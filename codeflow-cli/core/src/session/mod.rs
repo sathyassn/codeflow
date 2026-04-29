@@ -295,11 +295,15 @@ fn current_env_file_inner(
     read_env_file(&runtime_dir)
 }
 
-/// Check if a session is a live worktree session by reading its session pointer.
+/// Check if a session is a live worktree session.
 ///
 /// Returns `true` if a session pointer exists, the worktree directory is present,
 /// AND centralized liveness indicates the session is active or recent.
 /// Returns `false` if no pointer, pointer unreadable, worktree gone, or session dead.
+///
+/// INF-TSK-024-050 AC #2: lead_pid is read from `pathflow-session-status.json`
+/// (canonical source) instead of `session-pointer.json` (the field was removed).
+/// The pointer file is still used to discover the worktree path.
 pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
     let Some(pointer) = read_session_pointer(project_dir, sid) else {
         return false;
@@ -308,13 +312,48 @@ pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
     if !wt_path.exists() {
         return false;
     }
+    let lead_pid = read_lead_pid_from_status(project_dir, sid);
     liveness::check_session_liveness(
-        pointer.lead_pid,
+        lead_pid,
         Some(wt_path),
         None,
         liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
     )
     .is_alive()
+}
+
+/// Read the canonical `lead_pid` from `pathflow-session-status.json`.
+///
+/// Returns 0 when the file is missing, unreadable, malformed, or the
+/// `lead_pid` field is absent. Callers treat 0 as "no PID recorded".
+///
+/// INF-TSK-024-050 WS-SEC iter 1: path-traversal guard. `sid` is
+/// expected to come from a trusted internal source (filesystem
+/// directory listing under `.state/session/`), but the parallel
+/// helper `is_heartbeat_session_alive` in `cli/src/cmd/interactive.rs`
+/// has the same guard. Matching the pattern keeps the audit surface
+/// uniform and is defense-in-depth at zero cost.
+fn read_lead_pid_from_status(project_dir: &Path, sid: &str) -> u32 {
+    if sid.contains("..") {
+        return 0;
+    }
+    let status_path = project_dir
+        .join(".state")
+        .join("session")
+        .join(sid)
+        .join("pathflow")
+        .join("pathflow-session-status.json");
+    let Ok(content) = std::fs::read_to_string(&status_path) else {
+        return 0;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return 0;
+    };
+    value
+        .get("lead_pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1091,5 +1130,46 @@ mod tests {
         // Single active worktree => main file fallback is safe.
         let result = current_session_id_inner(project_dir.path(), None).unwrap();
         assert_eq!(result, project_sid);
+    }
+
+    /// INF-TSK-024-050 WS-SEC iter 1: defense-in-depth for the
+    /// `read_lead_pid_from_status` path-traversal guard. A `sid` that
+    /// contains `..` must short-circuit to 0 *before* any path
+    /// concatenation, so even if a malicious caller smuggled in
+    /// `"../../etc"` we never read outside `.state/session/<sid>/`.
+    #[test]
+    fn read_lead_pid_from_status_rejects_path_traversal() {
+        let project_dir = tempfile::tempdir().unwrap();
+        // Place a real status file at the legit location to prove the
+        // function is otherwise functional, then confirm the traversal
+        // input still returns 0 without reading it.
+        let legit_sid = "ses-01jq7statusguard0000000";
+        let legit_pf = project_dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(legit_sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&legit_pf).unwrap();
+        std::fs::write(
+            legit_pf.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","lead_pid":4242}"#,
+        )
+        .unwrap();
+        // Sanity: the function works for the legit sid.
+        assert_eq!(
+            read_lead_pid_from_status(project_dir.path(), legit_sid),
+            4242
+        );
+        // Guard: traversal sids return 0 without touching the filesystem.
+        assert_eq!(
+            read_lead_pid_from_status(project_dir.path(), "../../etc"),
+            0
+        );
+        assert_eq!(read_lead_pid_from_status(project_dir.path(), ".."), 0);
+        assert_eq!(
+            read_lead_pid_from_status(project_dir.path(), "ses-..0000000"),
+            0
+        );
     }
 }

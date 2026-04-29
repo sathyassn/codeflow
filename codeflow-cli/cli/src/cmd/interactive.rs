@@ -39,6 +39,11 @@ pub enum InteractiveCommand {
         /// Skip DB purge of old terminal sessions
         #[arg(long)]
         no_purge: bool,
+        /// Force pruning of ALL completed/stale interactive_session rows,
+        /// regardless of `interactive.retention_days`. Use to reclaim DB
+        /// space immediately. INF-TSK-024-050 AC #5.
+        #[arg(long)]
+        prune_completed: bool,
     },
 }
 
@@ -67,7 +72,10 @@ pub async fn run(command: Option<InteractiveCommand>) -> Result<()> {
                 run_status_tui(&project_dir, interval).await
             }
         }
-        Some(InteractiveCommand::Cleanup { no_purge }) => run_cleanup(no_purge).await,
+        Some(InteractiveCommand::Cleanup {
+            no_purge,
+            prune_completed,
+        }) => run_cleanup(no_purge, prune_completed).await,
     }
 }
 
@@ -131,7 +139,6 @@ async fn run_launch() -> Result<()> {
             codeflow_core::session::write_session_pointer(
                 &project_dir,
                 &sid_str,
-                std::process::id(),
                 &wt_path_str,
                 &chrono::Utc::now().to_rfc3339(),
             );
@@ -343,8 +350,13 @@ async fn run_list() -> Result<()> {
 /// Remove stale sessions (dead PID) and sweep filesystem artifacts.
 ///
 /// When `no_purge` is false (the default), also purges terminal sessions
-/// from the DB using retention config (days + keep_last from parallel-work-config).
-async fn run_cleanup(no_purge: bool) -> Result<()> {
+/// from the DB using retention config.
+///
+/// INF-TSK-024-050 AC #5: the per-row cutoff comes from
+/// `interactive.retention_days` (new config key, default 30). When
+/// `prune_completed` is true, ALL terminal interactive_session rows are
+/// pruned regardless of age (the cutoff is set to the current instant).
+async fn run_cleanup(no_purge: bool, prune_completed: bool) -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
     // INF-TSK-050-001 AC #13: cleanup considers both `active` (promote to
     // stale via the dead-PID predicate) and existing `stale` rows that
@@ -443,24 +455,51 @@ async fn run_cleanup(no_purge: bool) -> Result<()> {
     }
 
     // DB purge: remove old terminal sessions unless --no-purge.
+    //
+    // INF-TSK-024-050 AC #5: cutoff is `interactive.retention_days` from
+    // parallel-work-config.json (default 30). `--prune-completed` overrides
+    // the age check by setting the cutoff to the current instant, which
+    // matches every terminal row.
     if !no_purge {
         if let Ok(ref store) = store_result {
             use codeflow_core::store::DataStore;
-            let retention = codeflow_core::autorun::load_config(&project_dir)
-                .map(|c| c.retention)
-                .unwrap_or_default();
-            if retention.purge_on_cleanup {
-                let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention.days));
-                let cutoff_str = cutoff.to_rfc3339();
+            let cfg = codeflow_core::autorun::load_config(&project_dir).unwrap_or_default();
+            let retention = cfg.retention.clone();
+            let interactive_retention_days = cfg.interactive.retention_days;
+            if retention.purge_on_cleanup || prune_completed {
+                let cutoff_dt = if prune_completed {
+                    chrono::Utc::now()
+                } else {
+                    chrono::Utc::now()
+                        - chrono::Duration::days(i64::from(interactive_retention_days))
+                };
+                let cutoff_str = cutoff_dt.to_rfc3339();
+                // `--prune-completed` ignores keep_last so callers can
+                // unconditionally clear the table; the normal path keeps
+                // the configured tail.
+                let keep_last = if prune_completed {
+                    0
+                } else {
+                    retention.keep_last
+                };
                 match store
-                    .prune_interactive_sessions(&cutoff_str, retention.keep_last)
+                    .prune_interactive_sessions(&cutoff_str, keep_last)
                     .await
                 {
                     Ok(result) if result.sessions_deleted > 0 => {
-                        println!(
-                            "Purged {} old terminal session(s) from DB (>{} days, kept last {}).",
-                            result.sessions_deleted, retention.days, retention.keep_last,
-                        );
+                        if prune_completed {
+                            println!(
+                                "Pruned {} terminal interactive session(s) from DB (--prune-completed; ignored age).",
+                                result.sessions_deleted,
+                            );
+                        } else {
+                            println!(
+                                "Purged {} old interactive session(s) from DB (>{} days, kept last {}).",
+                                result.sessions_deleted,
+                                interactive_retention_days,
+                                retention.keep_last,
+                            );
+                        }
                     }
                     Err(e) => {
                         eprintln!("warning: DB purge failed: {e}");
@@ -706,22 +745,29 @@ fn scan_heartbeat_sessions(
     result
 }
 
-/// Check if a session is still alive by reading its session pointer.
+/// Check if a session is still alive by reading the canonical lead PID
+/// from `pathflow-session-status.json`.
+///
+/// INF-TSK-024-050 AC #2: migrated from `session-pointer.json::lead_pid`
+/// (which has been removed) to `pathflow-session-status.json::lead_pid`,
+/// the canonical source written via `validate_claude_pid(parent_id())`
+/// in session-start hooks.
 fn is_heartbeat_session_alive(project_dir: &Path, sid: &str) -> bool {
     if sid.contains("..") {
         return false;
     }
-    let pointer_path = project_dir
+    let status_path = project_dir
         .join(".state/session")
         .join(sid)
-        .join("session-pointer.json");
-    let Ok(content) = std::fs::read_to_string(&pointer_path) else {
+        .join("pathflow")
+        .join("pathflow-session-status.json");
+    let Ok(content) = std::fs::read_to_string(&status_path) else {
         return false;
     };
-    let Ok(pointer) = serde_json::from_str::<serde_json::Value>(&content) else {
+    let Ok(status) = serde_json::from_str::<serde_json::Value>(&content) else {
         return false;
     };
-    let pid = pointer
+    let pid = status
         .get("lead_pid")
         .and_then(serde_json::Value::as_u64)
         .and_then(|v| u32::try_from(v).ok())
@@ -2051,19 +2097,20 @@ mod tests {
         let hb_dir = dir.path().join(".state/interactive");
         std::fs::create_dir_all(&hb_dir).unwrap();
 
-        // Create a session pointer with current process PID (alive).
+        // INF-TSK-024-050 AC #2: liveness now reads
+        // pathflow-session-status.json::lead_pid (canonical) instead of
+        // session-pointer.json::lead_pid (removed).
         let sid = "ses-alive1";
-        let pointer_dir = dir.path().join(".state/session").join(sid);
-        std::fs::create_dir_all(&pointer_dir).unwrap();
-        let pointer = serde_json::json!({
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
             "lead_pid": std::process::id(),
-            "worktree_path": "/tmp/test",
             "session_id": sid,
-            "created_at": "2026-01-01T00:00:00Z"
+            "status": "pf-in-progress"
         });
         std::fs::write(
-            pointer_dir.join("session-pointer.json"),
-            serde_json::to_string(&pointer).unwrap(),
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string(&status).unwrap(),
         )
         .unwrap();
 
@@ -2258,8 +2305,12 @@ mod tests {
 
     // ─── is_heartbeat_session_alive ───────────────────────────────────
 
+    // INF-TSK-024-050 AC #2: tests verify is_heartbeat_session_alive
+    // reads pathflow-session-status.json::lead_pid (canonical), not the
+    // removed session-pointer.json::lead_pid field.
+
     #[test]
-    fn test_is_heartbeat_session_alive_no_pointer() {
+    fn test_is_heartbeat_session_alive_no_status_file() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_heartbeat_session_alive(dir.path(), "ses-nope"));
     }
@@ -2268,17 +2319,16 @@ mod tests {
     fn test_is_heartbeat_session_alive_dead_pid() {
         let dir = tempfile::tempdir().unwrap();
         let sid = "ses-deadpid";
-        let pointer_dir = dir.path().join(".state/session").join(sid);
-        std::fs::create_dir_all(&pointer_dir).unwrap();
-        let pointer = serde_json::json!({
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
             "lead_pid": 4_000_000,
-            "worktree_path": "/tmp/test",
             "session_id": sid,
-            "created_at": "2026-01-01T00:00:00Z"
+            "status": "pf-in-progress"
         });
         std::fs::write(
-            pointer_dir.join("session-pointer.json"),
-            serde_json::to_string(&pointer).unwrap(),
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string(&status).unwrap(),
         )
         .unwrap();
         assert!(!is_heartbeat_session_alive(dir.path(), sid));
@@ -2288,17 +2338,16 @@ mod tests {
     fn test_is_heartbeat_session_alive_current_pid() {
         let dir = tempfile::tempdir().unwrap();
         let sid = "ses-alivepid";
-        let pointer_dir = dir.path().join(".state/session").join(sid);
-        std::fs::create_dir_all(&pointer_dir).unwrap();
-        let pointer = serde_json::json!({
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        let status = serde_json::json!({
             "lead_pid": std::process::id(),
-            "worktree_path": "/tmp/test",
             "session_id": sid,
-            "created_at": "2026-01-01T00:00:00Z"
+            "status": "pf-in-progress"
         });
         std::fs::write(
-            pointer_dir.join("session-pointer.json"),
-            serde_json::to_string(&pointer).unwrap(),
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::to_string(&status).unwrap(),
         )
         .unwrap();
         assert!(is_heartbeat_session_alive(dir.path(), sid));

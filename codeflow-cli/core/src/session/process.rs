@@ -92,6 +92,19 @@ pub fn is_process_named(pid: u32, name_fragment: &str) -> bool {
 ///
 /// Returns the PID unchanged if it is alive AND its process name contains
 /// "claude". Returns 0 otherwise.
+///
+/// # TOCTOU race window
+///
+/// This function performs two non-atomic syscalls (`kill -0` followed by
+/// process-name check). Between them, the original process could exit and
+/// a different process could be assigned the same PID. The blast radius
+/// is bounded: the only consumer of the result is liveness display in
+/// `codeflow interactive status` and worktree-cleanup gating — there is
+/// no authentication, authorization, or capability decision driven by
+/// this check. Risk accepted for liveness-display-only context (see
+/// INF-TSK-024-050 WS-SEC review). Future hardening: replace with atomic
+/// platform API (`proc_pidpath` on macOS, `/proc/{pid}/exe` readlink on
+/// Linux). Tracked as follow-up.
 #[must_use]
 pub fn validate_claude_pid(pid: u32) -> u32 {
     if pid > 0 && is_process_alive(pid) && is_process_named(pid, "claude") {

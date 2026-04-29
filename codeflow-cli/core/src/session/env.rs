@@ -241,9 +241,15 @@ pub fn migrate_runtime_layout(runtime_dir: &Path) {
 const SESSION_POINTER_FILENAME: &str = "session-pointer.json";
 
 /// Session pointer data stored in the main repo for cross-session discovery.
+///
+/// INF-TSK-024-050 AC #2: the `lead_pid` field was removed. The canonical
+/// liveness PID lives in `pathflow-session-status.json::lead_pid`, written
+/// via `validate_claude_pid(parent_id())` from session-start hooks. The
+/// pointer's role is reduced to recording the worktree path so that
+/// compact/resume/teammate detection can find the worktree when env
+/// vars are lost.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionPointer {
-    pub lead_pid: u32,
     pub worktree_path: String,
     pub session_id: String,
     pub created_at: String,
@@ -259,14 +265,12 @@ pub struct SessionPointer {
 pub fn write_session_pointer(
     project_dir: &Path,
     session_id: &str,
-    lead_pid: u32,
     worktree_path: &str,
     created_at: &str,
 ) {
     let pointer_dir = project_dir.join(".state").join("session").join(session_id);
     let _ = fs::create_dir_all(&pointer_dir);
     let pointer = SessionPointer {
-        lead_pid,
         worktree_path: worktree_path.to_string(),
         session_id: session_id.to_string(),
         created_at: created_at.to_string(),
@@ -700,14 +704,12 @@ mod tests {
         write_session_pointer(
             dir.path(),
             "ses-test123",
-            42,
             "/path/to/worktree",
             "2026-03-29T00:00:00Z",
         );
         let pointer = read_session_pointer(dir.path(), "ses-test123");
         assert!(pointer.is_some());
         let p = pointer.unwrap();
-        assert_eq!(p.lead_pid, 42);
         assert_eq!(p.worktree_path, "/path/to/worktree");
         assert_eq!(p.session_id, "ses-test123");
         assert_eq!(p.created_at, "2026-03-29T00:00:00Z");
@@ -722,7 +724,7 @@ mod tests {
     #[test]
     fn test_remove_session_pointer() {
         let dir = tempfile::tempdir().unwrap();
-        write_session_pointer(dir.path(), "ses-rm", 1, "/wt", "now");
+        write_session_pointer(dir.path(), "ses-rm", "/wt", "now");
         assert!(read_session_pointer(dir.path(), "ses-rm").is_some());
         remove_session_pointer(dir.path(), "ses-rm");
         assert!(read_session_pointer(dir.path(), "ses-rm").is_none());

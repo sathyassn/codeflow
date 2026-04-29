@@ -975,3 +975,33 @@ Procedure:
 
 Output: Clean format, lint, build, and test output with approved crates only
 ```
+
+## Lint Guards
+
+### `validate_claude_pid` call site allowlist (INF-TSK-024-050 AC #7)
+
+`validate_claude_pid` is a name-verifying PID check that combines `is_process_alive` and `is_process_named("claude")`. It MUST only be invoked from a small set of canonical sites so the source-of-truth chain (parent_id() -> validate_claude_pid -> pathflow-session-status.json::lead_pid -> liveness consumers) stays auditable. Any new caller risks reintroducing the "live session shows as Stale" bug from PR #309 (INF-TSK-050-001) by reading or writing PIDs from places the canonical chain does not visit.
+
+Allowed call sites (verified production callers as of 2026-04-28):
+
+| File | Role |
+|------|------|
+| `codeflow-cli/core/src/session/process.rs` | Definition site. |
+| `codeflow-cli/core/src/session/liveness.rs` | Allowed for documentation references and future consolidated readers. |
+| `codeflow-cli/core/src/hooks/session_start.rs` | Canonical writer paths -- writes `lead_pid` into `pathflow-session-status.json`, `pathflow-team.json`, and `interactive_session.pid`. |
+| `codeflow-cli/core/src/autorun/stale.rs` | `default_pid_validator` wrapper used by stale-session detection. |
+| `codeflow-cli/core/src/tui/data.rs` | TUI status reader (introduced by PR #309). |
+| `codeflow-cli/cli/src/cmd/interactive.rs` | TUI/CLI status reader; staging area for the consolidated liveness reader. |
+
+Any other file calling `validate_claude_pid` is a violation. If a new consumer needs PID validation, route the call through one of the allowed files (typically by adding a helper in `session::liveness` and importing that helper) rather than calling `validate_claude_pid` directly.
+
+Grep one-liner (run from repo root) to detect violations:
+
+```bash
+grep -rn 'validate_claude_pid' codeflow-cli/ --include='*.rs' \
+  | grep -v -E '(codeflow-cli/core/src/session/process\.rs|codeflow-cli/core/src/session/liveness\.rs|codeflow-cli/core/src/hooks/session_start\.rs|codeflow-cli/core/src/autorun/stale\.rs|codeflow-cli/core/src/tui/data\.rs|codeflow-cli/cli/src/cmd/interactive\.rs)' \
+  && { echo "validate_claude_pid called outside the allowlist"; exit 1; } \
+  || echo "validate_claude_pid call sites OK"
+```
+
+If the command prints "validate_claude_pid called outside the allowlist", fix the new call site (move the logic into one of the allowed files) before requesting a commit.

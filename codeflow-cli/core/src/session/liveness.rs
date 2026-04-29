@@ -172,12 +172,6 @@ pub fn check_pid_liveness(lead_pid: u32) -> PidLiveness {
 /// SessionStart hooks.
 pub const REAPER_GRACE_WINDOW_SECS: i64 = 300;
 
-/// Maximum age of the interactive heartbeat file to count a session
-/// as alive via the heartbeat veto (10 minutes). The interactive
-/// heartbeat is touched on every hook invocation, so a fresh file
-/// proves a live session.
-pub const INTERACTIVE_HEARTBEAT_MAX_AGE_SECS: u64 = 600;
-
 /// Inputs to [`is_session_alive`]. Keeping this in a struct makes the
 /// function easy to test without needing a real filesystem for every call.
 #[derive(Debug, Clone, Default)]
@@ -204,7 +198,7 @@ pub struct SessionAliveInputs {
 /// Every cleanup entry point (SessionEnd, session_start's
 /// `clean_stale_worktrees`, autorun's `cleanup_stale_session`) calls this
 /// predicate **before** physically removing a worktree. The predicate
-/// returns `true` (ALIVE) when ANY of five veto conditions hold, so any
+/// returns `true` (ALIVE) when ANY of four veto conditions hold, so any
 /// single positive liveness signal is enough to protect the worktree.
 ///
 /// The default when we cannot determine state (missing files, unparseable
@@ -225,11 +219,16 @@ pub struct SessionAliveInputs {
 ///   **If the file is missing, unreadable, or malformed, this veto
 ///   ABSTAINS (does not vote dead), so an initializing session cannot be
 ///   reaped via V4 alone.**
-/// - **V5 Interactive heartbeat fresh** — `.state/interactive/heartbeat-{sid}`
-///   mtime within [`INTERACTIVE_HEARTBEAT_MAX_AGE_SECS`] (10 min).
 ///
-/// Only when ALL FIVE vetoes fail is the session considered confirmed
+/// Only when ALL FOUR vetoes fail is the session considered confirmed
 /// dead.
+///
+/// INF-TSK-024-050 AC #3: V5 (heartbeat mtime) was removed. V4 alone is
+/// sufficient -- the heartbeat file added a write per hook invocation
+/// without providing any liveness signal beyond what the lead_pid file
+/// check already gives us. The heartbeat file remains as a discovery
+/// breadcrumb for `codeflow interactive status`, but is no longer
+/// consulted by the cleanup predicate.
 #[must_use]
 pub fn is_session_alive(inputs: &SessionAliveInputs) -> bool {
     // V1: grace window -- entry is too young to judge.
@@ -247,10 +246,6 @@ pub fn is_session_alive(inputs: &SessionAliveInputs) -> bool {
     // V4: lead_pid recorded in pathflow-team.json is alive.
     //     (Abstains -- returns true -- on missing/malformed file.)
     if veto_lead_pid_alive(&inputs.project_dir, &inputs.session_id) {
-        return true;
-    }
-    // V5: interactive heartbeat file mtime is fresh.
-    if veto_heartbeat_fresh(&inputs.project_dir, &inputs.session_id) {
         return true;
     }
     false
@@ -370,27 +365,6 @@ fn veto_lead_pid_alive(project_dir: &Path, session_id: &str) -> bool {
     // Structurally valid file with a dead or missing lead_pid is a clear
     // "no process" signal.
     false
-}
-
-/// V5: interactive heartbeat file mtime is within
-/// [`INTERACTIVE_HEARTBEAT_MAX_AGE_SECS`].
-///
-/// Path: `{project_dir}/.state/interactive/heartbeat-{session_id}`.
-fn veto_heartbeat_fresh(project_dir: &Path, session_id: &str) -> bool {
-    let hb_path = project_dir
-        .join(".state")
-        .join("interactive")
-        .join(format!("heartbeat-{session_id}"));
-    let Ok(metadata) = std::fs::metadata(&hb_path) else {
-        return false;
-    };
-    let Ok(mtime) = metadata.modified() else {
-        return false;
-    };
-    let Ok(age) = mtime.elapsed() else {
-        return false;
-    };
-    age.as_secs() <= INTERACTIVE_HEARTBEAT_MAX_AGE_SECS
 }
 
 #[cfg(test)]
@@ -567,7 +541,7 @@ mod tests {
     //
     // Design contract exercised below:
     //   * Any single veto firing returns true (ALIVE).
-    //   * All five vetoes failing returns false (confirmed dead).
+    //   * All four vetoes failing returns false (confirmed dead).
     //   * V4 ABSTAINS (returns alive) when pathflow-team.json is
     //     missing or malformed -- initializing sessions must not be reaped.
 
@@ -811,50 +785,14 @@ mod tests {
         );
     }
 
-    // --- V5 interactive heartbeat ---
-
-    #[test]
-    fn test_veto_heartbeat_missing_file_votes_dead() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!veto_heartbeat_fresh(
-            dir.path(),
-            "ses-01kqnoheartbeat0123456789"
-        ));
-    }
-
-    #[test]
-    fn test_veto_heartbeat_fresh_file_votes_alive() {
-        let dir = tempfile::tempdir().unwrap();
-        let sid = "ses-01kqfreshheartbeat012345";
-        let hb_dir = dir.path().join(".state").join("interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-        std::fs::write(hb_dir.join(format!("heartbeat-{sid}")), "live").unwrap();
-        assert!(veto_heartbeat_fresh(dir.path(), sid));
-    }
-
-    #[test]
-    fn test_veto_heartbeat_stale_file_votes_dead() {
-        let dir = tempfile::tempdir().unwrap();
-        let sid = "ses-01kqstaleheartbeat012345";
-        let hb_dir = dir.path().join(".state").join("interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-        let path = hb_dir.join(format!("heartbeat-{sid}"));
-        std::fs::write(&path, "stale").unwrap();
-        // Force mtime to 30 minutes ago.
-        let old = filetime::FileTime::from_unix_time(chrono::Utc::now().timestamp() - 30 * 60, 0);
-        filetime::set_file_mtime(&path, old).unwrap();
-        assert!(!veto_heartbeat_fresh(dir.path(), sid));
-    }
-
     // --- aggregate predicate ---
 
     #[test]
     #[serial_test::serial(env_vars)]
     fn test_is_session_alive_all_vetoes_fail_returns_false() {
-        // Build a fixture where all five vetoes evaluate to false.
+        // Build a fixture where all four vetoes evaluate to false.
         // V1: old created_at. V2: env var unset. V3: bogus SID (no tmux match).
         // V4: pathflow-team.json exists, valid, with dead PID -- NOT abstain.
-        // V5: no heartbeat file.
         let dir = tempfile::tempdir().unwrap();
         let sid = DEAD_SID;
         let team_path = dir
@@ -958,42 +896,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_is_session_alive_v5_fresh_heartbeat_wins_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let sid = "ses-01kqhbwin01234567890123456";
-        let hb_dir = dir.path().join(".state").join("interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-        std::fs::write(hb_dir.join(format!("heartbeat-{sid}")), "live").unwrap();
-
-        // Make lead_pid veto fire DEAD (file exists, dead PID) so V4 doesn't
-        // carry the check.
-        let team_path = dir
-            .path()
-            .join(".state/session")
-            .join(sid)
-            .join("pathflow/pathflow-team.json");
-        std::fs::create_dir_all(team_path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &team_path,
-            serde_json::json!({"team_name": "x", "lead_pid": 4_000_000_u32}).to_string(),
-        )
-        .unwrap();
-
-        let inputs = SessionAliveInputs {
-            session_id: sid.to_string(),
-            project_dir: dir.path().to_path_buf(),
-            worktree_path: Some(dir.path().join("wt")),
-            registry_created_at: Some(
-                (chrono::Utc::now() - chrono::Duration::seconds(3600)).to_rfc3339(),
-            ),
-        };
-        assert!(
-            is_session_alive(&inputs),
-            "fresh heartbeat alone must keep the session alive"
-        );
-    }
-
     // -----------------------------------------------------------------
     // Integration test (exercises real tmux) — the only test that
     // actually spawns a tmux session. Skipped when tmux is not
@@ -1015,13 +917,12 @@ mod tests {
         // Spawn a real tmux session named so its name contains the
         // 8-char ULID suffix we embed in is_session_alive's V3 matcher.
         // Then verify is_session_alive reports alive even when every
-        // other veto (V1/V2/V4/V5) votes dead.
+        // other veto (V1/V2/V4) votes dead.
         //
         // All other vetoes are driven to DEAD:
         //   V1: registry_created_at in the distant past
         //   V2: CODEFLOW_WORKTREE_PATH not set on the target path
         //   V4: pathflow-team.json present with dead lead_pid
-        //   V5: no heartbeat file
         if !tmux_available() {
             eprintln!("tmux not available -- skipping integration test");
             return;
@@ -1083,13 +984,139 @@ mod tests {
         );
 
         // Sanity: after killing the tmux session, the predicate must go
-        // false (V3 no longer fires, and V1/V2/V4/V5 are all dead).
+        // false (V3 no longer fires, and V1/V2/V4 are all dead).
         drop(guard);
         // Small wait to ensure tmux registers the session as gone.
         std::thread::sleep(std::time::Duration::from_millis(150));
         assert!(
             !is_session_alive(&inputs),
             "after tmux kill every veto is dead; predicate must return false"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // INF-TSK-024-050 AC #6: lead_pid canonical source test
+    // -----------------------------------------------------------------
+    //
+    // Proves liveness for a live session resolves through
+    // `pathflow-session-status.json::lead_pid` (the canonical PID, written
+    // via `validate_claude_pid(parent_id())` in session-start hooks),
+    // NOT via `session-pointer.json` (the `lead_pid` field was removed in
+    // AC #2) or any DB-cached PID.
+
+    /// Read `lead_pid` from a `pathflow-session-status.json` file using
+    /// the same shape downstream consumers (sync.rs, interactive.rs,
+    /// session/mod.rs::read_lead_pid_from_status) use. Kept identical to
+    /// the production parsers so a regression in any of them surfaces
+    /// here too.
+    fn read_lead_pid_from_status_json(project_dir: &Path, session_id: &str) -> u32 {
+        let path = project_dir
+            .join(".state/session")
+            .join(session_id)
+            .join("pathflow")
+            .join("pathflow-session-status.json");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return 0;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return 0;
+        };
+        value
+            .get("lead_pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn lead_pid_canonical_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-01kqcanon0123456789abcdef";
+
+        // Canonical source: pathflow-session-status.json with the LIVE PID.
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        let live_pid = std::process::id();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::json!({
+                "session_id": sid,
+                "lead_pid": live_pid,
+                "status": "pf-in-progress"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Stale source: a session-pointer.json with a different (dead) PID.
+        // After INF-TSK-024-050 AC #2 the lead_pid field is GONE from the
+        // SessionPointer struct, but a stale JSON file from a pre-fix
+        // session may still exist on disk. Liveness must not consult it.
+        let pointer_dir = dir.path().join(".state/session").join(sid);
+        std::fs::create_dir_all(&pointer_dir).unwrap();
+        std::fs::write(
+            pointer_dir.join("session-pointer.json"),
+            serde_json::json!({
+                "lead_pid": 4_000_000_u32, // Stale -- a dead PID.
+                "worktree_path": "/tmp/wt",
+                "session_id": sid,
+                "created_at": "2026-01-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Read PID from the canonical source and confirm we got the LIVE
+        // value, not the stale one.
+        let resolved = read_lead_pid_from_status_json(dir.path(), sid);
+        assert_eq!(
+            resolved, live_pid,
+            "liveness must resolve PID from pathflow-session-status.json (live={live_pid}), \
+             not the stale session-pointer.json"
+        );
+        assert_ne!(
+            resolved, 4_000_000,
+            "liveness must NOT pick up the stale PID from session-pointer.json"
+        );
+
+        // Drive the public liveness API with the canonical PID.
+        let result = check_session_liveness(resolved, None, None, DEFAULT_HEARTBEAT_THRESHOLD_SECS);
+        assert_eq!(
+            result,
+            LivenessResult::Active,
+            "live PID from canonical source must produce Active"
+        );
+        assert!(result.is_alive());
+    }
+
+    #[test]
+    fn lead_pid_canonical_source_missing_status_returns_zero() {
+        // Regression guard: if the canonical file is missing, callers must
+        // see 0 (not crash, not fall back to a stale source). The "no PID"
+        // signal lets downstream liveness predicates fail closed correctly
+        // (V4 abstains; check_session_liveness with pid=0 yields
+        // Unknown/Dead based on other signals).
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-01kqmissing01234567890ab";
+        // Pre-fix sessions may still have a session-pointer.json on disk
+        // -- it must NOT be consulted as a fallback.
+        let pointer_dir = dir.path().join(".state/session").join(sid);
+        std::fs::create_dir_all(&pointer_dir).unwrap();
+        std::fs::write(
+            pointer_dir.join("session-pointer.json"),
+            serde_json::json!({
+                "lead_pid": std::process::id(),
+                "worktree_path": "/tmp/wt",
+                "session_id": sid,
+                "created_at": "2026-01-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_lead_pid_from_status_json(dir.path(), sid),
+            0,
+            "missing pathflow-session-status.json must yield 0, not a fallback to session-pointer.json"
         );
     }
 }

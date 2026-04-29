@@ -249,11 +249,13 @@ impl SessionStartInit {
                     }
                     self.create_directories(project_dir, sid.as_str());
 
-                    // Write heartbeat file for liveness detection.
-                    let heartbeat_dir = project_dir.join(".state").join("interactive");
-                    let _ = fs::create_dir_all(&heartbeat_dir);
-                    let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{}", sid.as_str()));
-                    let _ = fs::write(&heartbeat_path, (self.now)());
+                    // INF-TSK-024-050 AC3: heartbeat write removed here.
+                    // V5 (heartbeat freshness) is gone from the liveness
+                    // chain; V4 (lead_pid alive) is sufficient. The
+                    // .state/interactive/heartbeat-{SID} file is still
+                    // produced later in the unmanaged-session SessionStart
+                    // path because cli/src/cmd/interactive.rs uses it as an
+                    // FS-only discovery breadcrumb when the DB is unavailable.
 
                     // Create PathFlow flag.
                     let flag_base = std::env::var("CODEFLOW_WORKTREE_PATH")
@@ -667,7 +669,6 @@ impl SessionStartInit {
             session::write_session_pointer(
                 project_dir,
                 session_id.as_str(),
-                self.lead_pid,
                 &wt_path_str,
                 &(self.now)(),
             );
@@ -796,14 +797,13 @@ impl SessionStartInit {
                 }
             }
 
-            // Update session pointer lead_pid on resume (new Claude Code process = new PID).
+            // Update session pointer on resume (new Claude Code process = new PID).
             if source == "resume" {
                 if let Some(ref wt_path) = env_worktree_path {
                     if !wt_path.is_empty() {
                         session::write_session_pointer(
                             project_dir,
                             existing_sid.as_str(),
-                            self.lead_pid,
                             wt_path,
                             &(self.now)(),
                         );
@@ -1769,7 +1769,14 @@ impl SessionStartInit {
         }
         let sid = session_id.to_string();
         let wt = worktree_path.map(String::from);
-        let pid = i64::from(std::process::id());
+        // INF-TSK-024-050 AC1: capture the Claude Code lead PID, not the
+        // hook subprocess PID. `parent_id()` walks up to the parent process
+        // (the hook is invoked by Claude Code), and `validate_claude_pid`
+        // returns 0 if the parent is dead or not a Claude Code process,
+        // which signals "unknown" to downstream liveness consumers.
+        let pid = i64::from(crate::session::process::validate_claude_pid(
+            std::os::unix::process::parent_id(),
+        ));
         let now = chrono::Utc::now().to_rfc3339();
         // INF-TSK-049-001 AC #8: classify as autorun when this unmanaged
         // session was spawned by an autorun worker (AUTORUN_SESSION_ID

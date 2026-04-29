@@ -417,8 +417,37 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_pf_task_complete_creates_sentinel_and_updates_status() {
         // Full integration: session env + checkpoint + PF task completion.
+        // INF-TSK-024-050 AC #4: scrub `CODEFLOW_WORKTREE_PATH` for the
+        // duration of this test. The handler resolves the session
+        // directory via `pipeline::resolve_state_base`, which honors
+        // `CODEFLOW_WORKTREE_PATH` when set. If the surrounding
+        // environment has it set (running tests inside a worktree), the
+        // handler writes the status file under the worktree instead of
+        // `dir.path()` and our assertions miss the actual write. The
+        // guard restores the original value on drop so parallel tests
+        // are unaffected (`#[serial_test::serial]` enforces serial
+        // execution among env-touching tests).
+        struct EnvGuard {
+            key: &'static str,
+            prev: Option<String>,
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.prev {
+                    Some(v) => unsafe { std::env::set_var(self.key, v) },
+                    None => unsafe { std::env::remove_var(self.key) },
+                }
+            }
+        }
+        let _guard = EnvGuard {
+            key: "CODEFLOW_WORKTREE_PATH",
+            prev: std::env::var("CODEFLOW_WORKTREE_PATH").ok(),
+        };
+        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
+
         let dir = tempfile::tempdir().unwrap();
         let sid = "ses-01jq7checkpoint000000ab";
 

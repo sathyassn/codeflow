@@ -195,13 +195,19 @@ pub(crate) fn latest_ws_sentinel_mtime_secs(
     latest
 }
 
-/// Append a `stage_timeout` event to `pathflow-events.jsonl`.
+/// Append a `stage_timeout` event to `pathflow-events.jsonl`. // EXEMPT: doc names the ledger filename
 ///
-/// The ledger lives at `{worktree}/.state/ledger/pathflow-events.jsonl`
+/// The ledger lives at `{worktree}/.state/ledger/pathflow-events.jsonl` // EXEMPT: doc names the ledger filename
 /// in worktree mode (LOCAL since INF-TSK-024-035), or at
-/// `{project_dir}/.state/ledger/pathflow-events.jsonl` otherwise.
+/// `{project_dir}/.state/ledger/pathflow-events.jsonl` otherwise. // EXEMPT: doc names the ledger filename
 /// Errors are non-fatal — failure to write the event must NOT prevent
 /// the watcher from aborting the worker.
+///
+/// Path construction below is preserved as-is: the writer uses the
+/// flat layout `<base>/.state/ledger/pathflow-events.jsonl`. Aligning // EXEMPT: doc names the legacy flat path
+/// with the canonical subdirectory layout served by
+/// `ledger::resolve_path_in("pathflow-events", ..)` is tracked
+/// separately under INF-TSK-024-014 (downstream consumer migration).
 pub(crate) fn emit_stage_timeout_event(
     project_dir: &std::path::Path,
     session_id: &str,
@@ -215,7 +221,7 @@ pub(crate) fn emit_stage_timeout_event(
     let path = base
         .join(".state")
         .join("ledger")
-        .join("pathflow-events.jsonl");
+        .join("pathflow-events.jsonl"); // EXEMPT: writer matches reader; canonical migration tracked in INF-TSK-024-014
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -1401,7 +1407,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             tokio::select! {
                 biased;
                 last_seen = stage_watcher => {
-                    // Emit `stage_timeout` event to pathflow-events.jsonl
+                    // Emit `stage_timeout` event to pathflow-events.jsonl // EXEMPT: comment names the ledger filename
                     // (LOCAL per-worktree since INF-TSK-024-035), then
                     // synthesize an exit-125 result. The worker bus path
                     // turns this into a `failed` outcome below.

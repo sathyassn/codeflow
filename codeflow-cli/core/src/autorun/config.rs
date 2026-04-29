@@ -22,7 +22,7 @@ const CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.j
 /// Relative path to the local config override file (gitignored).
 const LOCAL_CONFIG_PATH: &str = ".codeflow/config/parallel-work/parallel-work-config.local.json";
 
-/// Top-level parallel work configuration with 7 sections.
+/// Top-level parallel work configuration with 8 sections.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ParallelWorkConfig {
@@ -40,6 +40,28 @@ pub struct ParallelWorkConfig {
     pub retention: RetentionConfig,
     /// Rescue bundle retention, gating, and surfacing settings.
     pub rescue: RescueConfig,
+    /// Interactive session retention settings (INF-TSK-024-050 AC #5).
+    pub interactive: InteractiveConfig,
+}
+
+/// Interactive session retention settings.
+///
+/// Controls the per-row retention threshold consulted by
+/// `codeflow interactive cleanup` (INF-TSK-024-050 AC #5). Distinct from
+/// `RetentionConfig` (which is shared with autorun pruning) so interactive
+/// rows can have a tighter or looser cutoff without affecting autorun.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct InteractiveConfig {
+    /// Days to retain terminal interactive_session rows before
+    /// `codeflow interactive cleanup` prunes them. Default: 30.
+    pub retention_days: u32,
+}
+
+impl Default for InteractiveConfig {
+    fn default() -> Self {
+        Self { retention_days: 30 }
+    }
 }
 
 /// Rescue bundle retention, gating, and surfacing settings.
