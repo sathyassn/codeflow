@@ -529,6 +529,8 @@ Before delivering your verdict, read the task markdown path from your assignment
 | Examples Tested | {PASS/FAIL/N/A} | {DOCS only} |
 | Test Independence | {PASS/FAIL/N/A} | {TEST only} |
 | Edge Cases | {PASS/FAIL/N/A} | {TEST only} |
+| Expected Outcome | {PASS/FAIL/N/A} | {CODE only — see Outcome Verification section} |
+| Integration Requirements | {PASS/FAIL/N/A} | {CODE only — see Integration Verification section} |
 
 #### Code Path Audit
 
@@ -556,6 +558,26 @@ Before delivering your verdict, read the task markdown path from your assignment
 | # | Category | Scenario | Setup → Action → Result | Impact | Severity |
 |---|----------|----------|------------------------|--------|----------|
 | 1 | {Input/State/Sequence/Assumption} | {description} | {concrete steps} | {data loss/crash/wrong result/etc.} | {CRITICAL/MAJOR/MINOR} |
+
+#### Outcome Verification
+
+<!-- MANDATORY for CODE_REVIEW. Verify every item in the task's ## Expected Outcome section.
+     Check the DEV Report Outcome Demonstration table, then independently verify each claim.
+     A missing ## Expected Outcome section in the task doc is itself a MAJOR finding. -->
+
+| # | Outcome | DEV Report Evidence | Independent Check | Verdict |
+|---|---------|--------------------|--------------------|---------|
+| 1 | {outcome text} | {what DEV claimed} | {your verification step} | PASS / FAIL |
+
+#### Integration Verification
+
+<!-- MANDATORY for CODE_REVIEW. Verify every item in the task's ## Integration Requirements section.
+     Run the stated grep/test/check independently. A missing ## Integration Requirements section is a MAJOR finding.
+     A requirement with placeholder text (no named call sites, no grep command) is a MINOR finding. -->
+
+| # | Requirement | Verification Command | Result | Verdict |
+|---|------------|---------------------|--------|---------|
+| 1 | {requirement text} | {grep / test / runtime check} | {actual output} | PASS / FAIL |
 
 #### Findings Log
 
@@ -599,8 +621,11 @@ Before delivering your verdict, read the task markdown path from your assignment
 | Examples Tested | N/A | N/A | Yes | N/A |
 | Test Independence | N/A | N/A | N/A | Yes |
 | Edge Cases | N/A | N/A | N/A | Yes |
+| Expected Outcome | Yes | N/A | N/A | N/A |
+| Integration Requirements | Yes | N/A | N/A | N/A |
 
 🔒 **Security, PII Check, and Scope Compliance are MANDATORY for ALL review modes — never use N/A for these three dimensions.**
+🔒 **Expected Outcome and Integration Requirements are MANDATORY for CODE_REVIEW — a missing section in the task doc is a MAJOR finding that blocks APPROVED.**
 
 **During rework iterations:** Update the Findings Log (mark resolved findings as RESOLVED in the Resolution column) and add new rows to the Rework History table for each iteration.
 

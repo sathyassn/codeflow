@@ -352,6 +352,8 @@ The lead MUST drive every tracked session to PF7 completion. Stopping mid-pipeli
   3. **Modified File Coverage** — per-file coverage >= 85% for every file modified in the PR
   A QA Report missing any of these three sections, reporting any test failures, or reporting any modified file below 85% (without a configured exception) is a rework trigger — return to WS-QA.
 - **Delivery summary:** Read the `## Deliverables` section in the task markdown. Confirm Expected Outcome and Deployment fields are populated (no placeholders). If placeholders remain, request the stage teammate update before proceeding.
+- **Outcome verification gate (BLOCKING):** Read the `## Expected Outcome` section in the task markdown. Verify it exists and contains at least one substantive, user-observable item (no placeholder text, no "tests pass" items). For pipelines that include WS-QA: read the QA Report Outcome Verification table and confirm all rows show PASS. For pipelines without WS-QA: read the REV Report and confirm the Expected Outcome dimension shows PASS. A missing `## Expected Outcome` section in the task doc is a blocking failure — return to the primary stage teammate before marking PF5-TSK-02 complete.
+- **Integration verification gate (BLOCKING):** Read the `## Integration Requirements` section in the task markdown. Verify it exists and contains at least one named, verifiable requirement (no placeholder text, no requirements without a stated verification check). For pipelines that include WS-QA: read the QA Report Integration Verification table and confirm all rows show PASS. For pipelines without WS-QA: read the REV Report and confirm the Integration Requirements dimension shows PASS. A missing `## Integration Requirements` section is a blocking failure — return to the primary stage teammate before marking PF5-TSK-02 complete.
 
 4. **Task Tracker (MANDATORY):** TaskCreate for PF5-VERIFY phase entry (addBlockedBy PF4); TaskCreate for PF5-TSK-01, PF5-TSK-02; for each task with a `blocked_by` field in pathflow-config.json, apply `TaskUpdate(addBlockedBy=[...])` immediately after TaskCreate (PF5-TSK-01 blocked by PF4-TSK-07, PF5-TSK-02 blocked by PF5-TSK-01); TaskUpdate to completed when verification passes.
 
@@ -683,8 +685,8 @@ Note: The `## Stage Reports` subsection headings in the task markdown must match
 | WS-PLAN | PLAN / SPKE | Mark PLAN column: `DONE` / `PARTIAL` / `N/A` per criterion | `### PLAN Report` — design decisions, deliverables, deviations |
 | WS-DOCS | DOCS | Mark DOCS column: `DONE` / `PARTIAL` / `N/A` per criterion | `### DOCS Report` — documentation summary, files updated, deviations |
 | WS-TEST | TEST | Mark TEST column: `DONE` / `PARTIAL` / `N/A` per criterion | `### TEST Report` — test implementation summary, coverage, deviations |
-| WS-REV | All pipelines | Mark REV column: `PASS` / `FAIL` per criterion | `### REV Report` — dimensional assessment, findings log, rework history |
-| WS-QA | FEAT/FIX/RFCT/CICD/HTFX/CHOR / TEST | Mark QA column: `PASS` / `FAIL` per criterion | `### QA Report` — test execution, acceptance verification, regressions |
+| WS-REV | All pipelines | Mark REV column: `PASS` / `FAIL` per criterion | `### REV Report` — dimensional assessment (incl. Expected Outcome + Integration Requirements for CODE_REVIEW), findings log, rework history |
+| WS-QA | FEAT/FIX/RFCT/CICD/HTFX/CHOR / TEST | Mark QA column: `PASS` / `FAIL` per criterion | `### QA Report` — test execution, acceptance verification, outcome verification, integration verification, regressions |
 | All stages | All pipelines | N/A (score not per-criterion) | `### Confidence Score` — each stage records its 0-100 score and rationale before STAGE-COMPLETE; team lead checks scores ≥95 at PF5-VERIFY |
 
 **Status legend:**

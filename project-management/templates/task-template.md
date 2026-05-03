@@ -179,6 +179,28 @@ Mechanisms available in codebase:
 | 2 | {criterion text -- copy VERBATIM from YAML frontmatter acceptance array, do NOT paraphrase} | -- | -- | -- | -- | |
 | 3 | {criterion text -- copy VERBATIM from YAML frontmatter acceptance array, do NOT paraphrase} | -- | -- | -- | -- | |
 
+## Expected Outcome
+
+> User-observable, demonstrable verification of what this ticket delivers.
+> Each outcome must be: user-facing (not "tests pass"), demonstrable by the
+> operator manually, specific (named commands/UI/behaviors), and verifiable.
+
+1. **{outcome}**
+   - Verify: {exact commands or steps the user runs to confirm}
+2. ...
+
+## Integration Requirements
+
+> Wiring/coupling that MUST hold across the codebase after this ticket ships.
+> Forces explicit verification that consolidation isn't half-done. Each item:
+> specifically named (call sites, helper fns, sentinels, hooks, files);
+> verifiable via grep, test, or runtime check; bidirectional where applicable.
+
+1. **{requirement}**
+   - Verify: {grep command, test name, or runtime check}
+   - Caller list (if applicable): {named call sites}
+2. ...
+
 ## Dependencies
 
 ### Blocked By

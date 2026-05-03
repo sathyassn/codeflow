@@ -240,6 +240,28 @@ Templates via cf-markdown-standards skill (`.claude/skills/cf-markdown-standards
 
 🔒 **Task file naming:** Task markdown files MUST be named using only the task format ID — e.g., `INF-TSK-046-001.md`. Do NOT append descriptive suffixes to the filename (e.g., `INF-TSK-046-001-plan-generic-testing.md` is WRONG). The title and description belong inside the file, not in the filename.
 
+**For Task documents — mandatory sections (ALL must be populated, no placeholders):**
+
+When creating a new task file, you MUST populate `## Expected Outcome` and `## Integration Requirements` in addition to pipeline-specific stage reporting sections:
+
+🔒 **`## Expected Outcome` — MANDATORY for all task types:**
+
+Answer: "How will the operator know this ticket delivered its goal?" Each outcome must be user-facing (not "tests pass"), demonstrable by running a command or checking a UI, and specific enough for cf-review to independently verify.
+
+- Prompt yourself: _What can the operator do after this ticket ships that they could not do before?_
+- Outcome items must be named commands, observed behaviors, or verifiable states — not restatements of implementation steps.
+- Example: "Running `codeflow interactive status` shows the correct PID for the live session (not the tmux-attach PID)"
+- Anti-pattern: "The liveness function returns the correct value" — this is internal, not user-observable.
+
+🔒 **`## Integration Requirements` — MANDATORY for all task types:**
+
+Answer: "What ELSE in the codebase must stay wired after this ticket ships?" List every call site, helper, hook, config entry, or sentinel that the implementation touches or depends on.
+
+- Each requirement must name specific files/functions/patterns — not vague coupling descriptions.
+- Include a verifiable check: `grep -r "fn validate_claude_pid" codeflow-cli/`, a test name, or a runtime command.
+- Example: "All liveness callers use `liveness::validate_claude_pid` — Verify: `grep -rn "is_process_alive\|liveness::" codeflow-cli/core/src/` shows zero `is_process_alive` calls outside liveness.rs"
+- These items become the Integration Verification checklist for cf-review and cf-quality-assurance.
+
 **For Task documents — pipeline-specific stage reporting sections:**
 
 When creating a new task file, include the `### Criteria Status` subsection under `## Acceptance Criteria` and the `## Stage Reports` section. Generate the correct pipeline-specific column mapping based on the task `work_type`:
@@ -576,6 +598,8 @@ Add a script to clean up stale sessions. Add tests.
 - [ ] **Effort estimates justified:** Confidence level stated with reasoning
 - [ ] **Validation passed:** `codeflow validate task` / `codeflow validate epic` ran successfully on all created markdown
 - [ ] **Stage reporting sections present (task docs):** Every new task document includes `### Criteria Status` with correct pipeline columns and `## Stage Reports` with correct subsections for the pipeline
+- [ ] **Expected Outcome populated:** Every new task document includes `## Expected Outcome` with at least one user-observable, demonstrable outcome item — no placeholder text, no "tests pass" outcomes, no implementation-internal claims
+- [ ] **Integration Requirements populated:** Every new task document includes `## Integration Requirements` with named call sites, helpers, hooks, and files — each with a verifiable grep/test/runtime check — no placeholder text
 - [ ] **Chain-coverage audit:** Every acceptance criterion in every task produced by this plan covers all applicable links in the 8-link delivery chain (creation, content, error handling, integration, testing, coverage, standards, verification). Criteria that verify only top-level creation without specifying how to observe the behavior are rejected and rewritten before commit.
 - [ ] **Confidence gate ready:** Each task produced includes a `### Confidence Score` subsection in its `## Stage Reports` section (from the task template), so that each stage agent can record its score before STAGE-COMPLETE. Verify the subsection exists in all task docs before requesting commit.
 - [ ] **Delivery summary complete:** Every task definition includes a `## Deliverables` section with the table (Deliverable, Type, Location, Integration Point), Expected Outcome, and Deployment fields fully populated -- no placeholders.

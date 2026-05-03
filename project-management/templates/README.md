@@ -11,6 +11,17 @@ Standardized templates for epics and tasks. YAML frontmatter fields align 1:1 wi
 
 The task template includes 34 DB-aligned fields plus `epic_format_id` (a convenience cross-reference not yet in the DB tasks table; will be added in a future schema migration).
 
+### Mandatory Task Body Sections
+
+In addition to YAML frontmatter, every task document MUST include these markdown body sections (populated before WS-REV):
+
+| Section | Purpose | Populated By |
+|---------|---------|-------------|
+| `## Expected Outcome` | User-observable, demonstrable proof the ticket delivers its goal | cf-planning (task creation), cf-development (DEV Report demonstration) |
+| `## Integration Requirements` | Named call sites, helpers, hooks, and files that must stay wired after the change | cf-planning (task creation), cf-review/cf-quality-assurance (verification) |
+
+Both sections are **blocking gates** at PF5-VERIFY. A task doc missing either section or containing only placeholder text (`...`) will not pass verification.
+
 ## Format ID Convention
 
 IDs use the pattern `{AREA}-{TYPE}-{NNN}` where area is the only hierarchical component:

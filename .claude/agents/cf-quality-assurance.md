@@ -263,7 +263,7 @@ Before reporting STAGE-COMPLETE, read the task markdown path from your assignmen
 
 1. **Update `### Criteria Status` table** — in the QA column, mark each criterion as `PASS` (verified passing) or `FAIL` (verified failing). Do not leave `--` in the QA column after QA completes.
 
-2. **Fill in `### QA Report` section** — replace all placeholder text with actual data. The QA Report MUST contain all three numbered sections below. A report missing any section is INCOMPLETE and the verdict is automatically FAIL:
+2. **Fill in `### QA Report` section** — replace all placeholder text with actual data. The QA Report MUST contain all five numbered sections below. A report missing any section is INCOMPLETE and the verdict is automatically FAIL:
 
 ```markdown
 ### QA Report
@@ -310,6 +310,30 @@ All project-wide coverage exceptions from `test-config.json` `conventions.except
 
 QA verdict CANNOT be PASS if any row in Modified File Coverage shows FAIL.
 
+#### 4. Outcome Verification
+
+<!-- For each item in the task's ## Expected Outcome section, verify independently.
+     A missing ## Expected Outcome section in the task doc is a FAIL.
+     Re-run the stated verification steps yourself — do not trust the DEV Report alone. -->
+
+| # | Outcome | Verification Steps Run | Result | Verdict |
+|---|---------|------------------------|--------|---------|
+| 1 | {outcome text} | {exact commands/steps you ran} | {actual output} | PASS / FAIL |
+
+QA verdict CANNOT be PASS if any Outcome Verification row shows FAIL.
+
+#### 5. Integration Verification
+
+<!-- For each item in the task's ## Integration Requirements section, run the stated check.
+     A missing ## Integration Requirements section in the task doc is a FAIL.
+     Run each grep/test/runtime check yourself. -->
+
+| # | Requirement | Check Run | Result | Verdict |
+|---|------------|-----------|--------|---------|
+| 1 | {requirement text} | {grep / test / runtime check} | {actual output} | PASS / FAIL |
+
+QA verdict CANNOT be PASS if any Integration Verification row shows FAIL.
+
 #### Acceptance Verification
 
 | # | Criterion | Method | Result | Evidence |
@@ -329,11 +353,13 @@ QA verdict CANNOT be PASS if any row in Modified File Coverage shows FAIL.
 **Confidence Score:** {0-100} -- {brief rationale: what evidence supports this score, what (if any) uncertainty remains}
 ```
 
-🔒 **Mandatory three-part coverage reporting:**
+🔒 **Mandatory five-part QA reporting:**
 
 1. **Overall Test Pass Status** — `codeflow test --mode full` result with per-target breakdown. Minimum 2 consecutive clean runs. Any failure = QA FAIL.
 2. **Overall Coverage** — per-target coverage across all configured test targets. Any file below its configured threshold that is not in the exception list = QA FAIL. The Exempted Files table must list ALL entries from `test-config.json` `conventions.exceptions[]` — not just files modified in this session — with coverage %, configured threshold, and reason.
 3. **Modified File Coverage** — per-file coverage for every file modified in the PR. Each must be >= the configured threshold. Missing coverage data = QA FAIL.
+4. **Outcome Verification** — every item in `## Expected Outcome` independently verified by running the stated steps. Any FAIL row = QA FAIL. Missing section in task doc = QA FAIL.
+5. **Integration Verification** — every item in `## Integration Requirements` verified by running the stated grep/test/check. Any FAIL row = QA FAIL. Missing section in task doc = QA FAIL.
 
 Scoring guide: 95-100 = all acceptance criteria verified by passing tests with per-file coverage at threshold, zero open findings; 80-94 = criteria met but some test paths have thin coverage or one finding required a waiver; below 80 = known gaps, test failures, or coverage deficits remain. Round down when uncertain. A score below 95% triggers mandatory rework — do NOT report STAGE-COMPLETE with a score below 95% unless you have documented specific, irresolvable technical blockers that were escalated to the team lead.
 

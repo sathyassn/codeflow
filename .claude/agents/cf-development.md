@@ -373,6 +373,22 @@ Rewriting criteria to match implementation instead of fixing implementation to m
 
 **Integration chain:** {Upstream callers verified compatible / Downstream callees verified compatible}
 
+**Outcome Demonstration:**
+
+<!-- For each item in the task's ## Expected Outcome section, record how you demonstrated it works. -->
+
+| # | Outcome | Demonstrated By | Result |
+|---|---------|----------------|--------|
+| 1 | {outcome text} | {exact command run / UI step / log line} | DEMONSTRATED / NOT DEMONSTRATED |
+
+**Integration Verification:**
+
+<!-- For each item in the task's ## Integration Requirements section, record how you verified the wiring holds. -->
+
+| # | Requirement | Verified By | Result |
+|---|------------|------------|--------|
+| 1 | {requirement text} | {grep / test / runtime check run} | PASS / FAIL |
+
 **Deviations from Approach:**
 {Any deviations from the planned approach and why, or "None"}
 
@@ -670,6 +686,8 @@ Before requesting commit, do a "would I accept this in review?" pass:
 - [ ] **Code path trace:** Every function/handler modified has been traced through ALL branches (success, error, edge) from entry to user-visible output — documented in DEV Report Code Path Audit section
 - [ ] **Error propagation:** Every error path traced through full call chain — no swallowed errors, no generic messages, no silent failures
 - [ ] **Integration verified:** All upstream callers and downstream callees checked for compatibility with changes
+- [ ] **Outcome demonstrated:** Every item in `## Expected Outcome` has a corresponding row in the DEV Report Outcome Demonstration table with result DEMONSTRATED — no placeholder text, no "N/A" unless the outcome genuinely does not apply to this work type
+- [ ] **Integration requirements met:** Every item in `## Integration Requirements` has a corresponding row in the DEV Report Integration Verification table with result PASS — grep/test/runtime evidence recorded for each requirement
 - [ ] **Commit format:** Conventional commit message requested via cf-git-operations
 - [ ] **Modularization:** Scripts under thresholds (200 lines, 10 functions, 4 nesting levels) or exception documented
 
