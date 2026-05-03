@@ -229,7 +229,7 @@ impl SessionEndCleanup {
             worktree_path,
             registry_created_at: None,
         };
-        let aggregate_alive = crate::session::liveness::is_session_alive(&alive_inputs);
+        let aggregate_alive = crate::session::liveness::is_session_alive_for_cleanup(&alive_inputs);
 
         let status = match status_result {
             Ok(v) => v,
@@ -744,16 +744,13 @@ impl SessionEndCleanup {
             session::remove_session_pointer(project_dir, &result.session_id);
         }
 
-        // Remove heartbeat file (signals clean exit to stale sweep).
-        crate::session::heartbeat::remove(project_dir);
-
-        // Remove interactive heartbeat file for this session.
-        if !result.session_id.is_empty() {
-            let interactive_hb = project_dir
-                .join(".state/interactive")
-                .join(format!("heartbeat-{}", result.session_id));
-            let _ = fs::remove_file(&interactive_hb);
-        }
+        // INF-TSK-024-051 Phase 4: heartbeat file cleanup removed. Both
+        // `.state/runtime/heartbeat` (per-process Signal-2 heartbeat) and
+        // `.state/interactive/heartbeat-{sid}` (per-session breadcrumb)
+        // are no longer written by SessionStart or per-hook handlers,
+        // so there is nothing to clean up here. Stale legacy files
+        // from older binaries decay naturally with their session
+        // directories.
 
         // Remove session lock file (always in main project).
         let lock_path = runtime_dir.join("session.lock");
@@ -1006,12 +1003,28 @@ mod tests {
             .join("pathflow");
         fs::create_dir_all(&session_dir).unwrap();
 
-        // Write pathflow-team.json with a dead lead_pid so V4 of
-        // is_session_alive votes DEAD (not abstain). Tests that need to
-        // exercise the cleanup-proceeds path depend on aggregate_alive =
-        // false; without this file V4 abstains alive and every cleanup
-        // would skip. Tests that want to simulate a live session override
-        // this file with a live lead_pid.
+        // Write pathflow-session-status.json with a dead lead_pid so V4
+        // of is_session_alive_for_cleanup votes DEAD (not abstain). Tests
+        // that need to exercise the cleanup-proceeds path depend on
+        // aggregate_alive = false; without this file V4 abstains alive
+        // (Unknown verdict from the chokepoint) and every cleanup would
+        // skip. Tests that want to simulate a live session override this
+        // file with a live lead_pid.
+        //
+        // INF-TSK-024-051: V4 now reads the canonical
+        // pathflow-session-status.json (worktree-resolved via the
+        // chokepoint) instead of pathflow-team.json. The team file is
+        // still written below for tests that read team metadata.
+        fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            serde_json::json!({
+                "session_id": sid.as_str(),
+                "lead_pid": 4_000_000_u32,
+                "status": "pf-in-progress"
+            })
+            .to_string(),
+        )
+        .unwrap();
         fs::write(
             session_dir.join("pathflow-team.json"),
             serde_json::json!({"team_name": "", "lead_pid": 4_000_000_u32}).to_string(),
@@ -1302,6 +1315,9 @@ mod tests {
             "last_completed_stage": "",
             "created_at": "2026-03-10T00:00:00Z",
             "updated_at": "2026-03-10T00:15:00Z",
+            // INF-TSK-024-051: dead lead_pid so V4 (canonical chokepoint)
+            // votes DEAD instead of abstaining alive on Unknown.
+            "lead_pid": 4_000_000_u32,
         });
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
@@ -1352,6 +1368,9 @@ mod tests {
             "last_completed_stage": "",
             "created_at": "2026-03-10T00:00:00Z",
             "updated_at": "2026-03-10T00:05:00Z",
+            // INF-TSK-024-051: dead lead_pid so V4 votes DEAD via the
+            // canonical chokepoint, not abstain on Unknown.
+            "lead_pid": 4_000_000_u32,
         });
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
@@ -1397,6 +1416,9 @@ mod tests {
             "last_completed_stage": "",
             "created_at": "2026-03-10T00:00:00Z",
             "updated_at": "2026-03-10T00:00:00Z",
+            // INF-TSK-024-051: dead lead_pid so V4 votes DEAD via the
+            // canonical chokepoint, not abstain on Unknown.
+            "lead_pid": 4_000_000_u32,
         });
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
@@ -1567,6 +1589,9 @@ mod tests {
             "last_completed_stage": "WS-DEV",
             "created_at": "2026-03-10T00:00:00Z",
             "updated_at": "2026-03-10T00:30:00Z",
+            // INF-TSK-024-051: dead lead_pid so V4 votes DEAD via the
+            // canonical chokepoint, not abstain on Unknown.
+            "lead_pid": 4_000_000_u32,
         });
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
@@ -2093,7 +2118,6 @@ mod tests {
             session_id: Some(session_id.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&registry_path, &reg).unwrap();
         registry_path
@@ -2152,12 +2176,18 @@ mod tests {
             .join("pathflow");
         fs::write(
             pathflow_dir.join("pathflow-session-status.json"),
-            serde_json::json!({"status": "pf-in-progress", "session_id": session_id}).to_string(),
+            // INF-TSK-024-051: include dead lead_pid so V4 (canonical
+            // chokepoint) votes DEAD, not abstain on Unknown.
+            serde_json::json!({
+                "status": "pf-in-progress",
+                "session_id": session_id,
+                "lead_pid": 4_000_000_u32
+            })
+            .to_string(),
         )
         .unwrap();
-        // Write pathflow-team.json with a dead lead_pid so V4 votes DEAD,
-        // not abstain. Without this file V4 abstains alive (protecting
-        // initializing sessions) which would (correctly) skip cleanup.
+        // The legacy pathflow-team.json is still written for tests that
+        // read team metadata; V4 itself no longer reads it post-INF-TSK-024-051.
         fs::write(
             pathflow_dir.join("pathflow-team.json"),
             serde_json::json!({"team_name": "", "lead_pid": 4_000_000_u32}).to_string(),
@@ -2220,65 +2250,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_clean_runtime_files_removes_interactive_heartbeat() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let sid = "ses-01jq7hbcleantest12345678";
-
-        // Create runtime env file so clean_runtime_files_inner can resolve session ID.
-        let runtime_dir = dir.path().join(".state/runtime");
-        let sid_typed = SessionId::new_unchecked(sid);
-        session::write_env_file(&runtime_dir, &sid_typed, "codeflow").unwrap();
-
-        // Create interactive heartbeat file.
-        let hb_dir = dir.path().join(".state/interactive");
-        fs::create_dir_all(&hb_dir).unwrap();
-        let hb_path = hb_dir.join(format!("heartbeat-{sid}"));
-        fs::write(&hb_path, "2026-04-07T00:00:00Z").unwrap();
-        assert!(hb_path.exists(), "heartbeat should exist before cleanup");
-
-        let cleaner = make_cleaner(home.path().to_path_buf());
-        let mut result = CleanupResult {
-            session_id: sid.to_string(),
-            pf7_valid: false,
-            sentinels_cleaned: 0,
-            task_preserved: false,
-            team_name: String::new(),
-            warnings: Vec::new(),
-            messages: Vec::new(),
-        };
-        cleaner.clean_runtime_files_inner(dir.path(), None, &mut result);
-
-        assert!(
-            !hb_path.exists(),
-            "interactive heartbeat should be removed by clean_runtime_files_inner"
-        );
-    }
-
-    #[test]
-    fn test_clean_runtime_files_no_panic_when_heartbeat_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let sid = "ses-01jq7nohbtest123456789ab";
-
-        let runtime_dir = dir.path().join(".state/runtime");
-        let sid_typed = SessionId::new_unchecked(sid);
-        session::write_env_file(&runtime_dir, &sid_typed, "codeflow").unwrap();
-
-        let cleaner = make_cleaner(home.path().to_path_buf());
-        let mut result = CleanupResult {
-            session_id: sid.to_string(),
-            pf7_valid: false,
-            sentinels_cleaned: 0,
-            task_preserved: false,
-            team_name: String::new(),
-            warnings: Vec::new(),
-            messages: Vec::new(),
-        };
-        // No interactive heartbeat exists — should not panic.
-        cleaner.clean_runtime_files_inner(dir.path(), None, &mut result);
-    }
+    // INF-TSK-024-051 Phase 4: heartbeat cleanup tests removed. The
+    // `.state/interactive/heartbeat-{sid}` writer is gone and SessionEnd
+    // no longer calls a heartbeat-removal helper; these tests exercised
+    // the deleted code paths.
 
     // -- write_cleanup_log path resolution tests --
 

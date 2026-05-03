@@ -166,10 +166,13 @@ pub use paths::WorktreePaths;
 pub use registry::{
     WorktreeEntry, WorktreeRegistry, WorktreeStatus, count_active, deregister_by_name, list_active,
     locked_deregister_by_name, locked_deregister_worktree, locked_read_registry,
-    locked_register_with_limit, locked_update_branch, locked_update_lead_pid,
-    locked_update_session_id, locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon,
-    maybe_auto_stop_daemon, read_registry, update_branch_from_current, write_registry,
+    locked_register_with_limit, locked_update_branch, locked_update_session_id,
+    locked_update_source, mark_pending_cleanup, maybe_auto_start_daemon, maybe_auto_stop_daemon,
+    read_registry, update_branch_from_current, write_registry,
 };
+// INF-TSK-024-051 Phase 4-B: `locked_update_lead_pid` removed (the
+// registry no longer carries `lead_pid`; canonical PID lives in
+// pathflow-session-status.json).
 pub use setup::repair_symlinks;
 
 // WorktreeHandle is defined in this module (not a sub-module), so no re-export needed.
@@ -449,8 +452,14 @@ impl WorktreeManager {
 
     /// Check if a worktree's owning session is alive (public API for CLI).
     ///
-    /// Returns a `LivenessResult` combining PID (name-verified), heartbeat,
-    /// and pathflow-active flag signals.
+    /// Returns a `LivenessResult` derived from the canonical chokepoint
+    /// (`crate::session::liveness::is_session_alive`). The chokepoint
+    /// reads the worktree-resolved `pathflow-session-status.json::lead_pid`
+    /// directly — the previous `read_lead_pid` cascade (registry yaml
+    /// fast-path → status file fallback) consulted the registry first,
+    /// which holds a wrong-by-construction PID for managed sessions
+    /// (codeflow CLI PID captured pre-`exec`, becomes tmux-attach client
+    /// after exec). INF-TSK-024-051 Phase 3 fixes that.
     #[must_use]
     pub fn liveness_status(
         &self,
@@ -458,21 +467,24 @@ impl WorktreeManager {
     ) -> crate::session::liveness::LivenessResult {
         match &entry.session_id {
             Some(sid) if !sid.is_empty() => {
-                let lead_pid = self.read_lead_pid(entry).unwrap_or(0);
-                let wt_path = std::path::Path::new(&entry.path);
-                let heartbeat_dir = if wt_path.exists() {
-                    Some(wt_path as &std::path::Path)
-                } else {
-                    None
-                };
-                let pathflow_active = wt_path.join(".state/session/pathflow-active");
-                let _ = sid; // suppress unused warning
-                crate::session::liveness::check_session_liveness(
-                    lead_pid,
-                    heartbeat_dir,
-                    Some(&pathflow_active),
-                    crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
-                )
+                // Use the manager's recorded project_dir (the main repo
+                // root); the chokepoint will resolve the worktree path
+                // for this `sid` via `worktrees.yaml` and read the
+                // worktree-local status file. Falling back to deriving
+                // from `entry.path` is fragile for tests that fabricate
+                // synthetic entry paths.
+                let verdict = crate::session::liveness::is_session_alive(self.project_dir(), sid);
+                match verdict {
+                    crate::session::liveness::SessionLiveness::Active => {
+                        crate::session::liveness::LivenessResult::Active
+                    }
+                    crate::session::liveness::SessionLiveness::Dead => {
+                        crate::session::liveness::LivenessResult::Dead
+                    }
+                    crate::session::liveness::SessionLiveness::Unknown => {
+                        crate::session::liveness::LivenessResult::Unknown
+                    }
+                }
             }
             _ => crate::session::liveness::LivenessResult::Unknown,
         }
@@ -591,48 +603,19 @@ impl WorktreeManager {
         Ok(removed)
     }
 
-    /// Read the `lead_pid` for a worktree entry.
+    /// Read the canonical `lead_pid` for a worktree entry.
     ///
-    /// Checks three sources in order:
-    /// 1. The `lead_pid` field on the registry entry (fast path).
-    /// 2. The session status file in the worktree path.
-    /// 3. The session status file in the main repo.
+    /// INF-TSK-024-051 Phase 4-B: delegates to the canonical chokepoint
+    /// helper `crate::session::liveness::read_canonical_lead_pid`, which
+    /// resolves the worktree-local `pathflow-session-status.json::lead_pid`
+    /// via `worktrees.yaml`. The previous 3-source cascade (registry
+    /// fast-path → worktree status file → main-repo status file) is
+    /// consolidated to a single source of truth — the registry
+    /// `lead_pid` field is gone.
     fn read_lead_pid(&self, entry: &WorktreeEntry) -> Option<u32> {
-        // 1. Fast path: check the entry itself.
-        if let Some(pid) = entry.lead_pid {
-            return Some(pid);
-        }
-
         let session_id = entry.session_id.as_deref().filter(|s| !s.is_empty())?;
-
-        // 2. Check the worktree's session status file.
-        let wt_path = Path::new(&entry.path);
-        if wt_path.exists() {
-            let wt_status = wt_path
-                .join(".state/session")
-                .join(session_id)
-                .join("pathflow/pathflow-session-status.json");
-            if let Some(pid) = Self::read_pid_from_status_file(&wt_status) {
-                return Some(pid);
-            }
-        }
-
-        // 3. Fallback: check the main repo's session directory.
-        let main_status = self
-            .project_dir
-            .join(".state/session")
-            .join(session_id)
-            .join("pathflow/pathflow-session-status.json");
-        Self::read_pid_from_status_file(&main_status)
-    }
-
-    /// Read `lead_pid` from a `pathflow-session-status.json` file.
-    fn read_pid_from_status_file(path: &Path) -> Option<u32> {
-        let content = std::fs::read_to_string(path).ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
-        let pid = parsed.get("lead_pid")?.as_u64()?;
-        #[allow(clippy::cast_possible_truncation)]
-        Some(pid as u32)
+        let pid = crate::session::liveness::read_canonical_lead_pid(&self.project_dir, session_id);
+        if pid > 0 { Some(pid) } else { None }
     }
 
     /// Check if a worktree entry is older than `secs` seconds.
@@ -937,7 +920,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Stale);
     }
@@ -956,7 +938,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Orphaned);
     }
@@ -976,7 +957,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(mgr.detect_state(&entry), WorktreeState::Active);
     }
@@ -1176,7 +1156,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -1198,7 +1177,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         let mut handle = WorktreeHandle::new(&entry, &mgr);
@@ -1220,7 +1198,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -1311,7 +1288,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         // This should not panic.
@@ -1336,7 +1312,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(
             mgr.liveness_status(&entry),
@@ -1356,7 +1331,6 @@ mod tests {
             session_id: Some(String::new()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(
             mgr.liveness_status(&entry),
@@ -1388,7 +1362,6 @@ mod tests {
             session_id: Some(sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(
             mgr.liveness_status(&entry),
@@ -1409,7 +1382,6 @@ mod tests {
             session_id: Some("ses-nonexistent".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert!(mgr.read_lead_pid(&entry).is_none());
     }
@@ -1437,28 +1409,38 @@ mod tests {
             session_id: Some(sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         assert_eq!(mgr.read_lead_pid(&entry), Some(12345));
     }
 
     #[test]
     fn test_read_lead_pid_from_entry_field() {
+        // INF-TSK-024-051 Phase 4-B: original test asserted on the
+        // removed `entry.lead_pid` registry fast-path. Rewritten to
+        // verify the new chokepoint behavior — `read_lead_pid` reads
+        // `pathflow-session-status.json::lead_pid` for the session_id.
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
+        let sid = "ses-test-readpid";
+        let canonical_pid: u32 = 99999;
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::json!({"session_id": sid, "lead_pid": canonical_pid}).to_string(),
+        )
+        .unwrap();
         let entry = WorktreeEntry {
             name: "test".to_string(),
             path: "/nonexistent".to_string(),
             branch: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             status: registry::WorktreeStatus::Active,
-            session_id: Some("ses-test".to_string()),
+            session_id: Some(sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(99999),
         };
-        // Should return the entry's lead_pid directly (fast path).
-        assert_eq!(mgr.read_lead_pid(&entry), Some(99999));
+        assert_eq!(mgr.read_lead_pid(&entry), Some(canonical_pid));
     }
 
     #[test]
@@ -1478,7 +1460,6 @@ mod tests {
                 session_id: None,
                 task_id: None,
                 source: None,
-                lead_pid: None,
             });
         }
         registry::write_registry(&reg_path, &reg).unwrap();
@@ -1516,7 +1497,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         registry::write_registry(&reg_path, &reg).unwrap();
 
@@ -1547,7 +1527,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         registry::write_registry(&reg_path, &reg).unwrap();
 
@@ -1656,7 +1635,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         registry::write_registry(&reg_path, &reg).unwrap();
 
@@ -1700,7 +1678,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         registry::write_registry(&reg_path, &reg).unwrap();
 
@@ -1734,7 +1711,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1771,7 +1747,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1797,7 +1772,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1816,9 +1790,12 @@ mod tests {
 
     #[test]
     fn test_classify_entry_pending_cleanup_dead_pid() {
-        // pending_cleanup + dead PID → Clean (regardless of heartbeat/flag state).
+        // pending_cleanup + dead PID → Clean. Phase 4-B: requires a
+        // status file with a dead PID; the registry no longer carries
+        // lead_pid, so `pid_liveness` reads the canonical file.
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
+        write_test_status_file(dir.path(), "ses-test-dead", 4_000_000);
         let entry = WorktreeEntry {
             name: "pending-dead-wt".to_string(),
             path: "/nonexistent/pending-dead-wt".to_string(),
@@ -1828,7 +1805,6 @@ mod tests {
             session_id: Some("ses-test-dead".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(4_000_000), // Dead PID
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1840,12 +1816,36 @@ mod tests {
         );
     }
 
+    /// INF-TSK-024-051 Phase 4-B helper: write the canonical
+    /// `pathflow-session-status.json::lead_pid` for a test session so
+    /// the chokepoint resolves the right PID. The test runner is
+    /// `cargo`, so callers MUST also install
+    /// `liveness::override_pid_validator_for_tests(is_process_alive)`
+    /// to allow the bare-alive predicate (we're not a real "claude"
+    /// process).
+    fn write_test_status_file(project_dir: &Path, sid: &str, pid: u32) {
+        let status_dir = project_dir
+            .join(".state/session")
+            .join(sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::json!({"session_id": sid, "lead_pid": pid}).to_string(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_classify_entry_pending_cleanup_alive_pid() {
         // pending_cleanup + alive PID → ForceRequired.
+        let _g = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
         let current_pid = std::process::id();
+        write_test_status_file(dir.path(), "ses-test-alive", current_pid);
         let entry = WorktreeEntry {
             name: "pending-alive-wt".to_string(),
             path: "/nonexistent/pending-alive-wt".to_string(),
@@ -1855,7 +1855,6 @@ mod tests {
             session_id: Some("ses-test-alive".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(current_pid), // Current process = alive
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1869,16 +1868,20 @@ mod tests {
 
     #[test]
     fn test_classify_entry_active_dead_pid() {
-        // active + dead PID → Clean (even with heartbeat/flag leftovers).
+        // active + dead PID → Clean (even with leftover state files).
+        // Phase 4-B: requires a status file with a dead PID.
         let dir = tempfile::tempdir().unwrap();
         let wt_dir = dir.path().join("dead-pid-wt");
         std::fs::create_dir_all(&wt_dir).unwrap();
         std::fs::write(wt_dir.join(".git"), "gitdir: /somewhere").unwrap();
 
-        // Create leftover pathflow-active flag and heartbeat — should NOT matter.
+        // Create leftover pathflow-active flag — should NOT matter.
         let session_dir = wt_dir.join(".state/session");
         std::fs::create_dir_all(&session_dir).unwrap();
         std::fs::write(session_dir.join("pathflow-active"), "").unwrap();
+
+        // Canonical chokepoint requires a status file with a dead PID.
+        write_test_status_file(dir.path(), "ses-test-dead-pid", 4_000_000);
 
         let mgr = WorktreeManager::new(dir.path());
         let entry = WorktreeEntry {
@@ -1890,7 +1893,6 @@ mod tests {
             session_id: Some("ses-test-dead-pid".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(4_000_000), // Dead PID
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1905,6 +1907,9 @@ mod tests {
     #[test]
     fn test_classify_entry_active_alive_pid() {
         // active + alive PID → ForceRequired.
+        let _g = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         let dir = tempfile::tempdir().unwrap();
         let wt_dir = dir.path().join("alive-pid-wt");
         std::fs::create_dir_all(&wt_dir).unwrap();
@@ -1912,6 +1917,7 @@ mod tests {
 
         let mgr = WorktreeManager::new(dir.path());
         let current_pid = std::process::id();
+        write_test_status_file(dir.path(), "ses-test-alive-pid", current_pid);
         let entry = WorktreeEntry {
             name: "alive-pid-wt".to_string(),
             path: wt_dir.to_string_lossy().to_string(),
@@ -1921,7 +1927,6 @@ mod tests {
             session_id: Some("ses-test-alive-pid".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(current_pid), // Current process = alive
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1951,7 +1956,6 @@ mod tests {
             session_id: None, // No session → NoPid
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -1983,7 +1987,6 @@ mod tests {
             session_id: None, // No session → NoPid
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let threshold = std::time::Duration::from_secs(3600);
         let result = classify_entry(&mgr, &entry, threshold);
@@ -2009,7 +2012,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let result = mgr.pid_liveness(&entry);
         assert_eq!(result, crate::session::liveness::PidLiveness::NoPid);
@@ -2017,9 +2019,10 @@ mod tests {
 
     #[test]
     fn test_pid_liveness_method_dead_pid() {
-        // Entry with a dead PID → Dead.
+        // Status file with a dead PID → Dead.
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
+        write_test_status_file(dir.path(), "ses-dead", 4_000_000);
         let entry = WorktreeEntry {
             name: "dead-pid-wt".to_string(),
             path: "/nonexistent/dead-pid-wt".to_string(),
@@ -2029,7 +2032,6 @@ mod tests {
             session_id: Some("ses-dead".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(4_000_000),
         };
         let result = mgr.pid_liveness(&entry);
         assert_eq!(result, crate::session::liveness::PidLiveness::Dead);
@@ -2037,10 +2039,11 @@ mod tests {
 
     #[test]
     fn test_pid_liveness_method_alive_pid() {
-        // Entry with current process PID → Alive.
+        // Status file with current process PID → Alive.
         let dir = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::new(dir.path());
         let current_pid = std::process::id();
+        write_test_status_file(dir.path(), "ses-alive", current_pid);
         let entry = WorktreeEntry {
             name: "alive-pid-wt".to_string(),
             path: "/nonexistent/alive-pid-wt".to_string(),
@@ -2050,7 +2053,6 @@ mod tests {
             session_id: Some("ses-alive".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(current_pid),
         };
         let result = mgr.pid_liveness(&entry);
         assert_eq!(result, crate::session::liveness::PidLiveness::Alive);
@@ -2078,7 +2080,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "entry-b".to_string(),
@@ -2089,7 +2090,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         registry::write_registry(&reg_path, &reg).unwrap();
 
@@ -2134,7 +2134,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "entry-b".to_string(),
@@ -2145,7 +2144,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         registry::write_registry(&reg_path, &reg).unwrap();
 

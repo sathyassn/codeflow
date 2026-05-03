@@ -125,7 +125,6 @@ pub(crate) fn create_worktree(
         session_id: None,
         task_id: None,
         source: None,
-        lead_pid: None,
     };
 
     let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
@@ -210,7 +209,6 @@ pub(crate) fn create_detached_worktree(
         session_id: None,
         task_id: None,
         source: None,
-        lead_pid: None,
     };
 
     let max_concurrent = crate::autorun::config::load_config(mgr.project_dir())
@@ -286,28 +284,20 @@ fn clean_stale_session_dirs(project_dir: &Path) {
             continue;
         }
 
-        // Read the status file and check liveness using centralized module.
-        if let Ok(content) = fs::read_to_string(&status_file) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-                let lead_pid = parsed
-                    .get("lead_pid")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|v| u32::try_from(v).ok())
-                    .unwrap_or(0);
-                let liveness = crate::session::liveness::check_session_liveness(
-                    lead_pid,
-                    None,
-                    None,
-                    crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
-                );
-                if !liveness.is_alive() {
-                    diagnostics::warn(
-                        "worktree",
-                        &format!("removing stale session dir: {dir_name} (liveness: {liveness})"),
-                    );
-                    let _ = fs::remove_dir_all(&path);
-                }
-            }
+        // Check liveness via the canonical chokepoint. INF-TSK-024-051
+        // Phase 3: removed the inline status-file read; the chokepoint
+        // resolves the worktree path via `worktrees.yaml` and falls back
+        // to `project_dir` for non-worktree sessions, which is exactly
+        // what this sweep needs. Only `Dead` triggers removal — `Unknown`
+        // (status file present but no PID, or unparseable) abstains
+        // alive to protect initializing sessions.
+        let verdict = crate::session::liveness::is_session_alive(project_dir, &dir_name);
+        if matches!(verdict, crate::session::liveness::SessionLiveness::Dead) {
+            diagnostics::warn(
+                "worktree",
+                &format!("removing stale session dir: {dir_name} (liveness: {verdict})"),
+            );
+            let _ = fs::remove_dir_all(&path);
         }
     }
 }

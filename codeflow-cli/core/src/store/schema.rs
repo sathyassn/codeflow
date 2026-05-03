@@ -20,11 +20,23 @@ UPDATE interactive_session SET session_kind = 'autorun' \
 WHERE session_kind = 'interactive' \
   AND session_id IN (SELECT VALUE record::id(id) FROM autorun_session);";
 
+/// One-shot migration: drop the legacy `pid` column from `interactive_session`
+/// rows. INF-TSK-024-051 Phase 4-C.
+///
+/// The schema no longer defines `pid` on `interactive_session`, but SurrealDB
+/// SCHEMAFULL does NOT auto-strip columns when a `DEFINE FIELD` is removed —
+/// existing rows keep the (now-undefined) column until explicitly unset. This
+/// `UNSET` migration scrubs the column from every row at startup.
+///
+/// Idempotent: rows that no longer have the field are no-ops.
+const MIGRATION_DROP_INTERACTIVE_SESSION_PID: &str = "UPDATE interactive_session UNSET pid;";
+
 /// Apply the idempotent schema to a `SurrealDB` instance.
 ///
 /// All statements use `OVERWRITE`, making this safe to run on every startup.
 /// After the schema, runs one-shot migrations that back-fill newly-added
-/// columns on pre-existing rows (see [`MIGRATION_BACKFILL_AUTORUN_KIND`]).
+/// columns on pre-existing rows (see [`MIGRATION_BACKFILL_AUTORUN_KIND`]) and
+/// drop deprecated columns (see [`MIGRATION_DROP_INTERACTIVE_SESSION_PID`]).
 ///
 /// # Errors
 ///
@@ -34,6 +46,12 @@ pub async fn apply_schema<C: Connection>(db: &Surreal<C>) -> Result<(), DbError>
     // Back-fill session_kind for rows created before the column existed.
     // Idempotent: rows already set to 'autorun' are not matched.
     let _ = db.query(MIGRATION_BACKFILL_AUTORUN_KIND).await?.check();
+    // Drop the legacy `pid` column from any rows that still have it.
+    // Idempotent: UNSET on a missing field is a no-op.
+    let _ = db
+        .query(MIGRATION_DROP_INTERACTIVE_SESSION_PID)
+        .await?
+        .check();
     Ok(())
 }
 
@@ -72,7 +90,8 @@ mod tests {
     fn schema_contains_autorun_new_fields() {
         // autorun_session new fields (INF-TSK-023-032)
         assert!(
-            SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE pid"),
+            SCHEMA_SQL
+                .contains("DEFINE FIELD OVERWRITE pid                 ON TABLE autorun_session"),
             "autorun_session missing pid field"
         );
         assert!(
@@ -108,6 +127,23 @@ mod tests {
         assert!(
             SCHEMA_SQL.contains("DEFINE FIELD OVERWRITE merge_conflicts"),
             "autorun_task_run missing merge_conflicts field"
+        );
+    }
+
+    #[test]
+    fn schema_does_not_define_interactive_session_pid() {
+        // INF-TSK-024-051 Phase 4-C: the `pid` column on `interactive_session`
+        // was wrong-by-construction for managed sessions (the value captured
+        // pre-`exec` was the codeflow CLI PID, not the resulting Claude lead
+        // PID). The canonical PID source is `pathflow-session-status.json::lead_pid`
+        // read via `crate::session::liveness::is_session_alive`. If this
+        // assertion ever fires it means a regression added the column back.
+        assert!(
+            !SCHEMA_SQL.contains("ON TABLE interactive_session TYPE int"),
+            "interactive_session must not redefine the `pid` column \
+             (INF-TSK-024-051): canonical source is \
+             pathflow-session-status.json::lead_pid via \
+             session::liveness::is_session_alive"
         );
     }
 

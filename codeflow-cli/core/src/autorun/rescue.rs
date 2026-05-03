@@ -672,28 +672,24 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    /// Serialize tests that use the global xdg cache dir override.
-    /// Tests redirect `dirs::cache_dir()` by setting `XDG_CACHE_HOME`
-    /// (Linux) and `HOME` (macOS). All such tests must hold this lock so
-    /// they don't interfere with each other under nextest's per-process
-    /// model — tests in the same binary share the env.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
+    /// Acquire the crate-wide XDG env-var lock for the duration of a
+    /// test. INF-TSK-024-051 Phase 2.5: consolidated to
+    /// `crate::test_util::xdg_env_lock` so this module's tests serialise
+    /// against `crate::worktree::cleanup::tests` (previously each module
+    /// defined its own mutex and the two raced under parallel execution
+    /// of `cargo test --lib`).
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        crate::test_util::xdg_env_lock()
     }
 
     /// Set `HOME` and `XDG_CACHE_HOME` to a tempdir so xdg_rescue_root
     /// resolves under a test-scoped path. Returns the tempdir guard so the
     /// caller controls lifetime.
     fn redirect_xdg_cache(td: &tempfile::TempDir) {
-        // SAFETY: tests set env vars under ENV_LOCK and restore them implicitly
-        // by overwriting on next test invocation. No other code reads these
-        // during the test body.
+        // SAFETY: tests set env vars under the shared XDG env lock and
+        // restore them implicitly by overwriting on the next test
+        // invocation. No other code reads these during the test body.
         unsafe {
             std::env::set_var("HOME", td.path());
             std::env::set_var("XDG_CACHE_HOME", td.path().join(".cache"));

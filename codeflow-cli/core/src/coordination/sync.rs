@@ -800,20 +800,17 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
     }
 
     // Source 2: Worktree registry — scan active entries with session_ids.
-    // Also build a session_id -> worktree_path map for heartbeat resolution.
+    // INF-TSK-024-051 Phase 3: removed the session_id -> worktree_path
+    // map (previously fed `check_session_liveness`'s heartbeat dir). The
+    // canonical chokepoint resolves the worktree path itself via
+    // `worktrees.yaml`, so the duplicate map here is dead weight.
     let registry_path = config.project_dir.join(".state/worktrees/worktrees.yaml");
-    let mut session_worktree_paths: std::collections::HashMap<String, std::path::PathBuf> =
-        std::collections::HashMap::new();
     if let Ok(reg) = crate::worktree::read_registry(&registry_path) {
         for entry in &reg.worktrees {
             if entry.status == crate::worktree::WorktreeStatus::Active
                 || entry.status == crate::worktree::WorktreeStatus::PendingCleanup
             {
                 if let Some(ref sid_str) = entry.session_id {
-                    if !entry.path.is_empty() {
-                        session_worktree_paths
-                            .insert(sid_str.clone(), std::path::PathBuf::from(&entry.path));
-                    }
                     let sid = SessionId::new_unchecked(sid_str);
                     if !session_ids_to_check.contains(&sid) {
                         session_ids_to_check.push(sid);
@@ -823,48 +820,31 @@ pub fn cleanup_dead_workers(config: &SyncConfig) -> Result<usize, SyncError> {
         }
     }
 
-    // Check each session's liveness via its pathflow-session-status.json.
+    // Check each session's liveness via the canonical chokepoint.
+    // INF-TSK-024-051 Phase 3: migrated from `check_session_liveness` (which
+    // accepted a pre-resolved `lead_pid` and consulted heartbeat as a
+    // secondary signal) to `is_session_alive`, which reads the
+    // worktree-resolved `pathflow-session-status.json::lead_pid` directly
+    // and validates via `validate_claude_pid`. Removes the inline status-
+    // file read + heartbeat plumbing — single source of truth.
     for session_id in &session_ids_to_check {
-        let status_path = config
-            .project_dir
-            .join(".state")
-            .join("session")
-            .join(session_id.as_str())
-            .join("pathflow")
-            .join("pathflow-session-status.json");
+        let verdict =
+            crate::session::liveness::is_session_alive(&config.project_dir, session_id.as_str());
 
-        // Centralized liveness: combines PID (name-verified), heartbeat, and flag.
-        let lead_pid = fs::read_to_string(&status_path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-            .and_then(|status| status.get("lead_pid")?.as_u64())
-            .and_then(|v| u32::try_from(v).ok())
-            .unwrap_or(0);
+        // Active: keep the claims. Unknown: ABSTAIN — initializing
+        // sessions may not have written the status file yet, so
+        // releasing claims would race with PF1 setup. Dead is
+        // conclusive: release.
+        if !matches!(verdict, crate::session::liveness::SessionLiveness::Dead) {
+            continue;
+        }
 
-        let heartbeat_dir = session_worktree_paths
-            .get(session_id.as_str())
-            .map(std::path::Path::new);
-
-        let liveness = crate::session::liveness::check_session_liveness(
-            lead_pid,
-            heartbeat_dir,
-            None,
-            crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+        let released = release_dead_session_claims(&config.state_loro_path, session_id)?;
+        total_released += released;
+        eprintln!(
+            "crash cleanup: released {released} claims for dead session {}",
+            session_id.as_str()
         );
-
-        if liveness.is_alive() {
-            continue; // Session alive via centralized liveness.
-        }
-
-        if !liveness.is_alive() {
-            // Both heartbeat and PID say dead — release claims.
-            let released = release_dead_session_claims(&config.state_loro_path, session_id)?;
-            total_released += released;
-            eprintln!(
-                "crash cleanup: released {released} claims for dead session {}",
-                session_id.as_str()
-            );
-        }
     }
 
     Ok(total_released)
@@ -1770,7 +1750,6 @@ mod tests {
             session_id: Some("ses-registry-dead".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 

@@ -481,7 +481,7 @@ pub fn rescue_uncommitted_work_with_reason(
 /// gate config and ledger files in the MAIN repo. It MUST NOT be used to
 /// place new files (rescue bundle writes go to xdg root —
 /// `crate::autorun::rescue::xdg_rescue_root` — never to a git working tree).
-fn derive_main_repo_root(wt_path: &Path) -> PathBuf {
+pub(crate) fn derive_main_repo_root(wt_path: &Path) -> PathBuf {
     if let Some(parent) = wt_path.parent() {
         if parent.file_name().and_then(|n| n.to_str()) == Some(".git-worktrees") {
             if let Some(root) = parent.parent() {
@@ -974,27 +974,23 @@ fn prune_worktrees(mgr: &WorktreeManager, dry_run: bool) -> Result<(), WorktreeE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    /// Serialize tests that mutate `HOME` / `XDG_CACHE_HOME` to redirect the
-    /// xdg rescue root into a tempdir. Mirrors the lock in
-    /// `crate::autorun::rescue::tests`.
-    static XDG_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Acquire `XDG_LOCK` tolerating poison: a previous test panicking
-    /// inside the critical section poisons the mutex, but the env mutation
-    /// is idempotent — we just want to serialise, not propagate state.
+    /// Acquire the crate-wide XDG env-var lock for the duration of a
+    /// test. INF-TSK-024-051 Phase 2.5: consolidated to
+    /// `crate::test_util::xdg_env_lock` so this module's tests serialise
+    /// against `crate::autorun::rescue::tests` (previously each module
+    /// defined its own mutex and the two raced under parallel
+    /// execution).
     fn xdg_lock() -> std::sync::MutexGuard<'static, ()> {
-        XDG_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        crate::test_util::xdg_env_lock()
     }
 
     /// Redirect `dirs::cache_dir()` (used by `xdg_rescue_root`) into a
-    /// tempdir for the duration of a test. Caller must hold `XDG_LOCK`.
+    /// tempdir for the duration of a test. Caller must hold the lock
+    /// returned by [`xdg_lock`].
     fn redirect_xdg_cache(td: &tempfile::TempDir) {
-        // SAFETY: tests serialise via XDG_LOCK; no other thread reads these
-        // env vars during the test body.
+        // SAFETY: tests serialise via the shared XDG env lock; no other
+        // thread reads these env vars during the test body.
         unsafe {
             std::env::set_var("HOME", td.path());
             std::env::set_var("XDG_CACHE_HOME", td.path().join(".cache"));

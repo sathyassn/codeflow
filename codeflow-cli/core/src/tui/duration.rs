@@ -393,7 +393,6 @@ mod tests {
         InteractiveSession {
             id: "is-test".into(),
             session_id: "ses-test".into(),
-            pid: 1,
             status,
             worktree_path: None,
             branch: None,

@@ -893,36 +893,39 @@ fn try_remove_stale_head(
         return Ok(false); // Queue empty for this target.
     };
 
-    // Check if the session's heartbeat file exists and if the PID is alive.
+    // INF-TSK-024-051 Phase 7-rework: route through the canonical
+    // chokepoint instead of reading `.state/interactive/heartbeat-{sid}`
+    // and validating with bare `is_process_alive`. The chokepoint:
+    //   1. resolves the worker's worktree via `worktrees.yaml`,
+    //   2. reads `pathflow-session-status.json::lead_pid` from the
+    //      worktree-resolved location,
+    //   3. validates via `validate_claude_pid` (alive AND named "claude").
+    //
+    // The previous bare-check was a PID-reuse vector: if the worker
+    // crashed and its PID was recycled by an unrelated process
+    // (cargo, sshd, etc.), the merge-queue head would be perpetually
+    // marked alive and the queue would stall. The chokepoint's
+    // name-validation closes that race.
     let project_dir = state_path
         .ancestors()
         .find(|p| p.join(".codeflow").is_dir())
         .unwrap_or(state_path);
-    let heartbeat_dir = project_dir.join(".state/interactive");
-    let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{}", entry.session_id));
+    let session_id_str = entry.session_id.as_str();
+    let verdict = crate::session::liveness::is_session_alive(project_dir, session_id_str);
 
-    let is_dead = if heartbeat_path.exists() {
-        // Read PID from heartbeat and check liveness.
-        match std::fs::read_to_string(&heartbeat_path) {
-            Ok(content) => {
-                let pid_str = content.trim();
-                match pid_str.parse::<u32>() {
-                    Ok(pid) if pid > 0 => {
-                        let alive = crate::session::process::is_process_alive(pid);
-                        !alive
-                    }
-                    // PID 0/invalid or unparseable -- treat as dead.
-                    Ok(_) | Err(_) => true,
-                }
-            }
-            Err(_) => true, // Can't read, treat as dead.
+    let is_dead = match verdict {
+        crate::session::liveness::SessionLiveness::Dead => true,
+        crate::session::liveness::SessionLiveness::Active => false,
+        crate::session::liveness::SessionLiveness::Unknown => {
+            // Status file missing or `lead_pid` unrecorded — fall back to
+            // the original age-based heuristic so workers that crashed
+            // BEFORE writing the status file are still reaped, and so
+            // legacy entries from pre-Phase-7-rework batches still age out.
+            let age_secs = chrono::DateTime::parse_from_rfc3339(&entry.pr_ready_at)
+                .map(|dt| (chrono::Utc::now() - dt.to_utc()).num_seconds())
+                .unwrap_or(0);
+            age_secs > 3600
         }
-    } else {
-        // No heartbeat file -- check session age. If older than 1 hour, treat as dead.
-        let age_secs = chrono::DateTime::parse_from_rfc3339(&entry.pr_ready_at)
-            .map(|dt| (chrono::Utc::now() - dt.to_utc()).num_seconds())
-            .unwrap_or(0);
-        age_secs > 3600
     };
 
     if !is_dead {
@@ -1090,14 +1093,14 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             ),
         );
 
-        // Write heartbeat file for liveness detection by try_remove_stale_head().
-        // Autorun workers are Rust processes (not via codeflow -i), so they don't
-        // get heartbeat files from SessionStart. Writing one here ensures the stale
-        // entry detector can check PID liveness for crashed workers.
-        let heartbeat_dir = self.project_dir.join(".state/interactive");
-        let _ = std::fs::create_dir_all(&heartbeat_dir);
-        let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{worker_sid}"));
-        let _ = std::fs::write(&heartbeat_path, format!("{}", std::process::id()));
+        // INF-TSK-024-051 Phase 7-rework: heartbeat writer removed. The
+        // worker's child Claude session writes the canonical
+        // `pathflow-session-status.json::lead_pid` inside its worktree at
+        // SessionStart, and `try_remove_stale_head` reads that via the
+        // canonical chokepoint (`is_session_alive`). Writing a duplicate
+        // heartbeat from the worker process was wrong-by-construction
+        // anyway: the worker's `std::process::id()` is the autorun
+        // orchestrator's PID, not the Claude lead the chokepoint validates.
 
         // Write codeflow-env.sh into the worktree's runtime directory so
         // the SessionStart hook inside the worker detects the pre-created
@@ -1659,8 +1662,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             eprintln!("warning: failed to bump updated_at at finish: {e}");
         }
 
-        // Always cleanup: remove heartbeat, release claims, kill tmux, remove worktree.
-        let _ = std::fs::remove_file(&heartbeat_path);
+        // INF-TSK-024-051 Phase 7-rework: heartbeat cleanup line removed
+        // alongside the writer. The autorun worker no longer creates
+        // `.state/interactive/heartbeat-{worker_sid}`.
+        // Always cleanup: release claims, kill tmux, remove worktree.
 
         // Release claims via release_all().
         match crate::file_lock::locked_binary_rmw(
@@ -3925,13 +3930,21 @@ Read and implement.
         crate::coordination::merge_queue::locked_enqueue(&state_path, &blocker).unwrap();
         // Create a .codeflow dir so the project_dir ancestor search finds it.
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
-        // Create a fake heartbeat for the blocker with the current process PID
-        // so liveness check passes (process is alive).
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
+
+        // INF-TSK-024-051 Phase 7-rework: write a canonical
+        // pathflow-session-status.json in the project-dir fallback location
+        // (no worktree registered) so `is_session_alive` returns Active
+        // for the blocker. Install the synthetic always-alive validator
+        // because the test runner is `cargo`, not `claude`.
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(|_| true);
+        let status_dir = dir.path().join(".state/session/ses-blocker/pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
         std::fs::write(
-            hb_dir.join("heartbeat-ses-blocker"),
-            format!("{}", std::process::id()),
+            status_dir.join("pathflow-session-status.json"),
+            format!(
+                r#"{{"session_id":"ses-blocker","lead_pid":{},"status":"pf-in-progress"}}"#,
+                std::process::id()
+            ),
         )
         .unwrap();
 

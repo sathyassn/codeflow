@@ -244,7 +244,14 @@ DEFINE INDEX OVERWRITE idx_taskrun_session ON autorun_task_run FIELDS session_id
 
 DEFINE TABLE OVERWRITE interactive_session SCHEMAFULL;
 DEFINE FIELD OVERWRITE session_id    ON TABLE interactive_session TYPE string;
-DEFINE FIELD OVERWRITE pid           ON TABLE interactive_session TYPE int;
+-- INF-TSK-024-051 Phase 4-C: `pid` column removed. The DB column was a
+-- duplicate of the canonical PID source which lives in
+-- `pathflow-session-status.json::lead_pid` (worktree-resolved via
+-- `liveness::is_session_alive`). Wrong-by-construction for managed
+-- sessions: the CLI wrapper wrote `std::process::id()` pre-`exec`,
+-- which became the tmux-attach-client PID after exec — never the live
+-- Claude lead. Canonical chokepoint never read it; only the TUI
+-- display path did, and that was migrated in Phase 2.
 DEFINE FIELD OVERWRITE status        ON TABLE interactive_session TYPE string;
 DEFINE FIELD OVERWRITE worktree_path ON TABLE interactive_session TYPE option<string>;
 DEFINE FIELD OVERWRITE branch        ON TABLE interactive_session TYPE option<string>;

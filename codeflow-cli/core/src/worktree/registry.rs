@@ -61,9 +61,12 @@ pub struct WorktreeEntry {
     /// Source that created this worktree: "interactive" or "autorun".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// PID of the Claude Code lead process owning this worktree.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lead_pid: Option<u32>,
+    // INF-TSK-024-051 Phase 4-B: `lead_pid: Option<u32>` field removed.
+    // The registry was a duplicate source-of-truth for the session's
+    // lead PID; the canonical source is
+    // `pathflow-session-status.json::lead_pid` (worktree-resolved).
+    // Legacy YAML files containing `lead_pid:` keys deserialise without
+    // error because serde silently ignores unknown fields.
 }
 
 /// Registry metadata.
@@ -641,49 +644,11 @@ pub fn update_branch_from_current(project_dir: &Path) -> Result<(), WorktreeErro
     Ok(())
 }
 
-/// Update the `lead_pid` field on a worktree entry identified by name.
-///
-/// Uses file-locked read-modify-write to avoid concurrent corruption.
-///
-/// # Errors
-///
-/// Returns an error if the lock cannot be acquired or the file cannot be written.
-pub fn locked_update_lead_pid(
-    registry_path: &Path,
-    worktree_name: &str,
-    pid: u32,
-) -> Result<(), WorktreeError> {
-    if !registry_path.exists() {
-        return Ok(());
-    }
-
-    let name = worktree_name.to_string();
-    file_lock::locked_binary_rmw(
-        registry_path,
-        || WorktreeRegistry::new(""),
-        |bytes| {
-            if bytes.is_empty() {
-                return Ok(WorktreeRegistry::new(""));
-            }
-            let content = std::str::from_utf8(bytes).map_err(|e| format!("utf8: {e}"))?;
-            serde_yaml::from_str(content).map_err(|e| format!("yaml: {e}"))
-        },
-        |reg| {
-            let content = serde_yaml::to_string(reg).map_err(|e| format!("yaml: {e}"))?;
-            let output =
-                format!("# Worktree Tracking\n# Managed by: codeflow worktree\n\n{content}");
-            Ok(output.into_bytes())
-        },
-        |reg| {
-            if let Some(entry) = reg.worktrees.iter_mut().find(|e| e.name == name) {
-                entry.lead_pid = Some(pid);
-                reg.metadata.last_updated = super::now_rfc3339();
-            }
-            Ok(())
-        },
-    )
-    .map_err(|e| WorktreeError::Yaml(format!("locked update_lead_pid: {e}")))
-}
+// INF-TSK-024-051 Phase 4-B: `locked_update_lead_pid` removed. The
+// registry no longer carries a `lead_pid` column; the canonical PID
+// lives in `pathflow-session-status.json::lead_pid` (written by
+// SessionStart via `parent_id() -> validate_claude_pid`). Legacy YAML
+// files with stale `lead_pid:` keys are silently ignored on read.
 
 /// Update the `session_id` field on a worktree entry identified by name.
 ///
@@ -849,7 +814,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
 
         write_registry(&path, &reg).unwrap();
@@ -876,7 +840,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         register_worktree(&path, entry).unwrap();
@@ -901,7 +864,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let entry2 = WorktreeEntry {
             name: "wt-2".to_string(),
@@ -912,7 +874,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         register_worktree(&path, entry1).unwrap();
@@ -938,7 +899,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -965,7 +925,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1024,7 +983,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         let parsed: WorktreeEntry = serde_yaml::from_str(&yaml).unwrap();
@@ -1060,7 +1018,6 @@ status: active
             session_id: Some("ses-abc123".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -1083,7 +1040,6 @@ status: active
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -1105,7 +1061,6 @@ status: active
             session_id: Some("ses-abc".to_string()),
             task_id: Some("INF-TSK-023-018".to_string()),
             source: None,
-            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -1144,7 +1099,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(
@@ -1167,7 +1121,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "pending-1".to_string(),
@@ -1178,7 +1131,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "active-2".to_string(),
@@ -1189,7 +1141,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
 
         assert_eq!(count_active(&reg), 2);
@@ -1213,7 +1164,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "pending-1".to_string(),
@@ -1224,7 +1174,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
 
         let active = list_active(&reg);
@@ -1249,7 +1198,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&reg_path, &entry, 3).unwrap();
 
@@ -1274,7 +1222,6 @@ session_id: ses-123
                 session_id: None,
                 task_id: None,
                 source: None,
-                lead_pid: None,
             };
             locked_register_with_limit(&reg_path, &entry, 3).unwrap();
         }
@@ -1299,7 +1246,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&reg_path, &entry, 3).unwrap();
 
@@ -1334,7 +1280,6 @@ session_id: ses-123
             session_id: None,
             task_id: Some("TSK-001".to_string()),
             source: None,
-            lead_pid: None,
         };
 
         locked_register_with_limit(&path, &entry, 3).unwrap();
@@ -1360,7 +1305,6 @@ session_id: ses-123
                 session_id: None,
                 task_id: None,
                 source: None,
-                lead_pid: None,
             };
             locked_register_with_limit(&path, &entry, 3).unwrap();
         }
@@ -1375,7 +1319,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         let result = locked_register_with_limit(&path, &entry, 3);
@@ -1404,7 +1347,6 @@ session_id: ses-123
                 session_id: None,
                 task_id: None,
                 source: None,
-                lead_pid: None,
             };
             locked_register_with_limit(&path, &entry, 3).unwrap();
         }
@@ -1422,7 +1364,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry, 3).unwrap();
 
@@ -1444,7 +1385,6 @@ session_id: ses-123
             session_id: Some("ses-001".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1458,7 +1398,6 @@ session_id: ses-123
             session_id: Some("ses-002".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1501,7 +1440,6 @@ session_id: ses-123
             session_id: Some("ses-001".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1516,7 +1454,6 @@ session_id: ses-123
             session_id: Some("ses-002".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1557,7 +1494,6 @@ session_id: ses-123
             session_id: Some("ses-original".to_string()),
             task_id: Some("task-original".to_string()),
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry1, 3).unwrap();
 
@@ -1572,7 +1508,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         locked_register_with_limit(&path, &entry2, 3).unwrap();
 
@@ -1611,7 +1546,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1639,7 +1573,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1686,7 +1619,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1713,7 +1645,6 @@ session_id: ses-123
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1761,7 +1692,6 @@ status: removed
             session_id: Some("ses-01jqpendcleantest00000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1787,7 +1717,6 @@ status: removed
             session_id: Some("ses-01jqactive0000000000000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         reg.worktrees.push(WorktreeEntry {
             name: "worktree-pending".to_string(),
@@ -1798,7 +1727,6 @@ status: removed
             session_id: Some("ses-01jqpending000000000000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
 
         assert_eq!(
@@ -1823,7 +1751,6 @@ status: removed
             session_id: Some("ses-01jqdifferentsession000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1862,7 +1789,6 @@ status: removed
             session_id: Some("ses-01jqpendingtest00000000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&path, &reg).unwrap();
 
@@ -1909,7 +1835,6 @@ status: removed
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         let yaml = serde_yaml::to_string(&entry).unwrap();
         assert!(!yaml.contains("branch"), "None branch should be skipped");
@@ -1931,7 +1856,8 @@ status: active
 "#;
         let parsed: WorktreeEntry = serde_yaml::from_str(old_yaml).unwrap();
         assert!(parsed.branch.is_none());
-        assert!(parsed.lead_pid.is_none());
+        // INF-TSK-024-051 Phase 4-B: removed `parsed.lead_pid.is_none()`
+        // assertion — the field no longer exists.
     }
 
     // -- locked_update_branch tests --
@@ -1950,7 +1876,6 @@ status: active
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -1960,31 +1885,10 @@ status: active
         assert_eq!(reg.worktrees[0].branch, Some("fix/cleanup".to_string()));
     }
 
-    // -- locked_update_lead_pid tests --
-
-    #[test]
-    fn test_locked_update_lead_pid() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("worktrees.yaml");
-
-        let entry = WorktreeEntry {
-            name: "pid-test".to_string(),
-            path: "/tmp/pid-test".to_string(),
-            branch: None,
-            created_at: "2026-04-01T00:00:00Z".to_string(),
-            status: WorktreeStatus::Active,
-            session_id: None,
-            task_id: None,
-            source: None,
-            lead_pid: None,
-        };
-        register_worktree(&path, entry).unwrap();
-
-        locked_update_lead_pid(&path, "pid-test", 12345).unwrap();
-
-        let reg = read_registry(&path).unwrap();
-        assert_eq!(reg.worktrees[0].lead_pid, Some(12345));
-    }
+    // INF-TSK-024-051 Phase 4-B: `test_locked_update_lead_pid` removed.
+    // The function `locked_update_lead_pid` is gone; canonical PID
+    // lives in `pathflow-session-status.json::lead_pid` (worktree-
+    // resolved via the chokepoint).
 
     // -- locked_update_session_id tests --
 
@@ -2002,7 +1906,6 @@ status: active
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -2028,7 +1931,6 @@ status: active
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 
@@ -2055,7 +1957,6 @@ status: active
             session_id: Some("ses-test".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         register_worktree(&path, entry).unwrap();
 

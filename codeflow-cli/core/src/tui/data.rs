@@ -615,15 +615,21 @@ pub async fn fetch_session_views(
     fetch_session_views_with_keep_last(store, project_dir, 10).await
 }
 
-/// Default PID validator for `fetch_session_views_*`.
+/// Default liveness oracle for `fetch_session_views_*`.
 ///
-/// INF-TSK-050-001 AC #4: matches the `validate_claude_pid > 0` semantic
-/// — the PID must be alive AND its process name must contain "claude".
-/// Tests use [`fetch_session_views_with_keep_last_and_validator`] to
-/// inject a synthetic predicate so they don't depend on the test runner
-/// being a Claude Code child process.
-fn default_session_pid_validator(pid: u32) -> bool {
-    crate::session::process::validate_claude_pid(pid) > 0
+/// INF-TSK-024-051: routes the TUI's "is this session alive?" question
+/// through the canonical [`crate::session::liveness::is_session_alive`]
+/// chokepoint. The chokepoint reads the worktree-resolved
+/// `pathflow-session-status.json::lead_pid` (the only authoritative PID
+/// source) and validates via `validate_claude_pid` (alive AND named
+/// "claude"). Tests use
+/// [`fetch_session_views_with_keep_last_and_validator`] to inject a
+/// synthetic oracle so they don't need to write a real status file.
+fn default_session_liveness_oracle(
+    project_dir: &Path,
+    session_id: &str,
+) -> crate::session::liveness::SessionLiveness {
+    crate::session::liveness::is_session_alive(project_dir, session_id)
 }
 
 /// Fetch interactive session views with a configurable `keep_last` threshold.
@@ -643,21 +649,30 @@ pub async fn fetch_session_views_with_keep_last(
         store,
         project_dir,
         keep_last,
-        default_session_pid_validator,
+        default_session_liveness_oracle,
     )
     .await
 }
 
 /// Internal hook for [`fetch_session_views_with_keep_last`] that accepts a
-/// custom PID validator. Production code uses [`default_session_pid_validator`];
-/// unit tests pass a closure that returns `true` for known test PIDs so they
-/// can exercise the active-session phase fallback chain without spawning a
-/// real `claude` child process.
+/// custom liveness oracle. Production code uses
+/// [`default_session_liveness_oracle`] which delegates to the canonical
+/// [`crate::session::liveness::is_session_alive`] chokepoint; unit tests
+/// pass a synthetic oracle so they can exercise the active-session
+/// phase fallback chain without writing a real status file.
 ///
-/// The validator is called with a non-zero `u32` PID and returns whether the
-/// process should count as "live owner of an interactive session". Returning
-/// `false` triggers the synchronous stale-promotion path (matching the
-/// production behavior when `validate_claude_pid` returns 0).
+/// The oracle is called with the project directory and session ID and
+/// returns a [`crate::session::liveness::SessionLiveness`]. `Active`
+/// keeps the row in its DB-recorded status; anything else
+/// (`Dead`/`Unknown`) triggers the synchronous stale-promotion path
+/// when the DB status is `active`.
+///
+/// INF-TSK-024-051: switched from `fn(u32) -> bool` (which validated
+/// the DB-stored `pid` column) to `fn(&Path, &str) -> SessionLiveness`
+/// (which reads the canonical worktree-resolved status file). The DB
+/// `pid` column was unreliable — it stored the codeflow CLI PID
+/// captured pre-`exec`, which becomes the tmux-attach client PID after
+/// exec, never the live Claude lead PID.
 ///
 /// # Errors
 ///
@@ -666,7 +681,7 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
     store: &crate::store::SurrealStore,
     project_dir: &Path,
     keep_last: usize,
-    pid_validator: fn(u32) -> bool,
+    liveness_oracle: fn(&Path, &str) -> crate::session::liveness::SessionLiveness,
 ) -> Result<(Vec<SessionView>, SessionSummary), DbError> {
     // INF-TSK-049-001 AC #9: filter out autorun worker sessions. Workers
     // register as `interactive_session` rows with `source_cli='codeflow'`,
@@ -692,28 +707,53 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
     // instead of producing the "00:01 blip" from the async write landing
     // later.
     let mut stale_promotions: Vec<String> = Vec::new();
+    // INF-TSK-024-051: when the canonical chokepoint reports a `stale`-
+    // marked row as Active (the prior promotion used the wrong PID source
+    // and was wrong), restore it to `active`. Synchronous DB write below.
+    let mut stale_demotions: Vec<String> = Vec::new();
     let now_rfc = chrono::Utc::now().to_rfc3339();
 
     for s in &sessions {
-        // PID liveness override: detect dead sessions still marked "active".
-        // INF-TSK-050-001 AC #4: use the injectable `pid_validator` instead
-        // of a bare `is_process_alive`. The stored `pid` for an interactive
-        // session is the lead Claude Code process; if a different process
-        // has since recycled the PID (rare but possible), treating it as
-        // alive would suppress the stale-promotion that the user expects.
-        // The default validator wraps `validate_claude_pid` so the PID
-        // must be BOTH alive AND its process name must contain "claude" —
-        // exactly the semantic we want. Tests pass a synthetic predicate.
-        let effective_status = if s.status.to_string() == "active" {
-            let pid_u32 = u32::try_from(s.pid).unwrap_or(0);
-            if pid_u32 > 0 && !pid_validator(pid_u32) {
+        // INF-TSK-024-051: route liveness through the canonical chokepoint
+        // (worktree-resolved `pathflow-session-status.json::lead_pid`)
+        // instead of validating the DB `pid` column. The DB column held the
+        // codeflow CLI PID captured before `exec` into tmux/claude, so for
+        // managed worktree sessions it pointed at the tmux-attach client
+        // and `validate_claude_pid` always failed — flipping live sessions
+        // to Stale in the TUI. The chokepoint reads the file written by the
+        // SessionStart hook with `parent_id() -> validate_claude_pid`, the
+        // only canonical PID source. Tests inject a synthetic oracle so
+        // they can return `Active` without writing a real status file.
+        // Probe the chokepoint once and reuse the verdict for both the
+        // stale-promotion path (active -> stale on Dead/Unknown) and the
+        // stale-demotion path (stale -> active on Active).
+        let live_verdict = liveness_oracle(project_dir, &s.session_id);
+        let effective_status = match (s.status.to_string().as_str(), live_verdict) {
+            // active + chokepoint Active -> stay active
+            ("active", crate::session::liveness::SessionLiveness::Active) => "active".to_string(),
+            // active + chokepoint Dead/Unknown -> promote to stale.
+            // Dead is conclusive. Unknown means the status file is missing
+            // or has no PID; for `active`-marked rows that's a crash
+            // signature (the file should exist for any session reaching PF1).
+            ("active", _) => {
                 stale_promotions.push(s.session_id.clone());
                 "stale".to_string()
-            } else {
-                s.status.to_string()
             }
-        } else {
-            s.status.to_string()
+            // INF-TSK-024-051: stale + chokepoint Active -> demote to
+            // active. The previous stale-promotion was based on the wrong
+            // PID source (DB column held the codeflow CLI PID, not the
+            // canonical Claude lead PID). Now that the chokepoint reads
+            // the canonical file and returns Active, the row was wrongly
+            // demoted and must be restored. The row is recorded in
+            // `stale_demotions` for synchronous DB write so the next
+            // render observes the corrected status without flicker.
+            ("stale", crate::session::liveness::SessionLiveness::Active) => {
+                stale_demotions.push(s.session_id.clone());
+                "active".to_string()
+            }
+            // stale + Dead/Unknown -> stay stale (no change)
+            // complete + anything -> stay complete (terminal)
+            (other, _) => other.to_string(),
         };
 
         match effective_status.as_str() {
@@ -774,6 +814,15 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
                 effective_session.completed_at = Some(now_rfc.clone());
             }
         }
+        // INF-TSK-024-051: stale -> active demotion mirrors the
+        // synchronous DB write below — clear the synthetic `completed_at`
+        // anchor so the duration helper resumes live computation instead
+        // of freezing on the (now-invalidated) prior promotion.
+        if effective_status == "active" && s.status == crate::types::InteractiveSessionStatus::Stale
+        {
+            effective_session.status = crate::types::InteractiveSessionStatus::Active;
+            effective_session.completed_at = None;
+        }
         let elapsed = crate::tui::duration::freeze_on_terminal_secs(
             &effective_session,
             chrono::Utc::now(),
@@ -810,6 +859,15 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
             )
         };
 
+        // INF-TSK-024-051 Phase 4-C: read the canonical PID from the
+        // worktree-resolved status file. The DB `pid` column was the
+        // codeflow CLI PID captured pre-`exec` and was deleted in this
+        // phase; the chokepoint is now the only source of truth.
+        let displayed_pid = i64::from(crate::session::liveness::read_canonical_lead_pid(
+            project_dir,
+            &s.session_id,
+        ));
+
         views.push(SessionView {
             session_id: s.session_id.clone(),
             status: effective_status,
@@ -820,7 +878,7 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
             task_format_id,
             last_phase: s.last_phase.clone(),
             team_name: s.team_name.clone(),
-            pid: s.pid,
+            pid: displayed_pid,
             worktree_path: s.worktree_path.clone(),
             duration_secs: elapsed,
             managed: s.managed,
@@ -865,6 +923,26 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
                     "UPDATE interactive_session SET status = 'stale', \
                      completed_at = $now, updated_at = $now \
                      WHERE session_id = $sid AND status = 'active'",
+                )
+                .bind(("now", persist_now.clone()))
+                .bind(("sid", sid))
+                .await;
+        }
+    }
+
+    // INF-TSK-024-051: synchronously restore wrongly-promoted rows to
+    // `active`. Clears `completed_at` (the duration freeze anchor) since
+    // the session was never actually terminal. Updates `updated_at` so
+    // the freeze-on-terminal helper re-evaluates from a fresh anchor.
+    if !stale_demotions.is_empty() {
+        let persist_now = now_rfc.clone();
+        for sid in stale_demotions {
+            let _ = store
+                .db()
+                .query(
+                    "UPDATE interactive_session SET status = 'active', \
+                     completed_at = NONE, updated_at = $now \
+                     WHERE session_id = $sid AND status = 'stale'",
                 )
                 .bind(("now", persist_now.clone()))
                 .bind(("sid", sid))
@@ -964,10 +1042,17 @@ pub fn should_fetch_now(
 
 /// Resolve the worker's lead PID and its liveness.
 ///
-/// Reads `pathflow-session-status.json` from the worker's worktree first,
-/// falling back to the main-repo session directory. Returns the stored PID
-/// and a `kill(pid, 0)` liveness check. A missing status file, missing PID
-/// field, or PID of 0 returns `(None, None)`.
+/// INF-TSK-024-051: delegates to the canonical
+/// [`crate::session::liveness::is_session_alive`] +
+/// [`crate::session::liveness::read_canonical_lead_pid`] chokepoint.
+/// The chokepoint reads `worktrees.yaml` to find the owning worktree and
+/// then reads `pathflow-session-status.json::lead_pid` from there,
+/// falling back to `project_dir` when no worktree entry exists.
+///
+/// `worktree_path` is preserved as a courtesy fallback for callers that
+/// pass an explicit path the registry doesn't yet know about (workers
+/// can race their own registry insert) — when the chokepoint returns
+/// `Unknown`, we re-read the explicit worktree path before giving up.
 ///
 /// Pending tasks typically have `worktree_path=None` and no worker
 /// registration yet — this function returns `(None, None)` for them so the
@@ -983,52 +1068,29 @@ pub fn resolve_worker_pid_liveness(
         return (None, None);
     };
 
-    // Try the worker's own worktree first, then fall back to main repo.
-    let worktree_root = worktree_path
-        .filter(|p| !p.is_empty())
-        .map_or(project_dir, Path::new);
-    let candidates: [std::path::PathBuf; 2] = [
-        worktree_root
-            .join(".state/session")
-            .join(sid)
-            .join("pathflow/pathflow-session-status.json"),
-        project_dir
-            .join(".state/session")
-            .join(sid)
-            .join("pathflow/pathflow-session-status.json"),
-    ];
-
-    for path in &candidates {
-        let Ok(data) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) else {
-            continue;
-        };
-        let Some(pid_u64) = parsed.get("lead_pid").and_then(serde_json::Value::as_u64) else {
-            continue;
-        };
-        if pid_u64 == 0 {
-            continue;
-        }
-        let pid_u32 = u32::try_from(pid_u64).unwrap_or(0);
-        if pid_u32 == 0 {
-            continue;
-        }
-        // INF-TSK-050-001 AC #4: stored `lead_pid` is the worker's Claude
-        // Code lead process; use `validate_claude_pid` so a recycled PID
-        // owned by an unrelated process is treated as dead. Returns the
-        // input PID when alive and named "claude", 0 otherwise — convert
-        // to a bool for the existing `pid_alive` field semantics.
-        let alive = crate::session::process::validate_claude_pid(pid_u32) > 0;
-        // Real OS PIDs fit inside `i32::MAX` on every platform we support;
-        // if the stored value somehow exceeds it, cap at `i32::MAX` so the
-        // conversion remains lossless for practical purposes.
-        let pid_i32 = i32::try_from(pid_u32).unwrap_or(i32::MAX);
+    // Primary path: canonical chokepoint (reads worktrees.yaml + status file).
+    let canonical_pid = crate::session::liveness::read_canonical_lead_pid(project_dir, sid);
+    if canonical_pid > 0 {
+        let alive = crate::session::liveness::is_session_alive(project_dir, sid).is_alive();
+        let pid_i32 = i32::try_from(canonical_pid).unwrap_or(i32::MAX);
         return (Some(pid_i32), Some(alive));
     }
 
-    (None, None)
+    // Fallback for callers that pass an explicit worktree_path the registry
+    // hasn't recorded yet — worker registration vs status-file write can
+    // race. Use the worktree-explicit chokepoint variant so the JSON schema
+    // is read in exactly one place (no duplicated `lead_pid` extraction).
+    let Some(wt) = worktree_path.filter(|p| !p.is_empty()) else {
+        return (None, None);
+    };
+    let wt_path = Path::new(wt);
+    let pid = crate::session::liveness::read_canonical_lead_pid_at_worktree(wt_path, sid);
+    if pid == 0 {
+        return (None, None);
+    }
+    let alive = crate::session::liveness::is_session_alive_at_worktree(wt_path, sid).is_alive();
+    let pid_i32 = i32::try_from(pid).unwrap_or(i32::MAX);
+    (Some(pid_i32), Some(alive))
 }
 
 /// Abbreviate a session ID for display.
@@ -1900,7 +1962,7 @@ mod tests {
             task_format_id: None,
             last_phase: None,
             team_name: None,
-            pid: 1,
+            pid: 0,
             worktree_path: None,
             duration_secs: -1,
             managed: false,
@@ -1925,30 +1987,44 @@ mod tests {
         assert_eq!(summary.hidden_count, 0);
     }
 
-    /// Synthetic PID validator for tests: always returns `true` so the
-    /// stale-promotion path is skipped and the test exercises the
+    /// Synthetic liveness oracle for tests: always returns `Active` so
+    /// the stale-promotion path is skipped and the test exercises the
     /// "session is alive" branch. Production code uses
-    /// [`default_session_pid_validator`] which delegates to
-    /// `validate_claude_pid` (alive AND named "claude").
-    fn always_alive_validator(_pid: u32) -> bool {
-        true
+    /// [`default_session_liveness_oracle`] which delegates to the
+    /// canonical [`crate::session::liveness::is_session_alive`] chokepoint
+    /// (worktree-resolved status file + `validate_claude_pid`).
+    fn always_alive_validator(
+        _project_dir: &Path,
+        _session_id: &str,
+    ) -> crate::session::liveness::SessionLiveness {
+        crate::session::liveness::SessionLiveness::Active
     }
 
     #[tokio::test]
     async fn test_fetch_session_views_with_sessions() {
         let store = crate::store::SurrealStore::in_memory().await.unwrap();
-        // Use current process PID; pair with `always_alive_validator` so the
-        // PID-liveness override does not fire (the test runner is named
-        // `cargo`, not `claude`, so the production validator would
-        // promote this row to stale and break the assertions below).
-        let current_pid = i64::from(std::process::id());
+        // INF-TSK-024-051 Phase 4-C: `displayed_pid` reads `lead_pid` from
+        // `pathflow-session-status.json` via the canonical
+        // `read_canonical_lead_pid` (no DB pid column anymore). Place the
+        // status file at the project-dir fallback location (no worktree
+        // registry in this test), so the chokepoint reads from there.
+        let tmp = tempfile::tempdir().unwrap();
+        let sid = "ses-test-tui";
+        let status_dir = tmp.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        let canonical_pid: i64 = 4_242_424;
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            format!(r#"{{"lead_pid": {canonical_pid}}}"#),
+        )
+        .unwrap();
+
         let now = chrono::Utc::now().to_rfc3339();
         let _ = store
             .db()
             .query(
                 "CREATE interactive_session SET \
-                 session_id = 'ses-test-tui', \
-                 pid = $pid, \
+                 session_id = $sid, \
                  status = 'active', \
                  worktree_path = NONE, \
                  branch = 'feat/tui', \
@@ -1961,11 +2037,10 @@ mod tests {
                  updated_at = NONE, \
                  completed_at = NONE;",
             )
-            .bind(("pid", current_pid))
+            .bind(("sid", sid.to_string()))
             .bind(("now", now.clone()))
             .await;
 
-        let tmp = tempfile::tempdir().unwrap();
         let (views, summary) = fetch_session_views_with_keep_last_and_validator(
             &store,
             tmp.path(),
@@ -1979,13 +2054,122 @@ mod tests {
         assert_eq!(summary.stale, 0);
 
         let v = &views[0];
-        assert_eq!(v.session_id, "ses-test-tui");
+        assert_eq!(v.session_id, sid);
         assert_eq!(v.status, "active");
         assert_eq!(v.branch.as_deref(), Some("feat/tui"));
         assert_eq!(v.work_type.as_deref(), Some("FEAT"));
         assert_eq!(v.team_name.as_deref(), Some("test-team"));
-        assert_eq!(v.pid, current_pid);
+        assert_eq!(v.pid, canonical_pid);
         assert!(v.managed);
+    }
+
+    /// AC #13 (INF-TSK-024-051) — end-to-end regression test wired into
+    /// `codeflow test --mode full`. The canary that catches PR #310-class
+    /// failures: unit tests pass while the user-visible TUI flow shows
+    /// "live session as Stale/DEAD".
+    ///
+    /// Exercises the FULL chain that produced the bug:
+    ///   1. Worktree registered in `worktrees.yaml`.
+    ///   2. `pathflow-session-status.json` lives INSIDE the worktree (not
+    ///      the main repo) — this was the critical detail PR #310 missed.
+    ///   3. `lead_pid` in the status file is the canonical Claude lead PID.
+    ///   4. The chokepoint resolves the worktree from the registry, reads
+    ///      the status file from the worktree, and validates via the
+    ///      production `default_session_liveness_oracle` (which calls
+    ///      `is_session_alive`).
+    ///   5. `fetch_session_views` returns the row as Active with the
+    ///      canonical PID.
+    ///
+    /// Uses `override_pid_validator_for_tests` to inject a synthetic
+    /// "always alive" validator so the test runner's PID can stand in for
+    /// a live `claude` process. This is the real production path —
+    /// only the validator is faked.
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn ac13_e2e_live_session_shows_active_via_worktree_resolution() {
+        let _g = crate::session::liveness::override_pid_validator_for_tests(|_| true);
+
+        let store = crate::store::SurrealStore::in_memory().await.unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+        let worktree_root = tempfile::tempdir().unwrap();
+        let sid = "ses-01kqe2eAC130000000000000";
+        let canonical_pid: i64 = 5303; // matches the original bug report
+
+        // Step 1: register the worktree in worktrees.yaml under the project.
+        let yaml = format!(
+            "worktrees:\n- name: worktree-{sid}\n  path: {wt}\n  created_at: 2026-04-29T20:54:41Z\n  status: active\n  session_id: {sid}\nmetadata:\n  version: 1.0.0\n  last_updated: 2026-04-29T23:38:20Z\n",
+            sid = sid,
+            wt = worktree_root.path().display()
+        );
+        let registry_dir = project_root.path().join(".state").join("worktrees");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        std::fs::write(registry_dir.join("worktrees.yaml"), yaml).unwrap();
+
+        // Step 2: write the canonical status file INSIDE the worktree.
+        let status_dir = worktree_root
+            .path()
+            .join(".state/session")
+            .join(sid)
+            .join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            format!(
+                r#"{{"session_id": "{sid}", "lead_pid": {canonical_pid}, "status": "pf-in-progress"}}"#
+            ),
+        )
+        .unwrap();
+
+        // Step 3: register an interactive_session row matching the worktree.
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = store
+            .db()
+            .query(
+                "CREATE interactive_session SET \
+                 session_id = $sid, \
+                 status = 'active', \
+                 worktree_path = $wt, \
+                 branch = 'feat/e2e-canary', \
+                 work_type = 'FEAT', \
+                 task_id = NONE, \
+                 team_name = 'e2e-team', \
+                 source_cli = 'codeflow', \
+                 managed = true, \
+                 created_at = $now, \
+                 updated_at = NONE, \
+                 completed_at = NONE;",
+            )
+            .bind(("sid", sid.to_string()))
+            .bind(("wt", worktree_root.path().to_string_lossy().to_string()))
+            .bind(("now", now))
+            .await;
+
+        // Step 4 + 5: fetch via the production path (no synthetic oracle —
+        // `fetch_session_views` is the function the TUI command calls).
+        let (views, summary) = fetch_session_views(&store, project_root.path())
+            .await
+            .unwrap();
+
+        // The canary: regression PR #310 had `summary.stale == 1` and
+        // `view.pid == 4954` (the tmux-attach client PID), with
+        // `view.status == "stale"`.
+        assert_eq!(views.len(), 1, "exactly one session row expected");
+        assert_eq!(summary.active, 1, "session must be Active");
+        assert_eq!(summary.stale, 0, "session must NOT be promoted to Stale");
+
+        let v = &views[0];
+        assert_eq!(v.session_id, sid);
+        assert_eq!(
+            v.status, "active",
+            "user-visible status must be 'active', not 'stale' \
+             (this is the AC #13 canary for PR #310-class regressions)"
+        );
+        assert_eq!(
+            v.pid, canonical_pid,
+            "displayed PID must be the canonical lead_pid from the \
+             worktree-resolved status file, NOT the DB column or any \
+             other source"
+        );
     }
 
     #[test]
@@ -2004,7 +2188,6 @@ mod tests {
         let session = crate::models::InteractiveSession {
             id: "test".to_string(),
             session_id: sid.to_string(),
-            pid: 1,
             status: crate::types::InteractiveSessionStatus::Active,
             worktree_path: Some(wt.to_string_lossy().to_string()),
             branch: None,
@@ -2038,7 +2221,6 @@ mod tests {
         let session = crate::models::InteractiveSession {
             id: "test".to_string(),
             session_id: sid.to_string(),
-            pid: 1,
             status: crate::types::InteractiveSessionStatus::Active,
             worktree_path: None,
             branch: None,
@@ -2066,7 +2248,6 @@ mod tests {
         let session = crate::models::InteractiveSession {
             id: "test".to_string(),
             session_id: "../etc/passwd".to_string(),
-            pid: 1,
             status: crate::types::InteractiveSessionStatus::Active,
             worktree_path: None,
             branch: None,
@@ -3084,7 +3265,6 @@ mod tests {
         let session = crate::models::InteractiveSession {
             id: "test".to_string(),
             session_id: "ses-test-123".to_string(),
-            pid: 42,
             status: crate::types::InteractiveSessionStatus::Active,
             worktree_path: Some("/tmp/wt".to_string()),
             branch: Some("feat/test".to_string()),
@@ -3111,7 +3291,6 @@ mod tests {
         let session = crate::models::InteractiveSession {
             id: "test".to_string(),
             session_id: "ses-test-456".to_string(),
-            pid: 1,
             status: crate::types::InteractiveSessionStatus::Active,
             worktree_path: None,
             branch: None,

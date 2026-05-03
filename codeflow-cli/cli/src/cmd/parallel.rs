@@ -213,7 +213,6 @@ mod tests {
             session_id: Some("ses-001".to_string()),
             task_id: Some("TSK-001".to_string()),
             source: None,
-            lead_pid: None,
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 

@@ -111,11 +111,14 @@ async fn run_launch() -> Result<()> {
                 &wt_name,
                 &sid_str,
             );
-            let _ = codeflow_core::worktree::locked_update_lead_pid(
-                &registry_path,
-                &wt_name,
-                std::process::id(),
-            );
+            // INF-TSK-024-051 Phase 4-B: removed
+            // `locked_update_lead_pid(&registry_path, &wt_name, std::process::id())`.
+            // The wrapper-context PID was wrong-by-construction
+            // (codeflow CLI PID captured pre-`exec`, becomes the
+            // tmux-attach client PID after exec — never the live Claude
+            // lead). The registry's `lead_pid` field is gone; the
+            // canonical PID is written by SessionStart into
+            // `pathflow-session-status.json::lead_pid` instead.
             let _ = codeflow_core::worktree::locked_update_source(
                 &registry_path,
                 &wt_name,
@@ -225,7 +228,6 @@ async fn register_interactive_session(
     };
 
     let now = chrono::Utc::now().to_rfc3339();
-    let pid = i64::from(std::process::id());
     let wt = worktree_path.map(String::from);
     let tmux = tmux_session.map(String::from);
     // INF-TSK-049-001 AC #8: classify this row as autorun when launched
@@ -236,12 +238,17 @@ async fn register_interactive_session(
     } else {
         "interactive"
     };
+    // INF-TSK-024-051 Phase 4-C: removed `pid = $pid` from the CREATE
+    // statement and the corresponding `let pid = i64::from(std::process::id())`
+    // binding. The DB column was wrong-by-construction (CLI PID
+    // captured pre-`exec`, became tmux-attach-client PID after exec).
+    // Canonical PID lives in `pathflow-session-status.json::lead_pid`,
+    // written by SessionStart via `parent_id() -> validate_claude_pid`.
     let _ = store
         .db()
         .query(
             "CREATE interactive_session SET \
              session_id = $session_id, \
-             pid = $pid, \
              status = 'active', \
              worktree_path = $worktree_path, \
              tmux_session = $tmux_session, \
@@ -257,7 +264,6 @@ async fn register_interactive_session(
              completed_at = NONE;",
         )
         .bind(("session_id", session_id.to_string()))
-        .bind(("pid", pid))
         .bind(("worktree_path", wt))
         .bind(("tmux_session", tmux))
         .bind(("source_cli", source_cli.to_string()))
@@ -272,10 +278,24 @@ async fn register_interactive_session(
 /// By default, shows only active sessions. Pass `show_all=true` (via `--all`)
 /// to show all sessions. Optionally filter by `--status <active|stale|complete>`.
 ///
-/// Also scans `.state/interactive/heartbeat-*` as a filesystem fallback so
-/// sessions are visible even when the DB is unavailable.
+/// INF-TSK-024-051 Phase 7-rework: this function is now DB-only — every
+/// production session is registered in `interactive_session`, and the
+/// canonical liveness chokepoint reads `pathflow-session-status.json::lead_pid`
+/// directly, so the prior `.state/interactive/heartbeat-*` filesystem
+/// fallback is gone alongside the heartbeat writers.
 async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
     let project_dir = helpers::detect_project_root()?;
+
+    // INF-TSK-024-051: self-heal stale rows whose canonical PID file shows
+    // the session is actually alive. Prior runs of the broken DB-pid
+    // validator wrongly promoted live sessions to `stale`; the canonical
+    // chokepoint now resolves the right verdict, so demote them back to
+    // `active` before the user-visible SELECT runs. Cheap (only fires for
+    // rows currently marked `stale` whose status file reports Active) and
+    // self-healing (idempotent). Errors logged to stderr but never fatal.
+    if let Err(e) = repair_wrongly_stale_rows(&project_dir).await {
+        eprintln!("interactive status: stale-row repair skipped: {e}");
+    }
 
     // Determine the DB-level status filter.
     // --all => no filter (show everything).
@@ -293,13 +313,11 @@ async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
 
     let sessions = query_sessions(&project_dir, db_status_filter).await?;
 
-    let db_sids: std::collections::HashSet<String> =
-        sessions.iter().map(|s| s.session_id.clone()).collect();
-
-    // Filesystem fallback: scan heartbeat files for sessions not in DB.
-    let fs_only = scan_heartbeat_sessions(&project_dir, &db_sids);
-
-    if sessions.is_empty() && fs_only.is_empty() {
+    // INF-TSK-024-051 Phase 7-rework: heartbeat scanning removed. Every
+    // production session writes a `pathflow-session-status.json`, and
+    // every session is registered in `interactive_session`, so the
+    // DB-vs-filesystem reconciliation dance is no longer needed.
+    if sessions.is_empty() {
         if show_all {
             println!("No interactive sessions found.");
         } else {
@@ -314,7 +332,11 @@ async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
     );
     // Limit text output to 50 most recent.
     for s in sessions.iter().take(50) {
-        let pid_display = format_pid_with_liveness(s.pid);
+        // INF-TSK-024-051: display the canonical PID from
+        // pathflow-session-status.json (worktree-resolved). The DB
+        // `pid` column was removed in Phase 4-C.
+        let displayed_pid = resolve_displayed_pid(&project_dir, &s.session_id);
+        let pid_display = format_pid_with_liveness(displayed_pid);
         let wt = s.worktree_path.as_deref().unwrap_or("-");
         let branch = s.branch.as_deref().unwrap_or("-");
         let work_type = s.work_type.as_deref().unwrap_or("-");
@@ -323,19 +345,6 @@ async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
         println!(
             "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} {wt}",
             s.session_id, pid_display, s.status, s.source_cli, branch, work_type, phase
-        );
-    }
-    for (sid, alive) in &fs_only {
-        let liveness = if *alive { "alive" } else { "DEAD" };
-        println!(
-            "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} -",
-            sid,
-            format!("({liveness})"),
-            "(fs-only)",
-            "-",
-            "-",
-            "-",
-            "-"
         );
     }
     Ok(())
@@ -372,13 +381,23 @@ async fn run_cleanup(no_purge: bool, prune_completed: bool) -> Result<()> {
     let store_result = open_store(&project_dir).await;
     if let Ok(ref store) = store_result {
         for s in &sessions {
-            // Active rows: only act if the PID is dead (validate_claude_pid
-            // returns 0). Stale rows: act unconditionally — the row is
-            // already declared dead; we're just back-filling missing
-            // anchor timestamps for the freeze logic.
+            // Active rows: only act if the canonical chokepoint reports
+            // `Dead`. INF-TSK-024-051 Phase 3: migrated from
+            // `is_session_stale(s.pid)` (which validated the DB `pid`
+            // column — wrong-by-construction for managed sessions where
+            // the pid was the codeflow CLI PID captured pre-`exec`,
+            // becoming the tmux-attach client after exec) to the
+            // canonical chokepoint. `Unknown` ABSTAINS so an
+            // initializing session is never demoted by this command.
+            // Stale rows: act unconditionally on the back-fill path —
+            // the row is already declared dead; we're just back-filling
+            // missing anchor timestamps for the freeze logic.
             let s_status = s.status.to_string();
             let needs_action = match s_status.as_str() {
-                "active" => is_session_stale(s.pid),
+                "active" => matches!(
+                    codeflow_core::session::liveness::is_session_alive(&project_dir, &s.session_id,),
+                    codeflow_core::session::liveness::SessionLiveness::Dead
+                ),
                 "stale" => s.completed_at.is_none(),
                 _ => false,
             };
@@ -409,10 +428,10 @@ async fn run_cleanup(no_purge: bool, prune_completed: bool) -> Result<()> {
                 .bind(("sid", s.session_id.clone()))
                 .await;
             if s_status == "active" {
-                eprintln!(
-                    "cleaned stale session: {} (PID {} dead)",
-                    s.session_id, s.pid
-                );
+                // INF-TSK-024-051 Phase 4-C: DB `pid` column gone; the
+                // canonical PID is the chokepoint verdict that drove
+                // this branch. Just log the session id.
+                eprintln!("cleaned stale session: {} (session dead)", s.session_id);
             } else {
                 eprintln!(
                     "finalized stale session: {} (back-filled completed_at)",
@@ -424,21 +443,21 @@ async fn run_cleanup(no_purge: bool, prune_completed: bool) -> Result<()> {
     }
 
     // Filesystem artifact sweeps (independent of DB state).
-    let hb_cleaned = sweep_stale_heartbeats(&project_dir);
+    // INF-TSK-024-051 Phase 7-rework: `sweep_stale_heartbeats` removed.
+    // The heartbeat directory had no writers after Phase 4-A (interactive)
+    // and Phase 7-rework (autorun); the sweeper became a no-op and was
+    // deleted alongside its readers.
     let env_cleaned = sweep_dead_pid_env_files(&project_dir);
     let sess_cleaned = sweep_stale_session_dirs(&project_dir);
     let map_cleaned = clean_session_worktree_map(&project_dir);
     let wt_cleaned = mark_stale_worktree_entries(&project_dir);
 
-    let total = cleaned + hb_cleaned + env_cleaned + sess_cleaned + map_cleaned + wt_cleaned;
+    let total = cleaned + env_cleaned + sess_cleaned + map_cleaned + wt_cleaned;
     if total == 0 {
         println!("No stale sessions or artifacts found.");
     } else {
         if cleaned > 0 {
             println!("Cleaned {cleaned} stale DB session(s).");
-        }
-        if hb_cleaned > 0 {
-            println!("Removed {hb_cleaned} stale heartbeat file(s).");
         }
         if env_cleaned > 0 {
             println!("Removed {env_cleaned} dead-PID env file(s).");
@@ -522,6 +541,72 @@ async fn open_store(project_dir: &Path) -> Result<codeflow_core::store::SurrealS
 }
 
 /// Query InteractiveSession records from DB.
+/// Repair `stale` rows whose canonical chokepoint reports `Active`.
+///
+/// INF-TSK-024-051: prior runs of the TUI used the DB `pid` column as the
+/// liveness oracle. The DB column captured the codeflow CLI PID before
+/// `exec`, which became the tmux-attach-client PID after exec — never
+/// the live Claude lead. `validate_claude_pid` therefore failed and the
+/// row was wrongly demoted to `stale`. This helper consults the new
+/// canonical chokepoint (`is_session_alive` reads the worktree-resolved
+/// `pathflow-session-status.json::lead_pid`) and demotes such rows back
+/// to `active`, clearing the synthetic `completed_at` so duration display
+/// resumes live computation.
+///
+/// TODO(INF-TSK-024-051): this is a one-time legacy-row repair pass that
+/// runs on every `codeflow interactive status` invocation. Once codeflow
+/// gains a real DB migration framework (separate task, not in scope for
+/// this PR), this logic should move into a one-shot migration step that
+/// runs at startup, not a per-invocation hot-path. Until then the
+/// repair pays the SELECT cost on every call; once no more wrongly-stale
+/// rows exist, the SELECT returns empty and the repair is a no-op.
+///
+/// Idempotent and best-effort: silently continues on DB errors.
+async fn repair_wrongly_stale_rows(project_dir: &Path) -> Result<()> {
+    let store = open_store(project_dir).await?;
+    // SELECT * so the row deserialises into the full model. Selecting only
+    // `session_id` would leave other (non-Optional) fields unset and the
+    // take<Vec<...>>() call would fail silently.
+    let mut response = store
+        .db()
+        .query(
+            "SELECT * FROM interactive_session \
+             WHERE status = 'stale' \
+               AND (session_kind = 'interactive' OR session_kind = NONE)",
+        )
+        .await
+        .context("repair: query stale rows")?;
+    let rows: Vec<codeflow_core::models::InteractiveSession> =
+        response.take(0).context("repair: deserialize stale rows")?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut repaired = 0u32;
+    for r in rows {
+        let verdict =
+            codeflow_core::session::liveness::is_session_alive(project_dir, &r.session_id);
+        if matches!(
+            verdict,
+            codeflow_core::session::liveness::SessionLiveness::Active
+        ) {
+            store
+                .db()
+                .query(
+                    "UPDATE interactive_session SET status = 'active', \
+                     completed_at = NONE, updated_at = $now \
+                     WHERE session_id = $sid AND status = 'stale'",
+                )
+                .bind(("now", now.clone()))
+                .bind(("sid", r.session_id.clone()))
+                .await
+                .with_context(|| format!("repair: update {sid}", sid = r.session_id))?;
+            repaired += 1;
+        }
+    }
+    if repaired > 0 {
+        eprintln!("interactive status: repaired {repaired} wrongly-stale row(s)");
+    }
+    Ok(())
+}
+
 async fn query_sessions(
     project_dir: &Path,
     status_filter: Option<&str>,
@@ -597,16 +682,17 @@ fn resolve_work_dir<'a>(worktree_path: Option<&'a str>, project_dir: &'a str) ->
 
 /// Check if a session's PID is stale (dead OR not a Claude Code process).
 ///
-/// INF-TSK-050-001 AC #4: switched from bare `is_process_alive` to
-/// `validate_claude_pid` so a recycled PID (the orchestrator crashed,
-/// kernel reassigned the same PID to an unrelated process) is treated
-/// as dead. Without name verification, the cleanup path would skip
-/// such "alive but not ours" sessions and they'd accumulate in the
-/// list view.
+/// INF-TSK-024-051: callers MUST pass the canonical PID read from
+/// `pathflow-session-status.json::lead_pid` via the worktree-resolved
+/// chokepoint, NOT the DB `pid` column. The DB column captured the
+/// codeflow CLI process pre-`exec` and points at the tmux-attach client
+/// after exec, which `validate_claude_pid` correctly rejects (not named
+/// "claude") — but the rejection is meaningless because the wrong PID
+/// was being checked. With the canonical PID, "alive AND named claude"
+/// is the right invariant.
 ///
 /// Fail-secure: any uncertainty (missing name lookup, out-of-range PID,
-/// zero) returns `true` (i.e. "stale, safe to clean up"). Mirrors the
-/// stale-side contract in `core/src/autorun/stale.rs::is_session_pid_alive`.
+/// zero) returns `true` (i.e. "stale, safe to clean up").
 fn is_session_stale(pid: i64) -> bool {
     let Ok(pid_u32) = u32::try_from(pid) else {
         return true; // out-of-range or negative → fail-secure stale
@@ -625,6 +711,21 @@ fn format_pid_with_liveness(pid: i64) -> String {
         "alive"
     };
     format!("{pid} ({liveness})")
+}
+
+/// Resolve a session's displayed PID for text-mode status output.
+///
+/// INF-TSK-024-051 Phase 4-C: returns the canonical PID from the
+/// worktree-resolved `pathflow-session-status.json::lead_pid` (single
+/// source of truth). The DB `pid` column was removed in Phase 4-C; this
+/// returns 0 when the status file is missing (legacy unmanaged sessions
+/// pre-migration), and the caller renders 0 as "(0)" / "DEAD" via
+/// `format_pid_with_liveness`.
+fn resolve_displayed_pid(project_dir: &std::path::Path, session_id: &str) -> i64 {
+    i64::from(codeflow_core::session::liveness::read_canonical_lead_pid(
+        project_dir,
+        session_id,
+    ))
 }
 
 /// Derive the current PathFlow phase from the session's pathflow-session-status.json.
@@ -716,94 +817,19 @@ fn launch_in_tmux(tmux_name: &str, work_dir: &str, env_vars: &[(String, String)]
 }
 
 // ─── Filesystem sweep helpers ──────────────────────────────────────────
-
-/// Scan `.state/interactive/heartbeat-*` and return sessions found on disk
-/// but NOT in `db_sids`. Each entry is `(session_id, is_alive)`.
-fn scan_heartbeat_sessions(
-    project_dir: &Path,
-    db_sids: &std::collections::HashSet<String>,
-) -> Vec<(String, bool)> {
-    let hb_dir = project_dir.join(".state/interactive");
-    let mut result = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&hb_dir) else {
-        return result;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let Some(sid) = name.strip_prefix("heartbeat-") else {
-            continue;
-        };
-        if sid.contains("..") {
-            continue;
-        }
-        if db_sids.contains(sid) {
-            continue;
-        }
-        let alive = is_heartbeat_session_alive(project_dir, sid);
-        result.push((sid.to_string(), alive));
-    }
-    result
-}
-
-/// Check if a session is still alive by reading the canonical lead PID
-/// from `pathflow-session-status.json`.
-///
-/// INF-TSK-024-050 AC #2: migrated from `session-pointer.json::lead_pid`
-/// (which has been removed) to `pathflow-session-status.json::lead_pid`,
-/// the canonical source written via `validate_claude_pid(parent_id())`
-/// in session-start hooks.
-fn is_heartbeat_session_alive(project_dir: &Path, sid: &str) -> bool {
-    if sid.contains("..") {
-        return false;
-    }
-    let status_path = project_dir
-        .join(".state/session")
-        .join(sid)
-        .join("pathflow")
-        .join("pathflow-session-status.json");
-    let Ok(content) = std::fs::read_to_string(&status_path) else {
-        return false;
-    };
-    let Ok(status) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    let pid = status
-        .get("lead_pid")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|v| u32::try_from(v).ok())
-        .unwrap_or(0);
-    codeflow_core::session::process::is_process_alive(pid)
-}
-
-/// Sweep stale heartbeat files whose sessions are dead.
-///
-/// Returns the number of files removed.
-fn sweep_stale_heartbeats(project_dir: &Path) -> u32 {
-    sweep_stale_heartbeats_inner(project_dir, &project_dir.join(".state/interactive"))
-}
-
-/// Inner implementation for testability.
-fn sweep_stale_heartbeats_inner(project_dir: &Path, hb_dir: &Path) -> u32 {
-    let mut count = 0u32;
-    let Ok(entries) = std::fs::read_dir(hb_dir) else {
-        return count;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let Some(sid) = name.strip_prefix("heartbeat-") else {
-            continue;
-        };
-        if sid.contains("..") {
-            continue;
-        }
-        if !is_heartbeat_session_alive(project_dir, sid) {
-            let _ = std::fs::remove_file(entry.path());
-            eprintln!("removed stale heartbeat: {name}");
-            count += 1;
-        }
-    }
-    count
-}
+//
+// INF-TSK-024-051 Phase 7-rework: heartbeat scanners + sweepers removed.
+//   - `scan_heartbeat_sessions`: read `.state/interactive/heartbeat-*`
+//     and report DB-orphaned sessions. Now redundant — every production
+//     session is in `interactive_session`.
+//   - `is_heartbeat_session_alive`: delegated to the chokepoint anyway;
+//     direct chokepoint calls at the (one) remaining site are clearer.
+//   - `sweep_stale_heartbeats` / `_inner`: deleted alongside the readers
+//     since the directory has no writers post-rework.
+//
+// Replacement: callers use `crate::session::liveness::is_session_alive`
+// for liveness, and the `interactive_session` row is the source of
+// truth for the session list.
 
 /// Sweep `.state/runtime/shared/codeflow-env-*.sh` files whose PIDs are dead.
 ///
@@ -877,11 +903,17 @@ fn sweep_stale_session_dirs(project_dir: &Path) -> u32 {
         {
             Some(v) => v,
             None => {
-                // No status file — check session pointer liveness.
-                if !is_heartbeat_session_alive(project_dir, &name) {
-                    remove_session_artifacts(project_dir, &name);
-                    count += 1;
-                }
+                // No status file = stale artifact. The production
+                // `SessionStart` hook always writes the status file as its
+                // first action when creating a session directory, so a
+                // `.state/session/{sid}/` without a status file indicates
+                // a partial cleanup (sentinel survived) or an abandoned
+                // test fixture. Remove unconditionally — preserves the
+                // pre-Phase-7-rework `is_heartbeat_session_alive(missing)
+                // → false → remove` behavior without re-introducing the
+                // heartbeat reader.
+                remove_session_artifacts(project_dir, &name);
+                count += 1;
                 continue;
             }
         };
@@ -904,12 +936,18 @@ fn sweep_stale_session_dirs(project_dir: &Path) -> u32 {
                 }
             }
             "pf-started" | "pf-in-progress" => {
-                let lead_pid = status
-                    .get("lead_pid")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|v| u32::try_from(v).ok())
-                    .unwrap_or(0);
-                if lead_pid > 0 && !codeflow_core::session::process::is_process_alive(lead_pid) {
+                // INF-TSK-024-051 Phase 6: route through the canonical
+                // chokepoint instead of duplicating the lead_pid extraction
+                // + bare `is_process_alive` check. The chokepoint validates
+                // alive AND named "claude", so a recycled PID owned by an
+                // unrelated process (cargo, sshd, etc.) does not mask a
+                // dead session as alive.
+                let verdict =
+                    codeflow_core::session::liveness::is_session_alive(project_dir, &name);
+                if matches!(
+                    verdict,
+                    codeflow_core::session::liveness::SessionLiveness::Dead
+                ) {
                     remove_session_artifacts(project_dir, &name);
                     count += 1;
                 }
@@ -920,16 +958,17 @@ fn sweep_stale_session_dirs(project_dir: &Path) -> u32 {
     count
 }
 
-/// Remove session directory + sentinel directory + interactive heartbeat.
+/// Remove session directory + sentinel directory.
+///
+/// INF-TSK-024-051 Phase 7-rework: the heartbeat-file removal step was
+/// dropped — the file is no longer written. A best-effort `remove_file`
+/// against a non-existent path is a quiet no-op, but explicitly
+/// documenting the absence avoids a future reader thinking the cleanup
+/// is incomplete.
 fn remove_session_artifacts(project_dir: &Path, sid: &str) {
     if sid.contains("..") {
         return;
     }
-    let _ = std::fs::remove_file(
-        project_dir
-            .join(".state/interactive")
-            .join(format!("heartbeat-{sid}")),
-    );
     let _ = std::fs::remove_dir_all(project_dir.join(".state/session").join(sid));
     let _ = std::fs::remove_dir_all(project_dir.join(".state/sentinels/pathflow").join(sid));
     eprintln!("removed stale session artifacts: {sid}");
@@ -981,16 +1020,27 @@ fn mark_stale_worktree_entries(project_dir: &Path) -> u32 {
         if entry.status != codeflow_core::worktree::WorktreeStatus::Active {
             continue;
         }
-        let lead_pid = entry.lead_pid.unwrap_or(0);
-        if lead_pid > 0 && !codeflow_core::session::process::is_process_alive(lead_pid) {
-            if let Some(ref sid) = entry.session_id {
-                let _ = codeflow_core::worktree::mark_pending_cleanup(&registry_path, sid);
-                eprintln!(
-                    "marked stale worktree: {} (PID {lead_pid} dead)",
-                    entry.name
-                );
-                count += 1;
-            }
+        // INF-TSK-024-051 Phase 4-B: switched from `entry.lead_pid` (the
+        // removed registry field) to the canonical chokepoint via
+        // `is_session_alive`. The chokepoint reads
+        // `pathflow-session-status.json::lead_pid` worktree-resolved.
+        // Only `Dead` triggers `mark_pending_cleanup` — `Unknown`
+        // abstains (initializing sessions must not be marked stale).
+        let Some(ref sid) = entry.session_id else {
+            continue;
+        };
+        // Phase 4-C: use the `project_dir` parameter (caller-supplied)
+        // rather than re-resolving via `detect_project_root()`. This
+        // makes the function deterministic and testable; callers in
+        // production already pass the correct project root.
+        let verdict = codeflow_core::session::liveness::is_session_alive(project_dir, sid);
+        if matches!(
+            verdict,
+            codeflow_core::session::liveness::SessionLiveness::Dead
+        ) {
+            let _ = codeflow_core::worktree::mark_pending_cleanup(&registry_path, sid);
+            eprintln!("marked stale worktree: {} (session dead)", entry.name);
+            count += 1;
         }
     }
     count
@@ -1645,8 +1695,9 @@ fn render_session_detail(
     };
 
     let pid_alive = !is_session_stale(s.pid);
-    // `pid = 0` in the DB means no recorded PID; surface that as "unknown"
-    // to avoid rendering a misleading "0 (DEAD)".
+    // `pid = 0` here means the canonical `pathflow-session-status.json::lead_pid`
+    // is missing/zero (status file gone or session never recorded one); surface
+    // that as "unknown" to avoid rendering a misleading "0 (DEAD)".
     #[allow(clippy::cast_possible_truncation)]
     let (pid_field, alive_field) = if s.pid == 0 {
         (None, None)
@@ -2075,87 +2126,142 @@ mod tests {
         assert!(!sessions[0].managed);
     }
 
-    // ─── Heartbeat sweep ──────────────────────────────────────────────
+    // ─── repair_wrongly_stale_rows ────────────────────────────────────
+    //
+    // INF-TSK-024-051 Phase 7-rework iter3 (cf-quality-assurance retry 1):
+    // tests for the self-heal path that demotes wrongly-stale interactive
+    // rows back to active when the canonical chokepoint reports `Active`.
+    // Each test seeds `interactive_session` then directly UPDATEs status
+    // to 'stale' (the public `register_interactive_session` always
+    // creates as 'active'). The chokepoint requires
+    // `pathflow-session-status.json::lead_pid` to exist with a valid PID;
+    // the validator is bypassed via `override_pid_validator_for_tests` so
+    // the test runner's `cargo` PID can stand in for a Claude lead.
 
-    #[test]
-    fn test_sweep_stale_heartbeats_removes_dead_sessions() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        // Create heartbeat for a session with no pointer (dead).
-        std::fs::write(hb_dir.join("heartbeat-ses-dead1"), "2026-01-01T00:00:00Z").unwrap();
-
-        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
-        assert_eq!(removed, 1);
-        assert!(!hb_dir.join("heartbeat-ses-dead1").exists());
-    }
-
-    #[test]
-    fn test_sweep_stale_heartbeats_preserves_alive_sessions() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        // INF-TSK-024-050 AC #2: liveness now reads
-        // pathflow-session-status.json::lead_pid (canonical) instead of
-        // session-pointer.json::lead_pid (removed).
-        let sid = "ses-alive1";
-        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+    /// Helper: seed a stale interactive_session row with a status file
+    /// containing the given PID. Returns the project_dir path.
+    async fn seed_stale_interactive_row(project_dir: &std::path::Path, sid: &str, lead_pid: u32) {
+        let db_dir = project_dir.join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        register_interactive_session(project_dir, sid, None, None, "codeflow", true).await;
+        // Promote to stale via direct UPDATE — the public register helper
+        // always creates active rows.
+        let store = open_store(project_dir).await.unwrap();
+        let _ = store
+            .db()
+            .query("UPDATE interactive_session SET status = 'stale' WHERE session_id = $sid")
+            .bind(("sid", sid.to_string()))
+            .await;
+        // Write a status file with the requested lead_pid so the
+        // chokepoint can resolve the row's liveness from the project-dir
+        // fallback path (no worktree registered in these tests).
+        let status_dir = project_dir
+            .join(".state/session")
+            .join(sid)
+            .join("pathflow");
         std::fs::create_dir_all(&status_dir).unwrap();
-        let status = serde_json::json!({
-            "lead_pid": std::process::id(),
-            "session_id": sid,
-            "status": "pf-in-progress"
-        });
         std::fs::write(
             status_dir.join("pathflow-session-status.json"),
-            serde_json::to_string(&status).unwrap(),
+            format!(r#"{{"session_id":"{sid}","lead_pid":{lead_pid},"status":"pf-in-progress"}}"#),
         )
         .unwrap();
+    }
 
-        std::fs::write(
-            hb_dir.join(format!("heartbeat-{sid}")),
-            "2026-01-01T00:00:00Z",
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn test_repair_wrongly_stale_rows_demotes_wrongly_stale_to_active() {
+        // Validator returns true → chokepoint says Active → row should be
+        // demoted from 'stale' back to 'active'.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(|_| true);
+
+        let dir = tempfile::tempdir().unwrap();
+        seed_stale_interactive_row(dir.path(), "ses-wrongly-stale", std::process::id()).await;
+
+        // Sanity: row is currently stale.
+        let stale_before = query_sessions(dir.path(), Some("stale")).await.unwrap();
+        assert_eq!(stale_before.len(), 1);
+        assert_eq!(stale_before[0].session_id, "ses-wrongly-stale");
+
+        // Run the repair.
+        repair_wrongly_stale_rows(dir.path()).await.unwrap();
+
+        // The row should be active now and the stale list empty.
+        let active_after = query_sessions(dir.path(), Some("active")).await.unwrap();
+        assert_eq!(
+            active_after.len(),
+            1,
+            "wrongly-stale row should be demoted to active"
+        );
+        assert_eq!(active_after[0].session_id, "ses-wrongly-stale");
+
+        let stale_after = query_sessions(dir.path(), Some("stale")).await.unwrap();
+        assert!(
+            stale_after.is_empty(),
+            "no stale rows should remain after repair"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn test_repair_wrongly_stale_rows_leaves_dead_stale_rows_alone() {
+        // Validator returns false → chokepoint says Dead → row stays stale.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(|_| false);
+
+        let dir = tempfile::tempdir().unwrap();
+        seed_stale_interactive_row(dir.path(), "ses-truly-dead", 4_000_000).await;
+
+        repair_wrongly_stale_rows(dir.path()).await.unwrap();
+
+        let stale_after = query_sessions(dir.path(), Some("stale")).await.unwrap();
+        assert_eq!(
+            stale_after.len(),
+            1,
+            "dead-PID stale row must NOT be demoted"
+        );
+        assert_eq!(stale_after[0].session_id, "ses-truly-dead");
+
+        let active_after = query_sessions(dir.path(), Some("active")).await.unwrap();
+        assert!(
+            active_after.is_empty(),
+            "no rows should have been promoted to active"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn test_repair_wrongly_stale_rows_noop_when_no_stale_rows() {
+        // No stale rows present — repair is a no-op and returns Ok.
+        // (No validator override needed: the SELECT returns empty, so the
+        // chokepoint is never consulted.)
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        register_interactive_session(
+            dir.path(),
+            "ses-already-active",
+            None,
+            None,
+            "codeflow",
+            true,
         )
-        .unwrap();
+        .await;
 
-        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
-        assert_eq!(removed, 0);
-        assert!(hb_dir.join(format!("heartbeat-{sid}")).exists());
+        let result = repair_wrongly_stale_rows(dir.path()).await;
+        assert!(result.is_ok(), "no-op repair should return Ok: {result:?}");
+
+        // Active rows untouched.
+        let active = query_sessions(dir.path(), Some("active")).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].session_id, "ses-already-active");
     }
 
-    #[test]
-    fn test_sweep_stale_heartbeats_ignores_non_heartbeat_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        std::fs::write(hb_dir.join("other-file.txt"), "data").unwrap();
-
-        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
-        assert_eq!(removed, 0);
-        assert!(hb_dir.join("other-file.txt").exists());
-    }
-
-    #[test]
-    fn test_sweep_stale_heartbeats_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
-        assert_eq!(removed, 0);
-    }
-
-    #[test]
-    fn test_sweep_stale_heartbeats_missing_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        // Directory does not exist.
-        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
-        assert_eq!(removed, 0);
-    }
+    // INF-TSK-024-051 Phase 7-rework: heartbeat sweep tests deleted.
+    // The functions they exercised (`sweep_stale_heartbeats`,
+    // `sweep_stale_heartbeats_inner`, `scan_heartbeat_sessions`,
+    // `is_heartbeat_session_alive`) were removed as dead code after the
+    // autorun heartbeat writer was deleted alongside the interactive
+    // one. The chokepoint's own tests in `core/src/session/liveness.rs`
+    // cover the underlying liveness logic.
 
     // ─── Dead-PID env file sweep ──────────────────────────────────────
 
@@ -2276,82 +2382,11 @@ mod tests {
         assert_eq!(removed, 0);
     }
 
-    // ─── Scan heartbeat sessions ──────────────────────────────────────
-
-    #[test]
-    fn test_scan_heartbeat_sessions_excludes_db_known() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        std::fs::write(hb_dir.join("heartbeat-ses-known"), "ts").unwrap();
-        std::fs::write(hb_dir.join("heartbeat-ses-unknown"), "ts").unwrap();
-
-        let mut db_sids = std::collections::HashSet::new();
-        db_sids.insert("ses-known".to_string());
-
-        let fs_only = scan_heartbeat_sessions(dir.path(), &db_sids);
-        assert_eq!(fs_only.len(), 1);
-        assert_eq!(fs_only[0].0, "ses-unknown");
-    }
-
-    #[test]
-    fn test_scan_heartbeat_sessions_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_sids = std::collections::HashSet::new();
-        let fs_only = scan_heartbeat_sessions(dir.path(), &db_sids);
-        assert!(fs_only.is_empty());
-    }
-
-    // ─── is_heartbeat_session_alive ───────────────────────────────────
-
-    // INF-TSK-024-050 AC #2: tests verify is_heartbeat_session_alive
-    // reads pathflow-session-status.json::lead_pid (canonical), not the
-    // removed session-pointer.json::lead_pid field.
-
-    #[test]
-    fn test_is_heartbeat_session_alive_no_status_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_heartbeat_session_alive(dir.path(), "ses-nope"));
-    }
-
-    #[test]
-    fn test_is_heartbeat_session_alive_dead_pid() {
-        let dir = tempfile::tempdir().unwrap();
-        let sid = "ses-deadpid";
-        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
-        std::fs::create_dir_all(&status_dir).unwrap();
-        let status = serde_json::json!({
-            "lead_pid": 4_000_000,
-            "session_id": sid,
-            "status": "pf-in-progress"
-        });
-        std::fs::write(
-            status_dir.join("pathflow-session-status.json"),
-            serde_json::to_string(&status).unwrap(),
-        )
-        .unwrap();
-        assert!(!is_heartbeat_session_alive(dir.path(), sid));
-    }
-
-    #[test]
-    fn test_is_heartbeat_session_alive_current_pid() {
-        let dir = tempfile::tempdir().unwrap();
-        let sid = "ses-alivepid";
-        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
-        std::fs::create_dir_all(&status_dir).unwrap();
-        let status = serde_json::json!({
-            "lead_pid": std::process::id(),
-            "session_id": sid,
-            "status": "pf-in-progress"
-        });
-        std::fs::write(
-            status_dir.join("pathflow-session-status.json"),
-            serde_json::to_string(&status).unwrap(),
-        )
-        .unwrap();
-        assert!(is_heartbeat_session_alive(dir.path(), sid));
-    }
+    // INF-TSK-024-051 Phase 7-rework: scan_heartbeat_sessions and
+    // is_heartbeat_session_alive tests deleted. The functions they
+    // exercised were removed as dead code; the underlying liveness
+    // logic is covered by chokepoint tests in
+    // `core/src/session/liveness.rs`.
 
     // ─── remove_session_artifacts ─────────────────────────────────────
 
@@ -2360,11 +2395,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sid = "ses-cleanup1";
 
-        // Create artifacts.
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-        std::fs::write(hb_dir.join(format!("heartbeat-{sid}")), "ts").unwrap();
-
+        // INF-TSK-024-051 Phase 7-rework: heartbeat artifact removed from
+        // the cleanup contract; only session + sentinel directories are
+        // touched now.
         let sess_dir = dir.path().join(".state/session").join(sid);
         std::fs::create_dir_all(&sess_dir).unwrap();
 
@@ -2373,7 +2406,6 @@ mod tests {
 
         remove_session_artifacts(dir.path(), sid);
 
-        assert!(!hb_dir.join(format!("heartbeat-{sid}")).exists());
         assert!(!sess_dir.exists());
         assert!(!sentinel_dir.exists());
     }
@@ -2406,7 +2438,6 @@ mod tests {
             session_id: Some("ses-srctest".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -2434,60 +2465,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_interactive_worktree_registry_source_not_overwritten_by_pid() {
-        // Verify that locked_update_lead_pid does NOT affect the source field.
-        // This validates that both calls are needed independently.
-        let dir = tempfile::tempdir().unwrap();
-        let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
-
-        let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-01-01T00:00:00Z");
-        reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
-            name: "worktree-ses-indep".to_string(),
-            path: "/tmp/wt-indep".to_string(),
-            branch: Some("feat/test".to_string()),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            status: codeflow_core::worktree::WorktreeStatus::Active,
-            session_id: Some("ses-indep".to_string()),
-            task_id: None,
-            source: None,
-            lead_pid: None,
-        });
-        codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
-
-        // Update lead_pid only.
-        let _ = codeflow_core::worktree::locked_update_lead_pid(
-            &registry_path,
-            "worktree-ses-indep",
-            1234,
-        );
-
-        // Source should still be None after pid update.
-        let after_pid = codeflow_core::worktree::read_registry(&registry_path).unwrap();
-        assert!(
-            after_pid.worktrees[0].source.is_none(),
-            "source should remain None after locked_update_lead_pid"
-        );
-
-        // Now set source.
-        let _ = codeflow_core::worktree::locked_update_source(
-            &registry_path,
-            "worktree-ses-indep",
-            "interactive",
-        );
-
-        let after_both = codeflow_core::worktree::read_registry(&registry_path).unwrap();
-        assert_eq!(
-            after_both.worktrees[0].source.as_deref(),
-            Some("interactive"),
-            "source should be set after locked_update_source"
-        );
-        assert_eq!(
-            after_both.worktrees[0].lead_pid,
-            Some(1234),
-            "lead_pid should still be set"
-        );
-    }
+    // INF-TSK-024-051 Phase 4-B: removed
+    // `test_interactive_worktree_registry_source_not_overwritten_by_pid`.
+    // The test exercised the now-deleted `locked_update_lead_pid` and
+    // asserted on the now-removed `entry.lead_pid` field. The
+    // independence-of-update behavior the test validated is preserved
+    // implicitly: `locked_update_source` only touches `source`.
 
     // ─── sweep_stale_session_dirs ─────────────────────────────────────
 
@@ -2564,6 +2547,15 @@ mod tests {
 
     #[test]
     fn test_sweep_stale_session_dirs_in_progress_alive_pid() {
+        // INF-TSK-024-051 Phase 6: `sweep_stale_session_dirs` now routes
+        // through the canonical chokepoint, which requires the lead PID
+        // to be alive AND named "claude". Install a synthetic validator
+        // that only checks process aliveness so the test runner's PID
+        // (which is NOT named "claude") can stand in for a live lead.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(
+            codeflow_core::session::process::is_process_alive,
+        );
+
         let dir = tempfile::tempdir().unwrap();
         let current_pid = std::process::id();
         create_session_status(
@@ -2606,8 +2598,31 @@ mod tests {
 
     #[test]
     fn test_mark_stale_worktree_entries_dead_pid() {
+        // INF-TSK-024-051 Phase 4-C: `mark_stale_worktree_entries` now reads
+        // the canonical chokepoint instead of the removed registry
+        // `lead_pid` field. To exercise the `Dead` branch, write a status
+        // file containing a guaranteed-dead PID and install a synthetic
+        // validator that only checks process aliveness (the test runner is
+        // `cargo`, not `claude`, so the production validator would
+        // mis-classify the PID).
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(
+            codeflow_core::session::process::is_process_alive,
+        );
+
         let dir = tempfile::tempdir().unwrap();
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
+        let sid = "ses-stale1";
+
+        // Write a status file with a guaranteed-dead PID so the chokepoint
+        // returns `Dead` (not `Unknown`).
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        let dead_pid: u32 = 99_999_999;
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            format!(r#"{{"lead_pid": {dead_pid}, "session_id": "{sid}", "status": "active"}}"#),
+        )
+        .unwrap();
 
         let mut reg = codeflow_core::worktree::WorktreeRegistry::new("2026-01-01T00:00:00Z");
         reg.worktrees.push(codeflow_core::worktree::WorktreeEntry {
@@ -2616,10 +2631,9 @@ mod tests {
             branch: Some("feat/test".to_string()),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             status: codeflow_core::worktree::WorktreeStatus::Active,
-            session_id: Some("ses-stale1".to_string()),
+            session_id: Some(sid.to_string()),
             task_id: None,
             source: Some("interactive".to_string()),
-            lead_pid: Some(4_000_000), // Dead PID.
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -2650,7 +2664,6 @@ mod tests {
             session_id: Some("ses-alive1".to_string()),
             task_id: None,
             source: Some("interactive".to_string()),
-            lead_pid: Some(std::process::id()), // Alive PID.
         });
         codeflow_core::worktree::write_registry(&registry_path, &reg).unwrap();
 
@@ -2669,15 +2682,6 @@ mod tests {
     // ─── Path traversal guards ───────────────────────────────────────
 
     #[test]
-    fn test_is_heartbeat_session_alive_path_traversal() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(
-            !is_heartbeat_session_alive(dir.path(), "../etc"),
-            "path traversal SID should return false"
-        );
-    }
-
-    #[test]
     fn test_remove_session_artifacts_path_traversal() {
         let dir = tempfile::tempdir().unwrap();
         // Create a file that would be hit by traversal.
@@ -2692,47 +2696,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_scan_heartbeat_sessions_skips_path_traversal() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        // Create a heartbeat whose SID contains ".." (triggers the guard).
-        // Use "..evil" not "../evil" since "/" is a path separator the OS won't allow.
-        std::fs::write(hb_dir.join("heartbeat-..evil"), "ts").unwrap();
-
-        let db_sids = std::collections::HashSet::new();
-        let result = scan_heartbeat_sessions(dir.path(), &db_sids);
-        assert!(
-            result.is_empty(),
-            "path traversal heartbeat should be skipped"
-        );
-    }
-
-    #[test]
-    fn test_sweep_stale_heartbeats_skips_path_traversal() {
-        let dir = tempfile::tempdir().unwrap();
-        let hb_dir = dir.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-
-        // Create a heartbeat whose SID contains ".." (triggers the guard).
-        std::fs::write(hb_dir.join("heartbeat-ses..evil"), "ts").unwrap();
-        // Also create a normal stale heartbeat for comparison.
-        std::fs::write(hb_dir.join("heartbeat-ses-normalstale"), "ts").unwrap();
-
-        let removed = sweep_stale_heartbeats_inner(dir.path(), &hb_dir);
-        // Only the normal stale one should be removed (no alive pointer).
-        assert_eq!(
-            removed, 1,
-            "only non-traversal stale heartbeat should be removed"
-        );
-        // The traversal one should still exist (skipped, not removed).
-        assert!(
-            hb_dir.join("heartbeat-ses..evil").exists(),
-            "traversal heartbeat should be skipped, not removed"
-        );
-    }
+    // INF-TSK-024-051 Phase 7-rework: heartbeat traversal-guard tests
+    // deleted alongside the functions they exercised
+    // (`is_heartbeat_session_alive`, `scan_heartbeat_sessions`,
+    // `sweep_stale_heartbeats_inner`). The chokepoint
+    // `resolve_session_state_dir` has its own traversal guard (covered by
+    // `read_canonical_lead_pid_rejects_path_traversal` in
+    // `core/src/session/mod.rs`).
 
     // -----------------------------------------------------------------------
     // derive_session_phase tests
@@ -2743,7 +2713,6 @@ mod tests {
         let session = codeflow_core::models::InteractiveSession {
             id: "test:1".into(),
             session_id: "ses-test".into(),
-            pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: None,
             branch: None,
@@ -2778,7 +2747,6 @@ mod tests {
         let session = codeflow_core::models::InteractiveSession {
             id: "test:2".into(),
             session_id: "ses-phase-test".into(),
-            pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: Some(wt_path),
             branch: Some("fix/test".into()),
@@ -2803,7 +2771,6 @@ mod tests {
         let session = codeflow_core::models::InteractiveSession {
             id: "test:3".into(),
             session_id: "ses-../../../etc/passwd".into(),
-            pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: Some("/tmp/wt".into()),
             branch: None,
@@ -2828,7 +2795,6 @@ mod tests {
         let session = codeflow_core::models::InteractiveSession {
             id: "test:4".into(),
             session_id: "ses-clean-id".into(),
-            pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: Some("/tmp/../../../etc".into()),
             branch: None,
@@ -2863,7 +2829,6 @@ mod tests {
         let session = codeflow_core::models::InteractiveSession {
             id: "test:5".into(),
             session_id: "ses-bad-json".into(),
-            pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: Some(wt_path),
             branch: None,
@@ -2898,7 +2863,6 @@ mod tests {
         let session = codeflow_core::models::InteractiveSession {
             id: "test:6".into(),
             session_id: "ses-no-phase".into(),
-            pid: 1234,
             status: codeflow_core::types::InteractiveSessionStatus::Active,
             worktree_path: Some(wt_path),
             branch: None,
@@ -3040,7 +3004,7 @@ mod tests {
             task_format_id: None,
             last_phase: None,
             team_name: None,
-            pid: 1,
+            pid: 0,
             worktree_path: None,
             duration_secs: 0,
             managed: true,
@@ -3066,7 +3030,7 @@ mod tests {
             task_format_id: None,
             last_phase: None,
             team_name: Some("team-1".into()),
-            pid: 42,
+            pid: 12345,
             worktree_path: None,
             duration_secs: 120,
             managed: true,
@@ -3095,7 +3059,7 @@ mod tests {
                 task_format_id: None,
                 last_phase: None,
                 team_name: None,
-                pid: 1,
+                pid: 0,
                 worktree_path: None,
                 duration_secs: 0,
                 managed: true,
@@ -3112,7 +3076,7 @@ mod tests {
                 task_format_id: None,
                 last_phase: None,
                 team_name: None,
-                pid: 2,
+                pid: 0,
                 worktree_path: None,
                 duration_secs: 0,
                 managed: true,

@@ -570,7 +570,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         let state = mgr.detect_state(&entry);
@@ -592,7 +591,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -667,7 +665,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -690,7 +687,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -724,7 +720,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -933,7 +928,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -956,7 +950,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -993,7 +986,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1015,7 +1007,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1055,7 +1046,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1080,7 +1070,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1103,7 +1092,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1151,7 +1139,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1186,7 +1173,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1229,7 +1215,6 @@ mod tests {
             session_id: Some("ses-dead00000000000000000000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: Some(999_999_999),
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1252,7 +1237,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1364,7 +1348,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         }];
 
         let orphans = scan_orphaned_directories(&base, &registry_entries);
@@ -1436,7 +1419,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1519,7 +1501,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1562,7 +1543,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 
@@ -1605,7 +1585,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         write_registry(&reg_path, &reg).unwrap();
 

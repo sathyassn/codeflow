@@ -28,17 +28,39 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// Count active interactive sessions by scanning heartbeat files.
+/// Count active interactive sessions by scanning `.state/session/{sid}/`
+/// directories and asking the canonical liveness chokepoint whether each
+/// session is alive.
 ///
-/// Returns 0 on any error (best-effort).
+/// INF-TSK-024-051 Phase 7-rework iter2: was previously a heartbeat-file
+/// scanner (`scan .state/interactive/heartbeat-*`). When iter1 removed the
+/// last heartbeat writer (autorun's at `worker.rs:1093-1100`, after Phase
+/// 4-A removed the SessionStart-side writer at `session_start.rs:589-594`),
+/// the directory became unwritten and this function silently returned 0
+/// for all production sessions. Migrated to the canonical session-state
+/// directory + chokepoint to restore the welcome panel's session count.
+///
+/// Returns 0 on any I/O error (best-effort — the welcome panel is
+/// informational and must not fail the binary entry path).
 fn count_active_sessions(project_dir: &Path) -> usize {
-    let hb_dir = project_dir.join(".state/interactive");
-    let Ok(entries) = std::fs::read_dir(&hb_dir) else {
+    let session_dir = project_dir.join(".state/session");
+    let Ok(entries) = std::fs::read_dir(&session_dir) else {
         return 0;
     };
     entries
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with("heartbeat-"))
+        .filter(|e| {
+            let name = e.file_name();
+            let Some(sid) = name.to_str() else {
+                return false;
+            };
+            // Path-traversal defense: skip any sid containing `..` even
+            // though the name comes from `read_dir` (defense in depth).
+            if !sid.starts_with("ses-") || sid.contains("..") {
+                return false;
+            }
+            codeflow_core::session::liveness::is_session_alive(project_dir, sid).is_alive()
+        })
         .count()
 }
 
@@ -154,13 +176,34 @@ mod tests {
     }
 
     #[test]
-    fn test_count_active_sessions_with_heartbeats() {
+    fn test_count_active_sessions_with_status_files() {
+        // INF-TSK-024-051 Phase 7-rework iter2: rewritten to exercise the
+        // canonical session-state path. The chokepoint validates `pid alive
+        // AND named "claude"`; the test runner is `cargo`, not `claude`,
+        // so install a synthetic always-alive validator.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(|_| true);
+
         let tmp = tempfile::tempdir().unwrap();
-        let hb_dir = tmp.path().join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-        std::fs::write(hb_dir.join("heartbeat-ses-001"), "").unwrap();
-        std::fs::write(hb_dir.join("heartbeat-ses-002"), "").unwrap();
-        std::fs::write(hb_dir.join("other-file"), "").unwrap(); // not a heartbeat
+        let pid = std::process::id();
+
+        // Two live sessions (status files with non-zero lead_pid).
+        for sid in ["ses-001", "ses-002"] {
+            let dir = tmp.path().join(".state/session").join(sid).join("pathflow");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("pathflow-session-status.json"),
+                format!(r#"{{"session_id":"{sid}","lead_pid":{pid}}}"#),
+            )
+            .unwrap();
+        }
+
+        // A non-`ses-` directory under .state/session (must be ignored).
+        std::fs::create_dir_all(tmp.path().join(".state/session/other-dir")).unwrap();
+
+        // A `ses-` directory with no status file (chokepoint returns
+        // Unknown → not alive → not counted).
+        std::fs::create_dir_all(tmp.path().join(".state/session/ses-stale")).unwrap();
+
         assert_eq!(count_active_sessions(tmp.path()), 2);
     }
 

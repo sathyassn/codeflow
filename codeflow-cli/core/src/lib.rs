@@ -29,6 +29,13 @@ pub mod worktree;
 #[cfg(feature = "tui")]
 pub mod tui;
 
+/// Test-only utilities (shared mutexes, fixtures). Gated on `cfg(test)`
+/// so it does not contribute to production binary size. INF-TSK-024-051
+/// Phase 2.5: introduced to consolidate the per-module `XDG_LOCK`
+/// mutexes that were racing under parallel test execution.
+#[cfg(test)]
+pub(crate) mod test_util;
+
 // Re-export commonly used items at crate root.
 pub use error::{
     AutorunError, ConfigError, CoordinationError, DbError, DoctorError, GitError, HookError,

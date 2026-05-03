@@ -13,7 +13,13 @@
 pub mod active_task;
 pub mod autorun_detect;
 pub mod env;
-pub mod heartbeat;
+// INF-TSK-024-051 Phase 4: `pub mod heartbeat;` removed. The
+// `.state/runtime/heartbeat` file was Signal 2 in the old
+// `check_session_liveness` 3-signal model; the canonical chokepoint
+// (`liveness::is_session_alive`) reads
+// `pathflow-session-status.json::lead_pid` directly with
+// worktree-resolution. The `session/heartbeat.rs` file is deleted in
+// this commit.
 pub mod liveness;
 pub mod process;
 pub mod sentinel;
@@ -297,13 +303,17 @@ fn current_env_file_inner(
 
 /// Check if a session is a live worktree session.
 ///
-/// Returns `true` if a session pointer exists, the worktree directory is present,
-/// AND centralized liveness indicates the session is active or recent.
-/// Returns `false` if no pointer, pointer unreadable, worktree gone, or session dead.
+/// Returns `true` if a session pointer exists, the worktree directory is
+/// present, AND the canonical chokepoint reports `Active`. Returns
+/// `false` for any other case (no pointer, worktree gone, Dead, or
+/// Unknown — the caller's "is this a live worktree session?" semantic is
+/// strict, so Unknown counts as not-live).
 ///
-/// INF-TSK-024-050 AC #2: lead_pid is read from `pathflow-session-status.json`
-/// (canonical source) instead of `session-pointer.json` (the field was removed).
-/// The pointer file is still used to discover the worktree path.
+/// INF-TSK-024-051 Phase 3: migrated from `check_session_liveness` to
+/// the canonical `is_session_alive` chokepoint. The pointer file is
+/// still used to verify the worktree directory exists; PID resolution
+/// goes through the chokepoint (which uses `worktrees.yaml` to resolve
+/// the worktree-local status file).
 pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
     let Some(pointer) = read_session_pointer(project_dir, sid) else {
         return false;
@@ -312,48 +322,10 @@ pub(crate) fn is_live_worktree_session(project_dir: &Path, sid: &str) -> bool {
     if !wt_path.exists() {
         return false;
     }
-    let lead_pid = read_lead_pid_from_status(project_dir, sid);
-    liveness::check_session_liveness(
-        lead_pid,
-        Some(wt_path),
-        None,
-        liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
+    matches!(
+        liveness::is_session_alive(project_dir, sid),
+        liveness::SessionLiveness::Active
     )
-    .is_alive()
-}
-
-/// Read the canonical `lead_pid` from `pathflow-session-status.json`.
-///
-/// Returns 0 when the file is missing, unreadable, malformed, or the
-/// `lead_pid` field is absent. Callers treat 0 as "no PID recorded".
-///
-/// INF-TSK-024-050 WS-SEC iter 1: path-traversal guard. `sid` is
-/// expected to come from a trusted internal source (filesystem
-/// directory listing under `.state/session/`), but the parallel
-/// helper `is_heartbeat_session_alive` in `cli/src/cmd/interactive.rs`
-/// has the same guard. Matching the pattern keeps the audit surface
-/// uniform and is defense-in-depth at zero cost.
-fn read_lead_pid_from_status(project_dir: &Path, sid: &str) -> u32 {
-    if sid.contains("..") {
-        return 0;
-    }
-    let status_path = project_dir
-        .join(".state")
-        .join("session")
-        .join(sid)
-        .join("pathflow")
-        .join("pathflow-session-status.json");
-    let Ok(content) = std::fs::read_to_string(&status_path) else {
-        return 0;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return 0;
-    };
-    value
-        .get("lead_pid")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|v| u32::try_from(v).ok())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1132,13 +1104,17 @@ mod tests {
         assert_eq!(result, project_sid);
     }
 
-    /// INF-TSK-024-050 WS-SEC iter 1: defense-in-depth for the
-    /// `read_lead_pid_from_status` path-traversal guard. A `sid` that
-    /// contains `..` must short-circuit to 0 *before* any path
-    /// concatenation, so even if a malicious caller smuggled in
+    /// INF-TSK-024-050 WS-SEC iter 1 + INF-TSK-024-051 Phase 6:
+    /// defense-in-depth for the chokepoint's path-traversal guard. A
+    /// `sid` that contains `..` must short-circuit to 0 *before* any
+    /// path concatenation, so even if a malicious caller smuggled in
     /// `"../../etc"` we never read outside `.state/session/<sid>/`.
+    /// Phase 6 renamed and rerouted this test from the deleted dead
+    /// helper `read_lead_pid_from_status` to the canonical chokepoint
+    /// `liveness::read_canonical_lead_pid`, which performs the same
+    /// sanitisation via `resolve_session_state_dir`.
     #[test]
-    fn read_lead_pid_from_status_rejects_path_traversal() {
+    fn read_canonical_lead_pid_rejects_path_traversal() {
         let project_dir = tempfile::tempdir().unwrap();
         // Place a real status file at the legit location to prove the
         // function is otherwise functional, then confirm the traversal
@@ -1156,19 +1132,22 @@ mod tests {
             r#"{"status":"pf-in-progress","lead_pid":4242}"#,
         )
         .unwrap();
-        // Sanity: the function works for the legit sid.
+        // Sanity: the chokepoint reads the legit sid.
         assert_eq!(
-            read_lead_pid_from_status(project_dir.path(), legit_sid),
+            crate::session::liveness::read_canonical_lead_pid(project_dir.path(), legit_sid),
             4242
         );
-        // Guard: traversal sids return 0 without touching the filesystem.
+        // Guard: traversal sids return 0 without escaping the project dir.
         assert_eq!(
-            read_lead_pid_from_status(project_dir.path(), "../../etc"),
+            crate::session::liveness::read_canonical_lead_pid(project_dir.path(), "../../etc"),
             0
         );
-        assert_eq!(read_lead_pid_from_status(project_dir.path(), ".."), 0);
         assert_eq!(
-            read_lead_pid_from_status(project_dir.path(), "ses-..0000000"),
+            crate::session::liveness::read_canonical_lead_pid(project_dir.path(), ".."),
+            0
+        );
+        assert_eq!(
+            crate::session::liveness::read_canonical_lead_pid(project_dir.path(), "ses-..0000000"),
             0
         );
     }

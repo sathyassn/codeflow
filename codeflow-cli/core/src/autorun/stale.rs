@@ -106,11 +106,15 @@ pub fn is_session_pid_alive(pid: Option<i64>) -> bool {
     is_session_pid_alive_with(pid, default_pid_validator)
 }
 
-/// Default validator that delegates to [`validate_claude_pid`]. Tests
-/// can call [`is_session_pid_alive_with`] directly to inject a different
-/// predicate without spawning real Claude Code processes.
+/// INF-TSK-024-051 Phase 7-rework (AC #6): the autorun-side
+/// `i64 → u32 → validate` adapter now delegates to the canonical
+/// `crate::session::liveness::default_pid_validator` so the
+/// "alive AND named claude" semantic is shared in one place across
+/// the chokepoint and the autorun reaper. Removes drift risk: any
+/// future change to the validator (e.g. additional name pattern,
+/// stronger ps lookup) ripples to both call paths automatically.
 fn default_pid_validator(pid: u32) -> bool {
-    crate::session::process::validate_claude_pid(pid) > 0
+    crate::session::liveness::default_pid_validator(pid)
 }
 
 /// Internal hook for [`is_session_pid_alive`] that accepts a custom PID
@@ -119,6 +123,13 @@ fn default_pid_validator(pid: u32) -> bool {
 /// autorun session". Production code uses [`default_pid_validator`];
 /// unit tests use synthetic predicates so they don't depend on the
 /// presence of a real `claude` ancestor in the test runner.
+///
+/// This function is the autorun-side adapter for the
+/// `autorun_session.pid` column (which is `Option<i64>`-shaped because
+/// the schema column is nullable) — it cannot route through the
+/// session-id-driven chokepoint (`is_session_alive`) directly because
+/// the autorun reaper already has the validated PID on hand and would
+/// pay an unnecessary file read for the same answer.
 #[must_use]
 pub fn is_session_pid_alive_with(pid: Option<i64>, validator: fn(u32) -> bool) -> bool {
     let Some(pid) = pid else {
@@ -544,8 +555,8 @@ pub async fn reconcile_session_status<S: DataStore>(
 /// Perform destructive resource cleanup for a stuck session's workers.
 ///
 /// INF-TSK-050-001 AC #3: this is the destructive half of the cleanup
-/// split. Each worker is gated by the five-veto liveness check
-/// ([`crate::session::liveness::is_session_alive`]) before ANY destructive
+/// split. Each worker is gated by the cleanup-context liveness check
+/// ([`crate::session::liveness::is_session_alive_for_cleanup`]) before ANY destructive
 /// action — if the worker's session is still alive, the entire per-worker
 /// block is skipped (no tmux kill, no claim release, no registry
 /// deregister, no `git worktree remove`, no gh PR close, no DB worker
@@ -615,7 +626,7 @@ pub async fn cleanup_session_resources<S: DataStore>(
                     worktree_path: Some(wt.to_path_buf()),
                     registry_created_at: None,
                 };
-                if crate::session::liveness::is_session_alive(&alive_inputs) {
+                if crate::session::liveness::is_session_alive_for_cleanup(&alive_inputs) {
                     eprintln!(
                         "warn: skipping cleanup of live session for worker {}: session still alive",
                         worker.id
@@ -1593,7 +1604,6 @@ mod tests {
             session_id: Some(worker_sid.into()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 

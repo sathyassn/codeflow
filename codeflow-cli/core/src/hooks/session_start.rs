@@ -585,13 +585,15 @@ impl SessionStartInit {
             self.create_directories(project_dir, session_id.as_str());
         }
 
-        // Write heartbeat file for liveness detection (all sessions, not just managed).
-        if source == "startup" {
-            let heartbeat_dir = project_dir.join(".state").join("interactive");
-            let _ = fs::create_dir_all(&heartbeat_dir);
-            let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{}", session_id.as_str()));
-            let _ = fs::write(&heartbeat_path, (self.now)());
-        }
+        // INF-TSK-024-051 Phase 4: removed the
+        // `.state/interactive/heartbeat-{sid}` writer. The file was a
+        // discovery breadcrumb for `codeflow interactive status`'s
+        // filesystem-fallback scan path; that scan also reads the
+        // canonical `pathflow-session-status.json` for liveness now, so
+        // the breadcrumb file is redundant. Removing the writer also
+        // closes a Signal-2 source that the old `check_session_liveness`
+        // consulted alongside PID — eliminating one of three
+        // sources-of-truth in favour of the canonical chokepoint.
 
         // --- Section 4+5: Sweep all stale sessions (replaces detect_stale_sessions + sweep_orphan_sentinels) ---
         // Stale sweep always operates on main project dir (shared state).
@@ -894,16 +896,18 @@ impl SessionStartInit {
             return (None, false, None);
         }
 
-        if !crate::session::liveness::check_session_liveness(
-            lead_pid,
-            None,
-            None,
-            crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
-        )
-        .is_alive()
-        {
+        // INF-TSK-024-051 Phase 3: route through the canonical
+        // chokepoint so worktree-resolution applies. The chokepoint
+        // re-reads `pathflow-session-status.json::lead_pid` (we already
+        // have `lead_pid` from the local read above; this re-validates
+        // through the canonical worktree-resolution path so a stale
+        // local read can't claim a dead session is alive). Active means
+        // teammate path; anything else means new lead.
+        let verdict =
+            crate::session::liveness::is_session_alive(project_dir, existing_sid.as_str());
+        if !matches!(verdict, crate::session::liveness::SessionLiveness::Active) {
             result.messages.push(format!(
-                "STALE SESSION: lead_pid {lead_pid} is dead (team: {team_name}) — new lead"
+                "STALE SESSION: lead_pid {lead_pid} is {verdict} (team: {team_name}) — new lead"
             ));
             return (None, false, None); // Lead crashed -> new lead
         }
@@ -1000,13 +1004,6 @@ impl SessionStartInit {
                 continue;
             };
 
-            let status_path = project_dir
-                .join(".state")
-                .join("session")
-                .join(sid)
-                .join("pathflow")
-                .join("pathflow-session-status.json");
-
             // Grace period: skip entries created within the last N seconds
             // to protect worktrees still initializing.
             if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&entry.created_at) {
@@ -1020,29 +1017,20 @@ impl SessionStartInit {
                 }
             }
 
-            let session_alive =
-                if let Ok(status) = crate::pathflow::file_lock::locked_read(&status_path) {
-                    let lead_pid = status
-                        .get("lead_pid")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|v| u32::try_from(v).ok())
-                        .unwrap_or(0);
-                    let wt_path = std::path::Path::new(&entry.path);
-                    crate::session::liveness::check_session_liveness(
-                        lead_pid,
-                        if wt_path.exists() {
-                            Some(wt_path)
-                        } else {
-                            None
-                        },
-                        None,
-                        crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
-                    )
-                    .is_alive()
-                } else {
-                    // Status file not in main repo — check session pointer for worktree sessions.
-                    session::is_live_worktree_session(project_dir, sid)
-                };
+            // INF-TSK-024-051 Phase 3: replaced the inline
+            // status-file-read + check_session_liveness combo with the
+            // canonical chokepoint, which resolves the worktree path via
+            // `worktrees.yaml` and reads
+            // `pathflow-session-status.json::lead_pid` from there. The
+            // previous inline read at `project_dir/.state/...` was wrong
+            // for worktree sessions whose status file lives in the
+            // worktree, leaving the cleanup path to fall through to
+            // `is_live_worktree_session` (which now also delegates to the
+            // chokepoint). One source of truth, no fallback chain.
+            let session_alive = matches!(
+                crate::session::liveness::is_session_alive(project_dir, sid),
+                crate::session::liveness::SessionLiveness::Active
+            );
 
             if session_alive {
                 continue;
@@ -1062,7 +1050,7 @@ impl SessionStartInit {
                 worktree_path: Some(std::path::PathBuf::from(&entry.path)),
                 registry_created_at: Some(entry.created_at.clone()),
             };
-            if crate::session::liveness::is_session_alive(&alive_inputs) {
+            if crate::session::liveness::is_session_alive_for_cleanup(&alive_inputs) {
                 result.messages.push(format!(
                     "PROTECTED WORKTREE: skipping '{}' for session {sid} (alive signal detected)",
                     entry.name,
@@ -1169,48 +1157,29 @@ impl SessionStartInit {
             // Check session status for lead_pid liveness.
             let status_path = wt_path.join(".state").join("session");
 
+            // INF-TSK-024-051 Phase 3: previously this block called
+            // is_session_alive_for_cleanup AND fell back to an inline
+            // check_session_liveness read against the worktree's status
+            // file. Both reads now go through the same chokepoint (V4 of
+            // the cleanup predicate calls is_session_alive internally),
+            // so the fallback is redundant. Keep is_session_alive_for_cleanup
+            // here — orphan cleanup is reaper-context, the V1 grace window
+            // and V2 self-match vetoes still matter to protect concurrent
+            // sessions from being reaped by an orphaned-worktree sweep.
             let session_alive = if status_path.exists() {
                 if let Ok(session_dirs) = fs::read_dir(&status_path) {
                     session_dirs.flatten().any(|sd| {
-                        // Run the five-veto check first. Its fail-safe-true
-                        // semantics (missing team.json abstains, grace window
-                        // protects fresh entries) are the right default for
-                        // orphan cleanup, which already operates outside the
-                        // registry's control.
                         let sid_str = sd.file_name().to_string_lossy().into_owned();
-                        if !sid_str.is_empty() {
-                            let alive_inputs = crate::session::liveness::SessionAliveInputs {
-                                session_id: sid_str.clone(),
-                                project_dir: project_dir.to_path_buf(),
-                                worktree_path: Some(wt_path.clone()),
-                                registry_created_at: None,
-                            };
-                            if crate::session::liveness::is_session_alive(&alive_inputs) {
-                                return true;
-                            }
+                        if sid_str.is_empty() {
+                            return false;
                         }
-                        let pf_status = sd
-                            .path()
-                            .join("pathflow")
-                            .join("pathflow-session-status.json");
-                        if let Ok(content) = fs::read_to_string(&pf_status) {
-                            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&content)
-                            {
-                                let lead_pid = status
-                                    .get("lead_pid")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .and_then(|v| u32::try_from(v).ok())
-                                    .unwrap_or(0);
-                                return crate::session::liveness::check_session_liveness(
-                                    lead_pid,
-                                    Some(&wt_path),
-                                    None,
-                                    crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
-                                )
-                                .is_alive();
-                            }
-                        }
-                        false
+                        let alive_inputs = crate::session::liveness::SessionAliveInputs {
+                            session_id: sid_str,
+                            project_dir: project_dir.to_path_buf(),
+                            worktree_path: Some(wt_path.clone()),
+                            registry_created_at: None,
+                        };
+                        crate::session::liveness::is_session_alive_for_cleanup(&alive_inputs)
                     })
                 } else {
                     false
@@ -1340,22 +1309,10 @@ impl SessionStartInit {
         // Per-PID env file cleanup moved to SessionEnd (removes THIS
         // session's file at exit via remove_pid_env_file).
 
-        // Load worktree registry for heartbeat path resolution.
-        let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
-        let wt_paths: std::collections::HashMap<String, std::path::PathBuf> =
-            crate::worktree::read_registry(&registry_path)
-                .map(|reg| {
-                    reg.worktrees
-                        .iter()
-                        .filter_map(|e| {
-                            e.session_id
-                                .as_ref()
-                                .filter(|_| !e.path.is_empty())
-                                .map(|sid| (sid.clone(), std::path::PathBuf::from(&e.path)))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+        // INF-TSK-024-051 Phase 3: removed the wt_paths HashMap that
+        // previously fed `check_session_liveness`'s heartbeat-dir
+        // argument. The canonical chokepoint resolves the worktree path
+        // via `worktrees.yaml` itself, so no caller-side map needed.
         let session_base = project_dir.join(".state").join("session");
 
         if let Ok(entries) = fs::read_dir(&session_base) {
@@ -1431,23 +1388,22 @@ impl SessionStartInit {
                                 .join(team_name)
                                 .join("config.json");
                             if cfg.exists() {
-                                // Config exists — check lead_pid liveness.
-                                let lead_pid = status
-                                    .get("lead_pid")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .and_then(|v| u32::try_from(v).ok())
-                                    .unwrap_or(0);
-                                let heartbeat_dir = wt_paths.get(&name).map(PathBuf::as_path);
+                                // Config exists — check lead_pid liveness via the
+                                // canonical chokepoint. INF-TSK-024-051 Phase 3:
+                                // migrated from `check_session_liveness` (which
+                                // accepted a pre-resolved `lead_pid` and a
+                                // heartbeat dir) to `is_session_alive`, which
+                                // resolves the worktree path via `worktrees.yaml`
+                                // and reads the canonical
+                                // `pathflow-session-status.json::lead_pid`. Only
+                                // `Dead` triggers the teammate-survival check;
+                                // `Unknown` (no PID recorded) is preserved as
+                                // before.
                                 let lead_liveness =
-                                    crate::session::liveness::check_session_liveness(
-                                        lead_pid,
-                                        heartbeat_dir,
-                                        None,
-                                        crate::session::liveness::DEFAULT_HEARTBEAT_THRESHOLD_SECS,
-                                    );
+                                    crate::session::liveness::is_session_alive(project_dir, &name);
                                 if matches!(
                                     lead_liveness,
-                                    crate::session::liveness::LivenessResult::Dead
+                                    crate::session::liveness::SessionLiveness::Dead
                                 ) {
                                     // Lead confirmed dead — check if any teammate is still alive
                                     // before sweeping (teammate may still be finishing work).
@@ -1569,11 +1525,9 @@ impl SessionStartInit {
             .join("worktrees.yaml");
         let _ = crate::worktree::mark_pending_cleanup(&registry_path, sid);
 
-        // Remove interactive heartbeat for swept session.
-        let interactive_hb = project_dir
-            .join(".state/interactive")
-            .join(format!("heartbeat-{sid}"));
-        let _ = fs::remove_file(&interactive_hb);
+        // INF-TSK-024-051 Phase 4: legacy interactive-heartbeat cleanup
+        // removed. The `.state/interactive/heartbeat-{sid}` writer is
+        // gone; legacy files from older binaries no longer accumulate.
 
         let _ = fs::remove_dir_all(project_dir.join(".state").join("session").join(sid));
         let _ = fs::remove_dir_all(
@@ -1769,14 +1723,12 @@ impl SessionStartInit {
         }
         let sid = session_id.to_string();
         let wt = worktree_path.map(String::from);
-        // INF-TSK-024-050 AC1: capture the Claude Code lead PID, not the
-        // hook subprocess PID. `parent_id()` walks up to the parent process
-        // (the hook is invoked by Claude Code), and `validate_claude_pid`
-        // returns 0 if the parent is dead or not a Claude Code process,
-        // which signals "unknown" to downstream liveness consumers.
-        let pid = i64::from(crate::session::process::validate_claude_pid(
-            std::os::unix::process::parent_id(),
-        ));
+        // INF-TSK-024-051 Phase 4-C: the `pid` column on
+        // `interactive_session` was removed. The canonical PID lives in
+        // `pathflow-session-status.json::lead_pid` (already written by the
+        // status-file path of this same handler via
+        // `validate_claude_pid(parent_id())`) and is read via
+        // `liveness::is_session_alive`. The DB binding is gone.
         let now = chrono::Utc::now().to_rfc3339();
         // INF-TSK-049-001 AC #8: classify as autorun when this unmanaged
         // session was spawned by an autorun worker (AUTORUN_SESSION_ID
@@ -1808,7 +1760,6 @@ impl SessionStartInit {
                 .query(
                     "CREATE interactive_session SET \
                      session_id = $session_id, \
-                     pid = $pid, \
                      status = 'active', \
                      worktree_path = $worktree_path, \
                      branch = NONE, \
@@ -1823,7 +1774,6 @@ impl SessionStartInit {
                      completed_at = NONE;",
                 )
                 .bind(("session_id", sid))
-                .bind(("pid", pid))
                 .bind(("worktree_path", wt))
                 .bind(("session_kind", session_kind))
                 .bind(("created_at", now))
@@ -1889,7 +1839,6 @@ impl SessionStartInit {
             session_id: Some(session_id.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         };
         crate::worktree::locked_register_with_limit(
             mgr.registry_path(),
@@ -1906,10 +1855,13 @@ impl SessionStartInit {
         // Mirrors what autorun workers do with "autorun" in worker.rs.
         let _ = crate::worktree::locked_update_source(mgr.registry_path(), &wt_name, "interactive");
 
-        // Record lead PID in registry for fast liveness checks.
-        // Use validated Claude PID (walks process tree) instead of ephemeral hook PID.
-        let pid = crate::session::process::validate_claude_pid(self.lead_pid);
-        let _ = crate::worktree::locked_update_lead_pid(mgr.registry_path(), &wt_name, pid);
+        // INF-TSK-024-051 Phase 4-B: removed
+        // `locked_update_lead_pid(...)`. The registry's `lead_pid`
+        // field is gone; the canonical PID is written into
+        // `pathflow-session-status.json::lead_pid` later in this same
+        // SessionStart flow (via `validate_claude_pid(parent_id())`).
+        // The fast-path read that justified this duplicate write has
+        // been removed from `WorktreeManager::read_lead_pid` too.
 
         // Create RAII handle for cleanup on panic.
         let handle = WorktreeHandle::new(&entry, &mgr);
@@ -2048,9 +2000,11 @@ impl SessionStartInit {
                 &wt_name,
                 session_id,
             );
-            // Use validated Claude PID (walks process tree) instead of ephemeral hook PID.
-            let pid = crate::session::process::validate_claude_pid(self.lead_pid);
-            let _ = crate::worktree::locked_update_lead_pid(mgr.registry_path(), &wt_name, pid);
+            // INF-TSK-024-051 Phase 4-B: removed
+            // `locked_update_lead_pid(...)`. The registry's `lead_pid`
+            // field is gone; canonical PID lives in
+            // pathflow-session-status.json::lead_pid (written by this
+            // same SessionStart flow).
         }
 
         // 4. Update main env file with worker's session ID (mirrors lines 971-986).
@@ -2724,6 +2678,14 @@ mod tests {
 
     #[test]
     fn test_init_teammate_detection_via_file_signals() {
+        // INF-TSK-024-051 Phase 3: post-migration the chokepoint requires
+        // validate_claude_pid (alive AND named "claude"). The test runner
+        // is `cargo`, so substitute a permissive validator that just checks
+        // the process is alive — recovers the pre-Phase-3 semantic for
+        // tests that fake a teammate scenario with std::process::id().
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
@@ -4119,6 +4081,12 @@ mod tests {
         // Subsequent threads acquire the lock, see the env file + status file
         // + team config, and enter teammate mode -- all converging on same SID.
         // No env var needed -- detection is purely file-based.
+        //
+        // INF-TSK-024-051 Phase 3: see test_init_teammate_detection_via_file_signals
+        // for context on the permissive validator.
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         use std::sync::{Arc, Barrier, Mutex};
         use std::thread;
 
@@ -4936,6 +4904,10 @@ mod tests {
 
     #[test]
     fn test_teammate_mode_propagates_worktree_path() {
+        // INF-TSK-024-051 Phase 3: permissive validator (see other tests).
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime_dir = dir.path().join(".state").join("runtime");
@@ -5130,7 +5102,6 @@ mod tests {
             session_id: Some(dead_sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -5209,7 +5180,6 @@ mod tests {
             session_id: Some(dead_sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -5266,6 +5236,11 @@ mod tests {
 
     #[test]
     fn test_clean_stale_worktrees_skips_active_sessions() {
+        // INF-TSK-024-051 Phase 3: permissive validator so the test
+        // runner's PID stands in for a live "claude" lead.
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let init = make_init(home.path().to_path_buf());
@@ -5289,7 +5264,6 @@ mod tests {
             session_id: Some(live_sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -5356,7 +5330,6 @@ mod tests {
             session_id: None,
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -5404,15 +5377,17 @@ mod tests {
             session_id: Some(dead_sid.to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
         let registry_path = dir.path().join(".state/worktrees/worktrees.yaml");
         fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         crate::worktree::write_registry(&registry_path, &reg).unwrap();
 
-        // Write pathflow-team.json with dead lead_pid so V4 votes DEAD
-        // (without this the five-veto check abstains ALIVE for the
-        // unknown session and cleanup is skipped).
+        // Write pathflow-session-status.json with dead lead_pid so V4
+        // votes DEAD via the canonical chokepoint (without this the
+        // four-veto check abstains ALIVE for the unknown session and
+        // cleanup is skipped). INF-TSK-024-051: V4 reads
+        // pathflow-session-status.json (worktree-resolved); the legacy
+        // pathflow-team.json is no longer the V4 source.
         let status_dir = dir
             .path()
             .join(".state")
@@ -5420,6 +5395,16 @@ mod tests {
             .join(dead_sid)
             .join("pathflow");
         fs::create_dir_all(&status_dir).unwrap();
+        fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            serde_json::json!({
+                "session_id": dead_sid,
+                "lead_pid": 999_999_999_u64,
+                "status": "pf-in-progress"
+            })
+            .to_string(),
+        )
+        .unwrap();
         fs::write(
             status_dir.join("pathflow-team.json"),
             serde_json::json!({"team_name": "dead-team", "lead_pid": 999_999_999_u64}).to_string(),
@@ -5469,7 +5454,6 @@ mod tests {
             session_id: Some("ses-orchestrator00000000000".to_string()),
             task_id: None,
             source: None,
-            lead_pid: None,
         });
 
         let registry_path = project_dir.join(".state/worktrees/worktrees.yaml");
@@ -5914,6 +5898,11 @@ mod tests {
 
     #[test]
     fn test_stale_cleanup_active_session_pending_tmux_returns_teammate() {
+        // INF-TSK-024-051 Phase 3: permissive validator (test runner is
+        // not "claude"; pre-Phase-3 used bare is_process_alive).
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         // One teammate with pid==0 and backend_type=="tmux" -> pending -> teammate.
         let teammates = vec![serde_json::json!({
             "name": "cf-development",
@@ -6092,6 +6081,10 @@ mod tests {
 
     #[test]
     fn test_teammate_pid_update_clears_pending() {
+        // INF-TSK-024-051 Phase 3: permissive validator.
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
         // When teammate mode is detected, the first pending entry should get
         // its PID updated to the current process PID.
         let teammates = vec![
@@ -6464,105 +6457,15 @@ mod tests {
         }
     }
 
-    // --- GAP 4: Heartbeat file created for unmanaged sessions ---
-
-    #[test]
-    #[serial(env_vars)]
-    fn test_unmanaged_startup_creates_heartbeat() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_dir = dir.path();
-        std::fs::create_dir_all(project_dir.join(".claude")).unwrap();
-        std::fs::create_dir_all(project_dir.join(".state").join("runtime")).unwrap();
-
-        let home = tempfile::tempdir().unwrap();
-        let init = make_init(home.path().to_path_buf());
-        let input = make_input("startup", &project_dir.to_string_lossy());
-
-        // Save env vars for restore after test.
-        let prev_managed = std::env::var("CODEFLOW_MANAGED").ok();
-        let prev_sid = std::env::var("CODEFLOW_SESSION_ID").ok();
-        let prev_wt = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
-        let prev_cf = std::env::var("CF_PROJECT_ROOT").ok();
-
-        // Ensure NOT managed.
-        // SAFETY: Test-only env var manipulation.
-        unsafe { std::env::remove_var("CODEFLOW_MANAGED") };
-        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
-        unsafe { std::env::remove_var("CODEFLOW_WORKTREE_PATH") };
-        unsafe { std::env::remove_var("CF_PROJECT_ROOT") };
-
-        let mut buf = Vec::new();
-        let result = init.run(&input, project_dir, &mut buf);
-        assert!(result.is_ok());
-        let init_result = result.unwrap();
-
-        // Check heartbeat file exists.
-        let heartbeat_dir = project_dir.join(".state").join("interactive");
-        let heartbeat_path =
-            heartbeat_dir.join(format!("heartbeat-{}", init_result.session_id.as_str()));
-        assert!(
-            heartbeat_path.exists(),
-            "heartbeat file should be created for unmanaged startup sessions: {}",
-            heartbeat_path.display()
-        );
-
-        // Verify content is a timestamp.
-        let content = std::fs::read_to_string(&heartbeat_path).unwrap();
-        assert!(
-            !content.is_empty(),
-            "heartbeat file should contain a timestamp"
-        );
-
-        // Restore env vars.
-        // SAFETY: Test-only env var manipulation.
-        macro_rules! restore_env {
-            ($name:expr, $prev:expr) => {
-                match $prev {
-                    Some(v) => unsafe { std::env::set_var($name, v) },
-                    None => unsafe { std::env::remove_var($name) },
-                }
-            };
-        }
-        restore_env!("CODEFLOW_MANAGED", prev_managed);
-        restore_env!("CODEFLOW_SESSION_ID", prev_sid);
-        restore_env!("CODEFLOW_WORKTREE_PATH", prev_wt);
-        restore_env!("CF_PROJECT_ROOT", prev_cf);
-    }
-
-    #[test]
-    fn test_remove_stale_session_artifacts_cleans_interactive_heartbeat() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let project_dir = dir.path();
-        let sid = "ses-01jq7stalehb1234567890ab";
-
-        // Create interactive heartbeat.
-        let hb_dir = project_dir.join(".state/interactive");
-        std::fs::create_dir_all(&hb_dir).unwrap();
-        let hb_path = hb_dir.join(format!("heartbeat-{sid}"));
-        std::fs::write(&hb_path, "2026-04-07T00:00:00Z").unwrap();
-        assert!(hb_path.exists());
-
-        // Create session dir (so remove_dir_all has something to do).
-        let session_dir = project_dir.join(".state/session").join(sid);
-        std::fs::create_dir_all(&session_dir).unwrap();
-
-        // Create worktree registry directory for mark_pending_cleanup.
-        std::fs::create_dir_all(project_dir.join(".state/worktrees")).unwrap();
-
-        let init = SessionStartInit {
-            lead_pid: 0,
-            home_dir: home.path().to_path_buf(),
-            now: fixed_now,
-        };
-        init.remove_stale_session_artifacts(project_dir, sid, None);
-
-        assert!(
-            !hb_path.exists(),
-            "interactive heartbeat should be removed by stale sweep"
-        );
-        assert!(!session_dir.exists(), "session directory should be removed");
-    }
+    // --- GAP 4: Heartbeat tests removed in INF-TSK-024-051 Phase 4 ---
+    //
+    // The `.state/interactive/heartbeat-{sid}` writer is gone (the
+    // canonical chokepoint reads `pathflow-session-status.json::lead_pid`
+    // directly), so the original `test_unmanaged_startup_creates_heartbeat`
+    // and `test_remove_stale_session_artifacts_cleans_interactive_heartbeat`
+    // tests no longer apply — they were exercising the removed writer +
+    // cleanup-helper pair. Their coverage is replaced by the canonical
+    // chokepoint's own tests in `session::liveness::tests`.
 
     // --- migrate_pathflow_events_from_logs tests ---
 

@@ -999,9 +999,46 @@ Grep one-liner (run from repo root) to detect violations:
 
 ```bash
 grep -rn 'validate_claude_pid' codeflow-cli/ --include='*.rs' \
+  | grep -v -E '^[^:]+:[0-9]+:\s*//|^[^:]+:[0-9]+:\s*///' \
   | grep -v -E '(codeflow-cli/core/src/session/process\.rs|codeflow-cli/core/src/session/liveness\.rs|codeflow-cli/core/src/hooks/session_start\.rs|codeflow-cli/core/src/autorun/stale\.rs|codeflow-cli/core/src/tui/data\.rs|codeflow-cli/cli/src/cmd/interactive\.rs)' \
   && { echo "validate_claude_pid called outside the allowlist"; exit 1; } \
   || echo "validate_claude_pid call sites OK"
 ```
 
+The first `grep -v` filter strips line-comment references — doc-comment references that *describe* the function in prose are not call sites and must not trigger the guard. Without this filter the guard false-positives on every doc-comment that names the function.
+
 If the command prints "validate_claude_pid called outside the allowlist", fix the new call site (move the logic into one of the allowed files) before requesting a commit.
+
+### Session liveness chokepoint guards (INF-TSK-024-051 AC #11)
+
+Session liveness has exactly one source of truth: `pathflow-session-status.json::lead_pid`, validated through `session::liveness::is_session_alive` (or its companions `read_canonical_lead_pid`, `is_session_alive_at_worktree`, `read_canonical_lead_pid_at_worktree`). PR #310 regressed because parallel readers reimplemented the lookup and silently diverged from the canonical chain. These guards prevent that.
+
+#### Guard 1: no direct `lead_pid` reads from JSON outside the chokepoint
+
+`session/liveness.rs` is the ONLY file that may read the `lead_pid` field from a `pathflow-session-status.json` payload. Every other consumer must call one of the chokepoint functions. Writers (SessionStart, sync-state, autorun stale-detection fixtures, and tests that build status-file fixtures) are unaffected — only field reads are restricted.
+
+Allowed call sites for direct `lead_pid` reads (verified production callers as of 2026-04-29):
+
+| File | Role |
+|------|------|
+| `codeflow-cli/core/src/session/liveness.rs` | Definition site — every chokepoint variant (`is_session_alive`, `read_canonical_lead_pid`, the at-worktree variants, `is_session_alive_with_validator`) shares one internal `read_lead_pid_from_status_file` helper here. |
+| `codeflow-cli/core/src/hooks/session_start.rs` | Multi-signal teammate-vs-new-lead detection at SessionStart hook entry — reads `lead_pid` from already-loaded JSON as Signal 4 of a 4-signal algorithm. The signal-aggregation purpose differs from chokepoint liveness; the file also owns the canonical writer path. |
+
+Grep one-liner (run from repo root) to detect direct reads outside the allowlist:
+
+```bash
+grep -rnE '"lead_pid"' codeflow-cli/ --include='*.rs' \
+  | grep -E 'get\("lead_pid"\)|\.lead_pid' \
+  | grep -v -E '^[^:]+:[0-9]+:\s*//|^[^:]+:[0-9]+:\s*///' \
+  | grep -v -E '(codeflow-cli/core/src/session/liveness\.rs|codeflow-cli/core/src/hooks/session_start\.rs)' \
+  && { echo "direct lead_pid read outside session::liveness chokepoint"; exit 1; } \
+  || echo "lead_pid reader sites OK"
+```
+
+If the command prints "direct lead_pid read outside session::liveness chokepoint", route the new caller through `is_session_alive`, `read_canonical_lead_pid`, `is_session_alive_at_worktree`, or `read_canonical_lead_pid_at_worktree` (whichever fits the call shape) before requesting a commit.
+
+#### Guard 2: no `interactive_session.pid` schema column
+
+The DB column was the wrong-by-construction PID written pre-`exec` by the codeflow CLI wrapper (Phase 4-C dropped it). The schema must NEVER redefine it. Enforced by the runtime test `schema_does_not_define_interactive_session_pid` (`codeflow-cli/core/src/store/schema.rs`), which asserts `SCHEMA_SQL` does NOT contain `ON TABLE interactive_session TYPE int`.
+
+If `cargo test schema_does_not_define_interactive_session_pid` ever fails, a regression added the column back. Restore the comment block at `codeflow-cli/core/src/store/schema.surql` (the `interactive_session` field list, near `DEFINE FIELD OVERWRITE session_id`) and route any pid-display caller through the chokepoint.

@@ -163,9 +163,11 @@ fn run_hook_handler_inner(handler: &dyn HookHandler) -> Result<i32, ExitError> {
 fn process_hook_input(handler: &dyn HookHandler, stdin: &str) -> Result<i32, ExitError> {
     let input = parse_hook_input(stdin)?;
 
-    // Heartbeat: update on every hook invocation (throttled internally).
-    touch_heartbeat(&input, handler.name());
-
+    // INF-TSK-024-051 Phase 4: removed `touch_heartbeat(&input, handler.name())`.
+    // The `.state/runtime/heartbeat` file was a Signal 2 in the old
+    // `check_session_liveness` 3-signal model; the canonical chokepoint
+    // (`is_session_alive`) reads `pathflow-session-status.json::lead_pid`
+    // directly and does not need a per-hook heartbeat write.
     let output = execute_hook_handler(handler, input)?;
     Ok(map_hook_output(&output))
 }
@@ -213,30 +215,14 @@ fn map_hook_output(output: &HookOutput) -> i32 {
     }
 }
 
-/// Update the heartbeat file on every hook invocation.
-///
-/// Best-effort: failures are silently ignored (heartbeat is defense-in-depth,
-/// not a blocking prerequisite). Uses the hook event name as the `source` field.
-fn touch_heartbeat(_input: &HookInput, handler_name: &str) {
-    // Resolve project directory (same logic as detect_project_dir but without Result).
-    let project_dir = std::env::var("CODEFLOW_WORKTREE_PATH")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_dir())
-        .or_else(|| detect_project_dir().ok());
-
-    let Some(dir) = project_dir else {
-        return;
-    };
-
-    // Resolve session ID from env file.
-    let Ok(sid) = codeflow_core::session::current_session_id(&dir) else {
-        return;
-    };
-
-    let source = handler_name;
-    let _ = codeflow_core::session::heartbeat::touch(&dir, sid.as_str(), source);
-}
+// INF-TSK-024-051 Phase 4: `touch_heartbeat` removed. The
+// `.state/runtime/heartbeat` file was the per-hook heartbeat fed into
+// `check_session_liveness`'s Signal 2 (`heartbeat::is_alive`). The
+// canonical chokepoint (`is_session_alive`) reads
+// `pathflow-session-status.json::lead_pid` directly with
+// worktree-resolution; no parallel heartbeat write is needed.
+//
+// The `crate::session::heartbeat` module is also deleted in this phase.
 
 #[cfg(test)]
 mod tests {

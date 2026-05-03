@@ -17,7 +17,11 @@ pub struct InteractiveSession {
     )]
     pub id: String,
     pub session_id: String,
-    pub pid: i64,
+    // INF-TSK-024-051 Phase 4-C: `pid: i64` field removed. The DB
+    // column was wrong-by-construction for managed sessions and the
+    // canonical PID lives in `pathflow-session-status.json::lead_pid`
+    // (worktree-resolved via `liveness::is_session_alive`). Existing
+    // rows have the column dropped via the schema migration.
     pub status: InteractiveSessionStatus,
     #[serde(default)]
     pub worktree_path: Option<String>,
@@ -128,26 +132,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_heartbeat_file_naming_pattern() {
-        let sid = "ses-01abc2def3ghi4jkl5mno6pq";
-        let filename = format!("heartbeat-{sid}");
-        assert_eq!(filename, "heartbeat-ses-01abc2def3ghi4jkl5mno6pq");
-        assert!(filename.starts_with("heartbeat-ses-"));
-    }
-
-    #[test]
-    fn test_heartbeat_file_creation() {
-        let dir = tempfile::tempdir().unwrap();
-        let heartbeat_dir = dir.path().join(".state").join("interactive");
-        std::fs::create_dir_all(&heartbeat_dir).unwrap();
-        let sid = "ses-testbeat123";
-        let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{sid}"));
-        std::fs::write(&heartbeat_path, "2026-04-06T12:00:00Z").unwrap();
-        assert!(heartbeat_path.exists());
-        let content = std::fs::read_to_string(&heartbeat_path).unwrap();
-        assert!(!content.is_empty());
-    }
+    // INF-TSK-024-051 Phase 7-rework: heartbeat dead-code tests
+    // (test_heartbeat_file_naming_pattern, test_heartbeat_file_creation)
+    // deleted. The `.state/interactive/heartbeat-{sid}` file format these
+    // tests asserted is no longer written by any production code path
+    // (interactive removed in Phase 4-A, autorun removed in Phase 7-rework).
 
     #[test]
     fn test_managed_env_var_detection() {
