@@ -211,6 +211,13 @@ DEFINE FIELD OVERWRITE file_scope    ON TABLE autorun_worker TYPE array<string>;
 DEFINE FIELD OVERWRITE scope_policy  ON TABLE autorun_worker TYPE string;
 DEFINE FIELD OVERWRITE worker_session_id ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE pr_number     ON TABLE autorun_worker TYPE option<int>;
+-- INF-TSK-050-003 AC-11: timestamp recorded when `serialized_merge`
+-- successfully merges the worker's PR. Drives the AC-13 "all workers
+-- merged" final-PR gate (gate fires only when every worker has a
+-- non-NULL value here). MERGE-mode writes use option<string> for RFC
+-- 3339 strings to match the SCHEMAFULL constraint without a TYPE
+-- mismatch.
+DEFINE FIELD OVERWRITE pr_merged_at  ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE started_at    ON TABLE autorun_worker TYPE option<string>;
 DEFINE FIELD OVERWRITE completed_at  ON TABLE autorun_worker TYPE option<string>;
 

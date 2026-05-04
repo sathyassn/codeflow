@@ -71,6 +71,10 @@ pub struct AutorunWorkerUpdate {
     pub scope_policy: Option<String>,
     pub worker_session_id: Option<String>,
     pub pr_number: Option<i64>,
+    /// INF-TSK-050-003 AC-11: RFC 3339 timestamp recorded after a
+    /// successful `serialized_merge`. Drives the AC-13 final-PR gate
+    /// in `cli::cmd::autorun`.
+    pub pr_merged_at: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
 }

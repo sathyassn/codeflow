@@ -40,7 +40,25 @@ enum Command {
         yes: bool,
     },
     /// Diagnose infrastructure issues
-    Doctor,
+    Doctor {
+        /// INF-TSK-050-003 AC-01: back up `.state/db/codeflow.db/` to a
+        /// timestamped sibling and delete the original. Used to recover
+        /// from schema deserialization failures (apply_schema returns
+        /// AC-02 message). Backup file name:
+        /// `.state/db/codeflow.db.backup-{ISO8601}`. Aborts when an
+        /// in-progress `active_work` row exists unless `--force` is
+        /// also passed (rework safeguard after the live-DB-wipe
+        /// incident on 2026-05-03).
+        #[arg(long = "reset-db")]
+        reset_db: bool,
+        /// INF-TSK-050-003 AC-01 (rework): proceed with `--reset-db`
+        /// even when an in-progress active_work record exists. Without
+        /// this flag, `--reset-db` aborts on a non-empty active_work to
+        /// prevent the operator from accidentally wiping live session
+        /// state. Requires `--reset-db` (clap enforces this).
+        #[arg(long = "force", requires = "reset_db")]
+        force: bool,
+    },
     /// Configuration management
     Config {
         #[command(subcommand)]
@@ -212,7 +230,13 @@ async fn dispatch(command: Command) -> Result<()> {
             skip_auth,
             yes,
         }),
-        Command::Doctor => cmd::doctor::run().await,
+        Command::Doctor { reset_db, force } => {
+            if reset_db {
+                cmd::doctor::run_reset_db(force).await
+            } else {
+                cmd::doctor::run().await
+            }
+        }
         Command::Config { command } => cmd::config::run(command),
         Command::Update => cmd::update::run(),
         Command::Autorun { command } => cmd::autorun::run(command).await,

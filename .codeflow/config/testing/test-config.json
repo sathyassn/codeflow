@@ -176,6 +176,10 @@
             {
               "pattern": ".codeflow/testing/scripts/security/protection/test-cf-protection-*.sh",
               "reason": "Protection lib tests (test-cf-protection-{common,core,ops,verify}.sh) exercise modules under .codeflow/scripts/security/protection/lib/ that are excluded from source_glob via the matching no_test_required entry."
+            },
+            {
+              "pattern": ".codeflow/testing/scripts/lint/*",
+              "reason": "CI lint checks that run against the codebase rather than testing a specific source script — no 1:1 source script counterpart exists in .codeflow/scripts/lint/. The script (test-no-legacy-liveness.sh) scans Rust source for deleted symbols and emits exit 1 on findings; INF-TSK-050-003 AC-15."
             }
           ]
         }
@@ -248,6 +252,11 @@
         {
           "path": ".codeflow/testing/scripts/git-hooks/test-pre-push.sh",
           "tags": ["medium"]
+        },
+        {
+          "path": ".codeflow/testing/scripts/lint/test-no-legacy-liveness.sh",
+          "tags": ["high"],
+          "_comment": "INF-TSK-050-003 AC-15 lint guard: fails CI if any production Rust code references the deleted is_session_stale or check_heartbeat_alive symbols (autorun/stale.rs heartbeat readers, removed by AC-09)."
         }
       ]
     }

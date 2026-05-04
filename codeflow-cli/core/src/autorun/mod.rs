@@ -20,11 +20,17 @@ pub use batch::{
 };
 pub use config::{AutorunConfig, ParallelWorkConfig, load_config};
 pub use orchestrator::{Orchestrator, WorkerConfig, WorkerResult};
+// INF-TSK-050-003 AC-09: removed `check_heartbeat_alive` and
+// `is_session_stale` re-exports. Their definitions are gone — heartbeat
+// is no longer a liveness signal source. Callers should use
+// `crate::session::liveness::is_session_alive` for the canonical
+// chokepoint and `detect_stuck_sessions(_with)` for the autorun-side
+// reaper criterion.
 pub use stale::{
-    CleanupReport, StaleSessionInfo, SweepSummary, check_heartbeat_alive, check_pid_alive,
-    check_tmux_alive, cleanup_session_resources, cleanup_stale_session, compute_abort_age_secs,
+    CleanupReport, StaleSessionInfo, SweepSummary, check_pid_alive, check_tmux_alive,
+    cleanup_session_resources, cleanup_stale_session, compute_abort_age_secs,
     detect_stale_sessions, detect_stuck_sessions, detect_stuck_sessions_with, is_session_pid_alive,
-    is_session_pid_alive_with, is_session_stale, reconcile_session_status, sweep_stale_sessions,
+    is_session_pid_alive_with, reconcile_session_status, sweep_stale_sessions,
     sweep_stale_sessions_with,
 };
 pub use worker::{

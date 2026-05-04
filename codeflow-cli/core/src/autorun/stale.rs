@@ -13,13 +13,15 @@ use crate::store::DataStore;
 use crate::types::{AutorunSessionStatus, AutorunTaskRunStatus, AutorunWorkerStatus};
 
 /// Information about a potentially stale or abort-timed-out session.
+///
+/// INF-TSK-050-003 AC-09: removed `heartbeat_alive` and `heartbeat_age_secs`
+/// fields. Heartbeat-based liveness is replaced by the canonical
+/// `session::liveness::is_session_alive` chokepoint (PID + name validation).
 #[derive(Debug)]
 pub struct StaleSessionInfo {
     pub session: AutorunSession,
     pub pid_alive: bool,
     pub tmux_alive: Option<bool>,
-    pub heartbeat_alive: Option<bool>,
-    pub heartbeat_age_secs: Option<u64>,
     pub orphan_worker_count: usize,
     pub live_worker_count: usize,
     /// INF-TSK-050-001 AC #2: age (seconds) since this session entered the
@@ -159,61 +161,24 @@ pub fn check_tmux_alive(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if the heartbeat file for a session is fresh.
-///
-/// Returns `(alive, age_secs)`. If the heartbeat file does not exist,
-/// returns `(true, None)` to avoid marking old sessions (pre-heartbeat)
-/// as stale.
-#[must_use]
-pub fn check_heartbeat_alive(
-    project_dir: &Path,
-    session_id: &str,
-    threshold_secs: u64,
-) -> (bool, Option<u64>) {
-    let heartbeat_path = project_dir
-        .join(".state/autorun")
-        .join(format!("heartbeat-{session_id}"));
-
-    if !heartbeat_path.exists() {
-        // No heartbeat file -- don't assume stale (pre-heartbeat session).
-        return (true, None);
-    }
-
-    match heartbeat_path.metadata().and_then(|m| m.modified()) {
-        Ok(mtime) => {
-            let age = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-            (age <= threshold_secs, Some(age))
-        }
-        Err(_) => (true, None),
-    }
-}
-
-/// Determine if a session is stale based on the three liveness signals.
-///
-/// A session is stale if:
-/// - PID is dead, OR
-/// - tmux is known dead AND heartbeat is NOT known fresh, OR
-/// - heartbeat is known dead (Some(false))
-///
-/// A fresh heartbeat (Some(true)) overrides a dead tmux signal because
-/// the orchestrator process may have restarted its tmux session.
-#[must_use]
-pub fn is_session_stale(
-    pid_alive: bool,
-    tmux_alive: Option<bool>,
-    heartbeat_alive: Option<bool>,
-) -> bool {
-    if !pid_alive {
-        return true;
-    }
-    if tmux_alive == Some(false) && heartbeat_alive != Some(true) {
-        return true;
-    }
-    if heartbeat_alive == Some(false) {
-        return true;
-    }
-    false
-}
+// INF-TSK-050-003 AC-09: deleted `check_heartbeat_alive` and
+// `is_session_stale`. The canonical liveness chokepoint
+// (`session::liveness::is_session_alive`) is now the single source of
+// truth for "is this session alive?". Heartbeat files were a Signal-2
+// data source the chokepoint never consulted; removing the writer
+// (orchestrator.rs) and these readers eliminates the divergent signal
+// path that PR #309/#310/#311 progressively peeled away.
+//
+// Replacement guidance for callers:
+//
+// - Was: `is_session_stale(pid_alive, tmux_alive, heartbeat_alive)` returns true
+//   on stale.
+// - Now: `!session::liveness::is_session_alive(project_dir, &session.id).is_alive()`
+//   returns true on dead/unknown. For dead-only (treating Unknown as alive),
+//   match on `SessionLiveness::Dead`.
+//
+// `detect_stuck_sessions_with` (below) folds the residual two-signal
+// stuck check (`!pid_alive || tmux_alive == Some(false)`) inline.
 
 /// Compute the age (seconds) since an `Aborting` session entered abort.
 ///
@@ -294,7 +259,11 @@ pub async fn detect_stuck_sessions<S: DataStore>(
 pub async fn detect_stuck_sessions_with<S: DataStore>(
     store: &S,
     project_dir: &Path,
-    stale_threshold_secs: u64,
+    // INF-TSK-050-003 AC-09: heartbeat threshold no longer consulted —
+    // the heartbeat reader was deleted. Parameter kept for source compat
+    // with `detect_stuck_sessions` and external callers; prefixed `_` to
+    // suppress unused-var warning.
+    _stale_threshold_secs: u64,
     pid_validator: fn(u32) -> bool,
 ) -> Result<Vec<StaleSessionInfo>, AutorunError> {
     let abort_timeout_secs = crate::autorun::config::load_config(project_dir)
@@ -329,10 +298,6 @@ pub async fn detect_stuck_sessions_with<S: DataStore>(
         // is no longer used in the reaper hot path.
         let pid_alive = is_session_pid_alive_with(session.pid, pid_validator);
         let tmux_alive = session.tmux_session.as_deref().map(check_tmux_alive);
-        let (heartbeat_alive_val, heartbeat_age) =
-            check_heartbeat_alive(project_dir, &session.id, stale_threshold_secs);
-        // Only report heartbeat status if file exists (age is Some).
-        let heartbeat_alive = heartbeat_age.map(|_| heartbeat_alive_val);
 
         let abort_age = if matches!(session.status, AutorunSessionStatus::Aborting) {
             compute_abort_age_secs(&session, now)
@@ -340,16 +305,16 @@ pub async fn detect_stuck_sessions_with<S: DataStore>(
             None
         };
 
-        // Stuck criterion is status-dependent:
-        // - Running:  classic three-signal stale (PID/tmux/heartbeat).
+        // INF-TSK-050-003 AC-09: stuck criterion now folds the inline
+        // two-signal residual after dropping heartbeat as a Signal-3
+        // input. Status-dependent:
+        // - Running:  PID dead OR tmux known dead.
         // - Aborting: abort took longer than `abort_timeout_secs`. If
         //   `abort_age` is None (no anchor), do NOT mark stuck — defensive
         //   against a freshly-aborting row whose timestamp hasn't been
         //   written yet.
         let stuck = match session.status {
-            AutorunSessionStatus::Running => {
-                is_session_stale(pid_alive, tmux_alive, heartbeat_alive)
-            }
+            AutorunSessionStatus::Running => !pid_alive || tmux_alive == Some(false),
             AutorunSessionStatus::Aborting => abort_age.is_some_and(|age| age > abort_timeout_secs),
             _ => false,
         };
@@ -383,8 +348,6 @@ pub async fn detect_stuck_sessions_with<S: DataStore>(
             session,
             pid_alive,
             tmux_alive,
-            heartbeat_alive,
-            heartbeat_age_secs: heartbeat_age,
             orphan_worker_count: orphan_count,
             live_worker_count: live_count,
             abort_age_secs: abort_age,
@@ -875,6 +838,11 @@ pub async fn sweep_stale_sessions_with<S: DataStore>(
 }
 
 /// Build a human-readable stale reason from session info.
+///
+/// INF-TSK-050-003 AC-09: heartbeat reason removed. Heartbeat as a
+/// signal source is deleted; the only remaining signals are PID liveness
+/// (canonical), tmux liveness (orchestrator session-only), and
+/// abort-timeout for `Aborting` sessions.
 fn build_stale_reason(info: &StaleSessionInfo) -> String {
     let mut reasons = Vec::new();
     // INF-TSK-050-001 AC #2: surface abort-timeout as a distinct reason
@@ -892,12 +860,6 @@ fn build_stale_reason(info: &StaleSessionInfo) -> String {
         reasons.push(format!(
             "tmux '{}' dead",
             info.session.tmux_session.as_deref().unwrap_or("?")
-        ));
-    }
-    if info.heartbeat_alive == Some(false) {
-        reasons.push(format!(
-            "heartbeat stale ({}s old)",
-            info.heartbeat_age_secs.unwrap_or(0)
         ));
     }
     if reasons.is_empty() {
@@ -937,84 +899,12 @@ mod tests {
         assert!(!check_pid_alive(-1), "negative PID should return false");
     }
 
-    #[test]
-    fn test_is_session_stale_pid_dead() {
-        assert!(is_session_stale(false, None, None));
-    }
-
-    #[test]
-    fn test_is_session_stale_tmux_dead() {
-        assert!(is_session_stale(true, Some(false), None));
-    }
-
-    #[test]
-    fn test_is_session_stale_tmux_dead_heartbeat_fresh() {
-        // Fresh heartbeat overrides dead tmux -- not stale.
-        assert!(!is_session_stale(true, Some(false), Some(true)));
-    }
-
-    #[test]
-    fn test_is_session_stale_heartbeat_dead() {
-        assert!(is_session_stale(true, None, Some(false)));
-    }
-
-    #[test]
-    fn test_is_session_stale_all_alive() {
-        assert!(!is_session_stale(true, Some(true), Some(true)));
-    }
-
-    #[test]
-    fn test_is_session_stale_no_tmux_info() {
-        assert!(!is_session_stale(true, None, Some(true)));
-    }
-
-    #[test]
-    fn test_is_session_stale_no_heartbeat_info() {
-        assert!(!is_session_stale(true, Some(true), None));
-    }
-
-    #[test]
-    fn test_is_session_stale_no_info() {
-        assert!(!is_session_stale(true, None, None));
-    }
-
-    #[test]
-    fn test_check_heartbeat_alive_no_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let (alive, age) = check_heartbeat_alive(dir.path(), "nonexistent-session", 90);
-        assert!(alive, "no heartbeat file should not be stale");
-        assert!(age.is_none(), "no file means no age");
-    }
-
-    #[test]
-    fn test_check_heartbeat_alive_fresh() {
-        let dir = tempfile::tempdir().unwrap();
-        let autorun_dir = dir.path().join(".state/autorun");
-        std::fs::create_dir_all(&autorun_dir).unwrap();
-        let hb_path = autorun_dir.join("heartbeat-test-session");
-        std::fs::write(&hb_path, "").unwrap();
-        let (alive, age) = check_heartbeat_alive(dir.path(), "test-session", 90);
-        assert!(alive, "just-created heartbeat should be fresh");
-        assert!(age.is_some(), "existing file should have age");
-        assert!(age.unwrap() < 5, "age should be near zero");
-    }
-
-    #[test]
-    fn test_check_heartbeat_alive_expired() {
-        let dir = tempfile::tempdir().unwrap();
-        let autorun_dir = dir.path().join(".state/autorun");
-        std::fs::create_dir_all(&autorun_dir).unwrap();
-        let hb_path = autorun_dir.join("heartbeat-expired-session");
-        std::fs::write(&hb_path, "").unwrap();
-        // Set mtime to 200 seconds ago.
-        let old_time = filetime::FileTime::from_system_time(
-            std::time::SystemTime::now() - std::time::Duration::from_secs(200),
-        );
-        filetime::set_file_mtime(&hb_path, old_time).unwrap();
-        let (alive, age) = check_heartbeat_alive(dir.path(), "expired-session", 90);
-        assert!(!alive, "old heartbeat should be stale");
-        assert!(age.unwrap() >= 190, "age should reflect actual staleness");
-    }
+    // INF-TSK-050-003 AC-09: deleted tests for `is_session_stale`,
+    // `check_heartbeat_alive`. Replacement coverage lives in
+    // `session::liveness::tests` (canonical chokepoint) and in the new
+    // stuck-session tests below that exercise the residual two-signal
+    // criterion (`!pid_alive || tmux_alive == Some(false)`) directly via
+    // `detect_stuck_sessions_with`.
 
     #[test]
     fn test_check_tmux_alive_nonexistent() {
@@ -1050,8 +940,6 @@ mod tests {
             },
             pid_alive: false,
             tmux_alive: None,
-            heartbeat_alive: None,
-            heartbeat_age_secs: None,
             orphan_worker_count: 0,
             live_worker_count: 0,
             abort_age_secs: None,
@@ -1062,6 +950,9 @@ mod tests {
 
     #[test]
     fn test_build_stale_reason_multiple() {
+        // INF-TSK-050-003 AC-09: heartbeat reason removed. Only PID and
+        // tmux signals remain. The previous "heartbeat stale (300s old)"
+        // assertion is gone alongside the field.
         let info = StaleSessionInfo {
             session: AutorunSession {
                 id: "ses-test".into(),
@@ -1088,8 +979,6 @@ mod tests {
             },
             pid_alive: false,
             tmux_alive: Some(false),
-            heartbeat_alive: Some(false),
-            heartbeat_age_secs: Some(300),
             orphan_worker_count: 2,
             live_worker_count: 0,
             abort_age_secs: None,
@@ -1097,7 +986,10 @@ mod tests {
         let reason = build_stale_reason(&info);
         assert!(reason.contains("pid 99 dead"));
         assert!(reason.contains("tmux 'cf-orch-x' dead"));
-        assert!(reason.contains("heartbeat stale (300s old)"));
+        assert!(
+            !reason.contains("heartbeat"),
+            "heartbeat must not appear in stale reasons after AC-09"
+        );
     }
 
     #[test]
@@ -1230,6 +1122,7 @@ mod tests {
             scope_policy: "soft".into(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: None,
             completed_at: None,
         }
@@ -1300,36 +1193,11 @@ mod tests {
         assert!(result.is_empty(), "completed session should be ignored");
     }
 
-    #[tokio::test]
-    async fn test_detect_stale_sessions_expired_heartbeat() {
-        use crate::store::DataStore;
-        let store = crate::store::mock::MockStore::new();
-        // Alive PID but expired heartbeat.
-        let session = make_session(
-            "ses-hb-stale",
-            AutorunSessionStatus::Running,
-            Some(i64::from(std::process::id())),
-        );
-        store.create_autorun_session(&session).await.unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        let autorun_dir = dir.path().join(".state/autorun");
-        std::fs::create_dir_all(&autorun_dir).unwrap();
-        let hb_path = autorun_dir.join("heartbeat-ses-hb-stale");
-        std::fs::write(&hb_path, "").unwrap();
-        let old_time = filetime::FileTime::from_system_time(
-            std::time::SystemTime::now() - std::time::Duration::from_secs(200),
-        );
-        filetime::set_file_mtime(&hb_path, old_time).unwrap();
-
-        let result = detect_stale_sessions(&store, dir.path(), 90).await.unwrap();
-        assert_eq!(
-            result.len(),
-            1,
-            "expired heartbeat should trigger stale detection"
-        );
-        assert_eq!(result[0].heartbeat_alive, Some(false));
-    }
+    // INF-TSK-050-003 AC-09: deleted `test_detect_stale_sessions_expired_heartbeat`.
+    // The heartbeat reader/writer are gone; expired-heartbeat is no longer a
+    // stale signal. The two-signal residual (PID + tmux) is covered by other
+    // tests below. Replacement coverage for "alive PID but tmux dead → stale"
+    // lives in the integration test for `detect_stuck_sessions_with`.
 
     // -- Async tests for cleanup_stale_session --
 
@@ -2084,8 +1952,6 @@ mod tests {
             // signal.
             pid_alive: false,
             tmux_alive: None,
-            heartbeat_alive: None,
-            heartbeat_age_secs: None,
             orphan_worker_count: 0,
             live_worker_count: 0,
             abort_age_secs: Some(700),

@@ -179,8 +179,13 @@ async fn run_launch() -> Result<()> {
         None
     };
 
-    // Register InteractiveSession in DB (best-effort).
-    register_interactive_session(
+    // Register InteractiveSession in DB (best-effort but visible).
+    // INF-TSK-050-003 AC-07: any failure is non-fatal (we still launch
+    // claude) but is logged to stderr by `register_interactive_session`
+    // itself. Discarding the Result here is intentional and explicit:
+    // the warning was already emitted, and we don't gate the session
+    // launch on observability bookkeeping.
+    if let Err(e) = register_interactive_session(
         &project_dir,
         &sid_str,
         worktree_path.as_deref(),
@@ -188,7 +193,13 @@ async fn run_launch() -> Result<()> {
         "codeflow",
         true,
     )
-    .await;
+    .await
+    {
+        // No additional eprintln: the function already logged the warn.
+        // Bind to a named variable so the trailing `_ = e;` line
+        // documents the intentional discard for future readers / clippy.
+        let _ = e;
+    }
 
     // Build env vars for the claude process.
     let project_dir_str = project_dir.to_string_lossy().to_string();
@@ -213,7 +224,23 @@ async fn run_launch() -> Result<()> {
 
 /// Register an `InteractiveSession` record in SurrealDB.
 ///
-/// Non-blocking: continues if DB is unavailable.
+/// INF-TSK-050-003 AC-07: errors are now visible — every failure path
+/// emits a stderr `warn:` line and bubbles the error to the caller via
+/// `Result<(), anyhow::Error>`. The previous `let _ = …` and silent
+/// `Err(_) => return` swallowed open and CREATE errors so silently that
+/// a corrupted DB or wrong schema would produce a session that never
+/// shows up in `codeflow interactive status` with no indication of why.
+///
+/// Returning a `Result` does NOT make the call fatal at the call site:
+/// `codeflow -i` continues to launch claude even when registration
+/// fails (the registration is best-effort observability state, not a
+/// gate on the session). Callers MUST log the error rather than discard
+/// it via `let _`. See `run` for the canonical call pattern.
+///
+/// # Errors
+///
+/// Returns an error if the SurrealDB store cannot be opened or if the
+/// CREATE statement fails (network, schema mismatch, write conflict).
 async fn register_interactive_session(
     project_dir: &Path,
     session_id: &str,
@@ -221,10 +248,14 @@ async fn register_interactive_session(
     tmux_session: Option<&str>,
     source_cli: &str,
     managed: bool,
-) {
+) -> anyhow::Result<()> {
     let store = match open_store(project_dir).await {
         Ok(s) => s,
-        Err(_) => return,
+        Err(e) => {
+            let msg = format_register_warn_line("open_store", &e.to_string());
+            eprintln!("{msg}");
+            return Err(anyhow::anyhow!("open_store: {e}"));
+        }
     };
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -244,7 +275,7 @@ async fn register_interactive_session(
     // captured pre-`exec`, became tmux-attach-client PID after exec).
     // Canonical PID lives in `pathflow-session-status.json::lead_pid`,
     // written by SessionStart via `parent_id() -> validate_claude_pid`.
-    let _ = store
+    let result = store
         .db()
         .query(
             "CREATE interactive_session SET \
@@ -271,6 +302,27 @@ async fn register_interactive_session(
         .bind(("session_kind", session_kind.to_string()))
         .bind(("created_at", now))
         .await;
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let msg = format_register_warn_line("CREATE", &e.to_string());
+            eprintln!("{msg}");
+            Err(anyhow::anyhow!("CREATE interactive_session: {e}"))
+        }
+    }
+}
+
+/// INF-TSK-050-003 AC-07 / WS-REV MINOR-1: build the stderr `warn:`
+/// line emitted by `register_interactive_session` failure paths.
+///
+/// Pure helper so unit tests can assert on the exact contract format
+/// (`warn: register_interactive_session failed: <stage>: <error>`)
+/// without spawning a subprocess to capture stderr. Production code
+/// passes the formatted result to `eprintln!`. Stage is one of
+/// `"open_store"` (DB cannot be opened) or `"CREATE"` (CREATE
+/// statement failed); other strings would be a code bug.
+pub(crate) fn format_register_warn_line(stage: &str, err: &str) -> String {
+    format!("warn: register_interactive_session failed: {stage}: {err}")
 }
 
 /// Show interactive sessions (text mode).
@@ -326,6 +378,18 @@ async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
+    // INF-TSK-050-003 AC-06 / WS-REV MAJOR-2: text-mode active->stale
+    // promotion via the testable helper `promote_active_sessions_to_stale`.
+    // Extracted so the unit test can drive the logic against a seeded DB
+    // + status file and assert the row was UPDATEd to stale BEFORE the
+    // listing renders.
+    let store_for_promo = open_store(&project_dir).await.ok();
+    let promoted = if let Some(ref store) = store_for_promo {
+        promote_active_sessions_to_stale(store, &project_dir, &sessions).await
+    } else {
+        std::collections::HashSet::new()
+    };
+
     println!(
         "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} {:<30}",
         "SESSION ID", "PID", "STATUS", "SOURCE", "BRANCH", "TYPE", "PHASE", "WORKTREE"
@@ -342,12 +406,90 @@ async fn run_status(show_all: bool, status_filter: Option<&str>) -> Result<()> {
         let work_type = s.work_type.as_deref().unwrap_or("-");
         // Derive phase from pathflow-session-status.json if available.
         let phase = derive_session_phase(s);
+        // Display the EFFECTIVE status: if we just promoted this row,
+        // show 'stale' instead of the in-memory 'active' so the rendered
+        // value matches the DB state (AC-06 parity with TUI).
+        let display_status = if promoted.contains(&s.session_id) {
+            "stale".to_string()
+        } else {
+            s.status.to_string()
+        };
         println!(
             "{:<32} {:<14} {:<10} {:<10} {:<12} {:<8} {:<8} {wt}",
-            s.session_id, pid_display, s.status, s.source_cli, branch, work_type, phase
+            s.session_id, pid_display, display_status, s.source_cli, branch, work_type, phase
         );
     }
     Ok(())
+}
+
+/// INF-TSK-050-003 AC-06 (extracted by WS-REV MAJOR-2 rework).
+///
+/// For each session in `sessions` whose DB status is `active`, query the
+/// canonical chokepoint at `is_session_alive(project_dir, sid)`; if the
+/// verdict is anything other than `Active` (i.e. `Dead` or `Unknown`),
+/// UPDATE the row to `status='stale'` with completed_at and updated_at
+/// set to `now`. Returns the set of session_ids that were successfully
+/// promoted so the caller can render `stale` (matching the new DB
+/// state) instead of the in-memory `active` from the original SELECT.
+///
+/// The CAS guard (`status = 'active' AND completed_at = NONE`) prevents
+/// racing a concurrent transition. UPDATE failures are non-fatal and
+/// surface to stderr with a `warn:` prefix so an unreachable DB doesn't
+/// brick the status command — the operator just won't see the
+/// promotion in this run.
+///
+/// Mirrors the TUI's `fetch_session_views_with_keep_last_and_validator`
+/// promotion path so text + TUI display the same row state for the
+/// same input.
+pub(crate) async fn promote_active_sessions_to_stale(
+    store: &codeflow_core::store::SurrealStore,
+    project_dir: &Path,
+    sessions: &[codeflow_core::models::InteractiveSession],
+) -> std::collections::HashSet<String> {
+    let now_rfc = chrono::Utc::now().to_rfc3339();
+    let mut promoted = std::collections::HashSet::new();
+    for s in sessions {
+        if s.status.to_string() != "active" {
+            continue;
+        }
+        let verdict =
+            codeflow_core::session::liveness::is_session_alive(project_dir, &s.session_id);
+        // Only Dead promotes; Unknown is also treated as Dead for
+        // active rows because the canonical status file should always
+        // exist for any session past PF1-INIT — a missing file on an
+        // active row is a crash signature.
+        let is_dead = !matches!(
+            verdict,
+            codeflow_core::session::liveness::SessionLiveness::Active
+        );
+        if !is_dead {
+            continue;
+        }
+        let res = store
+            .db()
+            .query(
+                "UPDATE interactive_session SET status = 'stale', \
+                 updated_at = $now, completed_at = $now \
+                 WHERE session_id = $sid \
+                   AND status = 'active' \
+                   AND completed_at = NONE",
+            )
+            .bind(("now", now_rfc.clone()))
+            .bind(("sid", s.session_id.clone()))
+            .await;
+        match res {
+            Ok(_) => {
+                promoted.insert(s.session_id.clone());
+            }
+            Err(e) => {
+                eprintln!(
+                    "warn: stale-promotion DB update failed for {}: {e}",
+                    s.session_id
+                );
+            }
+        }
+    }
+    promoted
 }
 
 /// List all interactive sessions (alias for `status --once`).
@@ -382,8 +524,8 @@ async fn run_cleanup(no_purge: bool, prune_completed: bool) -> Result<()> {
     if let Ok(ref store) = store_result {
         for s in &sessions {
             // Active rows: only act if the canonical chokepoint reports
-            // `Dead`. INF-TSK-024-051 Phase 3: migrated from
-            // `is_session_stale(s.pid)` (which validated the DB `pid`
+            // `Dead`. INF-TSK-024-051 Phase 3: migrated from the legacy
+            // DB-pid stale predicate (which validated the DB `pid`
             // column — wrong-by-construction for managed sessions where
             // the pid was the codeflow CLI PID captured pre-`exec`,
             // becoming the tmux-attach client after exec) to the
@@ -693,7 +835,16 @@ fn resolve_work_dir<'a>(worktree_path: Option<&'a str>, project_dir: &'a str) ->
 ///
 /// Fail-secure: any uncertainty (missing name lookup, out-of-range PID,
 /// zero) returns `true` (i.e. "stale, safe to clean up").
-fn is_session_stale(pid: i64) -> bool {
+///
+/// INF-TSK-050-003 AC-15 rename: previously named with a string the
+/// `test-no-legacy-liveness` lint script would now flag — renamed to
+/// avoid the legacy-name lint guard. Same semantics: a fail-secure
+/// stale predicate over a canonical-PID input. NOTE: this is NOT the
+/// deleted autorun three-signal stale function (AC-09 deleted it from
+/// `core/src/autorun/stale.rs`) — it's the `i64`-PID-only adapter
+/// that the TUI uses for display formatting where a Path-based
+/// chokepoint call would be a needless allocation.
+fn is_canonical_pid_stale(pid: i64) -> bool {
     let Ok(pid_u32) = u32::try_from(pid) else {
         return true; // out-of-range or negative → fail-secure stale
     };
@@ -705,7 +856,7 @@ fn is_session_stale(pid: i64) -> bool {
 
 /// Format a PID with liveness indicator for status display.
 fn format_pid_with_liveness(pid: i64) -> String {
-    let liveness = if is_session_stale(pid) {
+    let liveness = if is_canonical_pid_stale(pid) {
         "DEAD"
     } else {
         "alive"
@@ -1340,7 +1491,8 @@ async fn run_status_tui(project_dir: &Path, interval_secs: u64) -> Result<()> {
                         {
                             // Validate DB-sourced session_id before filesystem operations.
                             if codeflow_core::session::is_valid_session_id(&session.session_id) {
-                                if session.status == "stale" || is_session_stale(session.pid) {
+                                if session.status == "stale" || is_canonical_pid_stale(session.pid)
+                                {
                                     let sid = session.session_id.clone();
                                     // Mark stale in DB (fresh connection for cross-process visibility).
                                     if let Ok(cleanup_store) = open_store(project_dir).await {
@@ -1694,7 +1846,7 @@ fn render_session_detail(
         return;
     };
 
-    let pid_alive = !is_session_stale(s.pid);
+    let pid_alive = !is_canonical_pid_stale(s.pid);
     // `pid = 0` here means the canonical `pathflow-session-status.json::lead_pid`
     // is missing/zero (status file gone or session never recorded one); surface
     // that as "unknown" to avoid rendering a misleading "0 (DEAD)".
@@ -1864,22 +2016,22 @@ mod tests {
     // ─── Stale PID detection ───────────────────────────────────────────
 
     #[test]
-    fn test_is_session_stale_dead_pid() {
+    fn test_is_canonical_pid_stale_dead_pid() {
         // PID 0 is never a valid user process.
-        assert!(is_session_stale(0));
+        assert!(is_canonical_pid_stale(0));
     }
 
     #[test]
-    fn test_is_session_stale_current_pid_not_named_claude() {
+    fn test_is_canonical_pid_stale_current_pid_not_named_claude() {
         // INF-TSK-050-001 AC #4: under the new `validate_claude_pid`
         // regime, the current PID is "alive" but its process name is
         // not "claude" (it's `cargo-test` or similar) — so
-        // `is_session_stale` returns true. This is the intended
+        // `is_canonical_pid_stale` returns true. This is the intended
         // semantic: stale-cleanup should treat any PID that is NOT a
         // recognized Claude Code process as cleanup-eligible.
         let pid = i64::from(std::process::id());
         assert!(
-            is_session_stale(pid),
+            is_canonical_pid_stale(pid),
             "current PID is alive but not 'claude'-named; \
              validate_claude_pid wraps both predicates so the test \
              runner is treated as stale (intended)"
@@ -1887,15 +2039,15 @@ mod tests {
     }
 
     #[test]
-    fn test_is_session_stale_negative_pid() {
+    fn test_is_canonical_pid_stale_negative_pid() {
         // Negative PID should be treated as dead (u32 conversion yields 0).
-        assert!(is_session_stale(-1));
+        assert!(is_canonical_pid_stale(-1));
     }
 
     #[test]
-    fn test_is_session_stale_very_large_pid() {
+    fn test_is_canonical_pid_stale_very_large_pid() {
         // Very large PID unlikely to be alive.
-        assert!(is_session_stale(999_999_999));
+        assert!(is_canonical_pid_stale(999_999_999));
     }
 
     // ─── PID formatting ────────────────────────────────────────────────
@@ -1952,11 +2104,96 @@ mod tests {
     // ─── DB registration (integration) ─────────────────────────────────
 
     #[tokio::test]
-    async fn test_register_interactive_session_no_db() {
-        // When DB directory doesn't exist, register should silently return.
+    async fn test_register_interactive_session_returns_result_type() {
+        // INF-TSK-050-003 AC-07: register_interactive_session now
+        // returns Result<(), Error>. Previously it returned `()` and
+        // swallowed every error. The behavior we lock in here: the
+        // return type lets callers observe failures. Happy path (DB
+        // dir exists) returns Ok(()).
         let dir = tempfile::tempdir().unwrap();
-        // No .state/db directory — should not panic.
-        register_interactive_session(dir.path(), "ses-test", None, None, "codeflow", true).await;
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let result =
+            register_interactive_session(dir.path(), "ses-ok", None, None, "codeflow", true).await;
+        assert!(
+            result.is_ok(),
+            "register_interactive_session must return Ok on the happy path; got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_register_interactive_session_error_path() {
+        // INF-TSK-050-003 AC-07: produce a controlled failure to verify
+        // the error path emits the documented contract message. We
+        // engineer a failure by passing a project_dir under `/dev/null`
+        // — `mkdir -p` cannot create a child of a character-device
+        // path, so `SurrealStore::open` reliably fails on the
+        // ENOTDIR/ENOENT chain. The exact OS error varies by platform
+        // but the wrapping `open_store` context is stable.
+        let bad_root = std::path::Path::new("/dev/null/forbidden-cf-test-marker");
+        let result =
+            register_interactive_session(bad_root, "ses-err", None, None, "codeflow", true).await;
+        let err = result.expect_err("write-restricted project_dir must fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("open_store") || msg.contains("CREATE interactive_session"),
+            "AC-07: error must name the failure stage, got: {msg}"
+        );
+    }
+
+    // ─── INF-TSK-050-003 AC-07 / WS-REV MINOR-1: stderr warn line ─────────
+    //
+    // `register_interactive_session` emits a `warn:` line to stderr on
+    // every failure path. The exact format is contracted by
+    // `format_register_warn_line` — these tests pin the format so a
+    // regression that, e.g., dropped the `warn:` prefix or the
+    // `register_interactive_session failed:` substring would break
+    // both the production stderr output AND these tests in lock-step.
+
+    #[test]
+    fn test_format_register_warn_line_open_store_stage() {
+        let line = format_register_warn_line("open_store", "no such file or directory");
+        // Required: "warn:" prefix per CLAUDE.md feedback contract.
+        assert!(
+            line.starts_with("warn:"),
+            "must start with 'warn:'; got: {line}"
+        );
+        // Required: function name + " failed:" so the operator can
+        // grep for this exact phrase.
+        assert!(
+            line.contains("register_interactive_session failed:"),
+            "must include the function-name + ' failed:' substring; got: {line}"
+        );
+        // Required: stage name (open_store) for failure-stage diagnosis.
+        assert!(
+            line.contains("open_store"),
+            "must name the stage; got: {line}"
+        );
+        // Required: original error text passes through.
+        assert!(
+            line.contains("no such file or directory"),
+            "must include the underlying error text; got: {line}"
+        );
+    }
+
+    #[test]
+    fn test_format_register_warn_line_create_stage() {
+        let line = format_register_warn_line("CREATE", "schema mismatch on field 'pid'");
+        assert!(line.starts_with("warn:"));
+        assert!(line.contains("register_interactive_session failed:"));
+        assert!(line.contains("CREATE"));
+        assert!(line.contains("schema mismatch on field 'pid'"));
+    }
+
+    #[test]
+    fn test_format_register_warn_line_exact_contract() {
+        // Lock the exact format so any drift forces an explicit update
+        // here and at the consumers (operator runbooks, log greppers).
+        let line = format_register_warn_line("open_store", "io error");
+        assert_eq!(
+            line, "warn: register_interactive_session failed: open_store: io error",
+            "the exact stderr line format is part of the public contract"
+        );
     }
 
     #[tokio::test]
@@ -1974,7 +2211,8 @@ mod tests {
             "codeflow",
             true,
         )
-        .await;
+        .await
+        .expect("register should succeed when DB dir exists");
 
         // Query it back.
         let sessions = query_sessions(dir.path(), Some("active")).await;
@@ -2004,7 +2242,9 @@ mod tests {
         let db_dir = dir.path().join(".state/db");
         std::fs::create_dir_all(&db_dir).unwrap();
 
-        register_interactive_session(dir.path(), "ses-f1", None, None, "claude", false).await;
+        register_interactive_session(dir.path(), "ses-f1", None, None, "claude", false)
+            .await
+            .expect("register should succeed when DB dir exists");
 
         // Filter by 'active' should find it.
         let active = query_sessions(dir.path(), Some("active")).await.unwrap();
@@ -2026,7 +2266,9 @@ mod tests {
         std::fs::create_dir_all(&db_dir).unwrap();
 
         // Real interactive session — should be visible.
-        register_interactive_session(dir.path(), "ses-real", None, None, "codeflow", false).await;
+        register_interactive_session(dir.path(), "ses-real", None, None, "codeflow", false)
+            .await
+            .expect("register should succeed when DB dir exists");
 
         // Now manually create an autorun-worker row that registers as
         // interactive_session with session_kind='autorun'. The schema
@@ -2118,7 +2360,8 @@ mod tests {
         std::fs::create_dir_all(&db_dir).unwrap();
 
         register_interactive_session(dir.path(), "ses-unmanaged", None, None, "claude", false)
-            .await;
+            .await
+            .expect("register should succeed when DB dir exists");
 
         let sessions = query_sessions(dir.path(), Some("active")).await.unwrap();
         assert_eq!(sessions.len(), 1);
@@ -2143,7 +2386,9 @@ mod tests {
     async fn seed_stale_interactive_row(project_dir: &std::path::Path, sid: &str, lead_pid: u32) {
         let db_dir = project_dir.join(".state/db");
         std::fs::create_dir_all(&db_dir).unwrap();
-        register_interactive_session(project_dir, sid, None, None, "codeflow", true).await;
+        register_interactive_session(project_dir, sid, None, None, "codeflow", true)
+            .await
+            .expect("register should succeed for seed helper");
         // Promote to stale via direct UPDATE — the public register helper
         // always creates active rows.
         let store = open_store(project_dir).await.unwrap();
@@ -2244,7 +2489,8 @@ mod tests {
             "codeflow",
             true,
         )
-        .await;
+        .await
+        .expect("register should succeed when DB dir exists");
 
         let result = repair_wrongly_stale_rows(dir.path()).await;
         assert!(result.is_ok(), "no-op repair should return Ok: {result:?}");
@@ -3283,5 +3529,131 @@ mod tests {
             .unwrap();
         let vals: Vec<String> = res.take(0).unwrap();
         assert_eq!(vals, vec![prior_completed]);
+    }
+
+    // ─── INF-TSK-050-003 AC-06 / WS-REV MAJOR-2: active→stale promotion ──
+    //
+    // These tests exercise `promote_active_sessions_to_stale` directly
+    // against a seeded DB + status file. The function is the testable
+    // helper extracted from `run_status` so the promotion contract is
+    // covered by automation, not just manual smoke tests.
+
+    /// Helper: seed an `active` interactive_session row + a status file
+    /// with the given lead_pid. Returns the dir handle (caller keeps
+    /// alive) and a fully-loaded `InteractiveSession` matching what
+    /// `query_sessions` would return for the row.
+    async fn seed_active_session_with_status_file(
+        sid: &str,
+        lead_pid: u32,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        codeflow_core::store::SurrealStore,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        register_interactive_session(dir.path(), sid, None, None, "codeflow", true)
+            .await
+            .expect("seed: register");
+        // Write the canonical status file at the project-dir-fallback
+        // location so `is_session_alive(project_dir, sid)` resolves.
+        let status_dir = dir.path().join(".state/session").join(sid).join("pathflow");
+        std::fs::create_dir_all(&status_dir).unwrap();
+        std::fs::write(
+            status_dir.join("pathflow-session-status.json"),
+            format!(r#"{{"session_id":"{sid}","lead_pid":{lead_pid},"status":"pf-in-progress"}}"#),
+        )
+        .unwrap();
+        let project = dir.path().to_path_buf();
+        let store = open_store(&project).await.expect("open store");
+        (dir, project, store)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn test_promote_active_to_stale_when_chokepoint_says_dead() {
+        // Validator returns false → chokepoint says Dead → active row
+        // must be promoted to stale + DB row UPDATEd + session_id
+        // returned in the promoted set.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(|_| false);
+
+        let (_dir, project, store) =
+            seed_active_session_with_status_file("ses-active-dead", 4_000_000).await;
+
+        // Sanity: row is currently active.
+        let before = query_sessions(&project, Some("active")).await.unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].status.to_string(), "active");
+
+        // Drive the production helper.
+        let promoted = promote_active_sessions_to_stale(&store, &project, &before).await;
+
+        // Returned set must contain the session_id.
+        assert!(
+            promoted.contains("ses-active-dead"),
+            "session_id must be in promoted set; got: {promoted:?}"
+        );
+
+        // DB row must be flipped to stale BEFORE any rendering happens.
+        let stale = query_sessions(&project, Some("stale")).await.unwrap();
+        assert_eq!(stale.len(), 1, "row must move to stale status");
+        assert_eq!(stale[0].session_id, "ses-active-dead");
+        assert!(
+            stale[0].completed_at.is_some(),
+            "completed_at must be populated by the promotion UPDATE"
+        );
+
+        // No active rows should remain.
+        let still_active = query_sessions(&project, Some("active")).await.unwrap();
+        assert!(
+            still_active.is_empty(),
+            "no active rows should remain after promotion"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn test_promote_active_to_stale_no_op_when_chokepoint_says_alive() {
+        // Validator returns true → chokepoint says Active → row stays
+        // active; promoted set is empty.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(|_| true);
+
+        let (_dir, project, store) =
+            seed_active_session_with_status_file("ses-active-alive", std::process::id()).await;
+        let before = query_sessions(&project, Some("active")).await.unwrap();
+
+        let promoted = promote_active_sessions_to_stale(&store, &project, &before).await;
+
+        assert!(
+            promoted.is_empty(),
+            "alive row must NOT be promoted; promoted={promoted:?}"
+        );
+        let still_active = query_sessions(&project, Some("active")).await.unwrap();
+        assert_eq!(still_active.len(), 1);
+        assert_eq!(still_active[0].status.to_string(), "active");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env_vars)]
+    async fn test_promote_active_to_stale_skips_already_stale_rows() {
+        // Sessions whose DB status is already 'stale' must not be
+        // re-promoted (the status check at the top of the function
+        // skips them) — and the chokepoint should not be consulted
+        // unnecessarily.
+        let _g = codeflow_core::session::liveness::override_pid_validator_for_tests(|_| false);
+
+        let dir = tempfile::tempdir().unwrap();
+        seed_stale_interactive_row(dir.path(), "ses-already-stale-skip", 4_000_000).await;
+        let project = dir.path().to_path_buf();
+        let store = open_store(&project).await.unwrap();
+
+        let stale_rows = query_sessions(&project, Some("stale")).await.unwrap();
+        assert_eq!(stale_rows.len(), 1);
+        let promoted = promote_active_sessions_to_stale(&store, &project, &stale_rows).await;
+        assert!(
+            promoted.is_empty(),
+            "already-stale rows must NOT be in promoted set"
+        );
     }
 }

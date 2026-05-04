@@ -692,6 +692,9 @@ pub mod mock {
                 if let Some(v) = update.pr_number {
                     w.pr_number = Some(v);
                 }
+                if let Some(v) = update.pr_merged_at {
+                    w.pr_merged_at = Some(v);
+                }
                 if let Some(v) = update.worker_session_id {
                     w.worker_session_id = Some(v);
                 }
@@ -1460,6 +1463,7 @@ pub mod mock {
                 scope_policy: "soft".into(),
                 worker_session_id: None,
                 pr_number: None,
+                pr_merged_at: None,
                 started_at: None,
                 completed_at: None,
             })
@@ -1576,6 +1580,7 @@ pub mod mock {
             scope_policy: "soft".into(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: None,
             completed_at: None,
         }

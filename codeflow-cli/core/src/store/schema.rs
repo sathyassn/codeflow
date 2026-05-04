@@ -40,9 +40,24 @@ const MIGRATION_DROP_INTERACTIVE_SESSION_PID: &str = "UPDATE interactive_session
 ///
 /// # Errors
 ///
-/// Returns `DbError::Surreal` if any schema statement fails.
+/// Returns `DbError::Surreal` if any schema statement fails. INF-TSK-050-003
+/// AC-02: when the underlying `surrealdb` error is a deserialization
+/// failure (i.e. the on-disk DB was written by an older binary whose
+/// model layout is incompatible with the current one), the error
+/// printed to stderr names `codeflow doctor --reset-db` as the
+/// recovery command and `codeflow ledger rebuild` as the JSONL replay
+/// strategy. The recovery hint is emitted by [`format_schema_error`]
+/// so callers (and tests) can construct the same actionable message
+/// without re-running the failing query.
 pub async fn apply_schema<C: Connection>(db: &Surreal<C>) -> Result<(), DbError> {
-    db.query(SCHEMA_SQL).await?.check()?;
+    if let Err(e) = db
+        .query(SCHEMA_SQL)
+        .await
+        .and_then(surrealdb::Response::check)
+    {
+        eprintln!("{}", format_schema_error(&e));
+        return Err(DbError::Surreal(e));
+    }
     // Back-fill session_kind for rows created before the column existed.
     // Idempotent: rows already set to 'autorun' are not matched.
     let _ = db.query(MIGRATION_BACKFILL_AUTORUN_KIND).await?.check();
@@ -53,6 +68,30 @@ pub async fn apply_schema<C: Connection>(db: &Surreal<C>) -> Result<(), DbError>
         .await?
         .check();
     Ok(())
+}
+
+/// Build the AC-02 actionable error message for a failed `apply_schema`.
+///
+/// Always names `codeflow doctor --reset-db` (AC-01 recovery command)
+/// and the JSONL replay strategy (`codeflow ledger rebuild`). The
+/// underlying `surrealdb::Error` is included for operator diagnosis;
+/// a deserialization failure prints a slightly more specific lead-in
+/// to make the cause unambiguous. Pure helper so the unit test can
+/// inject a synthetic error and assert on the resulting string without
+/// running an actual query.
+#[must_use]
+pub fn format_schema_error(err: &surrealdb::Error) -> String {
+    let msg = err.to_string();
+    let lead = if msg.contains("deserialize") || msg.contains("deserialization") {
+        "schema deserialization failed (on-disk DB layout incompatible with current binary)"
+    } else {
+        "schema apply failed"
+    };
+    format!(
+        "{lead}: {msg}\n\
+         recover with: codeflow doctor --reset-db\n\
+         then replay history (optional): codeflow ledger rebuild"
+    )
 }
 
 #[cfg(test)]
@@ -144,6 +183,44 @@ mod tests {
              (INF-TSK-024-051): canonical source is \
              pathflow-session-status.json::lead_pid via \
              session::liveness::is_session_alive"
+        );
+    }
+
+    #[test]
+    fn test_format_schema_error_names_recovery_command() {
+        // INF-TSK-050-003 AC-02: any apply_schema error must produce a
+        // message that names `codeflow doctor --reset-db` AND the
+        // JSONL replay path. We can't easily mint a real
+        // `surrealdb::Error` of the deserialize variant from a unit
+        // test, so we use the closest constructible variant and assert
+        // on the contract surface (recovery hint + ledger rebuild
+        // mention). Operator-facing string, not internal API.
+        // `surrealdb::Error::Db` is the public path for DB-layer errors.
+        let inner = surrealdb::error::Db::Thrown("synthetic deserialize failure".to_string());
+        let err = surrealdb::Error::Db(inner);
+        let msg = format_schema_error(&err);
+        assert!(
+            msg.contains("codeflow doctor --reset-db"),
+            "AC-02: error must name the recovery command, got: {msg}"
+        );
+        assert!(
+            msg.contains("codeflow ledger rebuild"),
+            "AC-02: error must name the JSONL replay command, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_format_schema_error_deserialization_specific_lead() {
+        // INF-TSK-050-003 AC-02: when the inner error mentions
+        // "deserialize", the lead-in line names that specifically.
+        let inner = surrealdb::error::Db::Thrown(
+            "failed to deserialize row 0: missing field x".to_string(),
+        );
+        let err = surrealdb::Error::Db(inner);
+        let msg = format_schema_error(&err);
+        assert!(
+            msg.contains("deserialization") || msg.contains("deserialize"),
+            "deserialize-specific message must surface the cause, got: {msg}"
         );
     }
 

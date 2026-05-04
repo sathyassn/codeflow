@@ -1042,3 +1042,25 @@ If the command prints "direct lead_pid read outside session::liveness chokepoint
 The DB column was the wrong-by-construction PID written pre-`exec` by the codeflow CLI wrapper (Phase 4-C dropped it). The schema must NEVER redefine it. Enforced by the runtime test `schema_does_not_define_interactive_session_pid` (`codeflow-cli/core/src/store/schema.rs`), which asserts `SCHEMA_SQL` does NOT contain `ON TABLE interactive_session TYPE int`.
 
 If `cargo test schema_does_not_define_interactive_session_pid` ever fails, a regression added the column back. Restore the comment block at `codeflow-cli/core/src/store/schema.surql` (the `interactive_session` field list, near `DEFINE FIELD OVERWRITE session_id`) and route any pid-display caller through the chokepoint.
+
+### Legacy liveness symbols are forbidden (INF-TSK-050-003 AC-15)
+
+`is_session_stale` and `check_heartbeat_alive` were deleted from the autorun stale module by INF-TSK-050-003 AC-09. Any reference to either symbol in production Rust code under `codeflow-cli/` is a regression: the canonical liveness chokepoint is `codeflow_core::session::liveness::is_session_alive` (and its `*_at_worktree` companion), validated through `validate_claude_pid` for Claude lead PIDs and `validate_orchestrator_pid` for autorun orchestrator PIDs. The heartbeat-file-based signal source (`.state/autorun/heartbeat-{sid}`) was removed alongside the autorun orchestrator's heartbeat writer; the canonical `pathflow-session-status.json::lead_pid` is now the only PID source the chokepoint reads.
+
+Enforced by `.codeflow/testing/scripts/lint/test-no-legacy-liveness.sh`, which scans every `.rs` file in `codeflow-cli/` excluding the integration `tests/` directories and exits 1 on any non-comment reference to either symbol. The script is registered under the `shell-scripts` target in `.codeflow/config/testing/test-config.json` with the `high` priority tag so `codeflow test --mode full` runs it on every push.
+
+Run from repo root to verify locally:
+
+```bash
+bash .codeflow/testing/scripts/lint/test-no-legacy-liveness.sh
+```
+
+Optional `--format json` emits a machine-readable summary; `--target <path>` overrides the scan root for fixture-driven test runs (the script's own self-test plants synthetic offenders in a tempdir and asserts the guard fires).
+
+If the guard fails on a real source file, the fix is one of:
+
+- Replace the call with `crate::session::liveness::is_session_alive(project_dir, sid)` (returns `SessionLiveness::Active|Dead|Unknown`).
+- For `i64`-PID-only adapters (TUI display formatting where a Path argument would be a needless allocation), name the local helper something other than `is_session_stale` — e.g. `is_canonical_pid_stale` — to avoid the lint guard while preserving the chokepoint semantic.
+- For tests that still need a synthetic stale predicate, place the test function inside a `tests/` directory (the script excludes that path).
+
+Comment-only references (e.g. doc comments naming the deleted symbols in prose to explain a migration) are allowed: the guard skips lines whose first non-whitespace token is `//`, `///`, or `//!`.

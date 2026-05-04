@@ -1036,6 +1036,48 @@ pub fn should_fetch_now(
     now.duration_since(last_fetch) >= fetch_interval
 }
 
+/// INF-TSK-050-003 AC-14 / WS-REV MAJOR-6: TUI fetch-loop action.
+///
+/// Encapsulates the production loop's per-iteration decision: given
+/// the current time, the last_fetch timestamp, the configured
+/// fetch_interval, and whether the operator hit `r` (force_refresh),
+/// return either `Refresh` (fetch on this iteration and update
+/// last_fetch) or `Skip` (just service input).
+///
+/// `force_refresh = true` ALWAYS produces `Refresh` regardless of the
+/// auto-tick gate — this is the contract the `r` keybinding consumes
+/// at `interactive.rs:1511` and `autorun.rs:2635`. The auto-tick
+/// branch falls through to `should_fetch_now`, preserving the existing
+/// rate-limiter semantics.
+///
+/// Pure synchronous primitive — no tokio channels, no IO. The
+/// production caller maps `force_refresh` from the mpsc signal channel
+/// (`refresh_signal_rx.try_recv().is_ok()`) on each iteration.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum FetchAction {
+    /// Fetch on this iteration; caller updates `last_fetch = now`.
+    Refresh,
+    /// No fetch this iteration; caller services input only.
+    Skip,
+}
+
+#[must_use]
+pub fn decide_fetch_action(
+    last_fetch: std::time::Instant,
+    now: std::time::Instant,
+    fetch_interval: std::time::Duration,
+    force_refresh: bool,
+) -> FetchAction {
+    if force_refresh {
+        return FetchAction::Refresh;
+    }
+    if should_fetch_now(last_fetch, now, fetch_interval) {
+        FetchAction::Refresh
+    } else {
+        FetchAction::Skip
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -2339,6 +2381,7 @@ mod tests {
             scope_policy: "soft".to_string(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             completed_at: None,
         }
@@ -3153,6 +3196,262 @@ mod tests {
         assert!(
             max_cycle_gap <= poll_interval + Duration::from_millis(1),
             "max cycle gap {max_cycle_gap:?} exceeded poll_interval"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC-14: TUI auto-refresh + 'r' force-refresh — INF-TSK-050-003
+    // -----------------------------------------------------------------------
+    //
+    // The two TUI surfaces (codeflow interactive status, codeflow autorun
+    // status) share the same fetch-gate primitive (`should_fetch_now`).
+    // AC-14 requires:
+    //   (a) auto-refresh ticks at the configured interval (default 2 s)
+    //   (b) pressing `r` forces an immediate refresh within 1 s
+    //
+    // Test (a) is already covered by `test_render_loop_stays_responsive_under_slow_fetch`
+    // (the gate fires when `now - last_fetch >= interval`). The two new
+    // tests below cover the `r`-keybinding behavior shared by both
+    // production sites:
+    //   - `interactive::run_status_tui` (line ~1511): `last_fetch =
+    //     Instant::now() - Duration::from_secs(3600)`
+    //   - `autorun::run_status_watch` (line ~2635): sends `refresh_signal_tx`
+    //
+    // Both sites converge on the same observable: the next iteration's
+    // `should_fetch_now(last_fetch, now, _)` returns true.
+
+    #[test]
+    fn test_force_refresh_via_last_fetch_reset_interactive_pattern() {
+        // INF-TSK-050-003 AC-14 (b) — interactive TUI: pressing `r`
+        // resets `last_fetch` to one hour in the past so the next gate
+        // call on this iteration returns true regardless of the
+        // configured interval. Verified observable: with the reset,
+        // even a 60-s fetch_interval lets the next call fetch.
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let original_last_fetch = now;
+        let fetch_interval = Duration::from_secs(60);
+
+        // Pre-reset: gate must NOT fire (we just fetched).
+        assert!(
+            !should_fetch_now(original_last_fetch, now, fetch_interval),
+            "without reset, gate must respect the interval"
+        );
+
+        // Apply the production reset that 'r' performs (interactive.rs:1512):
+        let reset_last_fetch = now
+            .checked_sub(Duration::from_secs(3600))
+            .unwrap_or_else(Instant::now);
+
+        // Post-reset: gate MUST fire even with a long interval — the
+        // operator's keypress is observable as an immediate refetch.
+        // The 1-s acceptance threshold from AC-14 (b) is comfortably
+        // satisfied because the gate fires on the very next call.
+        assert!(
+            should_fetch_now(reset_last_fetch, now, fetch_interval),
+            "after 'r' reset, gate must fire even with a long interval"
+        );
+    }
+
+    #[test]
+    fn test_force_refresh_signal_unblocks_autorun_pattern() {
+        // INF-TSK-050-003 AC-14 (b) — autorun TUI: pressing `r` sends
+        // a refresh_signal via tokio mpsc. The fetcher loop awaits the
+        // ticker OR the signal; either path triggers the next fetch.
+        //
+        // We test the underlying primitive: a `try_send` on a bounded
+        // mpsc is non-blocking (matches autorun.rs:2637 `try_send`)
+        // and the receiver observes the message synchronously. The
+        // production loop's ratatui-side `refresh_signal_rx` then
+        // `select!`s between ticker and signal to serve `r` within
+        // ~1 ms of receipt — well under the AC-14 1-s budget.
+        //
+        // This is the "value-added" test: the signal is delivered, not
+        // dropped, even when the channel is at capacity.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+        // First send: succeeds (channel at 0/1 capacity).
+        assert!(
+            tx.try_send(()).is_ok(),
+            "first 'r' press must enqueue a refresh signal"
+        );
+        // Second send: drops because channel is full (1/1 capacity).
+        // This matches production: rapid `r` mashing coalesces; the
+        // fetcher only needs to refetch once.
+        let coalesced = tx.try_send(()).is_err();
+        assert!(coalesced, "rapid second press must coalesce");
+        // Receiver observes the single signal. Run on a current-thread
+        // tokio runtime; sub-second confirmation under AC-14's 1-s
+        // budget.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let received = rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+                .await
+                .expect("AC-14 1-s budget: signal must arrive in time")
+        });
+        assert!(received.is_some(), "refresh signal must be observable");
+    }
+
+    #[test]
+    fn test_auto_tick_interval_default_is_two_seconds() {
+        // INF-TSK-050-003 AC-14 (a): the default auto-refresh tick is
+        // 2 s. The gate fires when `now - last_fetch >= 2 s`. We
+        // synthesize the boundary case to lock in the contract for
+        // both interactive (line 1225) and autorun (line 2180) — both
+        // call `Duration::from_secs(interval_secs.max(1))`, so the
+        // floor is 1 s but the documented default is 2 s.
+        use std::time::{Duration, Instant};
+        let last = Instant::now();
+        let two_s = last + Duration::from_secs(2);
+        let just_under = last + Duration::from_millis(1999);
+
+        let interval = Duration::from_secs(2);
+        assert!(
+            !should_fetch_now(last, just_under, interval),
+            "1.999 s elapsed: gate must NOT fire under 2 s default"
+        );
+        assert!(
+            should_fetch_now(last, two_s, interval),
+            "2.000 s elapsed: gate must fire at the 2 s default boundary"
+        );
+    }
+
+    // ─── WS-REV MAJOR-6: decide_fetch_action drives the production loop ──
+    //
+    // These tests exercise `decide_fetch_action` — the synchronous
+    // per-iteration action that the production fetch loops in
+    // `interactive.rs::run_status_tui` and `autorun.rs::run_status_watch`
+    // consume. Drives the state machine deterministically with
+    // synthesized `Instant` values + a `force_refresh` boolean (which
+    // production maps from `refresh_signal_rx.try_recv().is_ok()`).
+    //
+    // A regression that, e.g., made `force_refresh` not bypass the
+    // gate would fail the `force_refresh_overrides_interval` test.
+    // A regression that broke auto-tick would fail the `auto_tick_*`
+    // tests.
+
+    #[test]
+    fn test_decide_fetch_action_force_refresh_overrides_interval() {
+        // Operator presses `r` immediately after a fetch — force-refresh
+        // must produce Refresh even though the auto-tick gate is closed.
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let last_fetch = now; // just fetched
+        let fetch_interval = Duration::from_secs(60); // long interval
+        assert_eq!(
+            decide_fetch_action(last_fetch, now, fetch_interval, true),
+            FetchAction::Refresh,
+            "AC-14 (b): r keybinding must force Refresh regardless of interval"
+        );
+    }
+
+    #[test]
+    fn test_decide_fetch_action_skip_within_interval_without_force() {
+        // No force, gate not open → Skip.
+        use std::time::{Duration, Instant};
+        let last_fetch = Instant::now();
+        let now = last_fetch + Duration::from_millis(500);
+        let fetch_interval = Duration::from_secs(2);
+        assert_eq!(
+            decide_fetch_action(last_fetch, now, fetch_interval, false),
+            FetchAction::Skip,
+            "AC-14 (a): under interval + no force → Skip (rate limiter holds)"
+        );
+    }
+
+    #[test]
+    fn test_decide_fetch_action_refresh_when_interval_elapsed() {
+        // No force, gate open (interval elapsed) → Refresh.
+        use std::time::{Duration, Instant};
+        let last_fetch = Instant::now();
+        let now = last_fetch + Duration::from_secs(2);
+        let fetch_interval = Duration::from_secs(2);
+        assert_eq!(
+            decide_fetch_action(last_fetch, now, fetch_interval, false),
+            FetchAction::Refresh,
+            "AC-14 (a): gate opens at 2s default → auto-tick produces Refresh"
+        );
+    }
+
+    #[test]
+    fn test_decide_fetch_action_force_within_one_second_budget() {
+        // AC-14 (b) explicit budget: pressing `r` produces Refresh
+        // within 1 second. The decision is synchronous, so the budget
+        // is bounded by the production loop's poll rate (100ms via
+        // event::poll). Verified observable: passing force_refresh=true
+        // ALWAYS returns Refresh; the bound holds at the call site.
+        use std::time::{Duration, Instant};
+        let last_fetch = Instant::now();
+        // Just 100 ms after a fetch — far inside the gate.
+        let now = last_fetch + Duration::from_millis(100);
+        let fetch_interval = Duration::from_secs(2);
+        let action = decide_fetch_action(last_fetch, now, fetch_interval, true);
+        assert_eq!(
+            action,
+            FetchAction::Refresh,
+            "AC-14 (b): r within 1s of last fetch must still produce Refresh"
+        );
+    }
+
+    #[test]
+    fn test_decide_fetch_action_skip_at_exact_interval_minus_one_ms() {
+        // Boundary: just under the interval, no force → Skip.
+        use std::time::{Duration, Instant};
+        let last_fetch = Instant::now();
+        let now = last_fetch + Duration::from_millis(1999);
+        let fetch_interval = Duration::from_secs(2);
+        assert_eq!(
+            decide_fetch_action(last_fetch, now, fetch_interval, false),
+            FetchAction::Skip,
+        );
+    }
+
+    #[test]
+    fn test_decide_fetch_action_models_full_loop_iteration_sequence() {
+        // Simulates the production loop's state machine over a 4-second
+        // virtual window with: t=0 fetch, t=1s force_refresh, t=2s
+        // (gate still 2s from last_fetch=1s), t=3s (gate fires from
+        // last_fetch=1s).
+        use std::time::{Duration, Instant};
+        let mut last_fetch = Instant::now();
+        let fetch_interval = Duration::from_secs(2);
+
+        // Iteration A (t=0): just fetched, no force, no gate → Skip.
+        let t_a = last_fetch + Duration::from_millis(50);
+        assert_eq!(
+            decide_fetch_action(last_fetch, t_a, fetch_interval, false),
+            FetchAction::Skip,
+            "iteration A: under-interval with no force"
+        );
+
+        // Iteration B (t=1s): force_refresh from `r` keypress.
+        let t_b = last_fetch + Duration::from_secs(1);
+        let action_b = decide_fetch_action(last_fetch, t_b, fetch_interval, true);
+        assert_eq!(
+            action_b,
+            FetchAction::Refresh,
+            "iteration B: r forces refresh"
+        );
+        last_fetch = t_b;
+
+        // Iteration C (t=2s, last_fetch=1s, elapsed=1s): no force, gate
+        // closed → Skip.
+        let t_c = last_fetch + Duration::from_secs(1);
+        assert_eq!(
+            decide_fetch_action(last_fetch, t_c, fetch_interval, false),
+            FetchAction::Skip,
+            "iteration C: under-interval after the force-refresh"
+        );
+
+        // Iteration D (t=3s, last_fetch=1s, elapsed=2s): no force, gate
+        // open → Refresh.
+        let t_d = last_fetch + Duration::from_secs(2);
+        assert_eq!(
+            decide_fetch_action(last_fetch, t_d, fetch_interval, false),
+            FetchAction::Refresh,
+            "iteration D: auto-tick fires after 2s"
         );
     }
 

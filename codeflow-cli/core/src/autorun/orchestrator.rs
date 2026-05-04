@@ -284,25 +284,11 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
         }
         let blocked_behavior = loaded_config.autorun.blocked_behavior.clone();
 
-        // C4: Start heartbeat background task.
-        let heartbeat_dir = project_dir.join(".state/autorun");
-        let _ = std::fs::create_dir_all(&heartbeat_dir);
-        let heartbeat_path = heartbeat_dir.join(format!("heartbeat-{session_id}"));
-        let heartbeat_interval =
-            std::time::Duration::from_secs(loaded_config.autorun.heartbeat_interval_secs);
-        let heartbeat_handle = tokio::spawn({
-            let path = heartbeat_path.clone();
-            async move {
-                loop {
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .truncate(true)
-                        .write(true)
-                        .open(&path);
-                    tokio::time::sleep(heartbeat_interval).await;
-                }
-            }
-        });
+        // INF-TSK-050-003 AC-09: heartbeat background task removed.
+        // The canonical liveness chokepoint (`session::liveness::is_session_alive`)
+        // reads `pathflow-session-status.json::lead_pid` and validates it via
+        // `validate_claude_pid` — no per-30s file write needed. Orchestrator
+        // liveness is now a PID check via `validate_orchestrator_pid`.
 
         let state = ExecutionState::new(effective_workers);
         let total_tasks = batch.order.len();
@@ -371,9 +357,8 @@ impl<R: WorkerRunner + 'static, S: crate::store::DataStore + 'static> Orchestrat
             Self::abort_cleanup(&state, &batch.order).await;
         }
 
-        // C4: Stop heartbeat and clean up file.
-        heartbeat_handle.abort();
-        let _ = std::fs::remove_file(&heartbeat_path);
+        // INF-TSK-050-003 AC-09: heartbeat task abort/cleanup removed
+        // (the heartbeat writer itself is gone).
 
         // INF-TSK-050-001 AC #5 (partial — orchestrator side): remove
         // the abort marker file if it exists. The CLI side (run_abort

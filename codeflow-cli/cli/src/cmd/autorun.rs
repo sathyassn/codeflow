@@ -237,6 +237,26 @@ pub async fn run(command: Option<AutorunCommand>) -> Result<()> {
     }
 }
 
+/// INF-TSK-050-003 AC-13: final-PR gate predicate.
+///
+/// Returns `true` when EVERY autorun_worker in the batch has a
+/// non-NULL `pr_merged_at` AND the worker list is non-empty. A merge
+/// conflict (no `pr_merged_at` set by `apply_merge_writeback`)
+/// correctly closes the gate, ensuring the final autorun PR appears
+/// only when every worker actually merged.
+///
+/// Empty worker lists return `false` (the legacy/empty-batch case
+/// must NOT surprise-create a final PR for nothing).
+///
+/// Public-by-crate so the integration test at
+/// `cli/tests/final_pr_gate_all_merged.rs` consumes the SAME
+/// production predicate. WS-REV MAJOR-5 fix: previously the test
+/// re-implemented the predicate locally, allowing a regression to
+/// `.any()` to escape detection.
+pub(crate) fn final_pr_gate_open(workers: &[codeflow_core::models::AutorunWorker]) -> bool {
+    !workers.is_empty() && workers.iter().all(|w| w.pr_merged_at.is_some())
+}
+
 /// Resolve a path to the real git repository root.
 ///
 /// Worktrees have a `.git` file (containing `gitdir: ...`) instead of a
@@ -753,8 +773,36 @@ async fn run_with_dir(project_dir: &Path, batch_path: &Path, foreground: bool) -
     }
 
     // Post-batch: Create final PR (integration branch -> final_pr_target).
+    //
+    // INF-TSK-050-003 AC-13: gate changed from `completed_count > 0` to
+    // "every worker's `pr_merged_at` IS NOT NULL". Workers in
+    // `merge_conflict`, `merge_failed`, or `timeout` terminal states
+    // never set `pr_merged_at` (see `apply_merge_writeback`), so a
+    // batch with even one such worker is correctly rejected. The
+    // "completed" status alone is insufficient — a worker can be marked
+    // `completed` by the worker logic but still be in a `merge_conflict`
+    // state from `serialized_merge`, which would have produced no
+    // visible final PR but did pass the previous `completed_count > 0`
+    // check.
+    //
+    // Falls back gracefully on DB errors: if we cannot list workers,
+    // log a warning and behave as if the gate is closed (do NOT create
+    // the final PR). Better to skip an expected PR than to create one
+    // that misrepresents the batch state.
     let completed_count = results.iter().filter(|r| r.status == "completed").count();
-    if parsed.final_pr && completed_count > 0 {
+    let all_workers_merged: bool = match store_for_final_pr
+        .list_autorun_workers(session_id.as_str())
+        .await
+    {
+        Ok(workers) => final_pr_gate_open(&workers),
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read autorun_worker rows for final-PR gate: {e}; skipping final PR"
+            );
+            false
+        }
+    };
+    if parsed.final_pr && all_workers_merged && completed_count > 0 {
         let task_lines = results
             .iter()
             .map(|r| format!("- {} ({})", r.task_id, r.status))
@@ -1751,9 +1799,19 @@ async fn run_status(project_dir: &Path, batch: Option<&str>, show_all: bool) -> 
     crate::maybe_emit_rescue_banner();
 
     let store = open_store(project_dir).await?;
-    let stale_threshold = codeflow_core::autorun::load_config(project_dir)
-        .map(|c| c.autorun.stale_threshold_secs)
-        .unwrap_or(90);
+
+    // INF-TSK-050-003 AC-08: text mode now reconciles BEFORE rendering,
+    // matching `run_status_watch` (TUI) which calls
+    // `run_status_watch_auto_reconcile` on startup. Without this call,
+    // stuck Running sessions/tasks remain visible as Running in text
+    // output until a separate command (e.g. `codeflow autorun cleanup`)
+    // flips them. Failure here is non-fatal — display proceeds with the
+    // latest observed DB state and a stderr warning surfaces to the
+    // operator. Mirrors the TUI's `_count` discard policy: the operator
+    // sees the reconciled rows directly in the output below.
+    if let Err(e) = run_status_watch_auto_reconcile(store.as_ref(), project_dir).await {
+        eprintln!("warn: stuck-session reconcile failed: {e}");
+    }
 
     // Determine which sessions to show.
     let sessions = if let Some(sid) = batch {
@@ -1817,40 +1875,50 @@ async fn run_status(project_dir: &Path, batch: Option<&str>, show_all: bool) -> 
             .filter(|w| w.status == codeflow_core::types::AutorunWorkerStatus::Running)
             .count();
 
-        // C12: Real stale detection for running sessions.
+        // INF-TSK-050-003 AC-03: text-mode liveness via the canonical
+        // chokepoint. Per-worker liveness uses `is_session_alive`
+        // (workers ARE Claude lead processes); orchestrator liveness
+        // uses `validate_orchestrator_pid` (the orchestrator is
+        // `codeflow autorun run`, not `claude`, so the name-checking
+        // chokepoint would always reject it). The previous heartbeat
+        // combiner is gone (AC-09).
         let mut orphan_count = 0;
         let mut session_stale = false;
         for w in &workers {
             if w.status == codeflow_core::types::AutorunWorkerStatus::Running {
-                if let Some(ref tmux_name) = w.tmux_session {
-                    if !tmux_has_session(tmux_name) {
-                        orphan_count += 1;
-                    }
+                // INF-TSK-050-003 AC-03/AC-04: prefer the chokepoint
+                // when a worker_session_id is present (the Claude lead
+                // PID lives in `pathflow-session-status.json::lead_pid`
+                // for that SID). Fall back to tmux-only signal for
+                // legacy rows whose worker_session_id was never set.
+                let alive = if let Some(ref sid) = w.worker_session_id {
+                    codeflow_core::session::liveness::is_session_alive(project_dir, sid).is_alive()
+                } else {
+                    w.tmux_session
+                        .as_deref()
+                        .is_none_or(codeflow_core::autorun::check_tmux_alive)
+                };
+                if !alive {
+                    orphan_count += 1;
                 }
             }
         }
-        // Check orchestrator liveness.
+        // Orchestrator liveness — direct PID check (no name validation).
         if matches!(
             session.status,
             codeflow_core::types::AutorunSessionStatus::Running
         ) {
-            let pid_alive = session
-                .pid
-                .is_some_and(codeflow_core::autorun::check_pid_alive);
+            let pid_alive = session.pid.is_some_and(|p| {
+                u32::try_from(p).is_ok_and(|p32| {
+                    codeflow_core::session::liveness::validate_orchestrator_pid(p32)
+                })
+            });
             let tmux_alive = session
                 .tmux_session
                 .as_deref()
                 .map(codeflow_core::autorun::check_tmux_alive);
-            let (hb_alive, _) = codeflow_core::autorun::check_heartbeat_alive(
-                project_dir,
-                &session.id,
-                stale_threshold,
-            );
-            // Only pass stale signal -- if heartbeat file doesn't exist, don't
-            // report a false-positive stale status.
-            let heartbeat = if hb_alive { None } else { Some(false) };
-            session_stale =
-                codeflow_core::autorun::is_session_stale(pid_alive, tmux_alive, heartbeat);
+            // Stale = PID dead OR tmux known dead.
+            session_stale = !pid_alive || tmux_alive == Some(false);
         }
 
         // INF-TSK-049-001 AC #6: text-mode elapsed must freeze on terminal
@@ -7477,6 +7545,7 @@ tasks:
                 scope_policy: "soft".into(),
                 worker_session_id: None,
                 pr_number: None,
+                pr_merged_at: None,
                 started_at: None,
                 completed_at: None,
             };
@@ -7550,6 +7619,7 @@ tasks:
                     scope_policy: "soft".into(),
                     worker_session_id: None,
                     pr_number: None,
+                    pr_merged_at: None,
                     started_at: Some(now.clone()),
                     completed_at: None,
                 };
@@ -7775,6 +7845,7 @@ tasks:
                     scope_policy: "soft".into(),
                     worker_session_id: None,
                     pr_number: None,
+                    pr_merged_at: None,
                     started_at: None,
                     completed_at: None,
                 };
@@ -7821,6 +7892,7 @@ tasks:
                 scope_policy: "soft".into(),
                 worker_session_id: None,
                 pr_number: None,
+                pr_merged_at: None,
                 started_at: None,
                 completed_at: None,
             };
@@ -7953,6 +8025,7 @@ tasks:
             scope_policy: "soft".into(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: Some(chrono::Utc::now().to_rfc3339()),
             completed_at: None,
         }
@@ -10525,5 +10598,211 @@ tasks:
                 "no path-escape marker should appear under any condition"
             );
         });
+    }
+
+    // ─── INF-TSK-050-003 AC-13 / WS-REV MAJOR-5: final_pr_gate_open ────────
+    //
+    // These tests exercise the SAME `final_pr_gate_open` function that the
+    // production call site at line 776 imports. A regression that changes
+    // `.all()` to `.any()` (or removes the empty-list early return) would
+    // fail these tests immediately. Replaces the prior integration-test
+    // re-implementation that allowed regressions to escape detection.
+
+    fn make_test_worker_for_gate(
+        id: &str,
+        pr_merged_at: Option<String>,
+    ) -> codeflow_core::models::AutorunWorker {
+        codeflow_core::models::AutorunWorker {
+            id: id.into(),
+            session_id: "ses-gate-test".into(),
+            worker_num: 0,
+            task_id: format!("task-{id}"),
+            status: codeflow_core::types::AutorunWorkerStatus::Completed,
+            tmux_session: None,
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: "soft".into(),
+            worker_session_id: None,
+            pr_number: Some(101),
+            pr_merged_at,
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn test_final_pr_gate_closes_on_one_unmerged_worker() {
+        // 3 merged + 1 unmerged → gate closed. AC-13 contract:
+        // ANY worker with NULL pr_merged_at must close the gate.
+        let now = chrono::Utc::now().to_rfc3339();
+        let workers = vec![
+            make_test_worker_for_gate("aw-1", Some(now.clone())),
+            make_test_worker_for_gate("aw-2", Some(now.clone())),
+            make_test_worker_for_gate("aw-3", Some(now)),
+            make_test_worker_for_gate("aw-conflict", None),
+        ];
+        assert!(
+            !final_pr_gate_open(&workers),
+            "AC-13 / MAJOR-5: even one unmerged worker must close the gate"
+        );
+    }
+
+    #[test]
+    fn test_final_pr_gate_opens_when_all_merged() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let workers: Vec<_> = (0..5)
+            .map(|i| make_test_worker_for_gate(&format!("aw-{i}"), Some(now.clone())))
+            .collect();
+        assert!(
+            final_pr_gate_open(&workers),
+            "AC-13: every worker has pr_merged_at — gate opens"
+        );
+    }
+
+    #[test]
+    fn test_final_pr_gate_closes_on_empty_workers() {
+        // Legacy/empty-batch case: no workers means no surprise PR.
+        let workers: Vec<codeflow_core::models::AutorunWorker> = vec![];
+        assert!(
+            !final_pr_gate_open(&workers),
+            "AC-13: empty worker list must close the gate"
+        );
+    }
+
+    #[test]
+    fn test_final_pr_gate_closes_on_ci_failure() {
+        // Variant: CiFailed leaves pr_merged_at=None even though the PR
+        // exists on origin. Gate must still be closed.
+        let now = chrono::Utc::now().to_rfc3339();
+        let workers = vec![
+            make_test_worker_for_gate("aw-good", Some(now)),
+            make_test_worker_for_gate("aw-ci-fail", None),
+        ];
+        assert!(
+            !final_pr_gate_open(&workers),
+            "AC-13: CiFailed (pr_merged_at=None) closes the gate"
+        );
+    }
+
+    // ─── INF-TSK-050-003 AC-08 / WS-REV MAJOR-3: reconcile-before-display ──
+    //
+    // run_status (text mode) and run_status_watch (TUI) both invoke
+    // `run_status_watch_auto_reconcile` BEFORE listing sessions for
+    // display. The contract: a stuck Running task_run is flipped to
+    // Failed before the operator sees the listing — no zombie Running
+    // rows leak into the rendered output.
+    //
+    // This test seeds an autorun_session with status=Running and a dead
+    // PID (so detect_stuck_sessions classifies it stuck), seeds a
+    // task_run with status=Running, runs run_status_watch_auto_reconcile
+    // synchronously, then asserts the task_run row is NOW Failed.
+
+    #[tokio::test]
+    async fn test_run_status_auto_reconcile_flips_running_task_run_to_failed() {
+        use codeflow_core::store::DataStore;
+        use codeflow_core::types::{AutorunSessionStatus, AutorunTaskRunStatus};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join(".state/db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let store = codeflow_core::store::SurrealStore::open(&db_dir)
+            .await
+            .unwrap();
+        store.apply_schema().await.unwrap();
+
+        // Seed: stuck session + Running task_run.
+        // Session has pid=None, so `is_session_pid_alive_with` returns
+        // false → detect_stuck_sessions classifies it stuck without
+        // needing to spawn a real claude process.
+        let now = chrono::Utc::now().to_rfc3339();
+        let session = codeflow_core::models::AutorunSession {
+            id: "ses-reconcile-test".into(),
+            batch_file: "b.yaml".into(),
+            batch_name: Some("reconcile-test".into()),
+            status: AutorunSessionStatus::Running,
+            max_session_workers: 1,
+            total_tasks: 1,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            pid: None,
+            skipped_tasks: 0,
+            tmux_session: None,
+            stale_reason: None,
+            target_branch: None,
+            final_pr_url: None,
+            current_task_id: None,
+            current_task_format_id: None,
+            updated_at: None,
+            last_heartbeat_at: None,
+            created_at: now.clone(),
+            completed_at: None,
+            abort_started_at: None,
+        };
+        store.create_autorun_session(&session).await.unwrap();
+
+        let task_run = codeflow_core::models::AutorunTaskRun {
+            id: "atr-reconcile".into(),
+            worker_id: "aw-reconcile".into(),
+            task_id: "task-reconcile".into(),
+            session_id: "ses-reconcile-test".into(),
+            status: AutorunTaskRunStatus::Running,
+            branch_name: None,
+            worktree_path: None,
+            pr_number: None,
+            pr_url: None,
+            blocked_reason: None,
+            claim_conflicts: None,
+            merge_conflicts: None,
+            started_at: Some(now.clone()),
+            completed_at: None,
+            duration_seconds: None,
+            exit_code: None,
+            error_message: None,
+            verification_result: None,
+            last_phase: None,
+            created_at: now,
+        };
+        store.create_autorun_task_run(&task_run).await.unwrap();
+
+        // Pre-conditions: row is Running.
+        let runs_before = store
+            .list_autorun_task_runs("ses-reconcile-test")
+            .await
+            .unwrap();
+        assert_eq!(runs_before.len(), 1);
+        assert_eq!(runs_before[0].status, AutorunTaskRunStatus::Running);
+
+        // Production code path: text mode invokes
+        // `run_status_watch_auto_reconcile(&store, project_dir)` BEFORE
+        // listing sessions for display. Drive the same call here.
+        let count = run_status_watch_auto_reconcile(&store, dir.path())
+            .await
+            .expect("auto-reconcile must succeed");
+        assert_eq!(count, 1, "exactly one stuck session should be reconciled");
+
+        // Post-conditions: task_run is Failed BEFORE any rendering
+        // happens. This is the AC-08 contract — the listing surface
+        // never sees the stuck Running row.
+        let runs_after = store
+            .list_autorun_task_runs("ses-reconcile-test")
+            .await
+            .unwrap();
+        assert_eq!(runs_after.len(), 1);
+        assert_eq!(
+            runs_after[0].status,
+            AutorunTaskRunStatus::Failed,
+            "AC-08: stuck Running task_run must be flipped to Failed before display"
+        );
+        assert!(
+            runs_after[0].completed_at.is_some(),
+            "completed_at must be populated by the reconcile UPDATE"
+        );
+        assert!(
+            runs_after[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("stale cleanup")),
+            "error_message must surface the reconcile reason"
+        );
     }
 }

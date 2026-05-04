@@ -88,6 +88,14 @@ pub struct AutorunWorker {
     #[serde(default)]
     pub worker_session_id: Option<String>,
     pub pr_number: Option<i64>,
+    /// INF-TSK-050-003 AC-11: timestamp the worker's PR was merged.
+    /// `None` until `serialized_merge` returns `MergeOutcome::Merged`;
+    /// drives the AC-13 final-PR gate (the orchestrator creates a final
+    /// autorun PR only when every worker's `pr_merged_at` is `Some`).
+    /// Wrapped in `#[serde(default)]` so rows from earlier binaries
+    /// deserialize cleanly with `None` for this newly-added column.
+    #[serde(default)]
+    pub pr_merged_at: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
 }
@@ -414,12 +422,16 @@ mod tests {
             scope_policy: "hard".into(),
             worker_session_id: Some("ses-test-123".into()),
             pr_number: None,
+            pr_merged_at: None,
             started_at: Some("2026-03-21T00:00:00Z".into()),
             completed_at: None,
         };
         assert_eq!(worker.file_scope.len(), 2);
         assert_eq!(worker.scope_policy, "hard");
         assert_eq!(worker.worker_session_id.as_deref(), Some("ses-test-123"));
+        // INF-TSK-050-003 AC-11: pr_merged_at defaults None for fresh
+        // workers. Set only by `apply_merge_writeback`.
+        assert!(worker.pr_merged_at.is_none());
     }
 
     #[test]
@@ -437,12 +449,38 @@ mod tests {
             scope_policy: default_scope_policy(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: None,
             completed_at: None,
         };
         assert!(worker.file_scope.is_empty());
         assert_eq!(worker.scope_policy, "soft");
         assert!(worker.worker_session_id.is_none());
+    }
+
+    #[test]
+    fn test_autorun_worker_pr_merged_at_setter() {
+        // INF-TSK-050-003 AC-11: pr_merged_at is settable to a
+        // non-None RFC 3339 string. Drives the AC-13 final-PR gate.
+        let mut worker = AutorunWorker {
+            id: "aw-mark".into(),
+            session_id: "ar-2".into(),
+            worker_num: 0,
+            task_id: "t-merged".into(),
+            status: AutorunWorkerStatus::Completed,
+            tmux_session: None,
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: default_scope_policy(),
+            worker_session_id: None,
+            pr_number: Some(42),
+            pr_merged_at: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let merged = "2026-05-03T12:00:00Z".to_string();
+        worker.pr_merged_at = Some(merged.clone());
+        assert_eq!(worker.pr_merged_at.as_deref(), Some(merged.as_str()));
     }
 
     #[test]

@@ -695,6 +695,7 @@ impl DataStore for SurrealStore {
             "scope_policy" => update.scope_policy,
             "worker_session_id" => update.worker_session_id,
             "pr_number" => update.pr_number,
+            "pr_merged_at" => update.pr_merged_at,
             "started_at" => update.started_at,
             "completed_at" => update.completed_at,
         };
@@ -1796,6 +1797,7 @@ mod tests {
             scope_policy: "soft".into(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: None,
             completed_at: None,
         };
@@ -3007,6 +3009,7 @@ mod tests {
             scope_policy: "soft".into(),
             worker_session_id: None,
             pr_number: None,
+            pr_merged_at: None,
             started_at: None,
             completed_at: None,
         }

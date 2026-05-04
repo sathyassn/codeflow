@@ -130,6 +130,35 @@ pub fn check_pid_liveness(lead_pid: u32) -> PidLiveness {
     }
 }
 
+/// PID-only liveness check for the autorun orchestrator process.
+///
+/// Returns `true` only when `pid > 0` AND the kernel reports the process
+/// alive (`kill -0 <pid>` exits 0). Unlike [`process::validate_claude_pid`]
+/// (used for Claude Code lead PIDs), this does NOT verify the process name —
+/// the orchestrator is `codeflow autorun run`, which would never match a
+/// `claude` substring check.
+///
+/// Naming follows the project's fail-safe-naming feedback rule: the function
+/// is named `validate_orchestrator_pid` (positive assertion) and a `false`
+/// return on `pid == 0` or unknown is the right default for callers asking
+/// "should I display this orchestrator as alive?". See AC-05 of
+/// INF-TSK-050-003 for the spawning context.
+///
+/// # TOCTOU
+///
+/// Same single-syscall window as [`process::is_process_alive`]: between
+/// the call and the caller's use of the result, the orchestrator could
+/// exit. Acceptable for liveness display surfaces (the only consumer);
+/// the orchestrator never authenticates or authorizes anything off this
+/// result.
+#[must_use]
+pub fn validate_orchestrator_pid(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    process::is_process_alive(pid)
+}
+
 // ---------------------------------------------------------------------------
 // Canonical session-liveness chokepoint (INF-TSK-024-051)
 // ---------------------------------------------------------------------------
@@ -735,6 +764,59 @@ mod tests {
         assert!(PidLiveness::Alive.is_alive());
         assert!(!PidLiveness::Dead.is_alive());
         assert!(!PidLiveness::NoPid.is_alive());
+    }
+
+    // ---------------------------------------------------------------
+    // validate_orchestrator_pid tests (AC-05 INF-TSK-050-003)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_validate_orchestrator_pid_alive_returns_true() {
+        // Current process is guaranteed alive while the test runs.
+        let pid = std::process::id();
+        assert!(
+            validate_orchestrator_pid(pid),
+            "current process pid={pid} should be alive"
+        );
+    }
+
+    #[test]
+    fn test_validate_orchestrator_pid_dead_returns_false() {
+        // PID 4_000_000 is well outside any reasonable PID space — assumes
+        // pid_max is < 4M (true on Linux default 4_194_304 but the value
+        // is also reserved beyond live processes; on macOS pid_max is
+        // 99_999, so this PID is unconditionally non-existent). Matches
+        // the convention used by `test_pid_liveness_dead_for_nonexistent_pid`
+        // earlier in this file.
+        assert!(
+            !validate_orchestrator_pid(4_000_000),
+            "non-existent pid should not be alive"
+        );
+    }
+
+    #[test]
+    fn test_validate_orchestrator_pid_zero_returns_false() {
+        // PID 0 is reserved (the kernel scheduler / swapper). The function
+        // contract is: zero is never a valid orchestrator PID, regardless
+        // of whether the kernel would say it is alive.
+        assert!(
+            !validate_orchestrator_pid(0),
+            "pid 0 must always return false (reserved)"
+        );
+    }
+
+    #[test]
+    fn test_validate_orchestrator_pid_does_not_check_process_name() {
+        // The current test process is NOT named "claude" but IS alive,
+        // and validate_orchestrator_pid must say true regardless of name.
+        // This is the explicit deviation from validate_claude_pid: the
+        // orchestrator is `codeflow autorun run`, which would never match
+        // a "claude" substring.
+        let pid = std::process::id();
+        assert!(
+            validate_orchestrator_pid(pid),
+            "validate_orchestrator_pid must NOT require 'claude' in process name"
+        );
     }
 
     // -----------------------------------------------------------------
