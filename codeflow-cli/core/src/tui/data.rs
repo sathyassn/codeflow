@@ -837,7 +837,7 @@ pub async fn fetch_session_views_with_keep_last_and_validator(
                 .as_deref()
                 .filter(|p| !p.is_empty())
                 .and_then(|wt| {
-                    let path = std::path::Path::new(wt).join(".state/runtime/active-task.json");
+                    let path = crate::worktree::WorktreePaths::new(wt).active_task();
                     let data = std::fs::read_to_string(path).ok()?;
                     serde_json::from_str::<serde_json::Value>(&data).ok()
                 });

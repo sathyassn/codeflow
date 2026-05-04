@@ -28,6 +28,14 @@ pub const EXIT_ADVISORY: i32 = 0;
 /// Blocking exit code: hard-block the tool call (Phase 2, future).
 pub const EXIT_BLOCKING: i32 = 2;
 
+/// Recognized `scope_policy` values from `active-task.json`.
+///
+/// MUST stay in sync with `cli/src/cmd/state.rs::VALID_SCOPE_POLICIES`. The
+/// CLI write path rejects unknown values up front; this constant lets the
+/// hook surface a warning if a stale file or manual edit slips through (see
+/// WS-SEC iter-1 finding #1, A01 Broken Access Control).
+pub const KNOWN_SCOPE_POLICIES: &[&str] = &["soft", "hard", "permissive"];
+
 // ---------------------------------------------------------------------------
 // Shared regex patterns (compiled once)
 // ---------------------------------------------------------------------------
@@ -498,31 +506,124 @@ impl GateCheck {
         fallback.to_string()
     }
 
-    /// Read scope_policy and file_scope from active-task.json.
-    /// Returns (scope_policy, file_scope) with defaults: ("soft", empty vec).
-    fn read_scope_context(&self) -> (String, Vec<String>) {
+    /// Read scope_policy, file_scope, and task_id from active-task.json
+    /// in a single I/O round trip.
+    ///
+    /// Returns (scope_policy, file_scope, task_id) with defaults
+    /// `("soft", empty vec, None)` when the active task cannot be read.
+    /// Caching the task_id alongside the scope context avoids re-reading
+    /// active-task.json from each event-emit helper (REV-NOTE-003).
+    fn read_scope_context(&self) -> (String, Vec<String>, Option<String>) {
         use crate::session::active_task::get_active_task_worktree_aware;
 
         match get_active_task_worktree_aware(&self.project_dir) {
             Ok(Some(task)) => {
                 let policy = task.scope_policy.unwrap_or_else(|| "soft".to_string());
                 let scope = task.file_scope.unwrap_or_default();
-                (policy, scope)
+                let task_id = task
+                    .task_format_id
+                    .as_ref()
+                    .map(|f| f.as_str().to_string())
+                    .or_else(|| Some(task.task_id.as_str().to_string()));
+                (policy, scope, task_id)
             }
-            _ => ("soft".to_string(), Vec::new()),
+            _ => ("soft".to_string(), Vec::new(), None),
         }
     }
 
     /// Check if a file path is within the declared file_scope.
+    ///
+    /// Note: an empty `file_scope` returns `true` ("no scope declared = everything in scope").
+    /// This is the correct semantics for `soft` and `permissive` modes. For `hard` mode,
+    /// callers MUST gate on `!file_scope.is_empty()` BEFORE calling this helper, because
+    /// hard + empty file_scope is a misconfiguration (the CLI write path rejects it via
+    /// `validate_scope_policy` in `cmd::state`, but the hook applies defense-in-depth
+    /// for stale active-task.json files written by older binaries).
     fn is_in_scope(file_path: &str, file_scope: &[String]) -> bool {
         if file_scope.is_empty() {
-            return true; // No scope declared = everything in scope.
+            return true; // No scope declared = everything in scope (soft/permissive only).
         }
         file_scope.iter().any(|scope_entry| {
             file_path == scope_entry
                 || file_path.starts_with(&format!("{scope_entry}/"))
                 || scope_entry.ends_with('/') && file_path.starts_with(scope_entry.as_str())
         })
+    }
+
+    /// Append a `CoordinationEvent` to the worktree-aware coordination ledger.
+    ///
+    /// On any failure (event routing, file I/O), logs to stderr and returns
+    /// without propagating the error -- coordination event emission is
+    /// observability, not a gate. The hook's authoritative behavior is the
+    /// allow/block decision, not the event.
+    ///
+    /// AC-08: emits to `coordination-events.jsonl` so cf-review and cf-qa
+    /// have an audit trail of every claim acquisition, conflict, and scope
+    /// expansion.
+    fn emit_coordination_event(
+        &self,
+        event: &crate::coordination::types::events::CoordinationEvent,
+    ) {
+        use crate::ledger::{Event, JsonlWriter, LedgerWriter};
+        use std::collections::HashMap;
+
+        let event_type = event.event_type();
+        let json = match serde_json::to_value(event) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("gate-check: failed to serialize coordination event: {e}");
+                return;
+            }
+        };
+        let obj = match json.as_object() {
+            Some(o) => o,
+            None => {
+                eprintln!("gate-check: coordination event was not a JSON object");
+                return;
+            }
+        };
+
+        // Carry across all fields except those handled at the Event level
+        // (`type` -> event_type, `session_id`, `timestamp`).
+        let timestamp = obj
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let session_id = obj
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+        for (k, v) in obj {
+            if k == "type" || k == "session_id" || k == "timestamp" {
+                continue;
+            }
+            data.insert(k.clone(), v.clone());
+        }
+
+        let ledger_event = Event {
+            event_type: event_type.to_string(),
+            timestamp,
+            session_id,
+            worktree: None,
+            data,
+        };
+
+        // Resolve the ledger directory: JsonlWriter::new redirects to the
+        // worktree-local ledger when CODEFLOW_WORKTREE_PATH is set, so a
+        // bare project_dir-derived path is sufficient here.
+        let ledger_dir = self.project_dir.join(".state").join("ledger");
+        let writer = match JsonlWriter::new(&ledger_dir) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("gate-check: failed to open ledger writer: {e}");
+                return;
+            }
+        };
+        if let Err(e) = writer.append_event(ledger_event) {
+            eprintln!("gate-check: failed to append coordination event: {e}");
+        }
     }
 
     /// Enforce scope_policy for an Edit/Write operation on a file path.
@@ -532,15 +633,65 @@ impl GateCheck {
     /// - `hard`: block if file is NOT in file_scope (exit 2)
     /// - `soft` (default): in-scope → auto-acquire claim; out-of-scope →
     ///   attempt claim via Coordinator::acquire; block on conflict
+    ///
+    /// REV-NOTE-003: active-task.json is read ONCE at the top of this
+    /// function (via `read_scope_context`). The resolved task_id is then
+    /// passed by reference to event-emit helpers, avoiding the previous
+    /// 2-3 reads per Edit invocation.
     fn try_acquire_claim(&self, file_path: &str) -> HookOutput {
-        let (scope_policy, file_scope) = self.read_scope_context();
+        use crate::coordination::types::events::CoordinationEvent;
+
+        let (scope_policy, file_scope, task_id) = self.read_scope_context();
+        let task_id_ref = task_id.as_deref();
 
         match scope_policy.as_str() {
             "permissive" => HookOutput::Allow,
             "hard" => {
+                // Defense-in-depth: hard + empty file_scope is a misconfig
+                // (the CLI write path rejects it via validate_scope_policy,
+                // but a stale active-task.json from an older binary may
+                // still produce this state). Reject the edit AND emit a
+                // ClaimConflict event so the audit trail captures it.
+                //
+                // REV-MIN-001: held_by is None for policy-driven blocks
+                // (no session physically holds the file; the rejection is
+                // purely scope-based).
+                if file_scope.is_empty() {
+                    let conflict = CoordinationEvent::ClaimConflict {
+                        session_id: self.session_id.clone(),
+                        path: file_path.to_string(),
+                        held_by: None,
+                        task_id: task_id_ref.map(str::to_string),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+                    self.emit_coordination_event(&conflict);
+                    return HookOutput::Block {
+                        reason: format!(
+                            "BLOCKED: scope_policy=hard with empty file_scope.\n\
+                             File: {file_path}\n\
+                             scope_policy=hard requires a non-empty file_scope. \
+                             The active-task.json was written without populating file_scope, \
+                             which is a CLI misconfiguration.\n\
+                             Fix: re-run `codeflow state set-active-task` after the binary was \
+                             rebuilt with INF-TSK-050-010, or pass --file-scope explicitly.\n",
+                        ),
+                        category: Some(BlockCategory::Gate),
+                    };
+                }
                 if Self::is_in_scope(file_path, &file_scope) {
-                    self.acquire_claim(file_path)
+                    self.acquire_claim(file_path, task_id_ref)
                 } else {
+                    // Out-of-scope under hard: emit ClaimConflict and block.
+                    // REV-MIN-001: held_by is None (policy block, not a
+                    // CRDT conflict).
+                    let conflict = CoordinationEvent::ClaimConflict {
+                        session_id: self.session_id.clone(),
+                        path: file_path.to_string(),
+                        held_by: None,
+                        task_id: task_id_ref.map(str::to_string),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+                    self.emit_coordination_event(&conflict);
                     HookOutput::Block {
                         reason: format!(
                             "BLOCKED: scope_policy=hard — file '{file_path}' is NOT in file_scope.\n\
@@ -552,12 +703,28 @@ impl GateCheck {
                 }
             }
             _ => {
-                // "soft" (default)
+                // "soft" (default) — also the catch-all for unrecognized
+                // values. WS-SEC iter-1 finding #1 (A01 Broken Access
+                // Control): the CLI write path validates scope_policy
+                // against KNOWN_SCOPE_POLICIES and rejects unknown values,
+                // but a stale active-task.json from an older binary, a
+                // manual edit, or version drift could still surface here.
+                // Warn loudly so the operator does not silently believe a
+                // typoed "Hard"/"strict"/"Permissive" is enforced when in
+                // fact soft semantics apply.
+                if !KNOWN_SCOPE_POLICIES.contains(&scope_policy.as_str()) {
+                    eprintln!(
+                        "WARN: unrecognized scope_policy '{scope_policy}' in active-task.json -- \
+                         falling back to soft semantics. Valid values (case-sensitive): {}. \
+                         Re-run `codeflow state set-active-task` after fixing the task definition.",
+                        KNOWN_SCOPE_POLICIES.join(", "),
+                    );
+                }
                 if Self::is_in_scope(file_path, &file_scope) {
-                    self.acquire_claim(file_path)
+                    self.acquire_claim(file_path, task_id_ref)
                 } else {
                     // Out-of-scope: attempt claim, block on conflict.
-                    self.acquire_claim_or_block(file_path, &file_scope)
+                    self.acquire_claim_or_block(file_path, &file_scope, task_id_ref)
                 }
             }
         }
@@ -565,11 +732,30 @@ impl GateCheck {
 
     /// Acquire a claim on a file path (in-scope, auto-acquire).
     /// On conflict, warns but allows (graceful degradation for in-scope files).
-    fn acquire_claim(&self, file_path: &str) -> HookOutput {
+    ///
+    /// AC-08: Emits a `ClaimAcquired` coordination event on the success path
+    /// and a `ClaimConflict` event when another session holds the claim
+    /// (even though we proceed under graceful in-scope semantics).
+    ///
+    /// `task_id` is passed in by `try_acquire_claim` after a single read of
+    /// active-task.json (REV-NOTE-003).
+    fn acquire_claim(&self, file_path: &str, task_id: Option<&str>) -> HookOutput {
         use crate::coordination::Coordinator;
         use crate::coordination::loro::LoroCoordinator;
+        use crate::coordination::types::events::CoordinationEvent;
 
-        let mut conflict_warning: Option<String> = None;
+        // Outcome of the inner closure -- distinguishes acquired vs
+        // conflict-but-proceed so we emit the correct ledger event.
+        #[derive(Debug)]
+        enum InScopeOutcome {
+            Acquired,
+            Conflict {
+                owner: String,
+                warning_message: String,
+            },
+        }
+
+        let mut outcome: Option<InScopeOutcome> = None;
         let fp = file_path.to_string();
         let sid = self.session_id.clone();
 
@@ -584,21 +770,32 @@ impl GateCheck {
             |coord| {
                 if let Some(existing) = coord.check(&fp) {
                     if existing.owner != sid {
-                        let owner = &existing.owner;
+                        let owner = existing.owner.as_str().to_string();
                         let token = existing.token;
-                        conflict_warning = Some(format!(
+                        let message = format!(
                             "CLAIM CONFLICT (in-scope): file '{fp}' is claimed by session {owner} \
                              with token {token}. Proceeding (in-scope auto-acquire).",
-                        ));
+                        );
+                        outcome = Some(InScopeOutcome::Conflict {
+                            owner,
+                            warning_message: message,
+                        });
                         return Ok(());
                     }
                 }
                 match coord.acquire(&fp, &sid) {
-                    Ok(_token) => Ok(()),
+                    Ok(_token) => {
+                        outcome = Some(InScopeOutcome::Acquired);
+                        Ok(())
+                    }
                     Err(crate::error::CoordinationError::ClaimConflict { path, owner }) => {
-                        conflict_warning = Some(format!(
-                            "CLAIM CONFLICT (in-scope): file '{path}' is claimed by session {owner}."
-                        ));
+                        let owner_str = owner.as_str().to_string();
+                        outcome = Some(InScopeOutcome::Conflict {
+                            owner: owner_str.clone(),
+                            warning_message: format!(
+                                "CLAIM CONFLICT (in-scope): file '{path}' is claimed by session {owner_str}."
+                            ),
+                        });
                         Ok(())
                     }
                     Err(e) => {
@@ -613,18 +810,55 @@ impl GateCheck {
             eprintln!("gate-check: claim coordinator unavailable: {e}");
             return HookOutput::Allow;
         }
-        if let Some(message) = conflict_warning {
-            return HookOutput::Warn { message };
+
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let task_id_owned = task_id.map(str::to_string);
+        match outcome {
+            Some(InScopeOutcome::Acquired) => {
+                let evt = CoordinationEvent::ClaimAcquired {
+                    session_id: self.session_id.clone(),
+                    path: file_path.to_string(),
+                    task_id: task_id_owned,
+                    timestamp,
+                };
+                self.emit_coordination_event(&evt);
+                HookOutput::Allow
+            }
+            Some(InScopeOutcome::Conflict {
+                owner,
+                warning_message,
+            }) => {
+                let evt = CoordinationEvent::ClaimConflict {
+                    session_id: self.session_id.clone(),
+                    path: file_path.to_string(),
+                    held_by: Some(SessionId::new_unchecked(owner)),
+                    task_id: task_id_owned,
+                    timestamp,
+                };
+                self.emit_coordination_event(&evt);
+                HookOutput::Warn {
+                    message: warning_message,
+                }
+            }
+            None => HookOutput::Allow,
         }
-        HookOutput::Allow
     }
 
     /// Attempt to acquire a claim on an out-of-scope file (soft mode).
     /// If claim succeeds → allow + emit ScopeExpansion.
     /// If conflict → BLOCK (exit 2) + emit ClaimConflict.
-    fn acquire_claim_or_block(&self, file_path: &str, file_scope: &[String]) -> HookOutput {
+    ///
+    /// `task_id` is passed in by `try_acquire_claim` after a single read of
+    /// active-task.json (REV-NOTE-003).
+    fn acquire_claim_or_block(
+        &self,
+        file_path: &str,
+        file_scope: &[String],
+        task_id: Option<&str>,
+    ) -> HookOutput {
         use crate::coordination::Coordinator;
         use crate::coordination::loro::LoroCoordinator;
+        use crate::coordination::types::events::CoordinationEvent;
 
         #[derive(Debug)]
         enum ClaimResult {
@@ -678,24 +912,44 @@ impl GateCheck {
             return HookOutput::Allow;
         }
 
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let task_id_owned = task_id.map(str::to_string);
         match claim_result {
             Some(ClaimResult::Acquired) => {
                 eprintln!(
                     "SCOPE EXPANSION: file '{file_path}' is outside file_scope {file_scope:?} but claim acquired. \
                      Edit allowed.",
                 );
+                let evt = CoordinationEvent::ScopeExpansion {
+                    session_id: self.session_id.clone(),
+                    path: file_path.to_string(),
+                    original_scope: file_scope.to_vec(),
+                    task_id: task_id_owned,
+                    timestamp,
+                };
+                self.emit_coordination_event(&evt);
                 HookOutput::Allow
             }
-            Some(ClaimResult::Conflict { owner }) => HookOutput::Block {
-                reason: format!(
-                    "BLOCKED: scope_policy=soft — CLAIM CONFLICT on out-of-scope file.\n\
-                     File: {file_path}\n\
-                     Held by session: {owner}\n\
-                     Your file_scope: {file_scope:?}\n\
-                     The file is outside your declared scope AND held by another session.\n",
-                ),
-                category: Some(BlockCategory::Gate),
-            },
+            Some(ClaimResult::Conflict { owner }) => {
+                let evt = CoordinationEvent::ClaimConflict {
+                    session_id: self.session_id.clone(),
+                    path: file_path.to_string(),
+                    held_by: Some(SessionId::new_unchecked(owner.clone())),
+                    task_id: task_id_owned,
+                    timestamp,
+                };
+                self.emit_coordination_event(&evt);
+                HookOutput::Block {
+                    reason: format!(
+                        "BLOCKED: scope_policy=soft — CLAIM CONFLICT on out-of-scope file.\n\
+                         File: {file_path}\n\
+                         Held by session: {owner}\n\
+                         Your file_scope: {file_scope:?}\n\
+                         The file is outside your declared scope AND held by another session.\n",
+                    ),
+                    category: Some(BlockCategory::Gate),
+                }
+            }
             None => {
                 // No result = coordinator issue, graceful degradation.
                 HookOutput::Allow
@@ -5601,6 +5855,95 @@ mod tests {
         );
     }
 
+    // -- WS-SEC iter-1 finding #1 (A01 Broken Access Control) --
+    // An unrecognized scope_policy value (e.g., a typo "Hard"/"strict") must
+    // route to the soft fallback and the hook must not silently accept it as
+    // hard. The CLI write path validates and rejects unknown values, but a
+    // stale active-task.json from an older binary or a manual edit could
+    // still surface here.
+    //
+    // Behavioral assertion: with scope_policy="Hard" and an out-of-scope
+    // edit on an UNCLAIMED file, soft semantics produce Allow (scope
+    // expansion). Hard semantics would produce Block. We assert Allow,
+    // proving the catch-all routes to soft. The eprintln warning is
+    // exercised on the same code path; capturing stderr from a unit test is
+    // brittle in cargo, so the warning emission is verified via the
+    // KNOWN_SCOPE_POLICIES const + dedicated const-membership tests below.
+
+    #[test]
+    fn test_scope_policy_unrecognized_value_falls_back_to_soft() {
+        use crate::session::active_task::{ActiveTask, set_active_task};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-typo"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            work_type: None,
+            // Wrong-case typo — would silently bypass hard enforcement
+            // before the WS-SEC iter-1 fix.
+            scope_policy: Some("Hard".to_string()),
+            file_scope: Some(vec!["src/in.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-typo-test"),
+            dir.path().to_path_buf(),
+        );
+        // Out-of-scope edit on an unclaimed file. Soft fallback produces
+        // Allow (scope expansion). Hard enforcement would produce Block.
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/out.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-typo-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "unrecognized scope_policy must fall back to soft and allow \
+             out-of-scope edits on unclaimed files (scope expansion); got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_known_scope_policies_const_contents() {
+        // Lock the contents of KNOWN_SCOPE_POLICIES against accidental
+        // drift from cli/src/cmd/state.rs::VALID_SCOPE_POLICIES. The two
+        // lists MUST stay in sync; if either set changes, both sides must
+        // be updated together.
+        assert_eq!(KNOWN_SCOPE_POLICIES, &["soft", "hard", "permissive"]);
+        assert_eq!(KNOWN_SCOPE_POLICIES.len(), 3);
+        assert!(KNOWN_SCOPE_POLICIES.contains(&"soft"));
+        assert!(KNOWN_SCOPE_POLICIES.contains(&"hard"));
+        assert!(KNOWN_SCOPE_POLICIES.contains(&"permissive"));
+        // Common typos must NOT be members.
+        assert!(!KNOWN_SCOPE_POLICIES.contains(&"Soft"));
+        assert!(!KNOWN_SCOPE_POLICIES.contains(&"Hard"));
+        assert!(!KNOWN_SCOPE_POLICIES.contains(&"strict"));
+        assert!(!KNOWN_SCOPE_POLICIES.contains(&""));
+    }
+
     #[test]
     fn test_scope_policy_soft_allows_in_scope() {
         use crate::session::active_task::{ActiveTask, set_active_task};
@@ -5704,11 +6047,20 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_scope_policy_soft_out_of_scope_conflict_blocks() {
         use crate::coordination::Coordinator;
         use crate::coordination::loro::LoroCoordinator;
         use crate::session::active_task::{ActiveTask, set_active_task};
         use crate::types::TaskId;
+
+        // SAFETY: serial test exclusivity over env vars; the ledger writer
+        // resolves to `project_dir/.state/ledger` only when CODEFLOW_WORKTREE_PATH
+        // is unset (otherwise it redirects to the worktree path). Clear it so
+        // we can read the resulting JSONL from the project_dir tmpdir.
+        unsafe {
+            std::env::remove_var("CODEFLOW_WORKTREE_PATH");
+        }
 
         let dir = tempfile::tempdir().unwrap();
         sentinel::create_by_name(dir.path(), "pf-3").unwrap();
@@ -5763,6 +6115,38 @@ mod tests {
         assert!(
             matches!(result, HookOutput::Block { .. }),
             "soft mode should block out-of-scope edits when claimed by another session"
+        );
+
+        // REV-MIN-002: Verify a ClaimConflict event landed in the
+        // coordination-events ledger with held_by=Some(ses-other-holder)
+        // — this is a real CRDT conflict, not a policy block, so held_by
+        // must name the actual holder per REV-MIN-001 schema.
+        let events_path = dir
+            .path()
+            .join(".state")
+            .join("ledger")
+            .join("coordination-events")
+            .join("coordination-events.jsonl");
+        assert!(
+            events_path.exists(),
+            "coordination-events.jsonl must exist after Block at {events_path:?}"
+        );
+        let events: Vec<serde_json::Value> = std::fs::read_to_string(&events_path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let conflict = events
+            .iter()
+            .find(|e| e["event"].as_str() == Some("claim_conflict"))
+            .unwrap_or_else(|| panic!("expected ClaimConflict event in ledger; got: {events:?}"));
+        assert_eq!(conflict["path"].as_str(), Some("out/of/scope.rs"));
+        assert_eq!(conflict["session_id"].as_str(), Some("ses-soft-conflict"));
+        assert_eq!(
+            conflict["held_by"].as_str(),
+            Some("ses-other-holder"),
+            "held_by must name the real holder for CRDT conflicts (not policy blocks)"
         );
     }
 

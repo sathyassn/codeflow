@@ -179,7 +179,15 @@ pub fn get_active_task_worktree_aware(
 }
 
 /// Inner: testable with explicit worktree path.
-pub(crate) fn get_active_task_resolved(
+///
+/// Public so integration tests in `codeflow-cli/cli/tests/` can drive the
+/// resolver with explicit worktree paths.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on read failure, `SessionError::Serialization`
+/// on JSON parse failure.
+pub fn get_active_task_resolved(
     project_dir: &Path,
     worktree_path: Option<&str>,
 ) -> Result<Option<ActiveTask>, SessionError> {
@@ -214,7 +222,15 @@ pub fn set_active_task_worktree_aware(
 }
 
 /// Inner: testable with explicit worktree path.
-pub(crate) fn set_active_task_resolved(
+///
+/// Public so integration tests in `codeflow-cli/cli/tests/` can drive the
+/// resolver with explicit worktree paths.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on write failure, `SessionError::Serialization`
+/// on JSON serialization failure.
+pub fn set_active_task_resolved(
     project_dir: &Path,
     task: &ActiveTask,
     worktree_path: Option<&str>,
@@ -237,7 +253,14 @@ pub fn clear_active_task_worktree_aware(project_dir: &Path) -> Result<(), Sessio
 }
 
 /// Inner: testable with explicit worktree path.
-pub(crate) fn clear_active_task_resolved(
+///
+/// Public so integration tests in `codeflow-cli/cli/tests/` can drive the
+/// resolver with explicit worktree paths.
+///
+/// # Errors
+///
+/// Returns `SessionError::Io` on removal failure (other than not-found).
+pub fn clear_active_task_resolved(
     project_dir: &Path,
     worktree_path: Option<&str>,
 ) -> Result<(), SessionError> {

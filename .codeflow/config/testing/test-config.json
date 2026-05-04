@@ -158,6 +158,10 @@
             {
               "pattern": ".codeflow/scripts/security/protection/lib/*",
               "reason": "Protection lib modules — sourced by cf-protect-resources.sh and its siblings; covered indirectly by the parent-script tests (test-cf-protection-{common,core,ops,verify}.sh)."
+            },
+            {
+              "pattern": ".codeflow/scripts/test-no-direct-active-task-paths.sh",
+              "reason": "INF-TSK-050-010 AC-03 lint guard. Self-contained shell script that scans Rust source for direct active-task.json path literals; has no source script counterpart to test. Registered as a `test_files` entry under shell-scripts target so the runner executes it; structural-check excludes it here from source-mapping."
             }
           ],
           "orphan_allowed": [
@@ -257,6 +261,11 @@
           "path": ".codeflow/testing/scripts/lint/test-no-legacy-liveness.sh",
           "tags": ["high"],
           "_comment": "INF-TSK-050-003 AC-15 lint guard: fails CI if any production Rust code references the deleted is_session_stale or check_heartbeat_alive symbols (autorun/stale.rs heartbeat readers, removed by AC-09)."
+        },
+        {
+          "path": ".codeflow/scripts/test-no-direct-active-task-paths.sh",
+          "tags": ["high"],
+          "_comment": "INF-TSK-050-010 AC-03 lint guard: fails CI if any production Rust code constructs an active-task.json path literal outside the canonical resolver (WorktreePaths::active_task / active_task_path_resolved). Whitelist covers session/active_task.rs, worktree/paths.rs, and autorun/worker.rs (autorun-specific JSON shape)."
         }
       ]
     }

@@ -78,7 +78,7 @@ This epic consolidates 23 confirmed correctness issues across the autorun and in
 | INF-TSK-050-007 | (placeholder) Implement ADR-002 integration branch reset semantics | planned | normal |
 | INF-TSK-050-008 | (placeholder) Implement ADR-003 sync daemon supervision | planned | normal |
 | INF-TSK-050-009 | (placeholder) Implement ADR-004 reaper daemonization | planned | normal |
-| INF-TSK-050-010 | (placeholder) Implement DESIGN-005 env file write hardening | planned | normal |
+| INF-TSK-050-010 | Hook correctness in worktree mode: scope_policy=hard enforcement + active-task path consolidation | complete | high |
 | INF-TSK-050-011 | (placeholder) Implement DESIGN-006 stage timeout polling cadence | planned | normal |
 | INF-TSK-050-012 | (placeholder) Implement DESIGN-007 periodic-task stop-signal pattern | planned | normal |
 

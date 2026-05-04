@@ -25,12 +25,22 @@ pub enum CoordinationEvent {
         timestamp: String,
     },
 
-    /// A claim acquisition was blocked by a conflict.
+    /// A claim acquisition was blocked.
+    ///
+    /// `held_by` is `Some(owner)` when a real claim conflict occurred (another
+    /// session physically holds the file's CRDT claim). It is `None` when the
+    /// block is policy-driven (e.g., `scope_policy=hard` rejecting an
+    /// out-of-scope edit, or hard+empty `file_scope` defense-in-depth) — in
+    /// those cases no session holds the file; the rejection is purely
+    /// scope-based. Downstream "files held by session X" views must treat
+    /// missing `held_by` as "no holder, policy block" rather than self-conflict.
+    /// (INF-TSK-050-010 WS-REV iter-2 finding REV-MIN-001.)
     #[serde(rename = "claim_conflict")]
     ClaimConflict {
         session_id: SessionId,
         path: String,
-        held_by: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held_by: Option<SessionId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
         timestamp: String,
@@ -246,7 +256,7 @@ mod tests {
         let event = CoordinationEvent::ClaimConflict {
             session_id: session("ses-002"),
             path: "src/lib.rs".to_string(),
-            held_by: session("ses-001"),
+            held_by: Some(session("ses-001")),
             task_id: None,
             timestamp: "2026-03-21T10:01:00Z".to_string(),
         };
@@ -255,6 +265,45 @@ mod tests {
         assert!(json.contains("ses-001"));
         let parsed: CoordinationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn claim_conflict_policy_block_omits_held_by() {
+        // Policy-driven blocks (scope_policy=hard out-of-scope, hard+empty)
+        // emit held_by=None; the JSON must omit the field via
+        // skip_serializing_if = Option::is_none. INF-TSK-050-010 WS-REV
+        // iter-2 finding REV-MIN-001.
+        let event = CoordinationEvent::ClaimConflict {
+            session_id: session("ses-003"),
+            path: "out/of/scope.rs".to_string(),
+            held_by: None,
+            task_id: Some("INF-TSK-050-010".to_string()),
+            timestamp: "2026-05-04T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("claim_conflict"));
+        assert!(
+            !json.contains("held_by"),
+            "policy block must omit held_by field; got: {json}"
+        );
+        let parsed: CoordinationEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn claim_conflict_legacy_payload_without_held_by_deserializes() {
+        // Backward compatibility: pre-iter-2 ledger entries that wrote
+        // held_by=session_id (real conflicts) are unaffected; entries that
+        // never had held_by (hypothetical schema-pre-iter-2 with held_by
+        // omitted) must still deserialize with held_by=None thanks to
+        // serde(default).
+        let json =
+            r#"{"type":"claim_conflict","session_id":"ses-x","path":"a.rs","timestamp":"t"}"#;
+        let parsed: CoordinationEvent = serde_json::from_str(json).unwrap();
+        match parsed {
+            CoordinationEvent::ClaimConflict { held_by, .. } => assert!(held_by.is_none()),
+            other => panic!("expected ClaimConflict, got {other:?}"),
+        }
     }
 
     #[test]
@@ -300,7 +349,7 @@ mod tests {
         let conflict = CoordinationEvent::ClaimConflict {
             session_id: session("ses-002"),
             path: "a.rs".to_string(),
-            held_by: session("ses-001"),
+            held_by: Some(session("ses-001")),
             task_id: None,
             timestamp: "ts".to_string(),
         };

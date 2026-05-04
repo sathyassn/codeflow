@@ -244,7 +244,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Welcome => cmd::welcome::run(),
         Command::Internal => cmd::internal::run(),
         Command::Pathflow => cmd::pathflow::run(),
-        Command::State { command } => cmd::state::run(command),
+        Command::State { command } => cmd::state::run(command).await,
         Command::Validate { command } => cmd::validate::run(command),
         Command::Hooks { command } => cmd::hooks::run(command),
         Command::Sentinel => cmd::sentinel::run(),

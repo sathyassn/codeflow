@@ -1125,11 +1125,14 @@ PathFlow phase ordering is enforced through a hybrid of hooks and instructions:
 
 **Scope policy enforcement modes** (enforced by `try_acquire_claim()` in `pre_tool_use.rs`):
 
-- `scope_policy=hard`: edits to files NOT in `file_scope` are BLOCKED immediately (exit 2, no claim attempt)
-- `scope_policy=soft` + file IN `file_scope`: claim auto-acquired at startup via `acquire_batch()`, edit allowed
+- `scope_policy=hard`: edits to files NOT in `file_scope` are BLOCKED immediately (exit 2) and a `ClaimConflict` event is emitted to `coordination-events.jsonl`. No claim acquisition is attempted.
+- `scope_policy=hard` + empty `file_scope`: REJECTED at the CLI **write** time by `codeflow state set-active-task` (Option α). The CLI exits non-zero with the message "scope_policy=hard requires non-empty file_scope; task X has empty file_scope -- fix task definition". The hook applies defense-in-depth for stale `active-task.json` from older binaries: it BLOCKS the edit and emits a `ClaimConflict` event with a misconfiguration message.
+- `scope_policy=soft` + file IN `file_scope`: claim auto-acquired at startup via `acquire_batch()`, edit allowed; on success a `ClaimAcquired` event is emitted (or `ClaimConflict` warn-and-proceed if another session held the claim).
 - `scope_policy=soft` + file NOT in `file_scope`: attempt claim via `Coordinator::acquire` — if acquired (unclaimed), allow edit + emit `ScopeExpansion` event; if conflict, BLOCK (exit 2) + emit `ClaimConflict` event
-- `scope_policy=permissive`: no scope checking, no claim acquisition, edit allowed (interactive sessions only; forbidden for `autorun_eligible=true` tasks)
+- `scope_policy=permissive`: no scope checking, no claim acquisition, no events emitted; edit allowed (interactive sessions only; forbidden for `autorun_eligible=true` tasks)
 - Default is `soft` when not specified in the task definition
+
+**`codeflow state set-active-task` validation:** When invoked, the CLI looks up the task from the SurrealDB `tasks` table by `task_format_id` and populates `scope_policy` and `file_scope` from the task record. CLI flags `--scope-policy` and `--file-scope <json>` override the DB-derived values when explicitly provided. Before writing `active-task.json`, the CLI rejects `scope_policy=hard` with empty/missing `file_scope` and exits non-zero. This prevents the hook from ever observing a misconfigured state.
 
 **Instruction-enforced gates (not currently hook-enforced):**
 
