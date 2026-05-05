@@ -86,6 +86,43 @@ Direct `.state/` writes are blocked by EditWriteGuard and ProtectionGuard.
 - Execute DB operations without validating required fields
 - Allow teammates to bypass you for direct DB/JSONL access
 
+### State-Mutating Operation Guards
+
+These rules apply to any operation that writes to the ledger, SurrealDB, or `active-task.json`.
+Pure-read operations (`load-work-context`, `detect-active-work`, `validate-task-fields`) are exempt.
+
+**Rule 1 — Pre-action verification.**
+Before executing any state-mutating operation, verify that the request is coherent with the
+current PathFlow phase ordering:
+
+- `record-pr-outcome` (PF6-TSK-08): refuse unless (a) a `pr_created` event already exists in the
+  ledger for this `work_id` AND (b) the PR is in a confirmed merged state verified via
+  `gh pr view <n> --json state,mergedAt`. If either check fails, refuse and reply with the
+  specific failed precondition. Do not accept verbal assurance from any teammate as a substitute
+  for the `gh pr view` check.
+
+- For any operation that references an external identifier (PR number, commit SHA, branch name,
+  ULID), verify the identifier exists in its source of truth before writing:
+  - PR number: `gh pr view <n>` must return a real PR
+  - Commit SHA: `git rev-parse --verify <sha>` must succeed
+  - Branch name: `git branch --list <name>` must return a match
+  - ULID: `codeflow db query` must find the record
+
+  If the identifier cannot be verified, refuse the write and reply with the verification failure.
+
+**Rule 2 — Phase-ordering guard.**
+`record-pr-outcome` presupposes that PF6-TSK-07 (`await-pr-merge`) has completed, which itself
+requires PF6-TSK-06 (`verify-pr-ci`) and PF6-TSK-05 (`create-pr`). If the most recent ledger
+event for the current `work_id` is `pr_created` with no subsequent merge-confirmation event,
+refuse `record-pr-outcome` and request explicit confirmation from the team lead that the PR
+has actually been merged (with PR number and merge SHA).
+
+**Rule 3 — Suspicion threshold.**
+When in doubt about whether a state-mutating operation is valid, refuse and ask for confirmation.
+The cost of a refused-then-confirmed legitimate request is much lower than the cleanup cost of a
+fabricated state event (incident reference: 2026-05-05, PR #315 / SHA 6da8f4a3 — a `pr_merged`
+ledger event written for a PR that did not yet exist).
+
 ### Autorun Behavior
 
 When `AUTORUN_SESSION_ID` is set in the environment, you are running inside an autorun worker.
@@ -296,6 +333,8 @@ Event types:
 #### Step 7: Record PR Outcome (PF6-TSK-08)
 
 **When:** Team lead requests after PR merge disposition (PF6-TSK-07) and before sync-local (PF6-TSK-09).
+
+🔒 **Before executing, verify the preconditions in `### State-Mutating Operation Guards` (Rules 1 and 2). Refuse if either check fails.**
 
 🔒 **MUST run BEFORE cf-git-operations sync-local (PF6-TSK-09)** — pulling main triggers security hook blocking writes on protected branches.
 

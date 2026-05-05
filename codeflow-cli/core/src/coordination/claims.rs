@@ -2,11 +2,42 @@
 //!
 //! Provides batch operations and query utilities for file-level claims.
 
+use std::time::Duration;
+
 use crate::error::CoordinationError;
 use crate::types::SessionId;
 
 use super::loro::LoroCoordinator;
 use super::{Claim, Coordinator, FencingToken};
+
+/// Backoff schedule for [`release_all_with_retry`]: 4 attempts total
+/// with sleeps of 500ms / 1.5s / 4.5s between attempts.
+///
+/// INF-TSK-050-004 AC-02: claim release used to be best-effort
+/// (`let _ = release_all(...)`) inside the worker shutdown path. When
+/// the underlying CRDT write contended with the sync daemon (5s poll)
+/// or another worker, the release silently failed and left stale
+/// claims that blocked successor workers. The retry schedule covers
+/// transient contention windows of up to ~6.5s — a slow filesystem
+/// flush or sync-daemon read-modify-write cycle resolves before the
+/// 4.5s third retry, so we don't ship stale claims to the next worker.
+///
+/// **Schedule rationale (pre-merge rework, INF-TSK-050-004 retry 2):**
+/// The earlier "stay under 5s sync-daemon cadence" interpretation was
+/// over-engineered: at most one missed sync poll per shutdown is
+/// acceptable, and the literal AC text ("3 attempts, 500ms / 1.5s /
+/// 4.5s") implies all three delays exist as part of the schedule. We
+/// therefore have 3 inter-attempt sleeps and 4 attempts total.
+///
+/// `len(delays) + 1` attempts total: 4 attempts → 3 inter-attempt
+/// sleeps (500ms, 1500ms, 4500ms). Worst-case wall-clock wait before
+/// returning the final error is the sum of the three sleeps (~6.5s)
+/// plus the four CRDT-write attempts themselves.
+pub const RELEASE_ALL_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_millis(500),
+    Duration::from_millis(1_500),
+    Duration::from_millis(4_500),
+];
 
 /// Result of a batch acquire: successfully acquired claims and conflicts.
 pub type BatchAcquireResult = Result<
@@ -83,6 +114,62 @@ pub fn release_all(
     let _ = compact_expired_claims(coordinator);
 
     Ok(count)
+}
+
+/// Release all claims for `session_id`, retrying transient failures with
+/// exponential backoff per [`RELEASE_ALL_RETRY_DELAYS`].
+///
+/// INF-TSK-050-004 AC-02: the worker shutdown path used to call
+/// `release_all` once and discard the `Result` (`let _ =`), which let
+/// transient CRDT-write contention leak claims into the next worker's
+/// startup. This helper retries up to 4 times total — initial attempt
+/// plus three retries with sleeps of 500ms / 1.5s / 4.5s between them
+/// (worst case ~6.5s of waiting before surfacing the final error).
+///
+/// `op` is invoked on each attempt and is expected to encapsulate the
+/// caller's locking strategy (e.g. `locked_binary_rmw` wrapping
+/// `release_all`). On the final failure, the last error is returned.
+///
+/// Returns `Ok(attempts)` where `attempts` is the 1-based attempt number
+/// that succeeded (for telemetry / test assertions).
+///
+/// # Errors
+///
+/// Returns the last error from `op` if all attempts fail.
+///
+/// # Panics
+///
+/// Cannot panic in practice: the loop runs `RELEASE_ALL_RETRY_DELAYS.len() + 1`
+/// times (>=1), so on the failure path `last_err` is always populated
+/// before the `expect` is reached.
+pub async fn release_all_with_retry<F, E>(mut op: F) -> Result<usize, E>
+where
+    F: FnMut() -> Result<(), E>,
+    E: std::fmt::Display,
+{
+    let mut last_err: Option<E> = None;
+    let total_attempts = RELEASE_ALL_RETRY_DELAYS.len() + 1;
+    let mut attempt: usize = 0;
+    while attempt < total_attempts {
+        match op() {
+            Ok(()) => return Ok(attempt + 1),
+            Err(e) => {
+                eprintln!(
+                    "warn: release_all attempt {} of {total_attempts} failed: {e}",
+                    attempt + 1
+                );
+                last_err = Some(e);
+                // Sleep before next attempt, indexed by current
+                // attempt number into the delay schedule.
+                if attempt < RELEASE_ALL_RETRY_DELAYS.len() {
+                    let delay = RELEASE_ALL_RETRY_DELAYS[attempt];
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+        attempt += 1;
+    }
+    Err(last_err.expect("retry loop ran at least once"))
 }
 
 /// Validate that a session's expected fencing token matches the current token
@@ -414,6 +501,98 @@ mod tests {
         let active = list_active(&coord);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].0, "src/valid.rs");
+    }
+
+    // -- release_all_with_retry tests (INF-TSK-050-004 AC-02) --
+
+    #[tokio::test]
+    async fn release_retry_succeeds_on_first_attempt() {
+        let attempts = std::cell::Cell::new(0);
+        let result = release_all_with_retry::<_, &'static str>(|| {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, 1);
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn release_retry_succeeds_on_third_attempt() {
+        // Verifies the in-between behaviour: helper keeps retrying past
+        // the first failure but stops as soon as op() succeeds, even
+        // before exhausting the full schedule.
+        let attempts = std::cell::Cell::new(0);
+        let result = release_all_with_retry::<_, String>(|| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 3 {
+                Err(format!("transient error on attempt {}", attempts.get()))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, 3, "should succeed on the 3rd attempt");
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn release_retry_succeeds_on_fourth_attempt() {
+        // Pre-merge AC-02 schedule rework: with 3 inter-attempt sleeps
+        // there are 4 total attempts — verify the helper still keeps
+        // retrying through the full schedule when failures persist.
+        let attempts = std::cell::Cell::new(0);
+        let result = release_all_with_retry::<_, String>(|| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 4 {
+                Err(format!("transient error on attempt {}", attempts.get()))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, 4, "should succeed on the 4th attempt");
+        assert_eq!(attempts.get(), 4);
+    }
+
+    #[tokio::test]
+    async fn release_retry_returns_error_after_all_attempts_fail() {
+        let attempts = std::cell::Cell::new(0);
+        let err = release_all_with_retry::<_, String>(|| {
+            attempts.set(attempts.get() + 1);
+            Err(format!("attempt {}", attempts.get()))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(
+            attempts.get(),
+            RELEASE_ALL_RETRY_DELAYS.len() + 1,
+            "should attempt {} times",
+            RELEASE_ALL_RETRY_DELAYS.len() + 1
+        );
+        assert!(
+            err.contains(&format!("attempt {}", attempts.get())),
+            "final error should be from the last attempt, got: {err}",
+        );
+    }
+
+    #[test]
+    fn release_retry_delays_constant() {
+        // INF-TSK-050-004 AC-02 (post-rework): literal AC text says
+        // "3 attempts, 500ms / 1.5s / 4.5s". With 3 inter-attempt
+        // sleeps, the natural reading is 4 attempts total. Anchor each
+        // schedule slot so a regression that re-shortens the schedule
+        // (e.g. back to the over-engineered 2-element [500ms, 1.5s])
+        // produces a deliberate, visible diff.
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS.len(), 3);
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS[0].as_millis(), 500);
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS[1].as_millis(), 1_500);
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS[2].as_millis(), 4_500);
+        // 4 attempts total = 1 + len(delays).
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS.len() + 1, 4);
     }
 
     #[test]

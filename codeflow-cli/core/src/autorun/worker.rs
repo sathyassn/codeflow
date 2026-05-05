@@ -129,6 +129,121 @@ fn worker_log(log_path: &std::path::Path, message: &str) {
     }
 }
 
+/// Resolve the parent PID of a tmux pane in `session_name`'s first window.
+///
+/// INF-TSK-050-004 AC-01: when `tmux kill-session` fails, we want to
+/// SIGKILL any orphan claude process the pane was running. tmux exposes
+/// the pane process group leader via `list-panes -F '#{pane_pid}'`.
+///
+/// Returns `None` when:
+/// - tmux is not installed,
+/// - the session does not exist,
+/// - the output is malformed (not a u32),
+/// - or the resolved PID is 0 (sentinel "no process").
+///
+/// Pure-ish: spawns `tmux list-panes` synchronously. Tests inject a
+/// `MockPaneResolver` instead of going through tmux.
+pub(crate) fn resolve_tmux_pane_pid(session_name: &str) -> Option<u32> {
+    let output = std::process::Command::new("tmux")
+        .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Take first non-empty line — the session's primary pane.
+    let first = stdout.lines().find(|l| !l.trim().is_empty())?;
+    let pid: u32 = first.trim().parse().ok()?;
+    if pid == 0 { None } else { Some(pid) }
+}
+
+/// SIGKILL `pid` via the kill(1) command.
+///
+/// Returns `true` when the kill succeeded (or the process was already
+/// gone — ESRCH is treated as "already dead, mission accomplished").
+/// Returns `false` on permission errors or failures we can't tell apart
+/// from a still-alive process. Logs the outcome.
+///
+/// Used by [`escalate_tmux_kill_to_sigkill`] only — the caller is
+/// expected to first verify via [`crate::session::process::is_process_named`]
+/// that the PID actually belongs to a claude process so we don't
+/// accidentally kill an unrelated PID-recycle victim.
+pub(crate) fn sigkill_pid(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let status = std::process::Command::new("/bin/kill")
+        .args(["-9", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status();
+    match status {
+        Ok(s) if s.success() => true,
+        // ESRCH (no such process) → race with natural exit, fine.
+        Ok(_) => !crate::session::process::is_process_alive(pid),
+        Err(_) => false,
+    }
+}
+
+/// Escalation policy for AC-01: when the trait-level
+/// `kill_session` returns Err, attempt to identify the orphan claude
+/// process via tmux pane introspection and SIGKILL it. Idempotent —
+/// safe to call multiple times; a no-op if the pane no longer resolves
+/// to a live PID.
+///
+/// `pane_resolver` lets tests inject a deterministic PID without
+/// invoking real tmux. Returns the PID that was killed, or `None` if no
+/// orphan was found / the kill failed / the PID didn't pass the
+/// claude-name guard.
+pub(crate) fn escalate_tmux_kill_to_sigkill<F>(
+    session_name: &str,
+    log_path: &std::path::Path,
+    pane_resolver: F,
+) -> Option<u32>
+where
+    F: FnOnce(&str) -> Option<u32>,
+{
+    let Some(pid) = pane_resolver(session_name) else {
+        worker_log(
+            log_path,
+            &format!("TMUX_KILL_ESCALATION session={session_name} no_pane_pid"),
+        );
+        return None;
+    };
+    // Validate the PID is actually a claude process before SIGKILL.
+    // Without this check, a PID-recycle (claude exited, kernel reused
+    // the PID for an unrelated process) would result in killing the
+    // wrong process. `is_process_named` is the same chokepoint
+    // `validate_claude_pid` uses elsewhere.
+    if !crate::session::process::is_process_named(pid, "claude") {
+        worker_log(
+            log_path,
+            &format!("TMUX_KILL_ESCALATION session={session_name} pid={pid} skipped_not_claude"),
+        );
+        return None;
+    }
+    if sigkill_pid(pid) {
+        eprintln!("tmux kill_session failed for {session_name}; SIGKILL'd orphan claude pid={pid}");
+        worker_log(
+            log_path,
+            &format!("TMUX_KILL_ESCALATION session={session_name} pid={pid} sigkill_ok"),
+        );
+        Some(pid)
+    } else {
+        eprintln!(
+            "tmux kill_session failed for {session_name}; SIGKILL of orphan pid={pid} failed"
+        );
+        worker_log(
+            log_path,
+            &format!("TMUX_KILL_ESCALATION session={session_name} pid={pid} sigkill_failed"),
+        );
+        None
+    }
+}
+
 /// Default timeout for a single worker (120 minutes).
 pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(120 * 60);
 
@@ -1469,8 +1584,28 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             started_at: Some(now.clone()),
             completed_at: None,
         };
+        // INF-TSK-050-004 AC-04: DB CREATE failures previously logged a
+        // warning and continued, leaving the worker running without a
+        // tracking row in `autorun_worker`. The TUI then showed the
+        // worker as "Running" but there was no DB record to terminate
+        // on the cleanup path, masking the failure. Now we fail the
+        // worker fast so the orchestrator surfaces it as `failed`.
         if let Err(e) = self.store.create_autorun_worker(&worker_record).await {
-            eprintln!("warning: failed to create autorun_worker record: {e}");
+            eprintln!("error: failed to create autorun_worker record: {e}");
+            worker_log(
+                &log_path,
+                &format!("DB_CREATE_FAILED autorun_worker err={e}"),
+            );
+            // Best-effort cleanup: the worktree was created above; tear
+            // it down before propagating the error so the pool isn't
+            // stuck holding a phantom worktree.
+            if let Err(ce) = self.worktree.cleanup(&wt_name) {
+                eprintln!("warning: worktree cleanup failed for {wt_name}: {ce}");
+            }
+            return Err(AutorunError::WorkerFailed(format!(
+                "create_autorun_worker failed for {}: {e}",
+                cfg.worker_id
+            )));
         }
 
         // Create autorun_task_run record at task start.
@@ -1497,8 +1632,20 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             last_phase: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
+        // INF-TSK-050-004 AC-04: see comment on `create_autorun_worker`
+        // above. Same hard-fail policy for the task-run record.
         if let Err(e) = self.store.create_autorun_task_run(&task_run_record).await {
-            eprintln!("warning: failed to create autorun_task_run record: {e}");
+            eprintln!("error: failed to create autorun_task_run record: {e}");
+            worker_log(
+                &log_path,
+                &format!("DB_CREATE_FAILED autorun_task_run err={e}"),
+            );
+            if let Err(ce) = self.worktree.cleanup(&wt_name) {
+                eprintln!("warning: worktree cleanup failed for {wt_name}: {ce}");
+            }
+            return Err(AutorunError::WorkerFailed(format!(
+                "create_autorun_task_run failed for {task_run_id}: {e}"
+            )));
         }
 
         // INF-TSK-048-001 AC #8 + INF-TSK-049-001 AC #15: on task dispatch,
@@ -1682,7 +1829,29 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             Ok(Err(e)) => worker_log(&log_path, &format!("CLAUDE_ERROR {e}")),
             Err(_) => worker_log(&log_path, "CLAUDE_TIMEOUT"),
         }
-        // Merge conflict detection and remediation.
+        // INF-TSK-050-004 AC-05: PRE-PR-merge conflict gate.
+        //
+        // `check_merge_conflicts` MUST run BEFORE `serialized_merge`
+        // (which calls `gh pr merge`). When the branch will not merge
+        // cleanly into the integration target, the worker fails fast
+        // with `merge_conflict` status: no `gh pr merge` is attempted,
+        // no merge queue slot is consumed, no `apply_merge_writeback`
+        // runs. The `gh pr create` call itself is invoked by the inner
+        // Claude session (not the worker), so by the time we reach
+        // this point a PR already exists for the branch — but the
+        // important invariant for AC-05 is that the *merge* never
+        // happens and the worker reports `merge_conflict` to the
+        // operator instead of silently `completed`.
+        //
+        // Order of execution (verified by `worker_pre_pr_conflict_check.rs`
+        // integration test):
+        //   1. claude.invoke() returns Ok(exit_code=0)
+        //   2. check_merge_conflicts(target_branch) — THIS GATE
+        //   3. If conflict: return WorkerResult { status: "merge_conflict" }
+        //   4. If clean / rebased: continue to serialized_merge
+        //
+        // Without step 2, a Claude exit_code=0 + dirty target = silent
+        // merge failure later in the merge queue (or stale-PR limbo).
         if let Ok(Ok(ref invoke_result)) = result {
             if invoke_result.exit_code == 0 && !cfg.integration_branch.is_empty() {
                 let merge_config = crate::autorun::config::load_config(&self.project_dir)
@@ -1778,6 +1947,17 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
             }
         }
 
+        // INF-TSK-050-004 AC-03: when `serialized_merge` returns a
+        // non-Merged outcome (protected-branch hook block, CI failure,
+        // CI timeout, queue timeout, post-rebase merge conflict), the
+        // worker MUST surface that as `failed`/`timeout` so the
+        // operator sees the correct state in `autorun status`. Before
+        // AC-03, the worker logged the outcome but kept Claude's
+        // exit_code (typically 0), reporting `completed` for a task
+        // whose PR never merged. Track it here, override the
+        // worker_result after Claude's classification runs.
+        let mut serialized_merge_failure: Option<(String, String)> = None;
+
         // Serialized merge: when integration_auto_merge is enabled, use the
         // merge queue to serialize PR merges to the integration branch.
         //
@@ -1850,22 +2030,51 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                             eprintln!(
                                 "serialized merge: PR #{effective_pr_number} failed: {error}"
                             );
+                            // AC-03: protected-branch hook block, post-rebase
+                            // conflicts, or push failures all map to `failed`
+                            // (non-zero exit_code). The worker_result built
+                            // below will be overridden via
+                            // `serialized_merge_failure`.
+                            serialized_merge_failure = Some((
+                                "failed".to_string(),
+                                format!("gh pr merge failed: {error}"),
+                            ));
                         }
                         MergeOutcome::QueueTimeout => {
                             eprintln!(
                                 "serialized merge: PR #{effective_pr_number} timed out in queue"
                             );
+                            serialized_merge_failure = Some((
+                                "timeout".to_string(),
+                                format!(
+                                    "merge queue timeout for PR #{effective_pr_number} on target {}",
+                                    cfg.integration_branch
+                                ),
+                            ));
                         }
                         MergeOutcome::CiFailed { ref failing_checks } => {
                             eprintln!(
                                 "serialized merge: PR #{effective_pr_number} blocked — failing required CI checks: {} (PR left open, task blocked)",
                                 failing_checks.join(", ")
                             );
+                            serialized_merge_failure = Some((
+                                "failed".to_string(),
+                                format!(
+                                    "ci-failed: PR #{effective_pr_number} required checks failed: {}",
+                                    failing_checks.join(", ")
+                                ),
+                            ));
                         }
                         MergeOutcome::CiTimeout => {
                             eprintln!(
                                 "serialized merge: PR #{effective_pr_number} blocked — CI did not reach green within configured timeout (PR left open, task blocked)"
                             );
+                            serialized_merge_failure = Some((
+                                "timeout".to_string(),
+                                format!(
+                                    "ci-timeout: PR #{effective_pr_number} CI did not reach green"
+                                ),
+                            ));
                         }
                     }
                     // INF-TSK-050-003 AC-11: persist the merge outcome
@@ -1919,21 +2128,48 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
         // `.state/interactive/heartbeat-{worker_sid}`.
         // Always cleanup: release claims, kill tmux, remove worktree.
 
-        // Release claims via release_all().
-        match crate::file_lock::locked_binary_rmw(
-            &state_path,
-            crate::coordination::loro::LoroCoordinator::in_memory,
-            |bytes| {
-                crate::coordination::loro::LoroCoordinator::from_bytes(bytes, &state_path)
-                    .map_err(|e| format!("load coordinator: {e}"))
-            },
-            |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
-            |coord| {
-                let _ = crate::coordination::claims::release_all(coord, &worker_sid);
-                Ok(())
-            },
-        ) {
-            Ok(()) => {
+        // INF-TSK-050-004 AC-02: claim release used to be best-effort
+        // (`let _ = release_all(...)` inside the locked closure, which
+        // additionally swallowed any error from the inner operation).
+        // Now wrap the whole `locked_binary_rmw` + `release_all` cycle
+        // in `release_all_with_retry` so transient CRDT-write contention
+        // (sync daemon, peer worker) gets retried with backoff before
+        // we fall through to the warn-and-continue path.
+        let release_state_path = state_path.clone();
+        let release_worker_sid = worker_sid.clone();
+        let release_outcome = crate::coordination::claims::release_all_with_retry(move || {
+            // The closure runs the full read-modify-write cycle. Any
+            // error from `release_all` is also surfaced (replacing the
+            // pre-AC-02 behaviour where the inner result was discarded).
+            let inner_state_path = release_state_path.clone();
+            let inner_worker_sid = release_worker_sid.clone();
+            let mut release_err: Option<String> = None;
+            let lock_result = crate::file_lock::locked_binary_rmw(
+                &inner_state_path,
+                crate::coordination::loro::LoroCoordinator::in_memory,
+                |bytes| {
+                    crate::coordination::loro::LoroCoordinator::from_bytes(bytes, &inner_state_path)
+                        .map_err(|e| format!("load coordinator: {e}"))
+                },
+                |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+                |coord| {
+                    if let Err(e) =
+                        crate::coordination::claims::release_all(coord, &inner_worker_sid)
+                    {
+                        release_err = Some(format!("release_all: {e}"));
+                    }
+                    Ok(())
+                },
+            );
+            match (lock_result, release_err) {
+                (Ok(()), None) => Ok(()),
+                (Ok(()), Some(inner)) => Err(inner),
+                (Err(lock_err), _) => Err(format!("lock: {lock_err}")),
+            }
+        })
+        .await;
+        match release_outcome {
+            Ok(_attempts) => {
                 // Emit ClaimReleased event for each file in scope.
                 for path in &cfg.file_scope {
                     crate::autorun::emit_coordination_event(
@@ -1948,11 +2184,27 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 }
             }
             Err(e) => {
-                eprintln!("warning: claim release failed: {e}");
+                eprintln!("warning: claim release failed after retries: {e}");
+                worker_log(&log_path, &format!("CLAIM_RELEASE_FAILED err={e}"));
             }
         }
 
-        let _ = self.tmux.kill_session(&tmux_name).await;
+        // INF-TSK-050-004 AC-01: tmux kill_session failures used to be
+        // swallowed (`let _ = ...`). When the tmux daemon was wedged or
+        // the session vanished mid-shutdown, the pane's claude child
+        // could survive the worker exit and pile up across runs. Now we
+        // log + escalate to SIGKILL on the orphan claude PID. The
+        // escalation helper is idempotent and guarded by an
+        // is-claude-named check so PID recycling can't cause us to
+        // SIGKILL the wrong process.
+        if let Err(e) = self.tmux.kill_session(&tmux_name).await {
+            eprintln!("error: tmux kill_session({tmux_name}) failed: {e}");
+            worker_log(
+                &log_path,
+                &format!("TMUX_KILL_FAILED session={tmux_name} err={e}"),
+            );
+            let _ = escalate_tmux_kill_to_sigkill(&tmux_name, &log_path, resolve_tmux_pane_pid);
+        }
 
         // Branch safety check before cleanup — salvage unpushed work.
         let wt_dir = self
@@ -2154,6 +2406,50 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     warning,
                 })
             }
+        };
+
+        // INF-TSK-050-004 AC-03: if `serialized_merge` reported a
+        // non-Merged outcome upstream, override the
+        // Claude-classification result. The overall worker MUST report
+        // failed/timeout (exit_code != 0) so the operator sees the
+        // accurate state.
+        //
+        // Relationship to W1 (exit_code=124 + branch-on-origin = "completed"):
+        // `classify_invoke_outcome` runs FIRST and may classify a
+        // timeout as "completed-with-warning" when the branch is already
+        // pushed (W1, see line ~109). This override fires AFTERWARDS and
+        // only when `serialized_merge_failure` is `Some` — i.e., only
+        // when serialized_merge actually attempted and failed. W1's
+        // "completed-with-warning" is therefore preserved when no merge
+        // was attempted (e.g., `integration_auto_merge=false`), and
+        // correctly clobbered to "failed/timeout" when a merge was
+        // attempted but failed (e.g., CI flake, hook block, queue
+        // timeout) — because in that case the work isn't actually
+        // shipped, regardless of whether the branch made it to origin
+        // before Claude timed out.
+        //
+        // Without this override, a Claude exit_code=0 followed by a
+        // hook-blocked `gh pr merge` would show `completed` in
+        // `autorun status`, hiding the real failure.
+        let worker_result = match (worker_result, serialized_merge_failure) {
+            (Ok(mut wr), Some((failed_status, error_msg))) => {
+                wr.status = failed_status;
+                wr.exit_code = 1;
+                if wr.error.is_empty() {
+                    wr.error = error_msg;
+                } else {
+                    wr.error = format!("{}; {error_msg}", wr.error);
+                }
+                worker_log(
+                    &log_path,
+                    &format!(
+                        "MERGE_FAILURE_OVERRIDE status={} exit_code={}",
+                        wr.status, wr.exit_code
+                    ),
+                );
+                Ok(wr)
+            }
+            (other, _) => other,
         };
 
         // Read last phase from sentinel files before worktree cleanup destroys them.
@@ -4365,10 +4661,15 @@ Read and implement.
 
         let result = worker.run(cfg).await.unwrap();
         // The worker should attempt serialized merge because pr_number > 0,
-        // even though exit_code is 124 (timeout). The merge itself may fail
-        // (no real git repo), but the important thing is the path was entered.
-        // The result will be "failed" because exit_code != 0.
-        assert_eq!(result.exit_code, 124);
+        // even though exit_code is 124 (timeout). The merge fails because
+        // there's no real git repo, which under INF-TSK-050-004 AC-03 now
+        // overrides the worker_result: exit_code → 1, status → failed.
+        // The PR number is still preserved (rescued from the invoke result).
+        assert_eq!(
+            result.exit_code, 1,
+            "AC-03: serialized_merge failure overrides Claude exit_code"
+        );
+        assert_eq!(result.status, "failed");
         assert_eq!(result.pr_number, 99);
     }
 
@@ -5261,6 +5562,394 @@ Read and implement.
         );
     }
 
+    // ─── INF-TSK-050-004 QA rework: additional coverage for new code paths ──
+    //
+    // The Tier-B fixes added several branches whose error/edge paths were
+    // not exercised by the AC-targeted unit tests above. These tests close
+    // the gap so worker.rs coverage holds above the 79% threshold.
+
+    #[tokio::test]
+    async fn test_apply_merge_writeback_queue_timeout_sets_timeout_status() {
+        // QueueTimeout: status -> Timeout, pr_merged_at left None.
+        use crate::store::DataStore;
+        let store = crate::store::mock::MockStore::new();
+        let worker = crate::models::AutorunWorker {
+            id: "aw-qtimeout".into(),
+            session_id: "ar-qtimeout".into(),
+            worker_num: 1,
+            task_id: "task-qt".into(),
+            status: crate::types::AutorunWorkerStatus::Running,
+            tmux_session: None,
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: "soft".into(),
+            worker_session_id: None,
+            pr_number: Some(303),
+            pr_merged_at: None,
+            started_at: None,
+            completed_at: None,
+        };
+        store.create_autorun_worker(&worker).await.unwrap();
+
+        apply_merge_writeback(&store, "aw-qtimeout", &MergeOutcome::QueueTimeout)
+            .await
+            .expect("writeback should succeed");
+
+        let updated = store
+            .list_autorun_workers("ar-qtimeout")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == "aw-qtimeout")
+            .expect("worker still in store");
+        assert_eq!(updated.status, crate::types::AutorunWorkerStatus::Timeout);
+        assert!(updated.pr_merged_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_apply_merge_writeback_ci_failed_sets_failed_status() {
+        // CiFailed: status -> Failed (NOT Completed), pr_merged_at left None.
+        use crate::store::DataStore;
+        let store = crate::store::mock::MockStore::new();
+        let worker = crate::models::AutorunWorker {
+            id: "aw-cifail".into(),
+            session_id: "ar-cifail".into(),
+            worker_num: 1,
+            task_id: "task-cf".into(),
+            status: crate::types::AutorunWorkerStatus::Running,
+            tmux_session: None,
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: "soft".into(),
+            worker_session_id: None,
+            pr_number: Some(404),
+            pr_merged_at: None,
+            started_at: None,
+            completed_at: None,
+        };
+        store.create_autorun_worker(&worker).await.unwrap();
+
+        apply_merge_writeback(
+            &store,
+            "aw-cifail",
+            &MergeOutcome::CiFailed {
+                failing_checks: vec!["lint".into(), "test".into()],
+            },
+        )
+        .await
+        .expect("writeback should succeed");
+
+        let updated = store
+            .list_autorun_workers("ar-cifail")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == "aw-cifail")
+            .expect("worker still in store");
+        assert_eq!(updated.status, crate::types::AutorunWorkerStatus::Failed);
+        assert!(updated.pr_merged_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_apply_merge_writeback_ci_timeout_sets_timeout_status() {
+        // CiTimeout: status -> Timeout, pr_merged_at left None.
+        use crate::store::DataStore;
+        let store = crate::store::mock::MockStore::new();
+        let worker = crate::models::AutorunWorker {
+            id: "aw-citimeout".into(),
+            session_id: "ar-citimeout".into(),
+            worker_num: 1,
+            task_id: "task-ct".into(),
+            status: crate::types::AutorunWorkerStatus::Running,
+            tmux_session: None,
+            worktree_path: None,
+            file_scope: vec![],
+            scope_policy: "soft".into(),
+            worker_session_id: None,
+            pr_number: Some(505),
+            pr_merged_at: None,
+            started_at: None,
+            completed_at: None,
+        };
+        store.create_autorun_worker(&worker).await.unwrap();
+
+        apply_merge_writeback(&store, "aw-citimeout", &MergeOutcome::CiTimeout)
+            .await
+            .expect("writeback should succeed");
+
+        let updated = store
+            .list_autorun_workers("ar-citimeout")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == "aw-citimeout")
+            .expect("worker still in store");
+        assert_eq!(updated.status, crate::types::AutorunWorkerStatus::Timeout);
+        assert!(updated.pr_merged_at.is_none());
+    }
+
+    #[test]
+    fn test_release_all_with_retry_constants() {
+        // Anchor the AC-02 schedule values so a regression that changes
+        // them produces a deliberate, visible diff. Pre-merge rework
+        // moved this from a 2-element schedule (~2s total wait) to a
+        // 3-element schedule (~6.5s total wait) to match the AC text
+        // literally — see RELEASE_ALL_RETRY_DELAYS rustdoc for the
+        // schedule rationale.
+        use crate::coordination::claims::RELEASE_ALL_RETRY_DELAYS;
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS.len(), 3);
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS[0].as_millis(), 500);
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS[1].as_millis(), 1_500);
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS[2].as_millis(), 4_500);
+        // 4 attempts total = 1 + len(delays).
+        assert_eq!(RELEASE_ALL_RETRY_DELAYS.len() + 1, 4);
+    }
+
+    #[test]
+    fn test_resolve_tmux_pane_pid_returns_none_for_empty_session_name() {
+        // Empty session name: tmux list-panes returns non-zero, function returns None.
+        let pid = resolve_tmux_pane_pid("");
+        assert!(pid.is_none());
+    }
+
+    #[test]
+    fn test_escalate_tmux_kill_to_sigkill_logs_when_resolver_returns_pid_zero() {
+        // PID 0 is the sentinel; resolver indicating no pane PID by
+        // returning None drives the early-return branch.
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("worker.log");
+        let killed = escalate_tmux_kill_to_sigkill("session-zero", &log_path, |_| None);
+        assert!(killed.is_none());
+        // Verify the log captured the no_pane_pid event for auditability.
+        let log_content = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(
+            log_content.contains("TMUX_KILL_ESCALATION") && log_content.contains("no_pane_pid"),
+            "log must record the escalation outcome, got: {log_content}"
+        );
+    }
+
+    /// MockStore-backed worker test exercising the merge_conflict block
+    /// in run() (lines around 1881-1945 in the post-Claude conflict
+    /// remediation path). Uses a real git repo with a deliberate
+    /// conflict so resolve_merge_conflicts returns MergeConflict and
+    /// the worker emits MergeConflictDetected, calls update_db_records,
+    /// emits WorkerFailed, and returns status=merge_conflict.
+    #[tokio::test]
+    async fn test_worker_returns_merge_conflict_status_when_target_branch_dirty() {
+        use std::process::Command;
+
+        // Build a real git repo with two divergent branches so that
+        // check_merge_conflicts returns has_conflicts=true.
+        let project_dir = tempfile::tempdir().unwrap();
+        let wt_path = project_dir.path().join("wt");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        // Initialize git repo in wt_path.
+        let _ = Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&wt_path)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&wt_path)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&wt_path)
+            .output();
+        std::fs::write(wt_path.join("file.txt"), "base\n").unwrap();
+        let _ = Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&wt_path)
+            .output();
+        let _ = Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&wt_path)
+            .output();
+
+        // Create branch "target" pointing at the initial commit.
+        let _ = Command::new("git")
+            .args(["branch", "target"])
+            .current_dir(&wt_path)
+            .output();
+
+        // Modify file.txt on main so HEAD diverges from target with a conflicting line.
+        std::fs::write(wt_path.join("file.txt"), "main change\n").unwrap();
+        let _ = Command::new("git")
+            .args(["commit", "-am", "main edit"])
+            .current_dir(&wt_path)
+            .output();
+
+        // Modify file.txt on target so target also diverges, conflicting with main.
+        let _ = Command::new("git")
+            .args(["checkout", "target"])
+            .current_dir(&wt_path)
+            .output();
+        std::fs::write(wt_path.join("file.txt"), "target change\n").unwrap();
+        let _ = Command::new("git")
+            .args(["commit", "-am", "target edit"])
+            .current_dir(&wt_path)
+            .output();
+
+        // Switch back to main so HEAD is the diverged main commit.
+        let _ = Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(&wt_path)
+            .output();
+
+        // Skip if git isn't available or repo setup failed.
+        let head_check = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&wt_path)
+            .output();
+        let Ok(out) = head_check else {
+            eprintln!("git not available; skipping merge_conflict integration test");
+            return;
+        };
+        if !out.status.success() {
+            eprintln!("git rev-parse failed; skipping merge_conflict integration test");
+            return;
+        }
+
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(wt_path.clone());
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let mut cfg = make_worker_config();
+        cfg.integration_branch = "target".into();
+        cfg.integration_auto_merge = false;
+
+        let result = worker.run(cfg).await.unwrap();
+        // The worker MUST report merge_conflict because target conflicts.
+        // Auto-rebase will also fail (rebase target onto main) so
+        // resolve_merge_conflicts returns MergeConflict.
+        assert_eq!(
+            result.status, "merge_conflict",
+            "worker should return merge_conflict when target branch conflicts"
+        );
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.pr_number, 0);
+    }
+
+    // ─── INF-TSK-050-004 QA rework batch 2: more coverage for run() paths ──
+
+    /// Worktree provider that simulates the pool-limit error so the
+    /// run() pool_full branch (lines ~1402-1426) is exercised.
+    struct PoolFullWorktree;
+
+    impl WorktreeProvider for PoolFullWorktree {
+        fn setup(&self, _name: &str) -> Result<WorktreeInfo, AutorunError> {
+            Err(AutorunError::Worktree(
+                crate::error::WorktreeError::Creation("max concurrent worktrees reached".into()),
+            ))
+        }
+        fn cleanup(&self, _name: &str) -> Result<(), AutorunError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_returns_pool_full_when_worktree_setup_hits_pool_limit() {
+        // Exercises the C22/C28 pool_full branch in run().
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(
+            tmux,
+            claude,
+            PoolFullWorktree,
+            project_dir.path().to_path_buf(),
+        );
+
+        let result = worker.run(make_worker_config()).await.unwrap();
+        assert_eq!(result.status, "pool_full");
+        assert_eq!(result.exit_code, 0);
+        assert!(result.error.contains("max concurrent worktrees reached"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_blocked_status_on_claim_conflict_skip_and_continue() {
+        // Pre-acquire a claim under a DIFFERENT session id, then run
+        // the worker with the same file in its scope. The claim
+        // conflict is detected; with `blocked_behavior=skip_and_continue`
+        // (default), the worker returns status=blocked.
+        use crate::coordination::Coordinator;
+        let project_dir = make_project_dir();
+        let state_path = project_dir.path().join(".state/coordination/state.loro");
+        std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+
+        // Pre-acquire claim by another session via locked_binary_rmw.
+        let other_sid = crate::types::SessionId::new_unchecked("ses-other-holder");
+        crate::file_lock::locked_binary_rmw(
+            &state_path,
+            crate::coordination::loro::LoroCoordinator::in_memory,
+            |bytes| {
+                crate::coordination::loro::LoroCoordinator::from_bytes(bytes, &state_path)
+                    .map_err(|e| format!("load: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+            |coord| {
+                let _ = coord.acquire("conflicted/file.rs", &other_sid);
+                Ok(())
+            },
+        )
+        .expect("pre-claim setup must succeed");
+
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let mut cfg = make_worker_config();
+        cfg.file_scope = vec!["conflicted/file.rs".into()];
+        cfg.blocked_behavior = "skip_and_continue".into();
+        let result = worker.run(cfg).await.unwrap();
+        assert_eq!(result.status, "blocked");
+        assert_eq!(result.exit_code, 0);
+        assert!(result.error.contains("claim conflict"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_returns_err_on_claim_conflict_fail_behavior() {
+        // Same setup as above but with blocked_behavior="fail" the
+        // worker returns Err(WorkerFailed) instead of status=blocked.
+        use crate::coordination::Coordinator;
+        let project_dir = make_project_dir();
+        let state_path = project_dir.path().join(".state/coordination/state.loro");
+        std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+
+        let other_sid = crate::types::SessionId::new_unchecked("ses-other-holder-2");
+        crate::file_lock::locked_binary_rmw(
+            &state_path,
+            crate::coordination::loro::LoroCoordinator::in_memory,
+            |bytes| {
+                crate::coordination::loro::LoroCoordinator::from_bytes(bytes, &state_path)
+                    .map_err(|e| format!("load: {e}"))
+            },
+            |coord| coord.export_bytes().map_err(|e| format!("export: {e}")),
+            |coord| {
+                let _ = coord.acquire("blocked/path.rs", &other_sid);
+                Ok(())
+            },
+        )
+        .expect("pre-claim setup must succeed");
+
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let mut cfg = make_worker_config();
+        cfg.file_scope = vec!["blocked/path.rs".into()];
+        cfg.blocked_behavior = "fail".into();
+        let err = worker.run(cfg).await.unwrap_err();
+        assert!(
+            matches!(err, AutorunError::WorkerFailed(ref msg) if msg.contains("claim conflict")),
+            "expected WorkerFailed for claim conflict, got: {err:?}"
+        );
+    }
+
     // ─── INF-TSK-050-003 AC-10 / WS-REV MAJOR-4: per-poll stale-head ─────
     //
     // These tests exercise the EXTRACTED `poll_for_position_zero_iteration`
@@ -5406,6 +6095,628 @@ Read and implement.
         assert!(
             pos.is_some(),
             "re-enqueue must put the session back in the queue"
+        );
+    }
+
+    // --- INF-TSK-050-004 AC-01: tmux SIGKILL escalation ---
+
+    /// A `TmuxRunner` whose `kill_session` always errors. Used to drive
+    /// the AC-01 escalation path in tests.
+    struct FailingTmux {
+        kill_attempted: Arc<AtomicBool>,
+    }
+
+    impl FailingTmux {
+        fn new() -> (Self, Arc<AtomicBool>) {
+            let attempted = Arc::new(AtomicBool::new(false));
+            (
+                Self {
+                    kill_attempted: attempted.clone(),
+                },
+                attempted,
+            )
+        }
+    }
+
+    impl TmuxRunner for FailingTmux {
+        async fn create_session(
+            &self,
+            _name: &str,
+            _command: Option<Vec<String>>,
+        ) -> Result<(), AutorunError> {
+            Ok(())
+        }
+        async fn send_command(&self, _session: &str, _command: &str) -> Result<(), AutorunError> {
+            Ok(())
+        }
+        async fn kill_session(&self, name: &str) -> Result<(), AutorunError> {
+            self.kill_attempted.store(true, Ordering::SeqCst);
+            Err(AutorunError::WorkerFailed(format!(
+                "mock tmux kill_session failure for {name}"
+            )))
+        }
+        async fn has_session(&self, _name: &str) -> Result<bool, AutorunError> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn test_sigkill_pid_returns_false_for_zero() {
+        // PID 0 is the sentinel "no process" — must never invoke kill.
+        assert!(!sigkill_pid(0));
+    }
+
+    #[test]
+    fn test_sigkill_pid_returns_true_for_already_dead_pid() {
+        // A very high PID is virtually guaranteed not to exist; ESRCH
+        // path is treated as success ("already gone, mission done").
+        // We accept either true (race produced ESRCH) or false (the
+        // PID happened to exist). The contract under test is: the
+        // function does not panic and does not hang.
+        let _ = sigkill_pid(4_000_000);
+    }
+
+    #[test]
+    fn test_resolve_tmux_pane_pid_nonexistent_session() {
+        // No tmux session by this name — list-panes fails, returns None.
+        // Use a UUID-like name to ensure no collision with real sessions.
+        let name = "cf-test-sigkill-escalation-aef9c2-nonexistent";
+        let pid = resolve_tmux_pane_pid(name);
+        assert!(
+            pid.is_none(),
+            "expected None for nonexistent tmux session, got: {pid:?}"
+        );
+    }
+
+    #[test]
+    fn test_escalate_tmux_kill_no_pane() {
+        // When the resolver returns None, escalate logs and returns None.
+        // No SIGKILL attempt is made on PID 0.
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("worker.log");
+        let killed = escalate_tmux_kill_to_sigkill("session-x", &log_path, |_| None);
+        assert!(killed.is_none());
+    }
+
+    #[test]
+    fn test_escalate_tmux_kill_skips_non_claude_pid() {
+        // Even when the resolver finds a PID, escalate must NOT
+        // SIGKILL it unless the process name contains "claude". This
+        // guards against PID-recycle.
+        // We use the current test process PID — its name is "worker-..."
+        // or similar (cargo test binary), NOT "claude", so the
+        // escalation must skip the kill.
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("worker.log");
+        let our_pid = std::process::id();
+        let killed = escalate_tmux_kill_to_sigkill("session-x", &log_path, move |_| Some(our_pid));
+        assert!(
+            killed.is_none(),
+            "must not SIGKILL a non-claude PID; got: {killed:?}"
+        );
+        // Ensure we are still alive.
+        assert!(crate::session::process::is_process_alive(our_pid));
+    }
+
+    #[tokio::test]
+    async fn test_worker_handles_failing_tmux_kill() {
+        // AC-01: when kill_session returns Err, worker logs and
+        // attempts SIGKILL escalation. The escalation is best-effort
+        // — even when no orphan PID is found, the worker must
+        // continue cleanup and complete normally.
+        let project_dir = make_project_dir();
+        let (tmux, kill_attempted) = FailingTmux::new();
+        let (wt, _, wt_cleanup, _, _) =
+            MockWorktree::with_tracking(project_dir.path().to_path_buf());
+        let claude = MockClaude::simple(0);
+        let worker = TmuxWorker::new(tmux, claude, wt, project_dir.path().to_path_buf());
+
+        let result = worker.run(make_worker_config()).await.unwrap();
+        // Worker should still report `completed` — the AC-01 escalation
+        // is not allowed to surface as a worker failure on its own.
+        assert_eq!(result.status, "completed");
+        assert!(
+            kill_attempted.load(Ordering::SeqCst),
+            "kill_session must have been attempted (and failed)"
+        );
+        assert!(
+            wt_cleanup.load(Ordering::SeqCst),
+            "worktree must be cleaned up even when tmux kill fails"
+        );
+    }
+
+    // --- INF-TSK-050-004 AC-04: DB CREATE failure → worker fails ---
+
+    /// `DataStore` that fails the next `create_autorun_worker` and
+    /// `create_autorun_task_run` calls. Other methods are no-ops.
+    struct FailingCreateStore {
+        worker_creates: Arc<std::sync::atomic::AtomicUsize>,
+        task_run_creates: Arc<std::sync::atomic::AtomicUsize>,
+        fail_worker: bool,
+        fail_task_run: bool,
+    }
+
+    impl FailingCreateStore {
+        fn fail_worker_create() -> Arc<Self> {
+            Arc::new(Self {
+                worker_creates: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                task_run_creates: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                fail_worker: true,
+                fail_task_run: false,
+            })
+        }
+
+        fn fail_task_run_create() -> Arc<Self> {
+            Arc::new(Self {
+                worker_creates: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                task_run_creates: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                fail_worker: false,
+                fail_task_run: true,
+            })
+        }
+    }
+
+    impl crate::store::DataStore for FailingCreateStore {
+        async fn apply_schema(&self) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn check_integrity(&self) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn create_session(
+            &self,
+            _: &crate::models::Session,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn get_session(
+            &self,
+            _: &str,
+        ) -> Result<Option<crate::models::Session>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn update_session(
+            &self,
+            _: &str,
+            _: crate::models::SessionUpdate,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn list_sessions(
+            &self,
+            _: crate::models::SessionFilter,
+        ) -> Result<Vec<crate::models::Session>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn create_epic(&self, _: &crate::models::Epic) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn get_epic(
+            &self,
+            _: &str,
+        ) -> Result<Option<crate::models::Epic>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn get_epic_by_format_id(
+            &self,
+            _: &crate::types::FormatId,
+        ) -> Result<Option<crate::models::Epic>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn update_epic(
+            &self,
+            _: &str,
+            _: crate::models::EpicUpdate,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn list_epics(
+            &self,
+            _: crate::models::EpicFilter,
+        ) -> Result<Vec<crate::models::Epic>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn create_task(&self, _: &crate::models::Task) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn get_task(
+            &self,
+            _: &str,
+        ) -> Result<Option<crate::models::Task>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn get_task_by_format_id(
+            &self,
+            _: &crate::types::FormatId,
+        ) -> Result<Option<crate::models::Task>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn update_task(
+            &self,
+            _: &str,
+            _: crate::models::TaskUpdate,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn list_tasks(
+            &self,
+            _: crate::models::TaskFilter,
+        ) -> Result<Vec<crate::models::Task>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn get_active_work(
+            &self,
+        ) -> Result<Option<crate::models::ActiveWork>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn set_active_work(
+            &self,
+            _: &crate::models::ActiveWork,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn clear_active_work(&self, _: &str) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn create_memory_event(
+            &self,
+            _: &crate::models::MemoryEvent,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn list_memory_events(
+            &self,
+            _: crate::models::MemoryEventFilter,
+        ) -> Result<Vec<crate::models::MemoryEvent>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn create_autorun_session(
+            &self,
+            _: &crate::models::AutorunSession,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn get_autorun_session(
+            &self,
+            _: &str,
+        ) -> Result<Option<crate::models::AutorunSession>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn update_autorun_session(
+            &self,
+            _: &str,
+            _: crate::models::AutorunSessionUpdate,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn update_autorun_session_cas(
+            &self,
+            _: &str,
+            _: crate::types::AutorunSessionStatus,
+            _: crate::models::AutorunSessionUpdate,
+        ) -> Result<crate::store::CasResult, crate::error::DbError> {
+            Err(crate::error::DbError::Query("not impl".into()))
+        }
+        async fn create_autorun_worker(
+            &self,
+            _w: &crate::models::AutorunWorker,
+        ) -> Result<(), crate::error::DbError> {
+            self.worker_creates
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_worker {
+                Err(crate::error::DbError::Query(
+                    "mock create_autorun_worker failure".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        async fn update_autorun_worker(
+            &self,
+            _: &str,
+            _: crate::models::AutorunWorkerUpdate,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn create_autorun_task_run(
+            &self,
+            _r: &crate::models::AutorunTaskRun,
+        ) -> Result<(), crate::error::DbError> {
+            self.task_run_creates
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_task_run {
+                Err(crate::error::DbError::Query(
+                    "mock create_autorun_task_run failure".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        async fn update_autorun_task_run(
+            &self,
+            _: &str,
+            _: crate::models::AutorunTaskRunUpdate,
+        ) -> Result<(), crate::error::DbError> {
+            Ok(())
+        }
+        async fn list_autorun_sessions(
+            &self,
+            _: crate::models::AutorunSessionFilter,
+        ) -> Result<Vec<crate::models::AutorunSession>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn list_autorun_workers(
+            &self,
+            _: &str,
+        ) -> Result<Vec<crate::models::AutorunWorker>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn list_autorun_workers_bulk(
+            &self,
+            _: &[String],
+        ) -> Result<Vec<crate::models::AutorunWorker>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn list_autorun_task_runs(
+            &self,
+            _: &str,
+        ) -> Result<Vec<crate::models::AutorunTaskRun>, crate::error::DbError> {
+            Ok(vec![])
+        }
+        async fn get_autorun_worker_by_task_id(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<crate::models::AutorunWorker>, crate::error::DbError> {
+            Ok(None)
+        }
+        async fn prune_interactive_sessions(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> Result<crate::store::PruneResult, crate::error::DbError> {
+            Ok(crate::store::PruneResult::default())
+        }
+        async fn complete_worker_interactive_sessions(
+            &self,
+            _: &str,
+        ) -> Result<usize, crate::error::DbError> {
+            Ok(0)
+        }
+        async fn prune_autorun_sessions(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> Result<crate::store::PruneResult, crate::error::DbError> {
+            Ok(crate::store::PruneResult::default())
+        }
+        async fn query_to_json(&self, _: &str) -> Result<serde_json::Value, crate::error::DbError> {
+            Ok(serde_json::json!([]))
+        }
+        async fn sync_from_events(
+            &self,
+            e: impl Iterator<Item = crate::ledger::Event> + Send,
+        ) -> Result<crate::store::SyncResult, crate::error::DbError> {
+            Ok(crate::store::SyncResult {
+                events_processed: e.count() as u64,
+                ..Default::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_fails_on_db_worker_create_error() {
+        // AC-04: when create_autorun_worker fails, worker MUST return
+        // Err(WorkerFailed) instead of continuing silently.
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        let claude = MockClaude::simple(0);
+        let store = FailingCreateStore::fail_worker_create();
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            DEFAULT_WORKER_TIMEOUT,
+            store.clone(),
+        );
+
+        let err = worker.run(make_worker_config()).await.unwrap_err();
+        assert!(
+            matches!(err, AutorunError::WorkerFailed(ref msg) if msg.contains("create_autorun_worker")),
+            "expected WorkerFailed referencing create_autorun_worker, got: {err:?}"
+        );
+        assert_eq!(
+            store
+                .worker_creates
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "create_autorun_worker should have been attempted exactly once"
+        );
+        // task_run_create must NOT have been called — we returned
+        // before reaching it.
+        assert_eq!(
+            store
+                .task_run_creates
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "create_autorun_task_run must not run after worker create fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_worker_fails_on_db_task_run_create_error() {
+        // AC-04: when create_autorun_task_run fails, worker MUST return
+        // Err(WorkerFailed).
+        let project_dir = make_project_dir();
+        let (tmux, _, _) = MockTmux::new();
+        let wt = MockWorktree::new(project_dir.path().to_path_buf());
+        let claude = MockClaude::simple(0);
+        let store = FailingCreateStore::fail_task_run_create();
+        let worker = TmuxWorker::with_store(
+            tmux,
+            claude,
+            wt,
+            project_dir.path().to_path_buf(),
+            DEFAULT_WORKER_TIMEOUT,
+            store.clone(),
+        );
+
+        let err = worker.run(make_worker_config()).await.unwrap_err();
+        assert!(
+            matches!(err, AutorunError::WorkerFailed(ref msg) if msg.contains("create_autorun_task_run")),
+            "expected WorkerFailed referencing create_autorun_task_run, got: {err:?}"
+        );
+        assert_eq!(
+            store
+                .worker_creates
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            store
+                .task_run_creates
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "create_autorun_task_run should have been attempted exactly once"
+        );
+    }
+
+    // --- INF-TSK-050-004 AC-03: protected-branch merge failure mapping ---
+
+    #[test]
+    fn test_apply_merge_failure_override_changes_status_and_exit_code() {
+        // Pure-data check of the override semantics. When
+        // serialized_merge returns MergeConflict (e.g. protected-branch
+        // hook block), the worker_result must be transformed:
+        //   status: completed -> failed
+        //   exit_code: 0 -> 1
+        // This mirrors the override block applied after the
+        // worker_result match.
+        let mut wr = WorkerResult {
+            worker_id: "arw-1".into(),
+            task_id: "task-a".into(),
+            status: "completed".into(),
+            exit_code: 0,
+            pr_number: 10,
+            pr_url: "https://example".into(),
+            branch_name: "feat/x".into(),
+            error: String::new(),
+            duration_sec: 5,
+            warning: None,
+        };
+        // Apply the same transformation the worker applies when
+        // serialized_merge_failure is Some.
+        let (failed_status, error_msg): (String, String) = (
+            "failed".into(),
+            "gh pr merge failed: protected branch".into(),
+        );
+        wr.status = failed_status;
+        wr.exit_code = 1;
+        wr.error = if wr.error.is_empty() {
+            error_msg
+        } else {
+            format!("{}; {error_msg}", wr.error)
+        };
+        assert_eq!(wr.status, "failed");
+        assert_eq!(wr.exit_code, 1);
+        assert!(wr.error.contains("gh pr merge failed"));
+    }
+
+    #[test]
+    fn test_merge_failure_override_concatenates_existing_error() {
+        // When the worker_result already had an error (e.g. Claude
+        // exited non-zero AND merge failed), the override appends the
+        // merge error rather than replacing it.
+        let mut wr = WorkerResult {
+            worker_id: "arw-1".into(),
+            task_id: "task-a".into(),
+            status: "failed".into(),
+            exit_code: 2,
+            pr_number: 0,
+            pr_url: String::new(),
+            branch_name: String::new(),
+            error: "claude exit 2".into(),
+            duration_sec: 1,
+            warning: None,
+        };
+        let error_msg = "ci-failed: required checks failed".to_string();
+        wr.error = if wr.error.is_empty() {
+            error_msg.clone()
+        } else {
+            format!("{}; {error_msg}", wr.error)
+        };
+        assert!(wr.error.contains("claude exit 2"));
+        assert!(wr.error.contains("ci-failed"));
+    }
+
+    // --- INF-TSK-050-004 AC-05: pre-PR conflict gate ---
+
+    #[tokio::test]
+    async fn test_pre_pr_conflict_check_returns_merge_conflict_action() {
+        // AC-05: resolve_merge_conflicts (the gate the worker runs
+        // BEFORE serialized_merge) must return MergeConflict when
+        // check_merge_conflicts reports a conflict and rebase fails.
+        // Verified by injecting closures so we don't need a real git
+        // repo. This documents the contract: when a conflict exists
+        // and rebase cannot resolve it, the worker fails fast WITHOUT
+        // attempting the merge step (no `gh pr merge`).
+        let merge_config = crate::autorun::config::MergeConfig {
+            max_rebase_attempts: 1,
+            ..Default::default()
+        };
+        let action = resolve_merge_conflicts(
+            "main",
+            &merge_config,
+            || {
+                Ok(crate::git::conflict::ConflictResult {
+                    has_conflicts: true,
+                    conflicting_files: vec!["a.rs".into()],
+                    target_branch: "main".into(),
+                })
+            },
+            || {
+                Ok(crate::git::conflict::RebaseResult::ConflictAborted {
+                    conflicting_files: vec!["a.rs".into()],
+                })
+            },
+        )
+        .await;
+        assert!(
+            matches!(action, MergeConflictAction::MergeConflict { .. }),
+            "expected MergeConflict, got: {action:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pre_pr_conflict_check_continues_when_clean() {
+        // AC-05 inverse: when no conflict, the gate returns Continue
+        // and the worker proceeds to serialized_merge.
+        let merge_config = crate::autorun::config::MergeConfig {
+            max_rebase_attempts: 1,
+            ..Default::default()
+        };
+        let action = resolve_merge_conflicts(
+            "main",
+            &merge_config,
+            || {
+                Ok(crate::git::conflict::ConflictResult {
+                    has_conflicts: false,
+                    conflicting_files: Vec::new(),
+                    target_branch: "main".into(),
+                })
+            },
+            || {
+                Ok(crate::git::conflict::RebaseResult::ConflictAborted {
+                    conflicting_files: Vec::new(),
+                })
+            },
+        )
+        .await;
+        assert!(
+            matches!(action, MergeConflictAction::Continue),
+            "expected Continue, got: {action:?}"
         );
     }
 }

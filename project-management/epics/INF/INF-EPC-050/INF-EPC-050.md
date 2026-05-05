@@ -72,7 +72,7 @@ This epic consolidates 23 confirmed correctness issues across the autorun and in
 | INF-TSK-050-001 | Comprehensive Autorun + Interactive Status Correctness Sweep | complete | high |
 | INF-TSK-050-002 | EPC-050 follow-up planning (analysis + Tier A/B/C task docs + template + agent defs) | complete | high |
 | INF-TSK-050-003 | Tier-A autorun + interactive correctness fixes (chokepoint discipline + DB recovery + final-PR gate) | complete | high |
-| INF-TSK-050-004 | Tier-B autorun worker robustness fixes (tmux/claim retries, protected-branch failures, DB CREATE failures, pre-PR conflict check) | todo | high |
+| INF-TSK-050-004 | Tier-B autorun worker robustness fixes (tmux/claim retries, protected-branch failures, DB CREATE failures, pre-PR conflict check) | complete | high |
 | INF-TSK-050-005 | Tier-C deferred design notes (4 ADRs + 3 design notes) | todo | normal |
 | INF-TSK-050-006 | (placeholder) Implement ADR-001 CI timeout retry policy | planned | normal |
 | INF-TSK-050-007 | (placeholder) Implement ADR-002 integration branch reset semantics | planned | normal |
