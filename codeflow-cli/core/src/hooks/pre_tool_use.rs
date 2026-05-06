@@ -641,6 +641,33 @@ impl GateCheck {
     fn try_acquire_claim(&self, file_path: &str) -> HookOutput {
         use crate::coordination::types::events::CoordinationEvent;
 
+        // INF-TSK-050-004 pre-merge rework #2 (2026-05-06): the
+        // file_path argument arrives as the absolute path from the
+        // Edit/Write tool input (Claude passes /Volumes/.../foo.rs).
+        // file_scope entries in active-task.json are project-relative
+        // (codeflow-cli/...), so the exact-string match in
+        // is_in_scope (~line 542) NEVER matches absolute paths,
+        // falsely BLOCKING every in-scope edit under scope_policy=hard.
+        // Normalize once at entry; the shadow lets every downstream
+        // call (is_in_scope, acquire_claim, acquire_claim_or_block,
+        // ClaimConflict event emission) see the relative form.
+        // Logic mirrors ProtectionGuard::normalize_path (~line 1752):
+        // strip leading ./ segments, then strip the project_dir
+        // prefix if present.
+        let normalized_path = {
+            let mut p = file_path;
+            while let Some(stripped) = p.strip_prefix("./") {
+                p = stripped;
+            }
+            let proj_prefix = format!("{}/", self.project_dir.to_string_lossy());
+            if p.starts_with(&proj_prefix) {
+                p.strip_prefix(&proj_prefix).unwrap_or(p).to_string()
+            } else {
+                p.to_string()
+            }
+        };
+        let file_path = normalized_path.as_str();
+
         let (scope_policy, file_scope, task_id) = self.read_scope_context();
         let task_id_ref = task_id.as_deref();
 
@@ -5852,6 +5879,174 @@ mod tests {
         assert!(
             matches!(result, HookOutput::Allow),
             "hard mode should allow in-scope edits"
+        );
+    }
+
+    // -- INF-TSK-050-004 pre-merge rework #2 (2026-05-06): normalization --
+    // Coverage for the bug: try_acquire_claim was called with the raw
+    // file_path from tool input, so absolute paths from Edit/Write never
+    // matched project-relative file_scope entries. The normalize_path call
+    // at function entry strips the project_dir prefix so the downstream
+    // is_in_scope match works correctly. handler.project_dir is the test
+    // tempdir, so {project_dir}/src/main.rs normalizes to src/main.rs.
+
+    #[test]
+    fn test_try_acquire_claim_normalizes_absolute_path_under_hard_scope() {
+        use crate::session::active_task::{ActiveTask, set_active_task};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-norm-abs"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            work_type: None,
+            scope_policy: Some("hard".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-norm-abs"),
+            dir.path().to_path_buf(),
+        );
+        // Absolute path -- pre-fix this would always be Block.
+        let abs_path = dir
+            .path()
+            .join("src/main.rs")
+            .to_string_lossy()
+            .into_owned();
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": abs_path})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-norm-abs".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "absolute path of an in-scope file must normalize and pass; got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_try_acquire_claim_blocks_absolute_path_outside_scope_under_hard() {
+        use crate::session::active_task::{ActiveTask, set_active_task};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-norm-oos"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            work_type: None,
+            scope_policy: Some("hard".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-norm-oos"),
+            dir.path().to_path_buf(),
+        );
+        // Out-of-scope file passed as absolute path; must Block, not Allow.
+        let abs_path = dir.path().join("src/lib.rs").to_string_lossy().into_owned();
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": abs_path})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-norm-oos".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Block { .. }),
+            "out-of-scope absolute path must Block under hard, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_try_acquire_claim_handles_dot_slash_prefix() {
+        // normalize_path strips one or more leading ./ segments, so
+        // ./src/main.rs and ././src/main.rs both reduce to src/main.rs.
+        use crate::session::active_task::{ActiveTask, set_active_task};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-norm-dot"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            work_type: None,
+            scope_policy: Some("hard".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-norm-dot"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "./src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-norm-dot".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input).unwrap();
+        assert!(
+            matches!(result, HookOutput::Allow),
+            "./-prefixed in-scope file must normalize and Allow, got: {result:?}"
         );
     }
 
