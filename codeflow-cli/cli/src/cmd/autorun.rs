@@ -4972,6 +4972,41 @@ async fn run_tmux(args: &[&str]) -> Result<bool, codeflow_core::AutorunError> {
     Ok(status.success())
 }
 
+/// Translate a `run_tmux("kill-session", ...)` outcome into the
+/// `TmuxRunner::kill_session` trait return shape.
+///
+/// INF-TSK-050-004 pre-merge rework #2 (2026-05-06): the previous
+/// `RealTmux::kill_session` discarded `run_tmux`'s `Result<bool, ...>`
+/// (`let _ = run_tmux(...)`) and unconditionally returned `Ok(())`.
+/// That meant the worker's AC-01 SIGKILL escalation in
+/// `core/src/autorun/worker.rs` (the
+/// `if let Err(e) = self.tmux.kill_session(...) { escalate_tmux_kill_to_sigkill(...) }`
+/// branch) was dead code in production despite the `FailingTmux`
+/// mock tests passing. Extract the classification into a pure helper
+/// so the production implementation is exactly one line and the
+/// wiring is unit-testable without spawning real tmux processes.
+///
+/// Mapping:
+/// - `Ok(true)` (tmux exited 0)  -> `Ok(())`
+/// - `Ok(false)` (tmux exited non-zero - session missing, daemon dead) -> `Err(WorkerFailed)`
+/// - `Err(e)` (tmux could not be spawned at all)                        -> `Err(e)` propagated
+///
+/// Always-escalating-on-Err is safe: `escalate_tmux_kill_to_sigkill`
+/// is idempotent and guarded by `is_process_named("claude")`, so a
+/// PID-recycle race can never let us SIGKILL the wrong process.
+fn classify_kill_session_result(
+    name: &str,
+    result: Result<bool, codeflow_core::AutorunError>,
+) -> Result<(), codeflow_core::AutorunError> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(codeflow_core::AutorunError::WorkerFailed(format!(
+            "tmux kill-session -t {name}: non-zero exit"
+        ))),
+        Err(e) => Err(e),
+    }
+}
+
 /// Real tmux runner that executes tmux commands via the system.
 struct RealTmux;
 
@@ -5024,8 +5059,12 @@ impl codeflow_core::autorun::TmuxRunner for RealTmux {
     }
 
     async fn kill_session(&self, name: &str) -> Result<(), codeflow_core::AutorunError> {
-        let _ = run_tmux(&["kill-session", "-t", name]).await;
-        Ok(())
+        // INF-TSK-050-004 pre-merge rework #2: propagate run_tmux
+        // result via classify_kill_session_result so the worker's
+        // AC-01 SIGKILL escalation branch can fire when tmux fails.
+        // Previously this discarded run_tmux's Result and always
+        // returned Ok(()), making the escalation dead code.
+        classify_kill_session_result(name, run_tmux(&["kill-session", "-t", name]).await)
     }
 
     async fn has_session(&self, name: &str) -> Result<bool, codeflow_core::AutorunError> {
@@ -6981,6 +7020,49 @@ tasks:
     }
 
     #[test]
+    fn test_kill_session_classify_success_returns_ok() {
+        // INF-TSK-050-004 pre-merge rework #2 - AC-01 production wiring.
+        // Ok(true) (tmux exited 0) must map to Ok(()).
+        let r = classify_kill_session_result("w-success", Ok(true));
+        assert!(r.is_ok(), "Ok(true) should produce Ok(()), got: {r:?}",);
+    }
+
+    #[test]
+    fn test_kill_session_classify_non_zero_returns_err_with_session_name() {
+        // Ok(false) (tmux exited non-zero, e.g. session missing) must
+        // map to Err(WorkerFailed) and include the session name in the
+        // message so the worker log identifies which session failed.
+        let r = classify_kill_session_result("w-nonzero", Ok(false));
+        let e = r.unwrap_err();
+        let msg = e.to_string();
+        assert!(
+            msg.contains("w-nonzero"),
+            "error message must contain session name, got: {msg}",
+        );
+        assert!(
+            msg.contains("non-zero exit"),
+            "error message must describe the failure mode, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn test_kill_session_classify_propagates_run_tmux_error() {
+        // Err(e) (tmux could not be spawned at all) must propagate
+        // unchanged - the worker relies on the original error message
+        // to drive the AC-01 escalation.
+        let fake_err = codeflow_core::AutorunError::WorkerFailed(
+            "tmux: No such file or directory (os error 2)".to_string(),
+        );
+        let r = classify_kill_session_result("w-spawn-fail", Err(fake_err));
+        let e = r.unwrap_err();
+        let msg = e.to_string();
+        assert!(
+            msg.contains("No such file or directory"),
+            "should preserve original error, got: {msg}",
+        );
+    }
+
+    #[test]
     fn test_invoke_creates_session_with_command() {
         // C9b: Verify create_session receives the bash --login script args.
         let dir = tempfile::tempdir().unwrap();
@@ -7028,14 +7110,23 @@ tasks:
     }
 
     #[test]
-    fn test_real_tmux_kill_nonexistent_session_is_ok() {
+    fn test_real_tmux_kill_nonexistent_session_returns_err() {
+        // INF-TSK-050-004 pre-merge rework #2: previously this
+        // asserted Ok(()) because kill_session discarded the
+        // run_tmux result. Now that the result is propagated,
+        // killing a nonexistent tmux session returns Err
+        // (tmux exits non-zero). If tmux is not installed at
+        // all, run_tmux returns Err directly - also Err.
         let tmux = RealTmux;
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(codeflow_core::autorun::TmuxRunner::kill_session(
             &tmux,
             "nonexistent-session-xyz",
         ));
-        assert!(result.is_ok());
+        assert!(
+            result.is_err(),
+            "killing nonexistent session must not return Ok"
+        );
     }
 
     #[test]
