@@ -1,0 +1,109 @@
+# INF-EPC-050 Tier-C Implementations Batch
+# ==========================================
+# Implements the 7 ADRs/design notes authored in INF-TSK-050-005.
+# Also includes one standalone follow-up fix (post-PR gap)
+# and one investigation task (rescue test flake).
+# Total: 9 tasks (8 autorun-eligible ADR/design implementations + 1 investigation).
+#
+# PREREQUISITES (both required before launching this batch):
+#
+#   1. INF-TSK-050-005 PR must be MERGED to main before launching.
+#      Tasks 1-4 depend on the ADR decision records being on main
+#      (workers branch off main; the ADR docs are their design input).
+#
+#   2. INF-TSK-050-014 (worktree session latch fix) must be LANDED on main
+#      before launching this batch. That fix prevents the teammate-
+#      misclassification race condition that occurs under parallel pressure:
+#      without it, this batch's parallel workers may create duplicate worktrees
+#      and misclassify teammates as new team leads.
+#      See: project-management/epics/INF/INF-EPC-050/tasks/INF-TSK-050-014.md
+#
+# The autorun runner cannot enforce cross-session PR-merge ordering — both
+# prerequisites above are human prerequisites. Launch with:
+#   codeflow autorun .codeflow/config/autorun/inf-epc-050-tier-c-implementations.yaml
+#
+# Workflow:
+#   Each worker creates its own branch (feat/* or fix/*) off main.
+#   Each worker PR targets main directly for human review (main is protected).
+#   No integration branch — PRs are independent and reviewed separately.
+#   integration_auto_merge: false — human merges via GitHub UI.
+#
+# Priority notes:
+#   HIGH: TSK-050-006/007/008/009 — architectural decisions (ADR-001 through ADR-004)
+#   NORMAL: TSK-050-011/012/013/015 — design tuning + hardening
+#   LOW: TSK-024-052 — investigation/stabilization
+#
+# Task-to-design-doc mapping:
+#   TSK-050-006 <- ADR-001-ci-timeout-retry.md
+#   TSK-050-007 <- ADR-002-integration-branch-resume-reset.md
+#   TSK-050-008 <- ADR-003-sync-daemon-supervision.md
+#   TSK-050-009 <- ADR-004-reaper-daemonization.md
+#   TSK-050-011 <- DESIGN-006-stage-timeout-polling-cadence.md
+#   TSK-050-012 <- DESIGN-007-periodic-task-stop-signal.md
+#   TSK-050-013 <- DESIGN-005-env-file-hardening.md
+#   TSK-050-015 <- (standalone fix, no ADR)
+#   TSK-024-052 <- (investigation, no ADR)
+# All design docs at: project-management/epics/INF/INF-EPC-050/decisions/
+#
+# Task acceptance criteria:
+#   All tasks below are placeholder stubs (status=planned, acceptance=[]).
+#   cf-planning MUST populate acceptance criteria for each task before the
+#   autorun worker executes it. Workers with empty acceptance arrays will fail
+#   the pre-flight check. Run /cf-plan for each task to populate criteria
+#   before launching this batch.
+#
+# Tasks with empty file_scope (INF-TSK-024-052):
+#   The rescue test flake investigation must determine the affected files first.
+#   Update the task markdown's file_scope before launching.
+
+name: inf-epc-050-tier-c-implementations
+max_workers: 3
+integration_auto_merge: false
+
+tasks:
+  # ADR-001 implementation: CI timeout retry policy
+  # Adds --ci-timeout-secs CLI override + ci_wait_summary ledger event.
+  # Scope: codeflow-cli/core/src/autorun/ci_wait.rs + related.
+  - id: INF-TSK-050-006
+
+  # ADR-002 implementation: Integration branch reset semantics on resume
+  # Adds verify-and-recreate-if-missing fallback at autorun.rs:4222 (run_resume).
+  # Scope: codeflow-cli/core/src/autorun/autorun.rs + related.
+  - id: INF-TSK-050-007
+
+  # ADR-003 implementation: Sync daemon supervision
+  # Orchestrator-as-supervisor with SyncDaemonDied/Restarted/RestartFailed events.
+  # Scope: codeflow-cli/core/src/coordination/sync.rs + orchestrator.rs.
+  - id: INF-TSK-050-008
+
+  # ADR-004 implementation: Reaper daemonization
+  # Adds periodic reaper to sync daemon loop (60s cadence, configurable).
+  # Scope: codeflow-cli/core/src/coordination/sync.rs + stale.rs + config.
+  - id: INF-TSK-050-009
+
+  # DESIGN-006 implementation: Stage timeout polling cadence
+  # Promotes STAGE_TIMEOUT_POLL_INTERVAL_SECS to configurable with [5,300]s range.
+  # Scope: codeflow-cli/core/src/autorun/worker.rs + config.
+  - id: INF-TSK-050-011
+
+  # DESIGN-007 implementation: PeriodicTask util type
+  # Introduces codeflow-cli/core/src/util/periodic.rs with PeriodicTask.
+  # Scope: new file + callers in worker.rs / sync.rs.
+  - id: INF-TSK-050-012
+
+  # DESIGN-005 implementation: Env-file write hardening
+  # Splits write_pid_env_file into fail-loud/best-effort; adds readback verify.
+  # Scope: codeflow-cli/core/src/session/env.rs + hooks/session_start.rs.
+  # Blocked-by: INF-TSK-050-005 (DESIGN-005 doc); already on main post-merge.
+  - id: INF-TSK-050-013
+
+  # Fix: Post-PR auto-save runtime gap
+  # Runtime-agnostic guard in session_end.rs preventing rescue_uncommitted_work
+  # from firing after PF6-TSK-05 (PR pushed) in old-binary sessions.
+  # Scope: codeflow-cli/core/src/hooks/session_end.rs.
+  - id: INF-TSK-050-015
+
+  # Investigation: Rescue test flake — stabilize
+  # Root cause unknown; file_scope to be determined during investigation.
+  # Low priority — does not block other tasks.
+  - id: INF-TSK-024-052

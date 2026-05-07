@@ -73,7 +73,7 @@ This epic consolidates 23 confirmed correctness issues across the autorun and in
 | INF-TSK-050-002 | EPC-050 follow-up planning (analysis + Tier A/B/C task docs + template + agent defs) | complete | high |
 | INF-TSK-050-003 | Tier-A autorun + interactive correctness fixes (chokepoint discipline + DB recovery + final-PR gate) | complete | high |
 | INF-TSK-050-004 | Tier-B autorun worker robustness fixes (tmux/claim retries, protected-branch failures, DB CREATE failures, pre-PR conflict check) | complete | high |
-| INF-TSK-050-005 | Tier-C deferred design notes (4 ADRs + 3 design notes) | todo | normal |
+| INF-TSK-050-005 | Tier-C deferred design notes (4 ADRs + 3 design notes) | in_progress | normal |
 | INF-TSK-050-006 | (placeholder) Implement ADR-001 CI timeout retry policy | planned | normal |
 | INF-TSK-050-007 | (placeholder) Implement ADR-002 integration branch reset semantics | planned | normal |
 | INF-TSK-050-008 | (placeholder) Implement ADR-003 sync daemon supervision | planned | normal |
@@ -81,6 +81,9 @@ This epic consolidates 23 confirmed correctness issues across the autorun and in
 | INF-TSK-050-010 | Hook correctness in worktree mode: scope_policy=hard enforcement + active-task path consolidation | complete | high |
 | INF-TSK-050-011 | (placeholder) Implement DESIGN-006 stage timeout polling cadence | planned | normal |
 | INF-TSK-050-012 | (placeholder) Implement DESIGN-007 periodic-task stop-signal pattern | planned | normal |
+| INF-TSK-050-013 | (placeholder) Implement DESIGN-005 env-file write hardening | planned | normal |
+| INF-TSK-050-014 | Fix worktree session latch bug — teammate misclassification creating duplicate worktree | planned | high |
+| INF-TSK-050-015 | Post-PR auto-save runtime gap — runtime-agnostic guard for old-binary sessions | planned | normal |
 
 ## Analysis
 
