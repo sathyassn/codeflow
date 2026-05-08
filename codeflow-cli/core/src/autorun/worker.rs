@@ -136,14 +136,26 @@ fn worker_log(log_path: &std::path::Path, message: &str) {
 /// the pane process group leader via `list-panes -F '#{pane_pid}'`.
 ///
 /// Returns `None` when:
+/// - `session_name` is empty (defensive boundary check — see below),
 /// - tmux is not installed,
 /// - the session does not exist,
 /// - the output is malformed (not a u32),
 /// - or the resolved PID is 0 (sentinel "no process").
 ///
+/// INF-TSK-050-014 iter-2: an empty `session_name` is never a legitimate
+/// caller input (the single production caller at `worker.rs:2206` passes
+/// the autorun session's tmux name). On macOS, when the test runs inside
+/// an attached tmux session, `tmux list-panes -t ""` returns the
+/// current session's pane PID (exit 0) instead of failing — so a bare
+/// pass-through would leak the host session's PID into a SIGKILL path.
+/// Reject empty input at the boundary.
+///
 /// Pure-ish: spawns `tmux list-panes` synchronously. Tests inject a
 /// `MockPaneResolver` instead of going through tmux.
 pub(crate) fn resolve_tmux_pane_pid(session_name: &str) -> Option<u32> {
+    if session_name.is_empty() {
+        return None;
+    }
     let output = std::process::Command::new("tmux")
         .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
         .stdout(std::process::Stdio::piped())
@@ -5707,9 +5719,15 @@ Read and implement.
 
     #[test]
     fn test_resolve_tmux_pane_pid_returns_none_for_empty_session_name() {
-        // Empty session name: tmux list-panes returns non-zero, function returns None.
+        // INF-TSK-050-014 iter-2: empty session_name is rejected at the
+        // boundary (see resolve_tmux_pane_pid doc comment). The previous
+        // implementation pass-through to `tmux list-panes -t ""` was
+        // environment-dependent on macOS: when the test runs inside an
+        // attached tmux session, tmux interprets "" as the current
+        // session and returns its pane PID (exit 0). The defensive
+        // boundary check makes this assertion environment-independent.
         let pid = resolve_tmux_pane_pid("");
-        assert!(pid.is_none());
+        assert!(pid.is_none(), "empty session name must return None");
     }
 
     #[test]

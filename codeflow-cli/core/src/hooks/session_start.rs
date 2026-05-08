@@ -918,6 +918,19 @@ impl SessionStartInit {
         // If pending count > 0, this caller is a tmux teammate being spawned.
         // If pending count == 0, this is an independent new lead whose PID happens
         // to match (PID reuse) or a genuinely different window.
+        //
+        // INF-TSK-050-014 Layer 2: when the team file is UNREADABLE
+        // (missing, corrupt, or transient I/O failure) AND the lead is
+        // alive (already verified above) AND a session config directory
+        // exists at .state/session/{sid}/pathflow/ (implicit — we just
+        // read pathflow-session-status.json from this directory),
+        // classify as TEAMMATE MODE rather than falling through to NEW
+        // LEAD. This closes the race where a teammate's SessionStart
+        // fires before TeamCreate has been observed by post_tool_use,
+        // and pathflow-team.json does not yet exist. The previous
+        // behaviour (Err(_) -> 0 pending -> NEW LEAD) caused the lead's
+        // teammate to be treated as a new lead and to create a
+        // duplicate worktree.
         let team_file = project_dir
             .join(".state")
             .join("session")
@@ -925,39 +938,50 @@ impl SessionStartInit {
             .join("pathflow")
             .join("pathflow-team.json");
 
-        let pending_tmux_count =
-            match crate::pathflow::file_lock::locked_read_critical(&team_file, 3) {
-                Ok(team) => {
-                    let teammates = team.get("teammates").and_then(|v| v.as_array());
-                    teammates.map_or(0, |arr| {
-                        arr.iter()
-                            .filter(|e| {
-                                let pid = e
-                                    .get("pid")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0);
-                                let bt = e
-                                    .get("backend_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown");
-                                pid == 0 && bt != "in-process"
-                            })
-                            .count()
-                    })
-                }
-                Err(_) => 0, // Unreadable team file -> no pending spawns
-            };
+        match crate::pathflow::file_lock::locked_read_critical(&team_file, 3) {
+            Ok(team) => {
+                let pending_tmux_count =
+                    team.get("teammates")
+                        .and_then(|v| v.as_array())
+                        .map_or(0, |arr| {
+                            arr.iter()
+                                .filter(|e| {
+                                    let pid = e
+                                        .get("pid")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0);
+                                    let bt = e
+                                        .get("backend_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    pid == 0 && bt != "in-process"
+                                })
+                                .count()
+                        });
 
-        if pending_tmux_count > 0 {
-            result.messages.push(format!(
-                "TEAMMATE MODE: {pending_tmux_count} pending tmux spawn(s) detected (lead_pid {lead_pid}, team: {team_name})"
-            ));
-            (Some(existing_sid), true, env_worktree_path)
-        } else {
-            result.messages.push(format!(
-                "NEW LEAD: lead_pid {lead_pid} alive but no pending tmux spawns (team: {team_name}) — independent session"
-            ));
-            (None, false, None)
+                if pending_tmux_count > 0 {
+                    result.messages.push(format!(
+                        "TEAMMATE MODE: {pending_tmux_count} pending tmux spawn(s) detected (lead_pid {lead_pid}, team: {team_name})"
+                    ));
+                    (Some(existing_sid), true, env_worktree_path)
+                } else {
+                    result.messages.push(format!(
+                        "NEW LEAD: lead_pid {lead_pid} alive but no pending tmux spawns (team: {team_name}) — independent session"
+                    ));
+                    (None, false, None)
+                }
+            }
+            Err(_) => {
+                // INF-TSK-050-014 Layer 2: lead alive AND team file
+                // unreadable AND session config dir exists (implicit).
+                // Classify as TEAMMATE MODE — the previous fall-through
+                // to NEW LEAD caused duplicate worktrees in the
+                // teammate-before-TeamCreate race window.
+                result.messages.push(format!(
+                    "TEAMMATE MODE (fallback): lead_pid {lead_pid} alive but team file unreadable (team: {team_name}) — joining existing session"
+                ));
+                (Some(existing_sid), true, env_worktree_path)
+            }
         }
     }
 
@@ -3538,6 +3562,286 @@ mod tests {
             "no status file + startup should return None (new lead)"
         );
         assert!(!team_mode);
+    }
+
+    // INF-TSK-050-014 Layer 2 tests --------------------------------------
+
+    #[test]
+    #[serial(env_vars)]
+    fn test_handle_stale_cleanup_layer2_fallback_team_file_missing() {
+        // INF-TSK-050-014 AC-02 / AC-05 (fallback path): when the
+        // pathflow-session-status.json shows lead alive but
+        // pathflow-team.json is MISSING (the original bug), Layer 2
+        // classifies as TEAMMATE MODE rather than NEW LEAD. Pre-Layer-2
+        // the Err(_) arm fell through to pending_count=0 and returned
+        // (None, false, None) — creating a duplicate worktree.
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7layer2fallback00000");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // Create active session-status with alive lead_pid AND team config.
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        let lead_pid = std::process::id();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-in-progress",
+                "team_name": "fallback-team",
+                "lead_pid": lead_pid,
+                "updated_at": "2026-03-10T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let config_dir = home
+            .path()
+            .join(".claude")
+            .join("teams")
+            .join("fallback-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"members":[]}"#).unwrap();
+
+        // pathflow-team.json INTENTIONALLY MISSING.
+        assert!(
+            !pathflow_dir.join("pathflow-team.json").exists(),
+            "precondition: team file absent"
+        );
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let (existing, team_mode, _env_wt) =
+            init.handle_stale_cleanup(dir.path(), &runtime_dir, "startup", &mut result);
+
+        // AC-02 / AC-05: TEAMMATE MODE, not NEW LEAD.
+        assert_eq!(
+            existing.as_ref(),
+            Some(&sid),
+            "Layer 2: missing team file + alive lead = TEAMMATE MODE (existing SID returned)"
+        );
+        assert!(
+            team_mode,
+            "Layer 2: missing team file + alive lead = team_mode=true"
+        );
+    }
+
+    #[test]
+    #[serial(env_vars)]
+    fn test_handle_stale_cleanup_layer2_no_status_dir_remains_new_lead() {
+        // INF-TSK-050-014 AC-05 (negative leg): without the session
+        // config dir / status file, Layer 2 does NOT trigger — the
+        // existing "no status file + startup" path still returns
+        // (None, false, None).
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7layer2nostatus0000");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // No .state/session/{sid}/pathflow/ at all.
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let (existing, team_mode, _env_wt) =
+            init.handle_stale_cleanup(dir.path(), &runtime_dir, "startup", &mut result);
+
+        assert!(
+            existing.is_none(),
+            "no session config dir = NEW LEAD (Layer 2 must NOT fire)"
+        );
+        assert!(!team_mode);
+    }
+
+    #[test]
+    #[serial(env_vars)]
+    fn test_handle_stale_cleanup_layer2_corrupt_team_file_classified_teammate() {
+        // INF-TSK-050-014 AC-02: a corrupt (unparseable) team file with
+        // alive lead_pid also classifies as TEAMMATE MODE. The reader
+        // path treats locked_read_critical Err(_) uniformly: missing,
+        // unreadable, or unparseable file all defer to TEAMMATE MODE.
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7layer2corrupt00000");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        let lead_pid = std::process::id();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-in-progress",
+                "team_name": "corrupt-team",
+                "lead_pid": lead_pid,
+                "updated_at": "2026-03-10T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // Corrupt team file: invalid JSON.
+        fs::write(pathflow_dir.join("pathflow-team.json"), b"{not json").unwrap();
+        let config_dir = home
+            .path()
+            .join(".claude")
+            .join("teams")
+            .join("corrupt-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"members":[]}"#).unwrap();
+
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+
+        let (existing, team_mode, _env_wt) =
+            init.handle_stale_cleanup(dir.path(), &runtime_dir, "startup", &mut result);
+
+        assert_eq!(
+            existing.as_ref(),
+            Some(&sid),
+            "corrupt team file + alive lead = TEAMMATE MODE"
+        );
+        assert!(team_mode, "corrupt team file + alive lead = team_mode=true");
+    }
+
+    #[test]
+    #[serial(env_vars)]
+    fn test_handle_stale_cleanup_layer2_regression_full_failure_sequence() {
+        // INF-TSK-050-014 AC-04: simulate the full failure sequence
+        // documented in project_pid_detection_worktree_latch_bug.md.
+        // Pre-fix: cf-documentation's SessionStart was misclassified as
+        // NEW LEAD → duplicate worktree. With Layer 1 + Layer 2,
+        // cf-documentation observes the file (Layer 1 created it on the
+        // cf-security spawn) and Layer 2 covers the case where the file
+        // is somehow still missing (defense-in-depth).
+        //
+        // Steps:
+        // (a) lead SessionStart writes pathflow-session-status.json
+        //     with lead_pid (alive)
+        // (b) Layer 1: cf-security spawn creates pathflow-team.json
+        //     even though TeamCreate has not fired — this test directly
+        //     calls handle_teammate_spawn to mirror that
+        // (c) cf-documentation SessionStart fires
+        // (d) handle_stale_cleanup classifies as TEAMMATE MODE — does
+        //     NOT return NEW LEAD
+        let _validator_guard = crate::session::liveness::override_pid_validator_for_tests(
+            crate::session::process::is_process_alive,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path().join(".state").join("runtime");
+
+        let sid = SessionId::new_unchecked("ses-01jq7regressionseq00000");
+        session::write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // Step (a): lead writes pathflow-session-status.json.
+        let pathflow_dir = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid.as_str())
+            .join("pathflow");
+        fs::create_dir_all(&pathflow_dir).unwrap();
+        let lead_pid = std::process::id();
+        fs::write(
+            pathflow_dir.join("pathflow-session-status.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session_id": sid.as_str(),
+                "status": "pf-in-progress",
+                "team_name": "regression-team",
+                "lead_pid": lead_pid,
+                "updated_at": "2026-03-10T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let config_dir = home
+            .path()
+            .join(".claude")
+            .join("teams")
+            .join("regression-team");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.json"), r#"{"members":[]}"#).unwrap();
+
+        // Step (b): cf-security spawn fires Layer 1; pathflow-team.json
+        // is created with cf-security entry.
+        crate::hooks::post_tool_use::handle_teammate_spawn("cf-security", &pathflow_dir, None)
+            .unwrap();
+        assert!(
+            pathflow_dir.join("pathflow-team.json").exists(),
+            "Layer 1 must have created pathflow-team.json"
+        );
+
+        // Step (c) + (d): cf-documentation SessionStart fires; the
+        // existing teammate detection path applies. Simulate "19
+        // minutes elapse" by simply invoking handle_stale_cleanup —
+        // the chokepoint validator override keeps the test
+        // deterministic regardless of wall-clock time.
+        let init = make_init(home.path().to_path_buf());
+        let mut result = InitResult {
+            session_id: SessionId::new_unchecked("ses-unknown"),
+            is_resume: false,
+            is_teammate: false,
+            env_vars: HashMap::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        let (existing, team_mode, _env_wt) =
+            init.handle_stale_cleanup(dir.path(), &runtime_dir, "startup", &mut result);
+
+        assert_eq!(
+            existing.as_ref(),
+            Some(&sid),
+            "AC-04: cf-documentation must observe TEAMMATE MODE, not NEW LEAD"
+        );
+        assert!(
+            team_mode,
+            "AC-04: team_mode must be true (pending tmux entry from Layer 1)"
+        );
     }
 
     #[test]

@@ -789,9 +789,21 @@ pub struct TeammateSpawnMeta<'a> {
 ///
 /// Mirrors Go's `HandleTeammateSpawn` in `sentinel/stage.go`.
 ///
+/// INF-TSK-050-014 Layer 1: when `pathflow-team.json` is missing (first
+/// teammate spawn before `TeamCreate`), this function creates it with an
+/// empty teammates array before falling through to the locked
+/// read-modify-write that adds the new teammate entry. This closes the
+/// race window where a later teammate's `SessionStart` reads a missing
+/// team file and is misclassified as a NEW LEAD (creating a duplicate
+/// worktree). Layer 3 surfaces write failures as `HookError::Config`
+/// instead of returning `Allow`, so an operator can diagnose the
+/// underlying I/O / permission failure.
+///
 /// # Errors
 ///
-/// Returns `HookError` on I/O or serialization failures.
+/// Returns `HookError::Config` when the initial `pathflow-team.json`
+/// write fails (Layer 3 — loud failure). Returns `HookError` on
+/// subsequent I/O or serialization failures inside `locked_rmw`.
 pub fn handle_teammate_spawn(
     agent_name: &str,
     session_dir: &Path,
@@ -800,8 +812,15 @@ pub fn handle_teammate_spawn(
     let team_file_path = session_dir.join("pathflow-team.json");
 
     if !team_file_path.exists() {
-        // pathflow-team.json doesn't exist yet -- skip silently.
-        return Ok(HookOutput::Allow);
+        // INF-TSK-050-014 Layer 1: create an initial pathflow-team.json so
+        // a concurrent teammate's SessionStart can observe the file and
+        // route through TEAMMATE MODE. Falls through to locked_rmw below
+        // so the teammate entry is added by the same code path used when
+        // the file already exists. Write failure is surfaced as
+        // HookError::Config (Layer 3) so the operator can diagnose the
+        // underlying permission / I/O failure rather than silently
+        // continuing with a missing team file.
+        create_initial_team_file(session_dir, &team_file_path)?;
     }
 
     let agent_name = agent_name.to_string();
@@ -850,6 +869,88 @@ pub fn handle_teammate_spawn(
     .map_err(|e| HookError::Config(format!("pathflow-team.json locked_rmw failed: {e}")))?;
 
     Ok(HookOutput::Allow)
+}
+
+/// INF-TSK-050-014 Layer 1: create an initial `pathflow-team.json` for the
+/// race window between the first teammate spawn and `TeamCreate`.
+///
+/// The file is written with an empty `teammates` array. The
+/// `codeflow_session_id` is derived from `session_dir` (the parent
+/// directory's basename — `session_dir = .../session/{sid}/pathflow`).
+/// The `team_name` is derived from `pathflow-session-status.json` if
+/// the lead has already written it (post-`TeamCreate`); otherwise it
+/// defaults to an empty string and a later `handle_team_create` call
+/// will overwrite the file with the correct team_name.
+///
+/// Schema-compatible with `handle_team_create`'s write so a later
+/// `TeamCreate` overwriting this file does not corrupt downstream
+/// readers.
+///
+/// # Errors
+///
+/// Returns `HookError::Config` when the write fails (Layer 3). The error
+/// message includes the target path and the OS error reason so an
+/// operator can distinguish a permission failure from a disk-full
+/// failure.
+fn create_initial_team_file(session_dir: &Path, team_file_path: &Path) -> Result<(), HookError> {
+    let session_id = session_dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let team_name = read_team_name_from_status(session_dir);
+    let lead_pid = crate::session::process::get_claude_code_pid();
+    let team = PathflowTeamInfo {
+        team_name,
+        codeflow_session_id: session_id,
+        lead_pid,
+        teammate_spawned: false,
+        created_at: crate::util::now_rfc3339(),
+        last_spawn_name: None,
+        teammates: vec![],
+    };
+
+    let team_json = serde_json::to_string_pretty(&team).map_err(|e| {
+        HookError::Config(format!(
+            "pathflow-team.json marshal failed at {}: {e}",
+            team_file_path.display()
+        ))
+    })?;
+
+    fs::create_dir_all(session_dir).map_err(|e| {
+        HookError::Config(format!(
+            "pathflow-team.json create_dir_all failed at {}: {e}",
+            session_dir.display()
+        ))
+    })?;
+
+    atomic_write_file(team_file_path, team_json.as_bytes()).map_err(|e| {
+        HookError::Config(format!(
+            "pathflow-team.json write failed at {}: {e}",
+            team_file_path.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Best-effort read of `team_name` from `pathflow-session-status.json` in
+/// the same session directory. Returns an empty string when the file is
+/// missing, unreadable, or the field is absent — Layer 1 falls back to
+/// "" in that case and a later `handle_team_create` overwrites the file
+/// with the canonical team_name.
+fn read_team_name_from_status(session_dir: &Path) -> String {
+    let status_path = session_dir.join("pathflow-session-status.json");
+    let Ok(bytes) = fs::read(&status_path) else {
+        return String::new();
+    };
+    let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return String::new();
+    };
+    val.get("team_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1912,14 +2013,165 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_teammate_spawn_no_team_file() {
+    fn test_handle_teammate_spawn_no_team_file_creates_file() {
+        // INF-TSK-050-014 AC-01: when pathflow-team.json is missing,
+        // Layer 1 creates it with an empty teammates array, then falls
+        // through to locked_rmw which adds the new teammate entry.
         let dir = tempfile::tempdir().unwrap();
         let session_dir = dir.path().join("pathflow");
         fs::create_dir_all(&session_dir).unwrap();
 
-        // No pathflow-team.json exists.
+        // No pathflow-team.json exists initially.
+        let team_file = session_dir.join("pathflow-team.json");
+        assert!(!team_file.exists(), "precondition: team file absent");
+
         let result = handle_teammate_spawn("cf-review", &session_dir, None).unwrap();
         assert!(matches!(result, HookOutput::Allow));
+
+        // AC-01: file MUST be created by Layer 1.
+        assert!(
+            team_file.exists(),
+            "Layer 1: pathflow-team.json must be created when missing"
+        );
+
+        // The teammate entry MUST be present (locked_rmw fall-through).
+        let data = fs::read_to_string(&team_file).unwrap();
+        let team: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert!(
+            team.teammate_spawned,
+            "teammate_spawned=true after Layer 1 + locked_rmw"
+        );
+        assert_eq!(team.last_spawn_name.as_deref(), Some("cf-review"));
+        assert_eq!(team.teammates.len(), 1, "exactly one teammate entry");
+        assert_eq!(team.teammates[0].name, "cf-review");
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_layer1_idempotent_with_team_create() {
+        // INF-TSK-050-014 AC-01 / Integration Requirement #1: Layer 1
+        // and handle_team_create write schema-compatible files. If
+        // Layer 1 writes first and handle_team_create overwrites later
+        // (the "TeamCreate after first spawn" case), the resulting file
+        // is still a valid PathflowTeamInfo and the next
+        // handle_teammate_spawn call adds the new teammate entry on top
+        // of handle_team_create's empty teammates array.
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session").join("ses-z").join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        // Layer 1 fires first (teammate spawn before TeamCreate).
+        handle_teammate_spawn("cf-security", &session_dir, None).unwrap();
+        let team_file = session_dir.join("pathflow-team.json");
+        assert!(team_file.exists());
+
+        // TeamCreate fires later — overwrites with proper team_name.
+        handle_team_create("post-create-team", &session_dir, "ses-z").unwrap();
+        let data = fs::read_to_string(&team_file).unwrap();
+        let team: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(team.team_name, "post-create-team");
+        // handle_team_create resets teammates to empty — confirmed
+        // schema-compatible (Layer 1 write didn't break parsing).
+        assert!(team.teammates.is_empty());
+
+        // Next teammate spawn appends to the now-correctly-named file.
+        handle_teammate_spawn("cf-development", &session_dir, None).unwrap();
+        let data = fs::read_to_string(&team_file).unwrap();
+        let team: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(team.team_name, "post-create-team");
+        assert_eq!(team.teammates.len(), 1);
+        assert_eq!(team.teammates[0].name, "cf-development");
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_layer1_uses_session_id_from_dir() {
+        // INF-TSK-050-014 AC-01: Layer 1 derives codeflow_session_id from
+        // the session_dir parent's basename
+        // (.../session/{sid}/pathflow -> sid).
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-01jq7layer1sid000000000";
+        let session_dir = dir.path().join("session").join(sid).join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let result = handle_teammate_spawn("cf-development", &session_dir, None).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(session_dir.join("pathflow-team.json")).unwrap();
+        let team: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(
+            team.codeflow_session_id, sid,
+            "codeflow_session_id must come from session_dir parent basename"
+        );
+    }
+
+    #[test]
+    fn test_handle_teammate_spawn_layer1_reads_team_name_from_status() {
+        // INF-TSK-050-014 AC-01: Layer 1 reads team_name from
+        // pathflow-session-status.json when present (lead has already
+        // written it post-TeamCreate but pathflow-team.json was lost or
+        // not yet observed).
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session").join("ses-x").join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("pathflow-session-status.json"),
+            r#"{"status":"pf-in-progress","team_name":"alpha-team"}"#,
+        )
+        .unwrap();
+
+        let result = handle_teammate_spawn("cf-review", &session_dir, None).unwrap();
+        assert!(matches!(result, HookOutput::Allow));
+
+        let data = fs::read_to_string(session_dir.join("pathflow-team.json")).unwrap();
+        let team: PathflowTeamInfo = serde_json::from_str(&data).unwrap();
+        assert_eq!(
+            team.team_name, "alpha-team",
+            "team_name should be derived from status file when present"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_handle_teammate_spawn_layer3_loud_failure_on_write_error() {
+        // INF-TSK-050-014 AC-03: when the initial team file write fails
+        // (e.g., read-only session_dir), handle_teammate_spawn returns
+        // HookError::Config (Layer 3 — loud failure) with a message
+        // that names the path and the OS error reason. The previous
+        // bare `return Ok(HookOutput::Allow)` swallowed the failure.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session").join("ses-y").join("pathflow");
+        fs::create_dir_all(&session_dir).unwrap();
+        // Make session_dir read-only so atomic_write_file fails.
+        let mut perms = fs::metadata(&session_dir).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&session_dir, perms).unwrap();
+
+        let result = handle_teammate_spawn("cf-review", &session_dir, None);
+
+        // Restore permissions BEFORE the assertion so tempdir cleanup works
+        // even when the test fails.
+        let mut perms = fs::metadata(&session_dir).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&session_dir, perms).unwrap();
+
+        match result {
+            Err(HookError::Config(msg)) => {
+                assert!(
+                    msg.contains("pathflow-team.json"),
+                    "error message must name the file: {msg}"
+                );
+                assert!(
+                    msg.contains(&session_dir.display().to_string())
+                        || msg.contains("write failed"),
+                    "error message must include path or write context: {msg}"
+                );
+            }
+            Err(other) => {
+                panic!("expected HookError::Config (Layer 3 loud failure), got: {other:?}")
+            }
+            Ok(out) => panic!("Layer 3: write error must NOT return Allow silently, got: {out:?}"),
+        }
     }
 
     #[test]
