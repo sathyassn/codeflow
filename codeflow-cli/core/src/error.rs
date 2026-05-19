@@ -139,6 +139,15 @@ pub enum SessionError {
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("EnvFileWriteFailed: cannot write env file at {}: {reason}", path.display())]
+    EnvFileWriteFailed {
+        path: std::path::PathBuf,
+        reason: String,
+    },
+
+    #[error("EnvFileMissing: cannot resolve session env at {}", path.display())]
+    EnvFileMissing { path: std::path::PathBuf },
 }
 
 impl From<DbError> for SessionError {

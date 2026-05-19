@@ -50,6 +50,32 @@ pub fn read_env_file(state_dir: &Path) -> Result<Option<EnvFile>, SessionError> 
     parse_env_content(&content).map(Some)
 }
 
+/// Verify that an env file at `state_dir` exists and is readable.
+///
+/// Per DESIGN-005, this is called immediately after every load-bearing
+/// SessionStart write so that a rare silent-success-but-empty-file failure
+/// (network or container layered filesystem) is also caught.
+///
+/// Maps `read_env_file(state_dir) == Ok(None)` (absent file) to
+/// `SessionError::EnvFileMissing { path: state_dir/codeflow-env.sh }`.
+/// Any other read or parse error propagates as the underlying
+/// `SessionError` variant (`Io` / `InvalidSessionId`).
+///
+/// # Errors
+///
+/// - `SessionError::EnvFileMissing` if the file does not exist after the
+///   load-bearing write.
+/// - `SessionError::Io` if the file exists but cannot be read.
+/// - `SessionError::InvalidSessionId` if the file content fails to parse.
+pub fn verify_env_file_readable(state_dir: &Path) -> Result<EnvFile, SessionError> {
+    match read_env_file(state_dir)? {
+        Some(env) => Ok(env),
+        None => Err(SessionError::EnvFileMissing {
+            path: state_dir.join(ENV_FILENAME),
+        }),
+    }
+}
+
 /// Write a `codeflow-env.sh` file atomically using tmp+rename.
 ///
 /// # Errors
@@ -71,16 +97,43 @@ pub fn write_env_file(
 ///
 /// # Errors
 ///
-/// Returns `SessionError::Io` on write or rename failure.
+/// - `SessionError::EnvFileWriteFailed` when `worktree_path` is `Some(p)` and
+///   `p` contains a single-quote (`'`) character. The file is written as
+///   shell single-quoted exports (`export VAR='...'`); a single-quote in the
+///   value breaks the quoting, producing a syntactically invalid script and
+///   potentially injecting shell commands when sourced. Mirrors the iter-2
+///   protection on the per-PID writer (`write_pid_env_file_required`); see
+///   DEV Report Deviation #7 in `INF-TSK-050-013.md`.
+/// - `SessionError::Io` on write or rename failure.
 pub fn write_env_file_with_worktree(
     state_dir: &Path,
     session_id: &SessionId,
     project_root: &str,
     worktree_path: Option<&str>,
 ) -> Result<PathBuf, SessionError> {
+    let target = state_dir.join(ENV_FILENAME);
+
+    // SEC follow-up (INF-TSK-050-013 rework iter 3): reject single-quote in
+    // worktree_path before any I/O. Same threat model as the per-PID
+    // writer — the file is sourced by shell hooks and a single-quote in
+    // the value breaks the export's single-quoted string. Validate
+    // BEFORE create_dir_all / tmp file create so no on-disk state is
+    // left after a rejected write. session_id and project_root are
+    // produced by trusted code paths (ULID generator + project_dir name)
+    // and are not subject to this risk; only the user-derived
+    // worktree_path requires validation here.
+    if let Some(wt_path) = worktree_path {
+        if wt_path.contains('\'') {
+            return Err(SessionError::EnvFileWriteFailed {
+                path: target,
+                reason: "worktree path contains single-quote character; refusing to write"
+                    .to_string(),
+            });
+        }
+    }
+
     fs::create_dir_all(state_dir)?;
 
-    let target = state_dir.join(ENV_FILENAME);
     let tmp_path = state_dir.join(format!(".{ENV_FILENAME}.tmp"));
 
     let mut content = format!(
@@ -129,20 +182,112 @@ pub fn remove_env_file(state_dir: &Path) -> Result<(), SessionError> {
 const PID_ENV_PREFIX: &str = "codeflow-env-";
 const PID_ENV_SUFFIX: &str = ".sh";
 
-/// Write a per-PID env file with the worktree path.
+/// Fail-loud per-PID env file writer (DESIGN-005 split: load-bearing call sites).
 ///
-/// Creates `{runtime_dir}/codeflow-env-{pid}.sh` containing the
-/// `CODEFLOW_WORKTREE_PATH` export. Each Claude Code process gets its own
-/// file, avoiding the shared-file overwrite problem with parallel sessions.
+/// Creates `{runtime_dir}/shared/codeflow-env-{pid}.sh` containing the
+/// `CODEFLOW_WORKTREE_PATH` export, using atomic tmp+rename for crash
+/// safety. Returns the final file path on success.
 ///
-/// Non-fatal: errors are silently ignored (caller should use `let _ =`).
-pub fn write_pid_env_file(runtime_dir: &Path, pid: u32, worktree_path: &str) {
+/// Load-bearing SessionStart writes MUST use this function so that
+/// `ENOSPC` / `EACCES` / `EROFS` failures surface immediately as a typed
+/// `SessionError::EnvFileWriteFailed { path, reason }` instead of as a
+/// vague "file not found" several hook calls later. Cleanup / migration
+/// sites should use [`try_write_pid_env_file`] instead.
+///
+/// # Errors
+///
+/// - `SessionError::EnvFileWriteFailed` when `worktree_path` contains a
+///   single-quote (`'`) character. The file is written as a shell
+///   single-quoted export (`export VAR='...'`); a single-quote in the
+///   value breaks the quoting, producing a syntactically invalid script
+///   and potentially injecting shell commands when sourced. Validated at
+///   the writer rather than upstream so the back-compat alias and the
+///   best-effort variant inherit the same protection.
+/// - `SessionError::EnvFileWriteFailed` when `fs::create_dir_all`,
+///   `File::create`, `write_all`, `sync_all`, or `fs::rename` returns
+///   an OS error. The variant carries the resolved final path and the
+///   OS error string for diagnostics. Per DESIGN-005, NO retries are
+///   attempted — the underlying failure modes are not retriable.
+pub fn write_pid_env_file_required(
+    runtime_dir: &Path,
+    pid: u32,
+    worktree_path: &str,
+) -> Result<PathBuf, SessionError> {
     let shared = runtime_dir.join("shared");
-    let _ = fs::create_dir_all(&shared);
     let filename = format!("{PID_ENV_PREFIX}{pid}{PID_ENV_SUFFIX}");
-    let path = shared.join(filename);
+    let target = shared.join(&filename);
+    let tmp = shared.join(format!(".{filename}.tmp"));
+
+    // SEC #1 (INF-TSK-050-013 rework iter 1): reject single-quote in
+    // worktree_path before any I/O. The file is written as
+    // `export CODEFLOW_WORKTREE_PATH='{worktree_path}'`, which is a
+    // shell single-quoted string. A single-quote inside the value
+    // breaks the quoting (e.g., `/foo'bar` produces
+    // `export ...='/foo'bar'` — `/foo` quoted, then bare `bar`, then
+    // an unterminated quote). Sourcing that file would either fail to
+    // parse or, worse, execute injected shell commands. Refuse rather
+    // than silently produce a malformed export. Fail loud per
+    // DESIGN-005's philosophy. The best-effort alias inherits this
+    // check because it delegates to this function.
+    if worktree_path.contains('\'') {
+        return Err(SessionError::EnvFileWriteFailed {
+            path: target,
+            reason: "worktree path contains single-quote character; refusing to write".to_string(),
+        });
+    }
     let content = format!("export CODEFLOW_WORKTREE_PATH='{worktree_path}'\n");
-    let _ = fs::write(&path, content);
+
+    fs::create_dir_all(&shared).map_err(|e| SessionError::EnvFileWriteFailed {
+        path: target.clone(),
+        reason: format!("create_dir_all({}): {e}", shared.display()),
+    })?;
+
+    // Scope the tmp file handle so it is closed before rename.
+    {
+        let mut file = fs::File::create(&tmp).map_err(|e| SessionError::EnvFileWriteFailed {
+            path: target.clone(),
+            reason: format!("create tmp({}): {e}", tmp.display()),
+        })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| SessionError::EnvFileWriteFailed {
+                path: target.clone(),
+                reason: format!("write tmp({}): {e}", tmp.display()),
+            })?;
+        file.sync_all()
+            .map_err(|e| SessionError::EnvFileWriteFailed {
+                path: target.clone(),
+                reason: format!("sync tmp({}): {e}", tmp.display()),
+            })?;
+    }
+
+    fs::rename(&tmp, &target).map_err(|e| SessionError::EnvFileWriteFailed {
+        path: target.clone(),
+        reason: format!("rename({} -> {}): {e}", tmp.display(), target.display()),
+    })?;
+
+    Ok(target)
+}
+
+/// Best-effort per-PID env file writer (DESIGN-005 split: cleanup / migration).
+///
+/// Same write semantics as [`write_pid_env_file_required`] but discards
+/// all errors. Use this from cleanup, migration, and post-PR teardown
+/// paths where a missing per-PID file is acceptable. Load-bearing
+/// SessionStart writes MUST use the `_required` variant instead.
+pub fn try_write_pid_env_file(runtime_dir: &Path, pid: u32, worktree_path: &str) {
+    let _ = write_pid_env_file_required(runtime_dir, pid, worktree_path);
+}
+
+/// Backward-compatible best-effort writer.
+///
+/// Delegates to [`try_write_pid_env_file`]. Retained as a no-rename shim
+/// so out-of-scope callers (the interactive CLI, helpers, existing
+/// tests) continue to compile. New code should call
+/// [`write_pid_env_file_required`] (load-bearing) or
+/// [`try_write_pid_env_file`] (best-effort) directly so the intent is
+/// explicit at the call site.
+pub fn write_pid_env_file(runtime_dir: &Path, pid: u32, worktree_path: &str) {
+    try_write_pid_env_file(runtime_dir, pid, worktree_path);
 }
 
 /// Read `CODEFLOW_WORKTREE_PATH` from a per-PID env file.
@@ -845,5 +990,331 @@ mod tests {
         .unwrap();
         let result = read_pid_env_file(&runtime, 88);
         assert_eq!(result, Some("/wt".to_string()));
+    }
+
+    // -----------------------------------------------------------------
+    // DESIGN-005 / INF-TSK-050-013 AC-06 tests
+    // -----------------------------------------------------------------
+
+    /// AC-06 (b): verify_env_file_readable returns EnvFileMissing on absent
+    /// file. The function's contract is: Ok(None) from read_env_file becomes
+    /// SessionError::EnvFileMissing with the resolved path.
+    #[test]
+    fn test_verify_env_file_readable_missing_returns_envfilemissing() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path();
+
+        let result = verify_env_file_readable(state_dir);
+        match result {
+            Err(crate::error::SessionError::EnvFileMissing { path }) => {
+                assert_eq!(
+                    path,
+                    state_dir.join(ENV_FILENAME),
+                    "EnvFileMissing path must be the resolved env file path"
+                );
+                let msg = crate::error::SessionError::EnvFileMissing { path }.to_string();
+                assert!(
+                    msg.contains("EnvFileMissing"),
+                    "Display impl must name the variant: got {msg}"
+                );
+            }
+            other => panic!("expected SessionError::EnvFileMissing, got: {other:?}"),
+        }
+    }
+
+    /// AC-06 (b) cont.: verify_env_file_readable returns the parsed EnvFile
+    /// when the file is present and well-formed.
+    #[test]
+    fn test_verify_env_file_readable_present_returns_envfile() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = SessionId::new_unchecked("ses-01jq7verifyreadable12345");
+
+        write_env_file(dir.path(), &sid, "codeflow").unwrap();
+
+        let env = verify_env_file_readable(dir.path()).expect("env file is present");
+        assert_eq!(env.session_id, sid);
+        assert_eq!(env.project_root, "codeflow");
+    }
+
+    /// AC-06 (a): write_pid_env_file_required returns EnvFileWriteFailed when
+    /// the target shared/ directory cannot be created or written to. We
+    /// reproduce the failure deterministically without chmod 000 (which
+    /// behaves differently in CI / on root-equivalent users): place a
+    /// REGULAR FILE at the path where the `shared/` directory should be,
+    /// so fs::create_dir_all fails with "not a directory".
+    #[test]
+    fn test_write_pid_env_file_required_returns_envfilewritefailed_on_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path();
+        // Plant a regular file where create_dir_all expects a directory.
+        // This causes create_dir_all("shared") to fail deterministically.
+        fs::write(runtime_dir.join("shared"), b"not-a-dir").unwrap();
+
+        let result = write_pid_env_file_required(runtime_dir, 4242, "/wt/path");
+        match result {
+            Err(crate::error::SessionError::EnvFileWriteFailed { path, reason }) => {
+                assert_eq!(
+                    path,
+                    runtime_dir.join("shared").join("codeflow-env-4242.sh"),
+                    "error path must point at the resolved target file"
+                );
+                assert!(
+                    !reason.is_empty(),
+                    "reason must be populated with the OS error string"
+                );
+                let msg =
+                    crate::error::SessionError::EnvFileWriteFailed { path, reason }.to_string();
+                assert!(
+                    msg.contains("EnvFileWriteFailed"),
+                    "Display impl must name the variant: got {msg}"
+                );
+            }
+            other => panic!("expected SessionError::EnvFileWriteFailed, got: {other:?}"),
+        }
+    }
+
+    /// AC-06 (a) cont.: write_pid_env_file_required succeeds on the happy
+    /// path and returns the resolved file path.
+    #[test]
+    fn test_write_pid_env_file_required_success_returns_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_pid_env_file_required(dir.path(), 7777, "/some/worktree")
+            .expect("happy path must succeed");
+        assert_eq!(
+            path,
+            dir.path().join("shared").join("codeflow-env-7777.sh"),
+            "returned path must be the final target file"
+        );
+        assert!(path.exists(), "target file must be present after write");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("export CODEFLOW_WORKTREE_PATH='/some/worktree'"),
+            "file content must include the worktree export: got {content}"
+        );
+    }
+
+    /// AC-06 (d): try_write_pid_env_file returns () silently on write error.
+    /// Best-effort guarantee: the function MUST NOT panic and MUST NOT
+    /// propagate any error, even when the underlying write fails. We
+    /// reproduce the same failure mode as (a) and assert the function
+    /// returns without observable effect.
+    #[test]
+    fn test_try_write_pid_env_file_silent_on_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path();
+        fs::write(runtime_dir.join("shared"), b"not-a-dir").unwrap();
+
+        // Returns (), does NOT panic, does NOT propagate.
+        try_write_pid_env_file(runtime_dir, 9999, "/wt/path");
+
+        // Verify no file was created (best-effort write failed silently).
+        assert!(
+            !runtime_dir
+                .join("shared")
+                .join("codeflow-env-9999.sh")
+                .exists(),
+            "no per-PID file should exist after a failed best-effort write"
+        );
+    }
+
+    /// AC-06 (d) cont.: try_write_pid_env_file succeeds silently on the
+    /// happy path. We assert by reading back via read_pid_env_file rather
+    /// than inspecting filesystem internals.
+    #[test]
+    fn test_try_write_pid_env_file_silent_success_writes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        try_write_pid_env_file(dir.path(), 5555, "/another/worktree");
+        let readback = read_pid_env_file(dir.path(), 5555);
+        assert_eq!(
+            readback,
+            Some("/another/worktree".to_string()),
+            "happy-path best-effort write must produce a readable file"
+        );
+    }
+
+    /// Cross-check: the legacy `write_pid_env_file` alias preserves the
+    /// "errors silently ignored" contract documented in cleanup-path
+    /// callers (helpers.rs, interactive.rs). We use the same forced
+    /// failure as (a) / (d).
+    #[test]
+    fn test_legacy_write_pid_env_file_alias_remains_best_effort() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path();
+        fs::write(runtime_dir.join("shared"), b"not-a-dir").unwrap();
+
+        // Must not panic and must not propagate.
+        write_pid_env_file(runtime_dir, 1111, "/wt");
+        assert!(
+            !runtime_dir
+                .join("shared")
+                .join("codeflow-env-1111.sh")
+                .exists(),
+            "legacy alias must remain best-effort: no file created on failure"
+        );
+    }
+
+    /// WS-SEC #1 (INF-TSK-050-013 rework iter 1): worktree paths
+    /// containing a single-quote character would break the
+    /// `export VAR='...'` shell-quoted form of the env file, producing
+    /// malformed exports and potentially injecting shell commands when
+    /// the file is sourced. The fail-loud writer MUST reject such
+    /// input with `SessionError::EnvFileWriteFailed { path, reason }`
+    /// naming the offending file path and a clear reason string. The
+    /// best-effort `try_` variant inherits the rejection (no file
+    /// written), and no temp file is left on disk because the check
+    /// runs before any I/O.
+    #[test]
+    fn test_write_pid_env_file_required_rejects_single_quote_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_dir = dir.path();
+        let malicious = "/legit/path'; echo 'pwned";
+
+        // 1. Fail-loud variant: returns EnvFileWriteFailed with the
+        //    canonical refusal reason and the resolved target path.
+        let result = write_pid_env_file_required(runtime_dir, 3131, malicious);
+        match result {
+            Err(crate::error::SessionError::EnvFileWriteFailed { path, reason }) => {
+                assert_eq!(
+                    path,
+                    runtime_dir.join("shared").join("codeflow-env-3131.sh"),
+                    "error path must point at the resolved target file"
+                );
+                assert!(
+                    reason.contains("single-quote") && reason.contains("refusing to write"),
+                    "reason must name the validation failure: got {reason}"
+                );
+            }
+            other => panic!("expected EnvFileWriteFailed for single-quote path, got: {other:?}"),
+        }
+
+        // 2. No file should be created on disk (validation runs before
+        //    I/O, so even the tmp file should not exist).
+        assert!(
+            !runtime_dir
+                .join("shared")
+                .join("codeflow-env-3131.sh")
+                .exists(),
+            "no per-PID file should exist after a rejected write"
+        );
+        assert!(
+            !runtime_dir
+                .join("shared")
+                .join(".codeflow-env-3131.sh.tmp")
+                .exists(),
+            "no tmp file should exist after a rejected write"
+        );
+
+        // 3. Best-effort variant inherits the rejection silently.
+        try_write_pid_env_file(runtime_dir, 3232, malicious);
+        assert!(
+            !runtime_dir
+                .join("shared")
+                .join("codeflow-env-3232.sh")
+                .exists(),
+            "try_ variant must inherit single-quote rejection without writing"
+        );
+
+        // 4. Legacy back-compat alias likewise inherits.
+        write_pid_env_file(runtime_dir, 3333, malicious);
+        assert!(
+            !runtime_dir
+                .join("shared")
+                .join("codeflow-env-3333.sh")
+                .exists(),
+            "legacy alias must inherit single-quote rejection without writing"
+        );
+    }
+
+    /// WS-SEC follow-up (INF-TSK-050-013 rework iter 3 / Deviation #7
+    /// resolved): `write_env_file_with_worktree` is the SESSION-scoped
+    /// env-file writer used by every load-bearing SessionStart write,
+    /// and the file is sourced by hook scripts. It shares the same
+    /// single-quote shell-quoting risk as `write_pid_env_file_required`
+    /// (iter 2). This test asserts the pre-I/O check rejects any
+    /// worktree path containing a single-quote with a typed
+    /// `SessionError::EnvFileWriteFailed` carrying the resolved target
+    /// path and the canonical refusal reason, and leaves no on-disk
+    /// state behind (neither the env file nor a temp file).
+    #[test]
+    fn test_write_env_file_with_worktree_rejects_single_quote_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path();
+        let sid = SessionId::new_unchecked("ses-01jq7injectfollowupiter3");
+        let malicious = "/legit/path'; rm -rf /";
+
+        // 1. Rejected with EnvFileWriteFailed + canonical reason + target path.
+        let result = write_env_file_with_worktree(state_dir, &sid, "codeflow", Some(malicious));
+        match result {
+            Err(crate::error::SessionError::EnvFileWriteFailed { path, reason }) => {
+                assert_eq!(
+                    path,
+                    state_dir.join(ENV_FILENAME),
+                    "error path must point at the resolved env file"
+                );
+                assert!(
+                    reason.contains("single-quote") && reason.contains("refusing to write"),
+                    "reason must name the validation failure: got {reason}"
+                );
+            }
+            other => panic!("expected EnvFileWriteFailed for single-quote path, got: {other:?}"),
+        }
+
+        // 2. No file (env file) on disk after rejection.
+        assert!(
+            !state_dir.join(ENV_FILENAME).exists(),
+            "no env file should be created after a rejected write"
+        );
+
+        // 3. No tmp file on disk either (validation runs BEFORE any I/O).
+        assert!(
+            !state_dir.join(format!(".{ENV_FILENAME}.tmp")).exists(),
+            "no tmp file should be created after a rejected write"
+        );
+
+        // 4. The state_dir itself was not created by this rejected call,
+        //    confirming the validation runs before fs::create_dir_all.
+        //    We assert by writing again with a CLEAN path to a fresh
+        //    nested dir — if create_dir_all hadn't been gated, the
+        //    state_dir would already exist after the rejection above.
+        let nested = dir.path().join("nested-untouched");
+        assert!(
+            !nested.exists(),
+            "sanity precondition: nested dir must not exist yet"
+        );
+        let result_rejected =
+            write_env_file_with_worktree(&nested, &sid, "codeflow", Some("/another'malicious"));
+        assert!(
+            matches!(
+                result_rejected,
+                Err(crate::error::SessionError::EnvFileWriteFailed { .. })
+            ),
+            "expected EnvFileWriteFailed on second malicious path"
+        );
+        assert!(
+            !nested.exists(),
+            "rejected write must not create the state_dir (validation runs pre-I/O)"
+        );
+
+        // 5. Happy path still works on the same fixture: a clean
+        //    worktree path produces a valid env file.
+        let safe_path = "/safe/worktree/path";
+        let ok = write_env_file_with_worktree(state_dir, &sid, "codeflow", Some(safe_path))
+            .expect("clean path must succeed");
+        assert_eq!(ok, state_dir.join(ENV_FILENAME));
+        let content = fs::read_to_string(&ok).unwrap();
+        assert!(
+            content.contains(&format!("CODEFLOW_WORKTREE_PATH='{safe_path}'")),
+            "happy-path content must include the safe worktree export: got {content}"
+        );
+
+        // 6. None worktree_path (no validation needed) also still works.
+        let no_wt_dir = dir.path().join("no-wt");
+        write_env_file_with_worktree(&no_wt_dir, &sid, "codeflow", None)
+            .expect("None worktree_path must succeed (no validation needed)");
+        let no_wt_content = fs::read_to_string(no_wt_dir.join(ENV_FILENAME)).unwrap();
+        assert!(
+            !no_wt_content.contains("CODEFLOW_WORKTREE_PATH"),
+            "None branch must omit the worktree export"
+        );
     }
 }

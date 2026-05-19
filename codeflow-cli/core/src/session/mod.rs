@@ -40,7 +40,8 @@ pub use autorun_detect::is_autorun_session;
 pub use env::{
     EnvFile, SessionPointer, migrate_runtime_layout, read_env_file, read_pid_env_file,
     read_session_pointer, remove_env_file, remove_pid_env_file, remove_session_pointer,
-    write_env_file, write_env_file_with_worktree, write_pid_env_file, write_session_pointer,
+    try_write_pid_env_file, verify_env_file_readable, write_env_file, write_env_file_with_worktree,
+    write_pid_env_file, write_pid_env_file_required, write_session_pointer,
 };
 
 /// Generate a new session ID using ULID format: `ses-{26-char-lowercase-ULID}`.

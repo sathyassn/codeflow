@@ -531,6 +531,103 @@ impl GateCheck {
         }
     }
 
+    /// DESIGN-005 AC-05: fail-closed env-file presence check.
+    ///
+    /// When there is a real running session (CODEFLOW_SESSION_ID set by
+    /// SessionStart) AND there is an active task (active-task.json) but
+    /// the session env file (`codeflow-env.sh`) is absent or unreadable,
+    /// downstream hook resolution will silently route the tool call to
+    /// stale state. Block instead with a structured `EnvFileMissing`
+    /// message that names the resolved path.
+    ///
+    /// The CODEFLOW_SESSION_ID guard distinguishes a real SessionStart
+    /// from synthetic test fixtures or stale active-task.json from older
+    /// binaries: only SessionStart propagates CODEFLOW_SESSION_ID into
+    /// the hook process environment, so its presence reliably indicates
+    /// a real running session for which the env file is load-bearing.
+    /// Without this guard, every unit test that plants an active-task
+    /// fixture would also have to plant a codeflow-env.sh fixture, and
+    /// the check would surface false positives for any fixture-driven
+    /// scope-policy test that does not need an env file.
+    ///
+    /// Returns:
+    /// - `None` to allow (no CODEFLOW_SESSION_ID, no active task, OR env
+    ///   file present and readable).
+    /// - `Some(HookOutput::Block)` to fail closed when a real session has
+    ///   an active task but no env file (or read fails).
+    fn check_env_file_present(&self) -> Option<HookOutput> {
+        use crate::session::active_task::get_active_task_worktree_aware;
+        use crate::session::current_env_file;
+
+        // Gate 1: only enforce when a real SessionStart has set the env
+        // var. Tests, stale binaries, and pre-PathFlow callers do not set
+        // this variable; bypassing the check for them avoids false
+        // positives on fixtures that legitimately have no env file.
+        match std::env::var("CODEFLOW_SESSION_ID") {
+            Ok(v) if !v.is_empty() => {} // real session — proceed
+            _ => return None,
+        }
+
+        // Gate 2: only enforce when there is an active task. An untracked
+        // session can run without an env file lookup being load-bearing
+        // for scope/claim enforcement.
+        match get_active_task_worktree_aware(&self.project_dir) {
+            Ok(Some(_)) => {} // active task — proceed with env check
+            _ => return None,
+        }
+
+        match current_env_file(&self.project_dir) {
+            Ok(Some(_)) => None, // env file present and readable
+            Ok(None) => {
+                // Resolve the most-likely path for the diagnostic message.
+                // Worktree-aware resolution: prefer worktree-local, fall back
+                // to main repo runtime.
+                let path = if let Ok(wt_path) = std::env::var("CODEFLOW_WORKTREE_PATH") {
+                    if wt_path.is_empty() {
+                        self.project_dir
+                            .join(".state/runtime/local/codeflow-env.sh")
+                    } else {
+                        std::path::PathBuf::from(&wt_path)
+                            .join(".state/runtime/local/codeflow-env.sh")
+                    }
+                } else {
+                    self.project_dir
+                        .join(".state/runtime/local/codeflow-env.sh")
+                };
+                eprintln!(
+                    "EnvFileMissing: cannot resolve session env at {}; refusing tool call",
+                    path.display()
+                );
+                Some(HookOutput::Block {
+                    reason: format!(
+                        "BLOCKED: EnvFileMissing\n\
+                         Reason: active session has no readable codeflow-env.sh.\n\
+                         Path: {}\n\
+                         Routing this tool call would consume stale or wrong-session\n\
+                         state. Run SessionStart cleanly (env file write must succeed)\n\
+                         and retry.\n",
+                        path.display()
+                    ),
+                    category: Some(BlockCategory::Gate),
+                })
+            }
+            Err(e) => {
+                eprintln!(
+                    "EnvFileMissing: env file lookup failed for active session: {e}; refusing tool call"
+                );
+                Some(HookOutput::Block {
+                    reason: format!(
+                        "BLOCKED: EnvFileMissing (lookup failed)\n\
+                         Reason: env file lookup failed for the active session: {e}\n\
+                         The hook cannot determine the session's worktree path or\n\
+                         project root; routing this tool call risks state divergence.\n",
+                    ),
+                    category: Some(BlockCategory::Gate),
+                })
+            }
+        }
+    }
+
     /// Check if a file path is within the declared file_scope.
     ///
     /// Note: an empty `file_scope` returns `true` ("no scope declared = everything in scope").
@@ -1205,6 +1302,13 @@ impl HookHandler for GateCheck {
                         ),
                         category: Some(BlockCategory::Gate),
                     });
+                }
+                // DESIGN-005 AC-05: fail-closed on missing env file for the
+                // active session. Without the env file, hooks cannot resolve
+                // CODEFLOW_SESSION_ID / CODEFLOW_WORKTREE_PATH and would
+                // silently route the tool call to stale state.
+                if let Some(block) = self.check_env_file_present() {
+                    return Ok(block);
                 }
                 // pf-3 passed — attempt claim acquisition on the file path.
                 let file_path = tool_input
@@ -5727,6 +5831,203 @@ mod tests {
     #[test]
     fn test_is_in_scope_empty_scope_allows_all() {
         assert!(GateCheck::is_in_scope("anything.rs", &[]));
+    }
+
+    // -----------------------------------------------------------------
+    // DESIGN-005 / INF-TSK-050-013 AC-06 (c) test:
+    // pre-tool-use hook fails closed (exit 2 with EnvFileMissing) when
+    // the active session has no env file.
+    // -----------------------------------------------------------------
+
+    /// AC-06 (c): GateCheck::handle returns Block (exit 2) when an active
+    /// task exists but the session's env file is missing. The hook must
+    /// not silently route the tool call to stale state.
+    #[test]
+    #[serial(env_vars)]
+    fn test_gate_check_blocks_edit_when_env_file_missing_for_active_session() {
+        use crate::session::active_task::{ActiveTask, set_active_task};
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        // Establish pf-3 sentinel so the pf-3 gate passes — the
+        // env-file check is the only thing left between pf-3 and
+        // claim acquisition.
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        // Plant an active-task.json (active session). No env file.
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-envcheck"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            work_type: None,
+            scope_policy: Some("soft".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        // Set CODEFLOW_SESSION_ID so check_env_file_present's Gate 1 fires
+        // (only real SessionStart sets this env var). Clear
+        // CODEFLOW_WORKTREE_PATH so worktree-aware resolution falls back
+        // to the project_dir's runtime. Restore both before assertions so
+        // a failing assert does not leak env state to subsequent
+        // serialized tests (project convention).
+        // SAFETY: serialized via #[serial(env_vars)].
+        let prev_sid = std::env::var("CODEFLOW_SESSION_ID").ok();
+        let prev_wt = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        unsafe {
+            std::env::set_var("CODEFLOW_SESSION_ID", "ses-envcheck-test");
+            std::env::remove_var("CODEFLOW_WORKTREE_PATH");
+        }
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-envcheck-test"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-envcheck-test".into()),
+            ..Default::default()
+        };
+
+        let result = handler.handle(input);
+
+        // Restore env BEFORE asserting.
+        // SAFETY: serialized via #[serial(env_vars)].
+        unsafe {
+            match prev_sid {
+                Some(v) => std::env::set_var("CODEFLOW_SESSION_ID", v),
+                None => std::env::remove_var("CODEFLOW_SESSION_ID"),
+            }
+            if let Some(v) = prev_wt {
+                std::env::set_var("CODEFLOW_WORKTREE_PATH", v);
+            }
+        }
+
+        let output = result.expect("hook must not error — it must block");
+        // Exit code 2 is HookOutput::Block's exit code.
+        assert_eq!(
+            output.exit_code(),
+            2,
+            "hook must fail closed (exit 2) when env file missing for active session"
+        );
+        match output {
+            HookOutput::Block { reason, category } => {
+                assert!(
+                    reason.contains("EnvFileMissing"),
+                    "block reason must name EnvFileMissing: got {reason}"
+                );
+                assert_eq!(
+                    category,
+                    Some(BlockCategory::Gate),
+                    "block category must be Gate"
+                );
+            }
+            other => panic!("expected HookOutput::Block, got: {other:?}"),
+        }
+    }
+
+    /// AC-05 happy path: when an active session has a readable env file,
+    /// the env-file check does NOT fire and the hook proceeds to claim
+    /// acquisition. This guards against false-positive regressions.
+    #[test]
+    #[serial(env_vars)]
+    fn test_gate_check_allows_edit_when_env_file_present_for_active_session() {
+        use crate::session::active_task::{ActiveTask, set_active_task};
+        use crate::session::env::write_env_file;
+        use crate::types::TaskId;
+
+        let dir = tempfile::tempdir().unwrap();
+        sentinel::create_by_name(dir.path(), "pf-3").unwrap();
+
+        let runtime_dir = dir.path().join(".state").join("runtime");
+        let task = ActiveTask {
+            task_id: TaskId::new_unchecked("task-envpresent"),
+            epic_id: None,
+            task_format_id: None,
+            epic_format_id: None,
+            title: None,
+            status: None,
+            branch: None,
+            session_id: None,
+            created_at: None,
+            updated_at: None,
+            current_stage: None,
+            team_name: None,
+            work_type: None,
+            scope_policy: Some("soft".to_string()),
+            file_scope: Some(vec!["src/main.rs".to_string()]),
+            target_branch: None,
+            auto_merge: None,
+            epic_update: None,
+        };
+        set_active_task(&runtime_dir, &task).unwrap();
+
+        // Plant a readable env file in the same runtime dir.
+        let sid = SessionId::new_unchecked("ses-01jq7envpresent12345678");
+        write_env_file(&runtime_dir, &sid, "codeflow").unwrap();
+
+        // SAFETY: serialized via #[serial(env_vars)].
+        let prev_sid = std::env::var("CODEFLOW_SESSION_ID").ok();
+        let prev_wt = std::env::var("CODEFLOW_WORKTREE_PATH").ok();
+        unsafe {
+            std::env::set_var("CODEFLOW_SESSION_ID", "ses-envpresent-test");
+            std::env::remove_var("CODEFLOW_WORKTREE_PATH");
+        }
+
+        let handler = GateCheck::new(
+            dir.path().to_path_buf(),
+            dir.path().join("state.loro"),
+            SessionId::new_unchecked("ses-envpresent-test"),
+            dir.path().to_path_buf(),
+        );
+        let input = HookInput {
+            tool_name: Some("Edit".into()),
+            tool_input: Some(serde_json::json!({"file_path": "src/main.rs"})),
+            event: HookEvent::PreToolUse,
+            session_id: Some("ses-envpresent-test".into()),
+            ..Default::default()
+        };
+        let result = handler.handle(input);
+
+        // Restore env BEFORE asserting.
+        // SAFETY: serialized via #[serial(env_vars)].
+        unsafe {
+            match prev_sid {
+                Some(v) => std::env::set_var("CODEFLOW_SESSION_ID", v),
+                None => std::env::remove_var("CODEFLOW_SESSION_ID"),
+            }
+            if let Some(v) = prev_wt {
+                std::env::set_var("CODEFLOW_WORKTREE_PATH", v);
+            }
+        }
+
+        let output = result.expect("hook must not error on happy path");
+        // Must NOT be EnvFileMissing. Could be Allow (claim acquired) or
+        // a non-env-related block. The invariant we test is: the reason
+        // string does NOT mention EnvFileMissing.
+        if let HookOutput::Block { reason, .. } = &output {
+            assert!(
+                !reason.contains("EnvFileMissing"),
+                "must not surface EnvFileMissing when env file is present: got {reason}"
+            );
+        }
     }
 
     #[test]

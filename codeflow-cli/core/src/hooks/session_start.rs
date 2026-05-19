@@ -386,9 +386,14 @@ impl SessionStartInit {
                 }
 
                 // Write per-PID env file for this teammate's Claude Code process.
+                // Load-bearing per DESIGN-005: without this file the teammate's
+                // hooks cannot resolve CODEFLOW_WORKTREE_PATH. Fail loud on
+                // ENOSPC / EACCES / EROFS instead of surfacing several hook
+                // calls later as a vague "file not found".
                 if let Some(ref wt_path) = env_worktree_path {
                     if !wt_path.is_empty() {
-                        session::write_pid_env_file(&runtime_dir, self.lead_pid, wt_path);
+                        session::write_pid_env_file_required(&runtime_dir, self.lead_pid, wt_path)
+                            .map_err(|e| HookError::Config(e.to_string()))?;
                     }
                 }
 
@@ -562,6 +567,11 @@ impl SessionStartInit {
                 result
                     .warnings
                     .push(format!("deferred env file write error: {e}"));
+            } else if let Err(e) = session::verify_env_file_readable(&runtime_dir) {
+                // DESIGN-005 AC-03: readback verification after load-bearing write.
+                result
+                    .warnings
+                    .push(format!("deferred env file verify error: {e}"));
             }
         }
 
@@ -646,6 +656,11 @@ impl SessionStartInit {
                 result
                     .warnings
                     .push(format!("worktree env file write error: {e}"));
+            } else if let Err(e) = session::verify_env_file_readable(&wt_runtime) {
+                // DESIGN-005 AC-03: readback verification after load-bearing write.
+                result
+                    .warnings
+                    .push(format!("worktree env file verify error: {e}"));
             }
 
             // Also write main repo env file with CODEFLOW_WORKTREE_PATH.
@@ -662,10 +677,21 @@ impl SessionStartInit {
                 result
                     .warnings
                     .push(format!("main repo env redirect write error: {e}"));
+            } else if let Err(e) = session::verify_env_file_readable(&main_runtime) {
+                // DESIGN-005 AC-03: confirm readback after every load-bearing
+                // SessionStart write so a silent-success-but-empty-file failure
+                // (network FS / container layer) is caught here, not three
+                // hook calls later.
+                result
+                    .warnings
+                    .push(format!("main repo env redirect verify error: {e}"));
             }
 
-            // Write per-PID env file to main repo runtime dir.
-            session::write_pid_env_file(&main_runtime, self.lead_pid, &wt_path_str);
+            // Write per-PID env file to main repo runtime dir. Load-bearing per
+            // DESIGN-005: hooks downstream read this file to resolve the
+            // worktree for this Claude Code PID. Fail loud on OS-level errors.
+            session::write_pid_env_file_required(&main_runtime, self.lead_pid, &wt_path_str)
+                .map_err(|e| HookError::Config(e.to_string()))?;
 
             // Write session pointer to main repo for cross-session discovery.
             session::write_session_pointer(
@@ -793,9 +819,23 @@ impl SessionStartInit {
             );
 
             // Write per-PID env file for the new process (compact/resume creates new PID).
+            // Load-bearing per DESIGN-005: without this file the new Claude
+            // Code PID's hooks cannot resolve worktree path. This function
+            // returns a tuple (no Result), so we use `_required` and surface
+            // any OS-level error through stderr + result.warnings — the
+            // SessionStart caller cannot abort here, but the operator sees
+            // the structured error immediately instead of three hook calls
+            // later as a vague "file not found".
             if let Some(ref wt_path) = env_worktree_path {
                 if !wt_path.is_empty() {
-                    session::write_pid_env_file(runtime_dir, self.lead_pid, wt_path);
+                    if let Err(e) =
+                        session::write_pid_env_file_required(runtime_dir, self.lead_pid, wt_path)
+                    {
+                        eprintln!("[session_start] EnvFileWriteFailed during {source}: {e}");
+                        result
+                            .warnings
+                            .push(format!("compact/resume per-PID env write failed: {e}"));
+                    }
                 }
             }
 
@@ -1266,6 +1306,9 @@ impl SessionStartInit {
             let project_root_str = project_root_path.to_string_lossy().to_string();
             if let Err(e) = session::write_env_file(runtime_dir, &sid, &project_root_str) {
                 result.warnings.push(format!("env file write error: {e}"));
+            } else if let Err(e) = session::verify_env_file_readable(runtime_dir) {
+                // DESIGN-005 AC-03: readback verification after load-bearing write.
+                result.warnings.push(format!("env file verify error: {e}"));
             }
             return Ok(sid);
         }
@@ -1918,10 +1961,18 @@ impl SessionStartInit {
             result
                 .warnings
                 .push(format!("main env file update error: {e}"));
+        } else if let Err(e) = session::verify_env_file_readable(&main_runtime) {
+            // DESIGN-005 AC-03: readback verification.
+            result
+                .warnings
+                .push(format!("main env file verify error: {e}"));
         }
 
         // Write per-PID env file for this session's Claude Code process.
-        session::write_pid_env_file(&main_runtime, self.lead_pid, &wt_path_str);
+        // Load-bearing per DESIGN-005: hooks downstream read this file to
+        // resolve worktree for the current PID. Fail loud on OS errors.
+        session::write_pid_env_file_required(&main_runtime, self.lead_pid, &wt_path_str)
+            .map_err(|e| HookError::Config(e.to_string()))?;
 
         result.messages.push(format!(
             "WORKTREE: Created {} at {}",
@@ -2045,10 +2096,27 @@ impl SessionStartInit {
             result
                 .warnings
                 .push(format!("main env file update error: {e}"));
+        } else if let Err(e) = session::verify_env_file_readable(runtime_dir) {
+            // DESIGN-005 AC-03: readback verification after load-bearing write.
+            result
+                .warnings
+                .push(format!("main env file verify error: {e}"));
         }
 
         // Write per-PID env file for this session's Claude Code process.
-        session::write_pid_env_file(runtime_dir, self.lead_pid, &wt_path_str);
+        // Load-bearing per DESIGN-005. Caller signature is
+        // `-> Option<WorktreePaths>` (no Result), so surface OS-level errors
+        // via stderr + result.warnings — fail loud, do not silently swallow.
+        if let Err(e) =
+            session::write_pid_env_file_required(runtime_dir, self.lead_pid, &wt_path_str)
+        {
+            eprintln!(
+                "[session_start] EnvFileWriteFailed during precreated worktree detection: {e}"
+            );
+            result
+                .warnings
+                .push(format!("precreated worktree per-PID env write failed: {e}"));
+        }
 
         result
             .messages

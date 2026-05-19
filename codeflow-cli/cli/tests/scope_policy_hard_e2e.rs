@@ -59,9 +59,50 @@ fn read_event_lines(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// RAII guard: clear `CODEFLOW_SESSION_ID` for the test scope and restore it on
+/// Drop. INF-TSK-050-013 added `check_env_file_present` to `GateCheck::handle`,
+/// which fires the EnvFileMissing fail-closed path only when
+/// `CODEFLOW_SESSION_ID` is set (the marker of a real running SessionStart).
+/// These scope-policy E2E tests construct an active-task fixture without
+/// writing a `codeflow-env.sh` (their concern is scope enforcement, not env
+/// file presence), so they MUST clear the env var inherited from the test
+/// runner's session — otherwise the new gate fires before the scope-policy
+/// path is reached and the assertions misfire.
+///
+/// SAFETY: callers must hold `serial_test::serial` exclusivity over env vars.
+struct ClearSessionIdGuard {
+    prev: Option<String>,
+}
+
+impl ClearSessionIdGuard {
+    fn new() -> Self {
+        let prev = std::env::var("CODEFLOW_SESSION_ID").ok();
+        // SAFETY: serial test exclusivity over env vars is the caller's
+        // responsibility (#[serial_test::serial]).
+        unsafe { std::env::remove_var("CODEFLOW_SESSION_ID") };
+        Self { prev }
+    }
+}
+
+impl Drop for ClearSessionIdGuard {
+    fn drop(&mut self) {
+        // SAFETY: serial test exclusivity over env vars (caller invariant).
+        unsafe {
+            match self.prev.take() {
+                Some(v) => std::env::set_var("CODEFLOW_SESSION_ID", v),
+                None => std::env::remove_var("CODEFLOW_SESSION_ID"),
+            }
+        }
+    }
+}
+
 #[test]
 #[serial_test::serial]
 fn hard_mode_out_of_scope_edit_blocked_and_logs_claim_conflict() {
+    // INF-TSK-050-013: bypass the new EnvFileMissing fail-closed gate for
+    // this scope-policy fixture test (see ClearSessionIdGuard docs).
+    let _sid_guard = ClearSessionIdGuard::new();
+
     let project_dir = tempfile::tempdir().expect("project_dir");
     let worktree_dir = tempfile::tempdir().expect("worktree_dir");
 
@@ -154,6 +195,10 @@ fn hard_mode_out_of_scope_edit_blocked_and_logs_claim_conflict() {
 #[test]
 #[serial_test::serial]
 fn hard_mode_in_scope_edit_allowed_and_logs_claim_acquired() {
+    // INF-TSK-050-013: bypass the new EnvFileMissing fail-closed gate for
+    // this scope-policy fixture test (see ClearSessionIdGuard docs).
+    let _sid_guard = ClearSessionIdGuard::new();
+
     let project_dir = tempfile::tempdir().expect("project_dir");
     let worktree_dir = tempfile::tempdir().expect("worktree_dir");
 
@@ -217,6 +262,10 @@ fn hard_mode_in_scope_edit_allowed_and_logs_claim_acquired() {
 #[test]
 #[serial_test::serial]
 fn hard_mode_with_empty_file_scope_blocks_with_misconfig_message() {
+    // INF-TSK-050-013: bypass the new EnvFileMissing fail-closed gate for
+    // this scope-policy fixture test (see ClearSessionIdGuard docs).
+    let _sid_guard = ClearSessionIdGuard::new();
+
     let project_dir = tempfile::tempdir().expect("project_dir");
     let worktree_dir = tempfile::tempdir().expect("worktree_dir");
 
