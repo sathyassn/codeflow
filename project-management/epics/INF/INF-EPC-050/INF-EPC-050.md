@@ -83,7 +83,7 @@ This epic consolidates 23 confirmed correctness issues across the autorun and in
 | INF-TSK-050-012 | (placeholder) Implement DESIGN-007 periodic-task stop-signal pattern | planned | normal |
 | INF-TSK-050-013 | Implement DESIGN-005 env-file write hardening | complete | normal |
 | INF-TSK-050-014 | Fix worktree session latch bug — teammate misclassification creating duplicate worktree | complete | high |
-| INF-TSK-050-015 | Post-PR auto-save runtime gap — runtime-agnostic guard for old-binary sessions | planned | normal |
+| INF-TSK-050-015 | Post-PR auto-save runtime gap — runtime-agnostic guard for old-binary sessions | complete | normal |
 
 ## Analysis
 

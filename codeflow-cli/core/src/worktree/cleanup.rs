@@ -302,11 +302,16 @@ pub fn cleanup_orphan(
 /// 2. `no-rescue` marker at `{wt_path}/.state/runtime/no-rescue` exists.
 /// 3. `GateConfig(session_complete)` → pf-7 sentinel exists.
 /// 4. `GateConfig(pr_pushed)` → pf-6 sentinel exists.
-/// 5. Legacy `pr_pushed` flag in `pathflow-session-status.json`.
-/// 6. Ledger contains any `pr_created` event for this session.
-/// 7. **Gate 8** — HEAD on origin (zero commits ahead of `@{u}`).
-/// 8. **Gate 9** — `gh pr list --head <branch>` reports an existing PR.
-/// 9. Nothing to rescue (clean working tree AND no untracked files).
+/// 5. **Gate 0d.5** (INF-TSK-050-015) — `pr-merged` sentinel exists at
+///    `{wt_path}/.state/session/{sid}/pathflow/pr-merged`.
+/// 6. Legacy `pr_pushed` flag in `pathflow-session-status.json`.
+/// 7. Ledger contains any `pr_created` event for this session.
+/// 8. **Gate 0i** (INF-TSK-050-015) — HEAD is a descendant of
+///    `refs/remotes/origin/{default-branch}` (runtime-agnostic, survives
+///    upstream-deleted branches).
+/// 9. **Gate 8** — HEAD on origin (zero commits ahead of `@{u}`).
+/// 10. **Gate 9** — `gh pr list --head <branch>` reports an existing PR.
+/// 11. Nothing to rescue (clean working tree AND no untracked files).
 ///
 /// The inspect/apply CLI (`codeflow rescue`) surfaces the bundle to the user.
 pub fn rescue_uncommitted_work(wt_path: &Path, session_hint: &str) -> Result<(), WorktreeError> {
@@ -355,6 +360,18 @@ pub fn rescue_uncommitted_work_with_reason(
         return Ok(());
     }
 
+    // Step 0d.5: pr-merged sentinel — written by session_end after
+    // observing a `pr_merged` event in the ledger (INF-TSK-050-015 AC-03).
+    // New-binary sessions get this for free; old-binary sessions fall
+    // through to the runtime-agnostic Gate 0i below.
+    if pr_merged_sentinel_present(wt_path, session_hint) {
+        crate::diagnostics::warn(
+            "worktree",
+            &format!("{session_hint}: skipping rescue — pr-merged sentinel"),
+        );
+        return Ok(());
+    }
+
     // Step 0e: legacy flag in pathflow-session-status.json (pre-gate rollout).
     if session_pushed_pr(wt_path, session_hint) {
         crate::diagnostics::warn(
@@ -369,6 +386,26 @@ pub fn rescue_uncommitted_work_with_reason(
         crate::diagnostics::warn(
             "worktree",
             &format!("{session_hint}: skipping rescue — pr_created event in ledger"),
+        );
+        return Ok(());
+    }
+
+    // Step 0i (INF-TSK-050-015 ref-walk gate): is HEAD already a descendant
+    // of refs/remotes/origin/{default-branch}? If yes, every change has been
+    // merged regardless of what sentinels / flags say. This is the
+    // runtime-agnostic safety net for old-binary sessions where Gate 8
+    // (`branch_on_origin`) is blinded by an unset `@{u}` upstream (PR
+    // branch deleted on origin after merge). Inconclusive falls through so
+    // a transient git failure cannot accidentally suppress a legitimate
+    // rescue.
+    let on_remote_main = crate::autorun::rescue::head_is_descendant_of_remote_main(wt_path);
+    if matches!(
+        on_remote_main,
+        crate::autorun::rescue::BranchOriginStatus::OnOrigin
+    ) {
+        crate::diagnostics::warn(
+            "worktree",
+            &format!("{session_hint}: skipping rescue — HEAD descended from origin/main"),
         );
         return Ok(());
     }
@@ -535,9 +572,41 @@ fn is_safe_session_id(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Scan the project-level ledger for a `pr_created` event tied to this
+/// Check whether the `pr-merged` sentinel file exists for this session.
+///
+/// Path: `{wt_path}/.state/session/{sid}/pathflow/pr-merged` (INF-TSK-050-015 AC-03).
+/// The sentinel is written by `crate::hooks::session_end` after observing
+/// a `pr_merged` event in the ledger for this session. The session ID is
+/// recovered from `session_hint` by stripping any `worktree-` prefix and
+/// is sanitised against `[A-Za-z0-9_-]+` before joining into the
+/// filesystem path. Any failure to sanitise returns `false` (safe default —
+/// the caller proceeds to the next gate).
+fn pr_merged_sentinel_present(wt_path: &Path, session_hint: &str) -> bool {
+    let session_id = session_hint
+        .strip_prefix("worktree-")
+        .unwrap_or(session_hint);
+    if !is_safe_session_id(session_id) {
+        return false;
+    }
+    let sentinel_path = wt_path
+        .join(".state/session")
+        .join(session_id)
+        .join("pathflow")
+        .join("pr-merged");
+    sentinel_path.is_file()
+}
+
+/// Scan the worktree-local ledger for a `pr_created` event tied to this
 /// session. Returns `false` on any I/O or parse failure (safe default —
 /// callers proceed to write the bundle).
+///
+/// INF-TSK-050-015 WS-REV iter-1 Finding 4: the ledger is LOCAL per-worktree
+/// since PR #221 (see `crate::ledger::jsonl::resolve_ledger_dir_inner`).
+/// Previous code peeled up to the main repo via `derive_main_repo_root`,
+/// which holds at most pre-PR-#221 fragments; production `pr_created`
+/// events written by cf-knowledge-layer land at
+/// `{wt_path}/.state/ledger/work-graph/`. Using `wt_path` directly fixes
+/// the parallel bug Finding 1 identified for the writer.
 fn session_has_pr_created_event(wt_path: &Path, session_hint: &str) -> bool {
     let session_id = session_hint
         .strip_prefix("worktree-")
@@ -545,8 +614,7 @@ fn session_has_pr_created_event(wt_path: &Path, session_hint: &str) -> bool {
     if !is_safe_session_id(session_id) {
         return false;
     }
-    let project_root = derive_main_repo_root(wt_path);
-    let ledger_dir = project_root.join(".state/ledger");
+    let ledger_dir = wt_path.join(".state/ledger");
     if !ledger_dir.is_dir() {
         return false;
     }
@@ -570,6 +638,18 @@ fn session_has_pr_created_event(wt_path: &Path, session_hint: &str) -> bool {
     false
 }
 
+/// Scan a single JSONL fragment for a `pr_created` event matching `session_id`.
+///
+/// Accepts BOTH ledger schemas observed in production fragments: the older
+/// `{"event":"pr_created",...}` shape and the newer
+/// `{"event_type":"pr_created",...}` shape. Mirrors the dual-schema acceptance
+/// in `crate::hooks::session_end::SessionEndCleanup::ledger_has_pr_merged_for_session`
+/// so Gate 0f (rescue ladder Step 0f) cannot be defeated by a schema drift that
+/// the `pr_merged` reader already tolerates. Without this, an autorun worker
+/// whose ledger fragment used the `event_type:` shape would fall past Gate 0f
+/// and rely on the network-bound Gate 9 (`gh pr list`) as its only safety net,
+/// which has been the source of stray `wip: auto-save from crashed session`
+/// commits when `gh` is unreachable.
 fn file_has_pr_created_for_session(path: &Path, session_id: &str) -> bool {
     let Ok(contents) = fs::read_to_string(path) else {
         return false;
@@ -582,7 +662,14 @@ fn file_has_pr_created_for_session(path: &Path, session_id: &str) -> bool {
         let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if val.get("event").and_then(|v| v.as_str()) != Some("pr_created") {
+        let event_match = matches!(
+            val.get("event_type").and_then(|v| v.as_str()),
+            Some("pr_created")
+        ) || matches!(
+            val.get("event").and_then(|v| v.as_str()),
+            Some("pr_created")
+        );
+        if !event_match {
             continue;
         }
         if val.get("session_id").and_then(|v| v.as_str()) == Some(session_id) {
@@ -1281,6 +1368,17 @@ mod tests {
 
     #[test]
     fn test_cleanup_full_lifecycle() {
+        // mgr.cleanup triggers rescue_uncommitted_work which writes bundles
+        // under the XDG rescue root. Without redirecting HOME / XDG_CACHE_HOME
+        // to a test-scoped tempdir AND holding the shared xdg_env_lock, this
+        // test races with parallel rescue tests: it can leak a bundle into
+        // a concurrent rescue test's tempdir, breaking that test's
+        // `bundles.len() == 1` assertion. INF-TSK-050-015 — adopt the same
+        // serialisation pattern the rescue tests already use.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+
         let dir = tempfile::tempdir().unwrap();
 
         let repo = git2::Repository::init(dir.path()).unwrap();
@@ -1882,14 +1980,18 @@ mod tests {
 
     #[test]
     fn test_rescue_skips_when_ledger_has_pr_created() {
+        // INF-TSK-050-015 WS-REV iter-1 Finding 4: ledger is LOCAL per-
+        // worktree since PR #221. Plant the pr_created event at the
+        // WORKTREE's local ledger path (matching what JsonlWriter writes
+        // in production), not at the main project root.
         let _g = xdg_lock();
         let xdg_td = tempfile::tempdir().unwrap();
         redirect_xdg_cache(&xdg_td);
-        let (project, wt) = make_worktree("ses-ledger1");
+        let (_project, wt) = make_worktree("ses-ledger1");
         commit_file(&wt, "seed.txt", "s");
         fs::write(wt.join("seed.txt"), "m").unwrap();
 
-        let ledger_dir = project.path().join(".state/ledger/work-graph");
+        let ledger_dir = wt.join(".state/ledger/work-graph");
         fs::create_dir_all(&ledger_dir).unwrap();
         fs::write(
             ledger_dir.join("work-graph.jsonl"),
@@ -1909,6 +2011,47 @@ mod tests {
             })
             .unwrap_or(0);
         assert_eq!(dir_count, 0, "pr_created ledger event must suppress rescue");
+    }
+
+    #[test]
+    fn test_rescue_skips_when_pr_created_event_uses_event_type_schema() {
+        // INF-TSK-050-015 AC-09 schema-drift parallel-reader fix: production
+        // work-graph fragments are observed in TWO shapes — older `{"event":
+        // "pr_created",...}` and newer `{"event_type":"pr_created",...}`. The
+        // `pr_merged` reader in session_end.rs already accepts both; this
+        // test pins that Gate 0f's reader does too, so an autorun worker
+        // whose ledger fragment used the `event_type` shape never falls
+        // through to the network-bound Gate 9 fallback.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-ledger2");
+        commit_file(&wt, "seed.txt", "s");
+        fs::write(wt.join("seed.txt"), "m").unwrap();
+
+        let ledger_dir = wt.join(".state/ledger/work-graph");
+        fs::create_dir_all(&ledger_dir).unwrap();
+        fs::write(
+            ledger_dir.join("work-graph.jsonl"),
+            r#"{"event_type":"pr_created","session_id":"ses-ledger2","pr_number":43,"timestamp":"2026-05-19T00:00:00Z"}
+"#,
+        )
+        .unwrap();
+
+        rescue_uncommitted_work(&wt, "worktree-ses-ledger2").unwrap();
+
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dir_count, 0,
+            "pr_created ledger event in event_type schema must suppress rescue"
+        );
     }
 
     #[test]
@@ -2015,6 +2158,238 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(bundle.join("metadata.json")).unwrap())
                 .unwrap();
         assert!(metadata["skipped_large_files"].is_array());
+    }
+
+    // ------------------------------------------------------------------
+    // INF-TSK-050-015: Gate 0i (ref-walk) + Gate 0d.5 (pr-merged sentinel)
+    // ------------------------------------------------------------------
+
+    /// Build a worktree whose HEAD is on `refs/remotes/origin/main` AND has
+    /// no `@{u}` upstream — the old-binary post-merge scenario. Returns
+    /// `(project_tempdir, origin_tempdir, worktree_path)`.
+    fn make_worktree_head_on_remote_main_no_upstream(
+        sid: &str,
+    ) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+        let project = tempfile::tempdir().unwrap();
+        let origin = tempfile::tempdir().unwrap();
+        // Bare origin with default branch 'main'.
+        Command::new("git")
+            .args(["init", "--bare", "-q", "-b", "main"])
+            .current_dir(origin.path())
+            .status()
+            .unwrap();
+        let wt = project
+            .path()
+            .join(".git-worktrees")
+            .join(format!("worktree-{sid}"));
+        fs::create_dir_all(&wt).unwrap();
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "t@t.c"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        // commit + push so refs/remotes/origin/main exists and HEAD is on it.
+        fs::write(wt.join("seed.txt"), "seed").unwrap();
+        Command::new("git")
+            .args(["add", "seed.txt"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "seed", "--no-verify"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["remote", "add", "origin", origin.path().to_str().unwrap()])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "origin", "HEAD:refs/heads/main"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        // Mark origin/HEAD so remote_default_branch_name resolves.
+        Command::new("git")
+            .args(["remote", "set-head", "origin", "main"])
+            .current_dir(&wt)
+            .status()
+            .unwrap();
+        // Critically: do NOT call `branch --set-upstream-to`. Without `@{u}`,
+        // Gate 8 (`branch_on_origin`) will be Inconclusive — Gate 0i is the
+        // only safety net.
+        (project, origin, wt)
+    }
+
+    #[test]
+    fn test_rescue_skips_when_head_on_remote_main_without_upstream() {
+        // AC-04 (a): Gate 0i takes effect when HEAD is on origin/main even
+        // with no @{u} upstream.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, _origin, wt) = make_worktree_head_on_remote_main_no_upstream("ses-gate0i-a");
+        // Dirty the worktree so rescue WOULD run if not for Gate 0i.
+        fs::write(wt.join("seed.txt"), "modified").unwrap();
+        // Sanity: confirm @{u} is unset (Gate 8 should be Inconclusive).
+        assert_eq!(
+            crate::autorun::rescue::branch_on_origin(&wt),
+            crate::autorun::rescue::BranchOriginStatus::Inconclusive,
+            "precondition: Gate 8 must be Inconclusive without @{{u}}"
+        );
+
+        rescue_uncommitted_work(&wt, "worktree-ses-gate0i-a").unwrap();
+
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dir_count, 0,
+            "Gate 0i must suppress rescue when HEAD descended from origin/main"
+        );
+    }
+
+    #[test]
+    fn test_rescue_proceeds_when_origin_main_missing() {
+        // AC-04 (b): Gate 0i is Inconclusive when origin/main ref is missing
+        // (no remote configured) — must fall through to subsequent gates.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-gate0i-b");
+        commit_file(&wt, "seed.txt", "s");
+        fs::write(wt.join("seed.txt"), "modified").unwrap();
+        // No remote → refs/remotes/origin/main doesn't exist → Gate 0i must
+        // be Inconclusive, NOT OnOrigin. Bundle should be written.
+
+        // Sanity: confirm Gate 0i itself is Inconclusive in this setup.
+        assert_eq!(
+            crate::autorun::rescue::head_is_descendant_of_remote_main(&wt),
+            crate::autorun::rescue::BranchOriginStatus::Inconclusive,
+            "Gate 0i must be Inconclusive when origin/main is missing"
+        );
+
+        rescue_uncommitted_work(&wt, "worktree-ses-gate0i-b").unwrap();
+
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dir_count, 1,
+            "Inconclusive Gate 0i must fall through; bundle should be written"
+        );
+    }
+
+    #[test]
+    fn test_rescue_skips_when_pr_merged_sentinel_present() {
+        // AC-04 (c): Gate 0d.5 takes effect when pr-merged sentinel exists.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-gate0d5");
+        commit_file(&wt, "seed.txt", "s");
+        fs::write(wt.join("seed.txt"), "modified").unwrap();
+
+        // Plant the pr-merged sentinel at the documented path.
+        let sentinel_path = wt
+            .join(".state/session")
+            .join("ses-gate0d5")
+            .join("pathflow")
+            .join("pr-merged");
+        fs::create_dir_all(sentinel_path.parent().unwrap()).unwrap();
+        fs::write(&sentinel_path, "").unwrap();
+
+        rescue_uncommitted_work(&wt, "worktree-ses-gate0d5").unwrap();
+
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dir_count, 0,
+            "Gate 0d.5 must suppress rescue when pr-merged sentinel exists"
+        );
+    }
+
+    #[test]
+    fn test_rescue_writes_bundle_when_no_pr_gates_present() {
+        // AC-04 (d): Regression check — when ALL pr-related gates are absent
+        // and the worktree has uncommitted work, a bundle IS written.
+        let _g = xdg_lock();
+        let xdg_td = tempfile::tempdir().unwrap();
+        redirect_xdg_cache(&xdg_td);
+        let (_project, wt) = make_worktree("ses-noprgates");
+        commit_file(&wt, "seed.txt", "s");
+        fs::write(wt.join("seed.txt"), "modified").unwrap();
+        // No pr_pushed sentinel, no pr-merged sentinel, no session-status flag,
+        // no ledger event, no remote, no @{u}. Bundle MUST be written.
+
+        rescue_uncommitted_work(&wt, "worktree-ses-noprgates").unwrap();
+
+        let rescue_dir = crate::autorun::rescue::xdg_rescue_root().unwrap();
+        let dir_count = fs::read_dir(&rescue_dir)
+            .map(|e| {
+                e.filter_map(Result::ok)
+                    .filter(|en| en.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            dir_count, 1,
+            "bundle MUST be written when no pr-related gates fire"
+        );
+    }
+
+    #[test]
+    fn test_pr_merged_sentinel_present_rejects_traversal() {
+        // Defense-in-depth: session_hint sanitiser must reject path traversal.
+        let dir = tempfile::tempdir().unwrap();
+        // Plant a sentinel at a real session ID.
+        let real_path = dir
+            .path()
+            .join(".state/session")
+            .join("ses-real")
+            .join("pathflow")
+            .join("pr-merged");
+        fs::create_dir_all(real_path.parent().unwrap()).unwrap();
+        fs::write(&real_path, "").unwrap();
+
+        // Real session ID resolves.
+        assert!(pr_merged_sentinel_present(dir.path(), "ses-real"));
+        assert!(pr_merged_sentinel_present(dir.path(), "worktree-ses-real"));
+
+        // Traversal attempts must be rejected.
+        assert!(!pr_merged_sentinel_present(dir.path(), "../etc/passwd"));
+        assert!(!pr_merged_sentinel_present(dir.path(), "worktree-ses real"));
+        assert!(!pr_merged_sentinel_present(dir.path(), "worktree-a/b/c"));
+        assert!(!pr_merged_sentinel_present(dir.path(), ""));
+        // Missing file returns false.
+        assert!(!pr_merged_sentinel_present(dir.path(), "ses-absent"));
     }
 
     /// REV-NOTE-3: filenames with embedded newlines must survive

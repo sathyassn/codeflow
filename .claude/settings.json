@@ -1,6 +1,6 @@
 {
   "_template": "autonomous",
-  "_version": "1.1.0",
+  "_version": "1.1.1",
   "_description": "Local autonomy with network oversight - auto-approve local ops, ask for network git.",
   "_use_case": "Experienced developers, routine work, trusted local context",
   "_path_syntax": {
@@ -486,7 +486,7 @@
     ],
     "PermissionRequest": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Bash|WebFetch",
         "hooks": [
           {
             "type": "command",

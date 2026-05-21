@@ -1,6 +1,6 @@
 {
   "_template": "strict",
-  "_version": "1.1.0",
+  "_version": "1.1.1",
   "_description": "Maximum visibility, ask for everything except reads. Team default.",
   "_use_case": "Onboarding, auditing, learning, high-security environments",
   "_path_syntax": {
@@ -476,7 +476,7 @@
     ],
     "PermissionRequest": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Bash|WebFetch",
         "hooks": [
           {
             "type": "command",

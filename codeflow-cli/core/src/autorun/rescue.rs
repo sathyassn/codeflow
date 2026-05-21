@@ -120,6 +120,78 @@ pub fn branch_on_origin(wt_path: &Path) -> BranchOriginStatus {
     }
 }
 
+/// Resolve the remote default branch name (e.g. `"main"` or `"master"`).
+///
+/// Strategy (first hit wins):
+/// 1. `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` → parses
+///    `origin/<branch>` and returns `<branch>`.
+/// 2. Fallback: literal `"main"`.
+///
+/// Any spawn / parse failure short-circuits to the fallback. The caller is
+/// expected to treat the result as a ref name suffix, not a verified ref —
+/// the subsequent `git rev-list --is-ancestor` call is what actually verifies
+/// the ref exists.
+fn remote_default_branch_name(wt_path: &Path) -> String {
+    let output = Command::new("git")
+        .args([
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ])
+        .current_dir(wt_path)
+        .output();
+    if let Ok(o) = output {
+        if o.status.success() {
+            let raw = String::from_utf8_lossy(&o.stdout);
+            let trimmed = raw.trim();
+            if let Some(rest) = trimmed.strip_prefix("origin/") {
+                if !rest.is_empty() {
+                    return rest.to_string();
+                }
+            }
+        }
+    }
+    "main".to_string()
+}
+
+/// Check whether HEAD is already an ancestor of `refs/remotes/origin/{default-branch}`.
+///
+/// This is the runtime-agnostic safety net used by the post-PR auto-save
+/// runtime gap fix (INF-TSK-050-015 Gate 0i): when a PR has merged and the
+/// remote branch is subsequently deleted, the local `@{u}` upstream may
+/// disappear, blinding the existing Gate 8 (`branch_on_origin`) that relies
+/// on `@{u}..HEAD`. This helper sidesteps `@{u}` entirely and walks the
+/// remote main ref directly with `git merge-base --is-ancestor`.
+///
+/// Implementation: `git merge-base --is-ancestor HEAD refs/remotes/origin/<default>`
+/// run inside `wt_path`. The default-branch name is resolved via
+/// [`remote_default_branch_name`] with a `"main"` fallback.
+/// - Exit 0 → HEAD is an ancestor → [`BranchOriginStatus::OnOrigin`].
+/// - Exit 1 → HEAD is NOT an ancestor → [`BranchOriginStatus::AheadOfOrigin`].
+/// - Any other exit (ref missing, not a git repo) → [`BranchOriginStatus::Inconclusive`].
+/// - Spawn failure → [`BranchOriginStatus::Inconclusive`].
+///
+/// `Inconclusive` is the safe direction — callers fall through to the
+/// subsequent gates rather than incorrectly skipping rescue on a git failure.
+#[must_use]
+pub fn head_is_descendant_of_remote_main(wt_path: &Path) -> BranchOriginStatus {
+    let default_branch = remote_default_branch_name(wt_path);
+    let target_ref = format!("refs/remotes/origin/{default_branch}");
+    let output = Command::new("git")
+        .args(["merge-base", "--is-ancestor", "HEAD", target_ref.as_str()])
+        .current_dir(wt_path)
+        .output();
+    match output {
+        Ok(o) => match o.status.code() {
+            Some(0) => BranchOriginStatus::OnOrigin,
+            Some(1) => BranchOriginStatus::AheadOfOrigin,
+            _ => BranchOriginStatus::Inconclusive,
+        },
+        Err(_) => BranchOriginStatus::Inconclusive,
+    }
+}
+
 /// Outcome of the `gh pr list --head <branch>` fallback gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GhPrCheck {
@@ -856,6 +928,142 @@ mod tests {
             branch_on_origin(td.path()),
             BranchOriginStatus::Inconclusive
         );
+    }
+
+    // -- head_is_descendant_of_remote_main (INF-TSK-050-015 Gate 0i) --
+
+    /// Build a work repo whose HEAD is on `refs/remotes/origin/main` AND has
+    /// no `@{u}` upstream (the post-merge-branch-deleted scenario). Returns
+    /// `(origin_td, work_td)` — keep both alive for the test body.
+    fn make_head_on_remote_main_without_upstream() -> (tempfile::TempDir, tempfile::TempDir) {
+        let origin_td = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--bare", "-q", "-b", "main"])
+            .current_dir(origin_td.path())
+            .status()
+            .unwrap();
+        let work_td = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "t@t.c"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init", "--no-verify"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                origin_td.path().to_str().unwrap(),
+            ])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        // Push to establish refs/remotes/origin/main.
+        Command::new("git")
+            .args(["push", "origin", "HEAD:refs/heads/main"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        // Pull the remote ref into our local tracking refs so
+        // `refs/remotes/origin/main` exists.
+        Command::new("git")
+            .args(["fetch", "origin"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        // Mark refs/remotes/origin/HEAD so symbolic-ref resolves.
+        Command::new("git")
+            .args(["remote", "set-head", "origin", "main"])
+            .current_dir(work_td.path())
+            .status()
+            .unwrap();
+        // Critically: do NOT set @{u} (no `branch --set-upstream-to`). This
+        // mirrors the old-binary post-merge state.
+        (origin_td, work_td)
+    }
+
+    #[test]
+    fn head_is_descendant_returns_on_origin_when_head_on_remote_main() {
+        let (_origin, work) = make_head_on_remote_main_without_upstream();
+        // Sanity: branch_on_origin (Gate 8) is Inconclusive without @{u},
+        // so Gate 0i is the only safety net.
+        assert_eq!(
+            branch_on_origin(work.path()),
+            BranchOriginStatus::Inconclusive,
+            "precondition: Gate 8 must be Inconclusive without @{{u}}"
+        );
+        assert_eq!(
+            head_is_descendant_of_remote_main(work.path()),
+            BranchOriginStatus::OnOrigin,
+            "HEAD should be ancestor of refs/remotes/origin/main"
+        );
+    }
+
+    #[test]
+    fn head_is_descendant_returns_ahead_when_local_commits_after_remote_main() {
+        let (_origin, work) = make_head_on_remote_main_without_upstream();
+        // Add a local commit that is NOT on origin/main.
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "ahead", "--no-verify"])
+            .current_dir(work.path())
+            .status()
+            .unwrap();
+        assert_eq!(
+            head_is_descendant_of_remote_main(work.path()),
+            BranchOriginStatus::AheadOfOrigin,
+            "HEAD has a commit not on origin/main"
+        );
+    }
+
+    #[test]
+    fn head_is_descendant_returns_inconclusive_when_origin_main_missing() {
+        // Local repo, no remote at all → refs/remotes/origin/main doesn't
+        // resolve → git rev-list --is-ancestor exits with a non-0/non-1 code.
+        let td = tempfile::tempdir().unwrap();
+        init_git_repo(td.path());
+        assert_eq!(
+            head_is_descendant_of_remote_main(td.path()),
+            BranchOriginStatus::Inconclusive,
+            "missing origin/main ref must be inconclusive, not OnOrigin"
+        );
+    }
+
+    #[test]
+    fn head_is_descendant_returns_inconclusive_for_non_git_dir() {
+        let td = tempfile::tempdir().unwrap();
+        assert_eq!(
+            head_is_descendant_of_remote_main(td.path()),
+            BranchOriginStatus::Inconclusive
+        );
+    }
+
+    #[test]
+    fn remote_default_branch_falls_back_to_main_when_no_remote() {
+        let td = tempfile::tempdir().unwrap();
+        init_git_repo(td.path());
+        // No remote configured → symbolic-ref fails → fallback to "main".
+        assert_eq!(remote_default_branch_name(td.path()), "main");
+    }
+
+    #[test]
+    fn remote_default_branch_reads_origin_head_when_set() {
+        let (_origin, work) = make_head_on_remote_main_without_upstream();
+        assert_eq!(remote_default_branch_name(work.path()), "main");
     }
 
     // -- gh_pr_exists_for_branch --

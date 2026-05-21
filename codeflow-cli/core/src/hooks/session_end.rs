@@ -145,6 +145,18 @@ impl SessionEndCleanup {
         // --- Section 6: Active task preservation ---
         self.handle_active_task(project_dir, &mut result);
 
+        // --- Section 6b: pr-merged sentinel write (INF-TSK-050-015 AC-03) ---
+        // If cf-knowledge-layer's record-pr-outcome operation has appended a
+        // `pr_merged` event to the work-graph ledger for this session, plant
+        // a sentinel at `{project_dir}/.state/session/{sid}/pathflow/pr-merged`
+        // so the rescue path in Section 7 below (Gate 0d.5 in cleanup.rs)
+        // skips bundle writing for an already-merged PR. Best-effort: any
+        // failure is non-fatal -- the runtime-agnostic Gate 0i in cleanup.rs
+        // (`head_is_descendant_of_remote_main`) still catches the merged-
+        // HEAD case for sessions that never reach this writer (old binaries
+        // or crashes mid-cleanup).
+        Self::write_pr_merged_sentinel(project_dir, &session_id, &mut result);
+
         // --- Section 7: Worktree cleanup ---
         self.clean_worktree(project_dir, &mut result);
 
@@ -565,6 +577,143 @@ impl SessionEndCleanup {
                 }
             }
         }
+    }
+
+    /// Plant the `pr-merged` sentinel when this session's PR is merged.
+    ///
+    /// Scans the work-graph ledger fragment files for a `pr_merged` event
+    /// whose `session_id` matches the current session. When found, writes
+    /// an empty marker file at
+    /// `{project_dir}/.state/session/{sid}/pathflow/pr-merged` so the
+    /// rescue path's Gate 0d.5 (`pr_merged_sentinel_present` in
+    /// `crate::worktree::cleanup`) can short-circuit auto-save for an
+    /// already-merged PR.
+    ///
+    /// Best-effort: every failure path (ledger missing, parse error, write
+    /// error) returns silently. The runtime-agnostic Gate 0i
+    /// (`head_is_descendant_of_remote_main`) is the primary safety net;
+    /// this sentinel is defense-in-depth for sessions whose binary writes
+    /// the marker but whose worktree no longer has @{u} configured.
+    ///
+    /// The session ID is validated against `[A-Za-z0-9_-]+` before joining
+    /// into the filesystem path -- defense in depth against an attacker-
+    /// controlled value, even though the source is trusted today.
+    ///
+    /// Atomic write: contents written to `pr-merged.tmp`, then renamed.
+    /// Side-effects: a single `result.messages` entry on success, OR a
+    /// single `result.warnings` entry on a non-recoverable failure path
+    /// (e.g. ledger contains malformed JSON we cannot scan past).
+    pub fn write_pr_merged_sentinel(
+        project_dir: &Path,
+        session_id: &str,
+        result: &mut CleanupResult,
+    ) {
+        // Sanitize session_id -- only [A-Za-z0-9_-] allowed.
+        if session_id.is_empty()
+            || !session_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return;
+        }
+
+        // INF-TSK-050-015 WS-REV iter-1 Finding 1 [CRITICAL] fix:
+        // The ledger is LOCAL per-worktree since PR #221 -- see
+        // `crate::ledger::jsonl::resolve_ledger_dir_inner`. When session_end
+        // runs in worktree mode, project_dir IS the worktree path (matches
+        // the comment at run() line 95 -- "project_dir points to the
+        // worktree"). The previous code peeled up to the main repo root,
+        // which holds at most pre-PR-#221 ledger fragments; production
+        // `pr_merged` events written by cf-knowledge-layer land at
+        // `{worktree}/.state/ledger/work-graph/` via JsonlWriter::resolve_
+        // ledger_dir. Using project_dir directly fixes the dead fast-path.
+        let ledger_dir = project_dir.join(".state").join("ledger").join("work-graph");
+        if !ledger_dir.is_dir() {
+            return; // No ledger directory -- no PR could have been recorded.
+        }
+
+        if !Self::ledger_has_pr_merged_for_session(&ledger_dir, session_id) {
+            return; // No pr_merged event for this session -- nothing to plant.
+        }
+
+        // Sentinel path matches what `pr_merged_sentinel_present` reads in
+        // cleanup.rs:584. Use project_dir (the worktree path in worktree mode)
+        // so the file lands inside the session's worktree-local state tree.
+        let sentinel_dir = project_dir
+            .join(".state")
+            .join("session")
+            .join(session_id)
+            .join("pathflow");
+        if let Err(e) = fs::create_dir_all(&sentinel_dir) {
+            result
+                .warnings
+                .push(format!("SessionEnd: pr-merged sentinel mkdir failed: {e}"));
+            return;
+        }
+        let sentinel = sentinel_dir.join("pr-merged");
+        let tmp = sentinel_dir.join("pr-merged.tmp");
+
+        // Atomic write: temp file + rename.
+        if let Err(e) = fs::write(&tmp, "") {
+            result.warnings.push(format!(
+                "SessionEnd: pr-merged sentinel temp-write failed: {e}"
+            ));
+            return;
+        }
+        if let Err(e) = fs::rename(&tmp, &sentinel) {
+            // Clean up the temp file if rename failed.
+            let _ = fs::remove_file(&tmp);
+            result
+                .warnings
+                .push(format!("SessionEnd: pr-merged sentinel rename failed: {e}"));
+            return;
+        }
+
+        result
+            .messages
+            .push("SessionEnd: planted pr-merged sentinel".to_string());
+    }
+
+    /// Return true if the work-graph ledger contains a `pr_merged` event for
+    /// `session_id`. Best-effort: any I/O or parse failure returns false.
+    #[must_use]
+    pub fn ledger_has_pr_merged_for_session(ledger_dir: &Path, session_id: &str) -> bool {
+        let Ok(entries) = fs::read_dir(ledger_dir) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(&p) else {
+                continue;
+            };
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                // The ledger Event struct stores event-type under `event_type`
+                // (serde rename to `type` in some shapes); newer fragments use
+                // `event`. Check both to be robust to schema drift.
+                let event_match =
+                    matches!(
+                        val.get("event_type").and_then(|v| v.as_str()),
+                        Some("pr_merged")
+                    ) || matches!(val.get("event").and_then(|v| v.as_str()), Some("pr_merged"));
+                if !event_match {
+                    continue;
+                }
+                if val.get("session_id").and_then(|v| v.as_str()) == Some(session_id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Proactively evict expired claim entries from the Loro CRDT document.
@@ -2332,5 +2481,237 @@ mod tests {
 
         let log_dir = dir.path().join(".state").join("logs").join("sessions");
         assert!(log_dir.exists(), "log dir should exist in project dir");
+    }
+
+    // ------------------------------------------------------------------
+    // INF-TSK-050-015 AC-03: pr-merged sentinel writer tests.
+    // ------------------------------------------------------------------
+
+    /// Write a single-line work-graph ledger fragment with the given event
+    /// JSON payload. Mirrors the JsonlWriter shape:
+    /// `{"event_type": "...", "session_id": "...", "timestamp": "...", ...}`.
+    fn write_ledger_fragment(project_dir: &Path, event_type: &str, session_id: &str) {
+        let dir = project_dir.join(".state").join("ledger").join("work-graph");
+        fs::create_dir_all(&dir).unwrap();
+        let payload = serde_json::json!({
+            "event_type": event_type,
+            "session_id": session_id,
+            "timestamp": "2026-05-19T00:00:00Z",
+        });
+        let mut line = serde_json::to_string(&payload).unwrap();
+        line.push('\n');
+        fs::write(dir.join("work-graph.jsonl"), line).unwrap();
+    }
+
+    #[test]
+    fn test_write_pr_merged_sentinel_plants_when_ledger_has_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-prmerged-ok";
+        write_ledger_fragment(dir.path(), "pr_merged", sid);
+
+        let mut result = CleanupResult {
+            session_id: sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        SessionEndCleanup::write_pr_merged_sentinel(dir.path(), sid, &mut result);
+
+        let sentinel = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow")
+            .join("pr-merged");
+        assert!(
+            sentinel.is_file(),
+            "pr-merged sentinel must be planted; messages={:?} warnings={:?}",
+            result.messages,
+            result.warnings,
+        );
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("planted pr-merged sentinel")),
+            "success message must be recorded"
+        );
+    }
+
+    #[test]
+    fn test_write_pr_merged_sentinel_skips_when_no_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-prmerged-none";
+        // No ledger fragment for this session.
+
+        let mut result = CleanupResult {
+            session_id: sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        SessionEndCleanup::write_pr_merged_sentinel(dir.path(), sid, &mut result);
+
+        let sentinel = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow")
+            .join("pr-merged");
+        assert!(
+            !sentinel.exists(),
+            "sentinel must NOT be planted without pr_merged event"
+        );
+        // The skip path is silent -- no warning, no message.
+        assert!(result.warnings.is_empty(), "no warnings on skip");
+    }
+
+    #[test]
+    fn test_write_pr_merged_sentinel_skips_for_other_session_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let our_sid = "ses-ours";
+        let other_sid = "ses-someone-else";
+        // pr_merged event exists, but for a DIFFERENT session.
+        write_ledger_fragment(dir.path(), "pr_merged", other_sid);
+
+        let mut result = CleanupResult {
+            session_id: our_sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        SessionEndCleanup::write_pr_merged_sentinel(dir.path(), our_sid, &mut result);
+
+        let our_sentinel = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(our_sid)
+            .join("pathflow")
+            .join("pr-merged");
+        assert!(
+            !our_sentinel.exists(),
+            "must not plant sentinel based on another session's pr_merged event"
+        );
+    }
+
+    #[test]
+    fn test_write_pr_merged_sentinel_skips_for_non_pr_merged_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-prcreated-only";
+        // Only a pr_created event, no pr_merged -- writer should skip
+        // because the PR was opened but not merged (might be open or closed
+        // without merge).
+        write_ledger_fragment(dir.path(), "pr_created", sid);
+
+        let mut result = CleanupResult {
+            session_id: sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        SessionEndCleanup::write_pr_merged_sentinel(dir.path(), sid, &mut result);
+
+        let sentinel = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow")
+            .join("pr-merged");
+        assert!(
+            !sentinel.exists(),
+            "must not plant sentinel for pr_created-only ledger -- only pr_merged"
+        );
+    }
+
+    #[test]
+    fn test_write_pr_merged_sentinel_rejects_unsafe_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        // Plant a real pr_merged event for an attacker-named session id.
+        write_ledger_fragment(dir.path(), "pr_merged", "../etc/passwd");
+
+        let mut result = CleanupResult {
+            session_id: String::new(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        SessionEndCleanup::write_pr_merged_sentinel(dir.path(), "../etc/passwd", &mut result);
+
+        // Sanitiser must reject the unsafe id BEFORE the ledger is even read.
+        assert!(
+            result.messages.is_empty() && result.warnings.is_empty(),
+            "unsafe session id must produce no side effects"
+        );
+        // And no file should be written anywhere under .state/session.
+        let session_root = dir.path().join(".state").join("session");
+        if session_root.exists() {
+            let count = fs::read_dir(&session_root).unwrap().count();
+            assert_eq!(count, 0, "unsafe id must not create any session dir");
+        }
+    }
+
+    #[test]
+    fn test_write_pr_merged_sentinel_handles_event_field_variant() {
+        // Some ledger fragments use `event` instead of `event_type`. The
+        // writer must accept both schemas (schema drift robustness).
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ses-event-field";
+        let dir_inner = dir.path().join(".state").join("ledger").join("work-graph");
+        fs::create_dir_all(&dir_inner).unwrap();
+        // Note: `event` instead of `event_type`.
+        fs::write(
+            dir_inner.join("work-graph.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "event": "pr_merged",
+                    "session_id": sid,
+                    "timestamp": "2026-05-19T00:00:00Z",
+                })
+            ),
+        )
+        .unwrap();
+
+        let mut result = CleanupResult {
+            session_id: sid.to_string(),
+            pf7_valid: false,
+            sentinels_cleaned: 0,
+            task_preserved: false,
+            team_name: String::new(),
+            warnings: Vec::new(),
+            messages: Vec::new(),
+        };
+        SessionEndCleanup::write_pr_merged_sentinel(dir.path(), sid, &mut result);
+
+        let sentinel = dir
+            .path()
+            .join(".state")
+            .join("session")
+            .join(sid)
+            .join("pathflow")
+            .join("pr-merged");
+        assert!(
+            sentinel.is_file(),
+            "writer must accept `event` field as well as `event_type`"
+        );
     }
 }

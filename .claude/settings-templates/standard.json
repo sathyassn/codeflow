@@ -1,6 +1,6 @@
 {
   "_template": "standard",
-  "_version": "1.1.0",
+  "_version": "1.1.1",
   "_description": "Balanced autonomy - ask for git commit/push/PR and deletes only.",
   "_use_case": "Regular development work, recommended for most users",
   "_path_syntax": {
@@ -487,7 +487,7 @@
     ],
     "PermissionRequest": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Bash|WebFetch",
         "hooks": [
           {
             "type": "command",
