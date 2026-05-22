@@ -85,16 +85,25 @@ pub(crate) fn w1_timeout_outcome(wt_path: &std::path::Path) -> Option<String> {
 /// - `exit_code == 124` AND branch is on origin: `completed` with warning
 ///   (W1 — work pushed before timeout).
 /// - `exit_code == 124` AND branch NOT on origin (or inconclusive): `failed`.
+/// - INF-TSK-024-053 AC-3: `exit_code == 125`: `timeout` with non-empty
+///   error_msg sourced from `output` (the synthetic
+///   `stage_timeout: no ws-* sentinel in {n}s` message produced by the
+///   stage_timeout select! arm). This maps the dedicated stage_timeout
+///   exit code to the `Timeout` task_run status downstream, instead of
+///   the generic `Failed` it used to silently collapse into.
 /// - Any other non-zero exit: `failed`.
 ///
 /// `wt_path` is the worker's worktree (used for the `branch_on_origin`
 /// check). `pr_number` is consulted only for the `integration_auto_merge`
-/// guard. Pure function — no side effects.
+/// guard. `output` is the invoker's terminal output — only consulted on
+/// the `exit_code == 125` path to surface the stage_timeout message in
+/// place of an empty error. Pure function — no side effects.
 pub(crate) fn classify_invoke_outcome(
     wt_path: &std::path::Path,
     exit_code: i32,
     pr_number: i64,
     integration_auto_merge: bool,
+    output: &str,
 ) -> (&'static str, String, Option<String>) {
     if exit_code == 0 {
         if integration_auto_merge && pr_number == 0 {
@@ -110,6 +119,20 @@ pub(crate) fn classify_invoke_outcome(
         if let Some(warning) = w1_timeout_outcome(wt_path) {
             return ("completed", String::new(), Some(warning));
         }
+    }
+    if exit_code == 125 {
+        // INF-TSK-024-053 AC-3: stage_timeout exit code maps to `timeout`,
+        // not `failed`. The error string MUST be non-empty so the TUI and
+        // `codeflow autorun results` show an actionable message. Fall back
+        // to a generic phrase when the invoker returned empty output (the
+        // production path always populates a stage_timeout message, but
+        // defending against the empty case keeps the contract honest).
+        let error_msg = if output.is_empty() {
+            "stage_timeout: worker made no stage progress within configured window".to_string()
+        } else {
+            output.to_string()
+        };
+        return ("timeout", error_msg, None);
     }
     ("failed", String::new(), None)
 }
@@ -256,6 +279,50 @@ where
     }
 }
 
+/// INF-TSK-024-053 AC-4: kill the tmux session that hosts the orphan
+/// claude subprocess after a stage_timeout fires.
+///
+/// Why this exists: the stage_timeout `tokio::select!` arm wins over the
+/// `invoke_fut` (claude invocation) future. tokio drops the loser future,
+/// but the claude subprocess running INSIDE the tmux session is an
+/// independent process group — it survives the dropped future and leaks
+/// until the outer wall-clock timeout or until killed manually.
+/// Production observation (ses-01ks677d4d1yzq655f5qpth03x): claude PID
+/// 57027 had ELAPSED 10:49 AFTER the worker_failed event, confirming
+/// the leak.
+///
+/// Killing the tmux session terminates the pane, which sends SIGHUP to
+/// the pane's process group (including the orphan claude). The normal
+/// post-invoke cleanup uses this same `kill_session` API plus an
+/// escalation to `escalate_tmux_kill_to_sigkill` on failure; we mirror
+/// that two-step pattern here so behavior stays consistent across the
+/// timeout and normal-exit paths.
+///
+/// Best-effort: failures are logged and the timeout decision still
+/// stands. The worker MUST return an `InvokeResult` from the select!
+/// arm regardless of what happens to the tmux session.
+pub(crate) async fn kill_tmux_on_stage_timeout<T: TmuxRunner>(
+    tmux: &T,
+    tmux_name: &str,
+    log_path: &std::path::Path,
+) {
+    if let Err(e) = tmux.kill_session(tmux_name).await {
+        worker_log(
+            log_path,
+            &format!("STAGE_TIMEOUT_TMUX_KILL_FAILED session={tmux_name} err={e}"),
+        );
+        // Mirror the post-invoke cleanup's escalation policy so a
+        // failed `kill_session` does not silently leak claude. Best-
+        // effort — failures here do not block the timeout decision.
+        let _ = escalate_tmux_kill_to_sigkill(tmux_name, log_path, resolve_tmux_pane_pid);
+    } else {
+        worker_log(
+            log_path,
+            &format!("STAGE_TIMEOUT_TMUX_KILLED session={tmux_name}"),
+        );
+    }
+}
+
 /// Default timeout for a single worker (120 minutes).
 pub const DEFAULT_WORKER_TIMEOUT: Duration = Duration::from_secs(120 * 60);
 
@@ -271,10 +338,47 @@ pub const WORKER_HEARTBEAT_INTERVAL_SECS: u64 = 10;
 /// threshold; large enough that the filesystem scan is not hot.
 pub(crate) const STAGE_TIMEOUT_POLL_INTERVAL_SECS: u64 = 30;
 
-/// Most-recent ws-* sentinel mtime (Unix seconds) under
+/// INF-TSK-024-053 AC-2: returns `true` when the given sentinel filename
+/// counts as stage progress for the stage_timeout watcher.
+///
+/// Three families are recognized:
+/// - `pathflow-ws-*` / `ws-*` — stage completion sentinels (WS-DEV, WS-REV,
+///   WS-QA, etc.). These are the primary signal.
+/// - the PF3 sentinel — branch creation sentinel emitted at the end of
+///   PF3-CLASSIFY. PR #319 baseline observation: real FIX tasks can spend
+///   the bulk of the first hour in PF1/PF2/PF3 (context loading, team spawn,
+///   git branch). Without resetting the watcher on PF3 completion, that
+///   pre-work eats the WS-DEV budget. Including PF3 gives WS-DEV a fresh
+///   `stage_timeout_secs` window once branch creation completes.
+///
+/// Excluded: PF1, PF2, PF4..7. Those either fire too early (PF1/2 happen
+/// routinely, every session) or too late (PF4..7 happen after a `ws-*`
+/// sentinel, by which point the watcher has already reset on the stage
+/// sentinel).
+///
+/// Implementation note: PF3's sentinel name is resolved through `Phase`
+/// (canonical type), NOT a string literal — this preserves the
+/// `no_hardcoded_pathflow_names` lint guard's invariant that production
+/// code never hardcodes phase names.
+fn is_stage_progress_sentinel(name: &str) -> bool {
+    if name.starts_with("pathflow-ws-") || name.starts_with("ws-") {
+        return true;
+    }
+    let pf3_index = crate::types::Phase::Pf3Classify.index();
+    let pathflow_pf3 = format!("pathflow-pf-{pf3_index}");
+    let bare_pf3 = format!("pf-{pf3_index}");
+    name == pathflow_pf3 || name == bare_pf3
+}
+
+/// Most-recent stage-progress sentinel mtime (Unix seconds) under
 /// `.state/sentinels/pathflow/{session_id}/`. Returns `None` when the
 /// directory does not exist yet (no stage has emitted a sentinel) or
-/// no `ws-*` files are present.
+/// no eligible files are present.
+///
+/// INF-TSK-024-053 AC-2: "stage progress" now includes `pathflow-pf-3`
+/// (branch creation) in addition to the `ws-*` family. See
+/// [`is_stage_progress_sentinel`] for the inclusion rationale and the
+/// list of recognized filenames.
 ///
 /// Worktree-aware: when `worktree_path` is `Some`, sentinels live at
 /// `{worktree}/.state/sentinels/pathflow/{session_id}/`; otherwise
@@ -299,10 +403,7 @@ pub(crate) fn latest_ws_sentinel_mtime_secs(
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        // Match the `pathflow-ws-*` (or bare `ws-*`) naming used by
-        // `sentinel-write` PostToolUse hook. Both prefixes have been
-        // observed in the codebase historically.
-        if !(name_str.starts_with("pathflow-ws-") || name_str.starts_with("ws-")) {
+        if !is_stage_progress_sentinel(name_str) {
             continue;
         }
         if let Ok(meta) = entry.metadata() {
@@ -401,9 +502,10 @@ pub(crate) fn stage_timeout_decision(
 }
 
 /// Watch for stage-timeout. Resolves when a polling interval observes
-/// no new `ws-*` sentinel for longer than `stage_timeout_secs` since
-/// the most recent sentinel mtime (or session start if no sentinel
-/// exists yet).
+/// no new stage-progress sentinel (`ws-*` or `pathflow-pf-3`) for longer
+/// than `stage_timeout_secs` since the most recent sentinel mtime (or
+/// session start if no sentinel exists yet). See
+/// [`is_stage_progress_sentinel`] for the eligible filename list.
 ///
 /// `start_baseline_secs` is the wall-clock baseline used until the
 /// first sentinel appears — typically the worker start time as Unix
@@ -1760,13 +1862,18 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 }
             };
 
-        // STAGE TIMEOUT: a parallel watcher that observes ws-* sentinel
-        // mtime in `.state/sentinels/pathflow/{worker_session_id}/`. If
-        // the worker makes no stage progress within `stage_timeout_secs`
-        // (default 3600), the watcher resolves and the select! arm wins
-        // over the claude invoke. Distinct from the outer wall-clock
-        // timeout: a worker can be alive but stuck on a single stage
-        // (e.g. cf-development hung), in which case worker_timeout_secs
+        // STAGE TIMEOUT: a parallel watcher that observes `ws-*` and
+        // `pathflow-pf-3` sentinel mtime in
+        // `.state/sentinels/pathflow/{worker_session_id}/`. If the worker
+        // makes no stage progress within `stage_timeout_secs` (default
+        // 7200 per INF-TSK-024-053 — bumped from 3600 because real
+        // production FIX tasks legitimately need >60min to first
+        // sentinel), the watcher resolves and the select! arm wins over
+        // the claude invoke. The watcher also resets on the
+        // `pathflow-pf-3` sentinel so PF1/PF2 latency does not consume
+        // the WS-DEV budget. Distinct from the outer wall-clock timeout:
+        // a worker can be alive but stuck on a single stage (e.g.
+        // cf-development hung), in which case worker_timeout_secs
         // (typically 5400-7200s) would let it sit idle for 1-2 hours.
         let stage_timeout_secs = crate::autorun::config::load_config(&self.project_dir)
             .unwrap_or_default()
@@ -1807,8 +1914,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                 last_seen = stage_watcher => {
                     // Emit `stage_timeout` event to pathflow-events.jsonl // EXEMPT: comment names the ledger filename
                     // (LOCAL per-worktree since INF-TSK-024-035), then
-                    // synthesize an exit-125 result. The worker bus path
-                    // turns this into a `failed` outcome below.
+                    // synthesize an exit-125 result. The post-invoke
+                    // status mapping turns 125 into a `Timeout` task_run
+                    // status (INF-TSK-024-053 AC-3, not `Failed` as the
+                    // pre-AC-3 code silently did).
                     emit_stage_timeout_event(
                         &self.project_dir,
                         worker_sid.as_str(),
@@ -1817,6 +1926,10 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                         Some(last_seen),
                         stage_timeout_secs,
                     );
+                    // INF-TSK-024-053 AC-4: kill the tmux session BEFORE
+                    // returning the synthetic InvokeResult. See
+                    // `kill_tmux_on_stage_timeout` for the leak rationale.
+                    kill_tmux_on_stage_timeout(&self.tmux, &tmux_name, &log_path).await;
                     Ok(InvokeResult {
                         exit_code: 125,
                         pr_number: 0,
@@ -2360,6 +2473,7 @@ impl<T: TmuxRunner, C: ClaudeInvoker, W: WorktreeProvider, S: crate::store::Data
                     invoke_result.exit_code,
                     invoke_result.pr_number,
                     cfg.integration_auto_merge,
+                    &invoke_result.output,
                 );
                 if status == "pr_creation_failed" {
                     Self::emit_autorun_event(
@@ -4984,7 +5098,7 @@ Read and implement.
     #[test]
     fn w1_exit_zero_completed() {
         let td = tempfile::tempdir().unwrap();
-        let (status, msg, warning) = classify_invoke_outcome(td.path(), 0, 42, false);
+        let (status, msg, warning) = classify_invoke_outcome(td.path(), 0, 42, false, "");
         assert_eq!(status, "completed");
         assert!(msg.is_empty());
         assert!(warning.is_none());
@@ -4993,7 +5107,7 @@ Read and implement.
     #[test]
     fn w1_exit_zero_pr_creation_failed_when_auto_merge_no_pr() {
         let td = tempfile::tempdir().unwrap();
-        let (status, msg, warning) = classify_invoke_outcome(td.path(), 0, 0, true);
+        let (status, msg, warning) = classify_invoke_outcome(td.path(), 0, 0, true, "");
         assert_eq!(status, "pr_creation_failed");
         assert!(msg.contains("PR expected"));
         assert!(warning.is_none());
@@ -5003,7 +5117,7 @@ Read and implement.
     fn w1_exit_124_failed_when_branch_not_on_origin() {
         // No git repo here at all → branch_on_origin returns Inconclusive.
         let td = tempfile::tempdir().unwrap();
-        let (status, _msg, warning) = classify_invoke_outcome(td.path(), 124, 0, false);
+        let (status, _msg, warning) = classify_invoke_outcome(td.path(), 124, 0, false, "");
         assert_eq!(status, "failed", "exit 124 + no git → failed");
         assert!(warning.is_none());
     }
@@ -5011,7 +5125,7 @@ Read and implement.
     #[test]
     fn w1_exit_124_completed_when_branch_on_origin() {
         let work = make_repo_with_origin("w1-on-origin");
-        let (status, msg, warning) = classify_invoke_outcome(work.path(), 124, 0, false);
+        let (status, msg, warning) = classify_invoke_outcome(work.path(), 124, 0, false, "");
         assert_eq!(
             status, "completed",
             "AC #34: exit 124 + branch on origin → completed (success-with-warning)"
@@ -5026,11 +5140,69 @@ Read and implement.
     #[test]
     fn w1_other_nonzero_exit_failed() {
         let td = tempfile::tempdir().unwrap();
+        // exit_code 125 is reserved for stage_timeout (see
+        // `exit_125_maps_to_timeout_with_non_empty_error` below); the
+        // "any other non-zero" arm here covers 1, 2, 137, etc.
         for code in [1, 2, 137] {
-            let (status, _, warning) = classify_invoke_outcome(td.path(), code, 0, false);
+            let (status, _, warning) = classify_invoke_outcome(td.path(), code, 0, false, "");
             assert_eq!(status, "failed", "exit {code} → failed");
             assert!(warning.is_none());
         }
+    }
+
+    // ---- INF-TSK-024-053 AC-3: exit_code=125 → timeout status ----
+
+    #[test]
+    fn exit_125_maps_to_timeout_with_non_empty_error() {
+        let td = tempfile::tempdir().unwrap();
+        let output = "stage_timeout: no ws-* sentinel in 7200s";
+        let (status, error_msg, warning) =
+            classify_invoke_outcome(td.path(), 125, 0, false, output);
+        assert_eq!(
+            status, "timeout",
+            "AC-3: exit_code=125 must map to `timeout` status, not `failed`"
+        );
+        assert!(
+            !error_msg.is_empty(),
+            "AC-3: timeout status must surface a non-empty error_msg; got empty"
+        );
+        assert_eq!(
+            error_msg, output,
+            "AC-3: error_msg must come from invoke_result.output verbatim"
+        );
+        assert!(warning.is_none(), "timeout is a failure path, no warning");
+    }
+
+    #[test]
+    fn exit_125_empty_output_uses_generic_timeout_message() {
+        let td = tempfile::tempdir().unwrap();
+        let (status, error_msg, warning) = classify_invoke_outcome(td.path(), 125, 0, false, "");
+        assert_eq!(
+            status, "timeout",
+            "AC-3: exit_code=125 always means timeout"
+        );
+        assert!(
+            !error_msg.is_empty(),
+            "AC-3: error_msg must be non-empty even when output is empty"
+        );
+        assert!(
+            error_msg.contains("stage_timeout"),
+            "fallback error must mention stage_timeout; got {error_msg:?}"
+        );
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn exit_125_ignores_integration_auto_merge_pr_check() {
+        // Even when integration_auto_merge=true and pr_number=0, exit 125 must
+        // produce `timeout` (not the `pr_creation_failed` exit-0 branch).
+        let td = tempfile::tempdir().unwrap();
+        let (status, _msg, _warning) =
+            classify_invoke_outcome(td.path(), 125, 0, true, "stage_timeout: foo");
+        assert_eq!(
+            status, "timeout",
+            "exit 125 must short-circuit the exit-0 PR check"
+        );
     }
 
     // ---- Rework iter 1 Finding 3: shared w1_timeout_outcome helper ----
@@ -5046,7 +5218,7 @@ Read and implement.
         assert_eq!(outcome.as_deref(), Some(W1_TIMEOUT_ON_ORIGIN_WARNING));
 
         // And the classify path emits the same warning.
-        let (status, _, warning) = classify_invoke_outcome(work.path(), 124, 0, false);
+        let (status, _, warning) = classify_invoke_outcome(work.path(), 124, 0, false, "");
         assert_eq!(status, "completed");
         assert_eq!(warning.as_deref(), Some(W1_TIMEOUT_ON_ORIGIN_WARNING));
     }
@@ -5147,6 +5319,149 @@ Read and implement.
         std::fs::write(dir.join("ws-rev"), "").unwrap();
         let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
         assert!(result.is_some(), "bare ws-* is also accepted");
+    }
+
+    // ---- INF-TSK-024-053 AC-2: pf-3 heartbeat resets stage_watcher ----
+
+    /// AC-2: `pathflow-pf-3` (branch creation) is now recognized as a
+    /// stage_watcher heartbeat. Without this, long PF1/PF2/PF3 phases
+    /// would consume the WS-DEV stage_timeout budget — a 60-minute
+    /// stage budget could be eaten entirely by context loading and
+    /// branch creation, leaving WS-DEV with no time to make progress.
+    #[test]
+    fn test_latest_ws_sentinel_mtime_picks_up_pf_3_sentinel_ac2() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-ac2-pf3-only";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pathflow-pf-3"), "").unwrap();
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
+        assert!(
+            result.is_some(),
+            "AC-2: pathflow-pf-3 alone must count as stage progress (was: None)"
+        );
+    }
+
+    /// AC-2: bare `pf-3` (without the `pathflow-` prefix) is also accepted,
+    /// mirroring the dual-prefix tolerance the existing `ws-*` matcher
+    /// already has for historical sentinel naming.
+    #[test]
+    fn test_latest_ws_sentinel_mtime_picks_up_bare_pf_3_ac2() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-ac2-bare-pf3";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pf-3"), "").unwrap();
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
+        assert!(
+            result.is_some(),
+            "AC-2: bare pf-3 must also count as stage progress"
+        );
+    }
+
+    /// AC-2: a fresh `pf-3` mtime resets the stage_watcher clock — when
+    /// `pf-3` is newer than `ws-dev`, the watcher tracks the `pf-3`
+    /// mtime. (Today this can happen if PF3 fires late after a stage
+    /// has briefly produced a `ws-*` sentinel — e.g. recovery flows —
+    /// but the more important property is that BOTH sources are
+    /// considered when computing the most-recent heartbeat.)
+    #[test]
+    fn test_latest_ws_sentinel_mtime_pf_3_wins_when_newer_ac2() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-ac2-pf3-newer";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let dev = dir.join("pathflow-ws-dev");
+        let pf3 = dir.join("pathflow-pf-3");
+        std::fs::write(&dev, "").unwrap();
+        std::fs::write(&pf3, "").unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        let dev_old = filetime::FileTime::from_unix_time(now - 600, 0);
+        let pf3_now = filetime::FileTime::from_unix_time(now, 0);
+        filetime::set_file_mtime(&dev, dev_old).unwrap();
+        filetime::set_file_mtime(&pf3, pf3_now).unwrap();
+
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None).unwrap();
+        assert!(
+            result >= now - 1,
+            "AC-2: pf-3 (newer) must beat ws-dev (older); got {result}, want ~{now}"
+        );
+    }
+
+    /// AC-2: `pf-1`, `pf-2`, `pf-4`..`pf-7` must NOT be treated as
+    /// heartbeats. Including them would either (a) reset the clock
+    /// during normal session startup (pf-1/2 fire on every session)
+    /// or (b) be redundant with a ws-* sentinel that already arrived.
+    #[test]
+    fn test_latest_ws_sentinel_mtime_excludes_non_pf_3_phase_sentinels_ac2() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-ac2-other-phases";
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        // None of these phases should match.
+        for name in ["pathflow-pf-1", "pathflow-pf-2", "pathflow-pf-4", "pf-5"] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+        let result = latest_ws_sentinel_mtime_secs(td.path(), sid, None);
+        assert_eq!(
+            result, None,
+            "AC-2: only pf-3 and ws-* count; pf-1/2/4..7 must be excluded"
+        );
+    }
+
+    /// AC-2: `is_stage_progress_sentinel` allow-list explicit tests. Pure
+    /// helper, lots of small boundary cases — easier to read as one test.
+    #[test]
+    fn test_is_stage_progress_sentinel_allowlist_ac2() {
+        // Allowed:
+        assert!(is_stage_progress_sentinel("pathflow-ws-dev"));
+        assert!(is_stage_progress_sentinel("pathflow-ws-rev"));
+        assert!(is_stage_progress_sentinel("pathflow-ws-qa"));
+        assert!(is_stage_progress_sentinel("ws-rev"));
+        assert!(is_stage_progress_sentinel("pathflow-pf-3"));
+        assert!(is_stage_progress_sentinel("pf-3"));
+        // Disallowed:
+        assert!(!is_stage_progress_sentinel("pathflow-pf-1"));
+        assert!(!is_stage_progress_sentinel("pathflow-pf-2"));
+        assert!(!is_stage_progress_sentinel("pathflow-pf-4"));
+        assert!(!is_stage_progress_sentinel("pathflow-pf-7"));
+        assert!(!is_stage_progress_sentinel("pf-1"));
+        assert!(!is_stage_progress_sentinel("random-file"));
+        assert!(!is_stage_progress_sentinel(""));
+        // Avoid the prefix-trap: a filename starting with "pf-3" but
+        // NOT exactly "pf-3" (e.g. "pf-30") must NOT match. We use
+        // `==` for the pf-3 family (precise) but `starts_with` for
+        // ws-*; the equality match prevents accidental aliasing.
+        assert!(
+            !is_stage_progress_sentinel("pf-30"),
+            "exact-match guards against prefix-trap (pf-30 != pf-3)"
+        );
+        assert!(
+            !is_stage_progress_sentinel("pathflow-pf-30"),
+            "exact-match guards against prefix-trap"
+        );
     }
 
     #[test]
@@ -5380,6 +5695,55 @@ Read and implement.
         assert!(
             result.is_err(),
             "watcher MUST be still polling (real-time timeout fired); got resolved = {result:?}"
+        );
+    }
+
+    /// INF-TSK-024-053 AC-2 integration: the watcher MUST treat a fresh
+    /// `pathflow-pf-3` sentinel as a heartbeat. Without AC-2 the watcher
+    /// would fire — baseline is in the past, but pf-3 is current. With
+    /// AC-2 the watcher polls, sees the fresh pf-3 mtime, computes
+    /// `stale_for = now - pf3_mtime` which is small, and stays parked.
+    #[tokio::test]
+    async fn test_await_stage_timeout_resets_on_fresh_pf_3_sentinel_ac2() {
+        let td = tempfile::tempdir().unwrap();
+        let sid = "ses-ac2-watcher-pf3-reset";
+        // Set up a sentinel directory with a CURRENT pf-3 sentinel.
+        let dir = td
+            .path()
+            .join(".state")
+            .join("sentinels")
+            .join("pathflow")
+            .join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pf3_path = dir.join("pathflow-pf-3");
+        std::fs::write(&pf3_path, "").unwrap();
+        // Use a baseline far enough in the past that — without AC-2 —
+        // the watcher would fire on the first poll (no ws-* exists, so
+        // last_seen would fall back to baseline, which is stale).
+        let baseline = chrono::Utc::now().timestamp() - 600; // 10min ago
+        // Force pf-3 mtime to NOW to guarantee it's a fresh heartbeat.
+        let now = chrono::Utc::now().timestamp();
+        filetime::set_file_mtime(&pf3_path, filetime::FileTime::from_unix_time(now, 0)).unwrap();
+        // With AC-2 active, the watcher should stay parked because pf-3
+        // is current. We bound the test with a real-time timeout —
+        // resolution within the window means the AC-2 logic regressed.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            await_stage_timeout_with_interval(
+                td.path().to_path_buf(),
+                sid.into(),
+                None,
+                60, // 60s stage timeout
+                baseline,
+                std::time::Duration::from_millis(10), // tight poll
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "AC-2: watcher MUST stay parked when a fresh pf-3 sentinel is \
+             present (resolved = {result:?}) — regression means pf-3 is not \
+             being counted as stage progress"
         );
     }
 
@@ -6241,6 +6605,69 @@ Read and implement.
             wt_cleanup.load(Ordering::SeqCst),
             "worktree must be cleaned up even when tmux kill fails"
         );
+    }
+
+    // ---- INF-TSK-024-053 AC-4: tmux kill on stage_timeout ----
+
+    /// AC-4 happy path: when stage_timeout fires, the worker calls
+    /// `tmux.kill_session(&tmux_name)` BEFORE returning the synthetic
+    /// `InvokeResult { exit_code: 125 }`. This prevents the claude
+    /// subprocess from leaking (production observation:
+    /// ses-01ks677d4d1yzq655f5qpth03x leaked +10:49).
+    #[tokio::test]
+    async fn test_kill_tmux_on_stage_timeout_invokes_kill_session_ac4() {
+        let (tmux, _created, killed) = MockTmux::new();
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("worker.log");
+        let tmux_name = "cf-ar-stage-timeout-ac4";
+
+        kill_tmux_on_stage_timeout(&tmux, tmux_name, &log_path).await;
+
+        assert!(
+            killed.load(Ordering::SeqCst),
+            "AC-4: tmux.kill_session MUST be called on stage_timeout to prevent claude leak"
+        );
+        // Log line must record the kill so on-call can audit.
+        let log_content = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(
+            log_content.contains("STAGE_TIMEOUT_TMUX_KILLED"),
+            "AC-4: success log line must mention STAGE_TIMEOUT_TMUX_KILLED; got: {log_content:?}"
+        );
+        assert!(
+            log_content.contains(tmux_name),
+            "AC-4: log line must identify the tmux session"
+        );
+    }
+
+    /// AC-4 escalation path: when `kill_session` returns Err, the
+    /// helper still records the attempt and tries the SIGKILL
+    /// escalation (best-effort). The function MUST NOT panic and MUST
+    /// NOT propagate the error — the timeout decision is already made
+    /// and the worker has to continue.
+    #[tokio::test]
+    async fn test_kill_tmux_on_stage_timeout_escalates_on_kill_failure_ac4() {
+        let (tmux, kill_attempted) = FailingTmux::new();
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join("worker.log");
+        let tmux_name = "cf-ar-stage-timeout-ac4-failing";
+
+        kill_tmux_on_stage_timeout(&tmux, tmux_name, &log_path).await;
+
+        assert!(
+            kill_attempted.load(Ordering::SeqCst),
+            "AC-4: kill_session must be attempted even when it will fail"
+        );
+        // Failure path must log the failure and attempt escalation.
+        let log_content = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(
+            log_content.contains("STAGE_TIMEOUT_TMUX_KILL_FAILED"),
+            "AC-4: failure log line must mention STAGE_TIMEOUT_TMUX_KILL_FAILED; got: {log_content:?}"
+        );
+        // The SIGKILL escalation path runs but typically finds no pane
+        // for a synthetic tmux session name — so it's allowed to log a
+        // "no_pane_pid" line. We don't assert on that specific text
+        // because the real escalation depends on whether `tmux` is
+        // installed in the test environment.
     }
 
     // --- INF-TSK-050-004 AC-04: DB CREATE failure → worker fails ---

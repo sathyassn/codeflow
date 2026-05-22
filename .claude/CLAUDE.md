@@ -434,6 +434,7 @@ In autorun mode (no human present), phase transitions happen automatically:
 - **Parallel workers:** Each autorun worker runs in its own worktree via `WorktreeProvider` trait. Workers pre-claim file_scope entries at startup via acquire_batch(). Claims are enforced via scope_policy (soft by default for autorun). Merge conflicts are detected via `check_merge_conflicts()` before PR creation. The merge queue (`coordination/merge_queue.rs`) serializes PR merges across concurrent workers.
 - **Configuration:** All parallel execution settings are in `.codeflow/config/parallel-work/parallel-work-config.json` (5 sections: worktree, sync, merge, claims, autorun). Config is optional — defaults apply when absent. See `autorun/config.rs` for loading and validation.
 - **Coordination events:** Claim lifecycle events (acquired, conflict, released, scope expansion) are emitted to `coordination-events.jsonl` via `ledger/routing.rs`. Event types are defined in `coordination/types/events.rs`.
+- **Stage timeout (INF-TSK-024-053):** A parallel watcher (`await_stage_timeout` in `autorun/worker.rs`) polls `.state/sentinels/pathflow/{session_id}/` every 30s and fires when no `ws-*` or `pathflow-pf-3` sentinel has been updated within `autorun.stage_timeout_secs` (default 7200s / 120min). When fired: the worker emits a `stage_timeout` event to `pathflow-events.jsonl`, kills the tmux session that hosts the claude subprocess (preventing leaks), and returns a synthetic `InvokeResult { exit_code: 125 }`. The post-invoke classifier maps `exit_code=125` to `AutorunTaskRunStatus::Timeout` with a non-empty error message — distinct from the generic `Failed` collapse the code did pre-AC-3. `pathflow-pf-3` (branch creation) is treated as a heartbeat so PF1/PF2 context loading does not consume the WS-DEV budget.
 
 **Lead autorun detection:** The lead detects autorun mode by checking for the `AUTORUN_SESSION_ID` environment variable. When set, the lead operates autonomously without user prompts at any phase boundary.
 
@@ -1002,7 +1003,7 @@ WS-DEV --> WS-REV --> [approved] --> WS-QA --> [pass] --> PF5-VERIFY
 |-----------|---------|---------|
 | `max_rework_iterations` | 3 | WS-REV returns `changes_requested` --> back to primary stage |
 | `max_qa_retries` | 3 | WS-QA returns `fail` --> back to WS-DEV |
-| `stage_timeout_minutes` | 60 | Any single stage exceeds time limit (autorun only) |
+| `stage_timeout_secs` | 7200 (120 min) | A worker makes no stage progress (no new `ws-*` or `pathflow-pf-3` sentinel) within this window. INF-TSK-024-053: bumped from 3600 because real FIX tasks legitimately need >60min to reach the first stage sentinel. The watcher also resets on `pathflow-pf-3` (branch creation), so PF1/PF2 latency does not consume the WS-DEV budget. When fired, the worker reports `STATUS=timeout` (not `failed`) with a non-empty error message. |
 
 If limits exceeded: escalate to user (interactive) or mark task `blocked` and skip to PF7-END (autorun).
 
@@ -1175,6 +1176,15 @@ The checkpoint file (`.state/session/{SID}/pathflow/pathflow-phase-tasks.json`) 
 Agents must NOT create sentinels manually -- if a sentinel appears missing, investigate the hook pipeline or verify the session ID path at `.state/sentinels/pathflow/{session-id}/`.
 
 **Worktree note:** In worktree mode, sentinels are stored at `{worktree}/.state/sentinels/` (local, not symlinked). Each worktree has its own sentinel namespace.
+
+**Autorun stage_timeout heartbeats (INF-TSK-024-053):** The autorun stage_timeout watcher (`await_stage_timeout` in `autorun/worker.rs`) treats two sentinel families as "stage progress" and resets its clock on whichever is newer:
+
+| Family | Filenames | Why |
+|--------|-----------|-----|
+| Stage completion | `pathflow-ws-*` / `ws-*` (dev, rev, qa, etc.) | Primary signal — a stage finished |
+| Branch creation | `pathflow-pf-3` / `pf-3` | PF3-CLASSIFY heartbeat — prevents PF1/PF2/PF3 latency from eating the WS-DEV budget |
+
+Other phase sentinels (`pf-1`, `pf-2`, `pf-4..7`) are NOT heartbeats — they either fire too early (pf-1/2 every session) or too late (pf-4..7 after a `ws-*` already reset the clock). See `is_stage_progress_sentinel` in `core/src/autorun/worker.rs` for the canonical inclusion list. When stage_timeout fires, the worker kills its tmux session (preventing claude subprocess leaks) and returns `exit_code=125`, which the post-invoke classifier maps to `AutorunTaskRunStatus::Timeout`.
 
 → See Section 4 (Phase Reference) for sentinel-to-phase mapping
 

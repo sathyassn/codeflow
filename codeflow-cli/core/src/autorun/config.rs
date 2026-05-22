@@ -129,11 +129,18 @@ impl Default for RetentionConfig {
 pub struct AutorunConfig {
     /// Worker timeout in seconds (default: 7200 = 120 minutes).
     pub worker_timeout_secs: u64,
-    /// Stage timeout in seconds (default: 3600 = 60 minutes). If a worker
-    /// makes no stage progress (no new `ws-*` sentinel appears under
-    /// `.state/sentinels/pathflow/{session_id}/`) within this window, the
-    /// worker is aborted with exit code 125. Distinct from
+    /// Stage timeout in seconds (default: 7200 = 120 minutes). If a worker
+    /// makes no stage progress (no new `ws-*` sentinel or `pathflow-pf-3`
+    /// sentinel appears under `.state/sentinels/pathflow/{session_id}/`)
+    /// within this window, the worker is aborted with exit code 125 and
+    /// the wrapper status is mapped to `Timeout`. Distinct from
     /// `worker_timeout_secs`, which bounds total wall-clock time.
+    ///
+    /// INF-TSK-024-053: bumped from 3600 to 7200 because production
+    /// observation showed long FIX tasks legitimately need >60 minutes
+    /// to reach their first `ws-*` sentinel. The watcher also resets on
+    /// the `pathflow-pf-3` sentinel (branch creation) so PF1/PF2 latency
+    /// no longer eats into the WS-DEV budget.
     pub stage_timeout_secs: u64,
     /// INF-TSK-050-001 AC #21: maximum seconds an autorun session may
     /// remain in `Aborting` status before the orchestrator promotes it to
@@ -159,7 +166,7 @@ impl Default for AutorunConfig {
     fn default() -> Self {
         Self {
             worker_timeout_secs: 7200,
-            stage_timeout_secs: 3600,
+            stage_timeout_secs: 7200,
             abort_timeout_secs: 300,
             blocked_behavior: "skip_and_continue".to_string(),
             report_dir: ".state/autorun/reports".to_string(),
@@ -807,8 +814,8 @@ mod tests {
         let cfg = AutorunConfig::default();
         assert_eq!(cfg.worker_timeout_secs, 7200);
         assert_eq!(
-            cfg.stage_timeout_secs, 3600,
-            "stage_timeout_secs default must be 3600s (60 minutes)"
+            cfg.stage_timeout_secs, 7200,
+            "stage_timeout_secs default must be 7200s (120 minutes) per INF-TSK-024-053"
         );
         assert_eq!(
             cfg.abort_timeout_secs, 300,
@@ -878,8 +885,8 @@ mod tests {
         let cfg: ParallelWorkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.autorun.worker_timeout_secs, 5400);
         assert_eq!(
-            cfg.autorun.stage_timeout_secs, 3600,
-            "stage_timeout_secs must default when absent"
+            cfg.autorun.stage_timeout_secs, 7200,
+            "stage_timeout_secs must default to 7200 when absent (INF-TSK-024-053)"
         );
     }
 

@@ -58,8 +58,10 @@ pub struct SweepSummary {
 /// INF-TSK-050-001 AC #4: this is the legacy bare-PID liveness probe. It's
 /// retained for callers that genuinely don't care about the process name
 /// (e.g. signal-only health checks). The autorun reaper paths use
-/// [`is_session_pid_alive`] instead, which validates the name is "claude"
-/// to close the PID-reuse window.
+/// [`is_session_pid_alive`] instead, which delegates to
+/// `validate_orchestrator_pid` (INF-TSK-024-053 AC-5 — was previously
+/// `validate_claude_pid`, but `autorun_session.pid` is the orchestrator,
+/// not Claude, so the name guard always tripped).
 ///
 /// Fail-secure: returns `false` for non-positive PIDs.
 #[must_use]
@@ -80,43 +82,57 @@ pub fn check_pid_alive(pid: i64) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// Validate that an autorun session's PID is alive AND owned by a Claude
-/// Code process. Returns `true` only when both invariants hold.
+/// Validate that an autorun session's PID (the orchestrator process) is
+/// alive. Returns `true` only when the kernel reports the process alive.
 ///
-/// INF-TSK-050-001 AC #4: closes the PID-reuse race where the orchestrator
-/// crashed and another unrelated process was assigned the same PID before
-/// the reaper next swept. A bare `kill -0` would treat that PID as alive
-/// even though the original orchestrator is gone, leaving the session row
-/// stuck in `Running` indefinitely. The name check ("claude" anywhere in
-/// the process comm name) ensures we only treat a Claude Code PID as a
-/// live owner of an autorun session.
+/// INF-TSK-024-053 AC-5: this function validates `autorun_session.pid`,
+/// which is the **orchestrator** PID (`codeflow autorun run`) — written
+/// from `std::process::id()` in `orchestrator.rs:189`. It is NEVER a
+/// Claude Code PID. The validator therefore uses
+/// `session::liveness::validate_orchestrator_pid` (alive-only) rather
+/// than `validate_claude_pid` (alive AND named "claude"), which would
+/// always return `false` for the orchestrator and falsely mark every
+/// live autorun session stuck.
 ///
 /// Fail-secure invariants (cf-security flagged these as load-bearing):
 ///
 /// - `None` PID → `false` (no recorded owner means we can't prove
 ///   liveness; treat as dead so the reaper proceeds).
 /// - PID `<= 0` → `false` (kernel/invalid PIDs are never live owners).
-/// - PID alive but process name does NOT contain "claude" → `false`
-///   (PID was reused by an unrelated process).
-/// - Cannot determine process name (ps/proc lookup failed) → `false`
-///   via `is_process_named` returning `false` on lookup failure.
+/// - PID `0` after `i64 → u32` conversion → `false`.
+/// - Cannot determine liveness (kill -0 failed, not EPERM) → `false`.
 ///
-/// Never returns `true` under uncertainty: if we cannot prove the PID
-/// belongs to Claude Code, we treat it as dead.
+/// PID-reuse race note: in the very narrow window between orchestrator
+/// crash and PID reuse by an unrelated process, this function will
+/// return `true` until the next sweep. Acceptable here because (a) the
+/// orchestrator's session row stores `tmux_session` which is also
+/// checked, and (b) the reaper marks stuck on `!pid_alive ||
+/// tmux_alive == Some(false)` — so a stuck-but-reused PID still triggers
+/// the tmux-side signal.
 #[must_use]
 pub fn is_session_pid_alive(pid: Option<i64>) -> bool {
     is_session_pid_alive_with(pid, default_pid_validator)
 }
 
-/// INF-TSK-024-051 Phase 7-rework (AC #6): the autorun-side
-/// `i64 → u32 → validate` adapter now delegates to the canonical
-/// `crate::session::liveness::default_pid_validator` so the
-/// "alive AND named claude" semantic is shared in one place across
-/// the chokepoint and the autorun reaper. Removes drift risk: any
-/// future change to the validator (e.g. additional name pattern,
-/// stronger ps lookup) ripples to both call paths automatically.
+/// INF-TSK-024-053 AC-5: the autorun reaper validates the
+/// `autorun_session.pid` column, which is the **orchestrator process**
+/// PID (`codeflow autorun run` — written by `orchestrator.rs:189` from
+/// `std::process::id()`). The orchestrator is NEVER named "claude", so
+/// the prior delegation to `session::liveness::default_pid_validator`
+/// (which calls `validate_claude_pid`, requiring "claude" in the process
+/// name) always returned false → every autorun session was marked stuck
+/// the moment the sweep ran. Switching to `validate_orchestrator_pid`
+/// (alive-only PID check, no name requirement) fixes the false-stuck.
+///
+/// Historical context (now obsolete, kept for reviewer orientation):
+/// INF-TSK-024-051 Phase 7-rework (AC #6) shared the "alive AND named
+/// claude" semantic between the canonical chokepoint and the autorun
+/// reaper, on the assumption that both validated a Claude lead PID.
+/// That assumption was wrong here — the autorun reaper validates an
+/// orchestrator PID, not a Claude PID. The chokepoint's `claude` name
+/// check is still correct for the lead-PID resolution path.
 fn default_pid_validator(pid: u32) -> bool {
-    crate::session::liveness::default_pid_validator(pid)
+    crate::session::liveness::validate_orchestrator_pid(pid)
 }
 
 /// Internal hook for [`is_session_pid_alive`] that accepts a custom PID
@@ -1600,6 +1616,58 @@ mod tests {
     fn test_is_session_pid_alive_with_validator_rejects() {
         // Even with a non-zero, in-range PID, the validator decides.
         assert!(!is_session_pid_alive_with(Some(42), always_dead_validator));
+    }
+
+    /// INF-TSK-024-053 AC-5: regression guard for the false-stuck bug.
+    ///
+    /// Before AC-5, `default_pid_validator` delegated to
+    /// `validate_claude_pid`, which requires the process name to contain
+    /// "claude". The orchestrator process (`codeflow autorun run`,
+    /// written to `autorun_session.pid` by `orchestrator.rs:189`) is
+    /// NEVER named "claude", so the validator always returned `false`,
+    /// causing the reaper to mark every live autorun session stuck.
+    ///
+    /// Post-AC-5, the validator delegates to `validate_orchestrator_pid`
+    /// (alive-only, no name check). This test asserts that a live,
+    /// non-claude PID is accepted — which uses the **current process**
+    /// PID since `codeflow` (or the test binary) is itself not named
+    /// "claude".
+    #[test]
+    fn test_default_pid_validator_accepts_non_claude_live_pid_ac5() {
+        let current_pid = i64::from(std::process::id());
+        assert!(
+            current_pid > 0,
+            "std::process::id() must return a positive PID; got {current_pid}"
+        );
+        assert!(
+            is_session_pid_alive(Some(current_pid)),
+            "AC-5: default_pid_validator MUST accept a live non-claude PID \
+             (the orchestrator is never named 'claude'). Failing this test \
+             means the autorun reaper would mark every live autorun session \
+             stuck. PID under test: {current_pid}"
+        );
+    }
+
+    /// INF-TSK-024-053 AC-5 partner test: confirm the `pid==0` and dead-PID
+    /// branches still fail-secure. We cannot easily synthesize a "dead"
+    /// PID on every host, but a value above `u32::MAX` is guaranteed to be
+    /// rejected by the i64→u32 conversion before the kernel probe runs,
+    /// preserving the prior fail-secure contract.
+    #[test]
+    fn test_default_pid_validator_fail_secure_for_invalid_pid_ac5() {
+        // PID 0 is reserved (swapper on Linux, kernel_task on macOS) and the
+        // validator rejects it via the explicit `pid == 0` guard in
+        // `validate_orchestrator_pid`.
+        assert!(
+            !is_session_pid_alive(Some(0)),
+            "AC-5: PID 0 must remain rejected even after the validator swap"
+        );
+        // Out-of-range i64 still trips the u32::try_from guard inside
+        // `is_session_pid_alive_with`.
+        assert!(
+            !is_session_pid_alive(Some(i64::from(u32::MAX) + 1)),
+            "AC-5: out-of-range PID must remain rejected"
+        );
     }
 
     #[test]
