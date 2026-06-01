@@ -3,7 +3,8 @@ id: "epic-01KJD6Q4H6MPF58Q7C8JQJCP8V"
 format_id: "INF-EPC-019"
 title: "Claude Artifact Token Efficiency Restructuring"
 summary: "Restructure CLAUDE.md, agent definitions, commands, and skills to reduce token overhead by ~28%, with always-loaded content reduced by ~54%."
-status: draft
+status: superseded
+superseded_by: "INF-EPC-051"
 area_type: "INF"
 work_type: "RFCT"
 domain: "GENL"
@@ -18,7 +19,7 @@ pr_number: null
 external_id: null
 external_url: null
 created_at: "2026-02-26T15:00:00Z"
-updated_at: "2026-02-26T15:00:00Z"
+updated_at: "2026-05-30T00:00:00Z"
 ---
 
 # INF-EPC-019: Claude Artifact Token Efficiency Restructuring
