@@ -134,7 +134,7 @@ Replace the PathFlow phase/sentinel/task-graph orchestration subsystem with a de
 Source dir (verified, 8 files): `.codeflow/docs/analysis/artifact-token-efficiency/`
 
 | # | Harvested Asset | Carried into |
-|---|-----------------|--------------  |
+|---|---|---|
 | 1 | `README.md` (package index) | Epic Technical Notes / harvest pointer |
 | 2 | `01-design-principles.md` (P0–P6 + SPINE) | Anchor contract (T05) + router design (T13) |
 | 3 | `02-skill-taxonomy.md` | working-protocol skill rework (T24); confirms **drop** cf-pathflow-protocol/cf-team-communication (LD-2) |
