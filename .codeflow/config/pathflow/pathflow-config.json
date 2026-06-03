@@ -619,25 +619,21 @@
   "pipelines": {
     "FEAT": [
       "WS-DEV",
-      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "FIX": [
       "WS-DEV",
-      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "HTFX": [
       "WS-DEV",
-      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "RFCT": [
       "WS-DEV",
-      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
@@ -652,13 +648,11 @@
     ],
     "CHOR": [
       "WS-DEV",
-      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
     "CICD": [
       "WS-DEV",
-      "WS-SEC",
       "WS-REV",
       "WS-QA"
     ],
