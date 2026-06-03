@@ -83,7 +83,7 @@ Replace the PathFlow phase/sentinel/task-graph orchestration subsystem with a de
 
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
-| INF-TSK-051-001 | Formalize epic: supersede+harvest INF-EPC-019, validation-branch plan, WorkGraph register | todo | normal |
+| INF-TSK-051-001 | Formalize epic: supersede+harvest INF-EPC-019, validation-branch plan, WorkGraph register | complete | normal |
 | INF-TSK-051-002 | Create + verify the validation branch; confirm gate-check unlock behavior | todo | normal |
 | INF-TSK-051-003 | Fix 3 verified doc/citation errors (TeamGuard:157, hook count 21→22, acquire_claim_or_block:977) | todo | normal |
 | INF-TSK-051-004 | SPIKE: prove one-level workflow() expresses the FEAT rework loop (verify-first) | todo | normal |
