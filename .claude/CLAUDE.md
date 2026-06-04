@@ -1428,7 +1428,7 @@ These skills provide detailed standards and can be loaded by agents as needed:
 
 **Location:** `.claude/agents/cf-*.md`
 
-### Hooks (21 hook entries)
+### Hooks (22 hook entries)
 
 Hooks fire automatically at lifecycle points. Configured in `.claude/settings.json` as `codeflow hooks <event> <subcommand>` invocations.
 
@@ -1523,7 +1523,7 @@ The unified `codeflow test --mode full` command is the ONLY authorized test exec
 │   └── project/                      #   Project hook scripts (if any)
 ├── commands/                         # 14 slash command definitions (cf-*.md)
 ├── memory/                           # Tier 2: domain-specific work context
-└── settings.json                     # Permissions, hook config (21 hook entries as Rust CLI subcommands)
+└── settings.json                     # Permissions, hook config (22 hook entries as Rust CLI subcommands)
 
 codeflow-cli/                         # Rust CLI workspace
 ├── Cargo.toml                        #   Workspace root (members: core, cli)

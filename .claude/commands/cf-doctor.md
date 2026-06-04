@@ -175,7 +175,7 @@ Execute all checks sequentially. Each check returns: `pass`, `warn`, or `fail`.
 
 **Check 3: Hook Subcommands and Test Runner**
 
-- Verify all 21 hook entries in `.claude/settings.json` reference valid `codeflow hooks` subcommands
+- Verify all 22 hook entries in `.claude/settings.json` reference valid `codeflow hooks` subcommands
 - Check that the `codeflow` binary is on PATH and executable
 - Verify each hook subcommand responds without error (e.g., `codeflow hooks session-start init --help`)
 - Run `codeflow test doctor` to verify the test runner infrastructure:

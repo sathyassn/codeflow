@@ -85,7 +85,7 @@ Replace the PathFlow phase/sentinel/task-graph orchestration subsystem with a de
 |----|-------|--------|----------|
 | INF-TSK-051-001 | Formalize epic: supersede+harvest INF-EPC-019, validation-branch plan, WorkGraph register | complete | normal |
 | INF-TSK-051-002 | Create + verify the validation branch; confirm gate-check unlock behavior | complete | normal |
-| INF-TSK-051-003 | Fix 3 verified doc/citation errors (TeamGuard:157, hook count 21→22, acquire_claim_or_block:977) | todo | normal |
+| INF-TSK-051-003 | Fix 3 verified doc/citation errors (TeamGuard:157, hook count 21→22, acquire_claim_or_block:977) | complete | normal |
 | INF-TSK-051-004 | SPIKE: prove one-level workflow() expresses the FEAT rework loop (verify-first) | todo | normal |
 | INF-TSK-051-005 | Design STAGE-FINISH LIFECYCLE ANCHOR contract + re-home map | todo | normal |
 | INF-TSK-051-006 | Build bridge agent() stage runtime (WorkGraph / git / claim-lifecycle) | todo | normal |
