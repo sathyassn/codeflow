@@ -84,7 +84,7 @@ Replace the PathFlow phase/sentinel/task-graph orchestration subsystem with a de
 | ID | Title | Status | Priority |
 |----|-------|--------|----------|
 | INF-TSK-051-001 | Formalize epic: supersede+harvest INF-EPC-019, validation-branch plan, WorkGraph register | complete | normal |
-| INF-TSK-051-002 | Create + verify the validation branch; confirm gate-check unlock behavior | todo | normal |
+| INF-TSK-051-002 | Create + verify the validation branch; confirm gate-check unlock behavior | complete | normal |
 | INF-TSK-051-003 | Fix 3 verified doc/citation errors (TeamGuard:157, hook count 21→22, acquire_claim_or_block:977) | todo | normal |
 | INF-TSK-051-004 | SPIKE: prove one-level workflow() expresses the FEAT rework loop (verify-first) | todo | normal |
 | INF-TSK-051-005 | Design STAGE-FINISH LIFECYCLE ANCHOR contract + re-home map | todo | normal |
@@ -151,6 +151,33 @@ Claude Code's native `/goal` command (v2.1.139+) is an optional completion-drive
 ### Validation-Branch Stance (LD-4)
 
 All build/spec/migration work lands on a dedicated validation branch (e.g. `refactor/inf-epc-051-native-workflows`). The legacy PathFlow `gate-check` (`settings.json:379`) still gates Edit/Write on this branch via the normal pf-3 unlock; tasks operate within that. **PathFlow ordering + sentinels are removed only after WP-4 proves parity** — never on the same branch state that still relies on them for the gate that proved parity.
+
+### Gate-check behavior for `.claude/workflows/` (LD-4, T002)
+
+Firsthand analysis (settings.json hook wiring + `pre_tool_use.rs` enforcement) of what blocks Edit/Write to `.claude/workflows/**` pre-migration, so migration sequencing relies on facts, not assumptions. The directory does not exist yet — this is forward-looking.
+
+**Hook wiring (`settings.json`).** Three PreToolUse hooks fire for an Edit/Write, in this order:
+
+| Hook | Matcher line | Command line | Edit/Write role |
+|------|-------------:|-------------:|-----------------|
+| `edit-write-guard` | `350` (`Edit\|Write`) | `354` | blocked-directory + project-containment check |
+| `protection-guard` | `350` (`Edit\|Write`) | `359` | tiered protected-resource check (critical/high/moderate + worktree expansion) |
+| `gate-check` | `375` (`Edit\|Write\|Bash\|Task`) | `379` | PathFlow pf-3 sentinel gate + `scope_policy` claim |
+
+**Enumerated blocking scenarios for `.claude/workflows/**`:**
+
+| # | Scenario | Blocked? | By which hook + condition | Citation |
+|---|----------|----------|---------------------------|----------|
+| 1 | Edit/Write **before** pf-3 sentinel exists | **BLOCKED** (path-agnostic) | `gate-check` — `GateType::EditWrite` requires `pathflow-pf-3`; the check never inspects the file path | `pre_tool_use.rs:1293-1305`; classify @ `:386` |
+| 2 | Edit/Write **after** pf-3, in-scope under `scope_policy=soft` | Allowed | `gate-check` auto-acquires the CRDT claim | `pre_tool_use.rs:1313-1321`, `:847-848` |
+| 3 | Edit/Write **after** pf-3, out-of-scope under `scope_policy=soft` | Allowed unless another session holds the claim | `gate-check` → `acquire_claim_or_block` (ScopeExpansion on success, ClaimConflict block on conflict) | `pre_tool_use.rs:849-852`, `acquire_claim_or_block` @ `:977` |
+| 4 | Edit/Write **after** pf-3, out-of-scope under `scope_policy=hard` | **BLOCKED** | `gate-check` — `is_in_scope` false ⇒ exit 2, no claim attempt | `pre_tool_use.rs:805-830` |
+| 5 | protection-guard tiered match on the path | **NOT blocked** | No critical/high/moderate pattern matches `.claude/workflows/**`. The only `.claude/`-prefixed protected patterns are `.claude/settings.json`, `.claude/settings.local.json`, `.claude/CLAUDE.md` (critical) and `.claude/hooks/codeflow/**`, `.claude/settings-templates/**` (high). No blanket `.claude/**`. `matches_glob_pattern` does a `starts_with(prefix-before-**)`, so `.claude/hooks/codeflow/` never matches `.claude/workflows/`. | `enforcement-policy.json:70-95`; `check_tier` @ `pre_tool_use.rs:1891-1921`; matcher @ `:2572-2600` |
+| 6 | worktree-protection expansion match | **NOT blocked** | `worktree_protection.patterns` carries the same `.claude/` subset (no `.claude/workflows/`); expansion prefix `.git-worktrees/*/` only widens those same patterns | `enforcement-policy.json:97-127`; `matches_worktree_pattern` @ `pre_tool_use.rs:1924-1936` |
+| 7 | edit-write-guard blocked-directory match | **NOT blocked** | `blocked_directories` = `.git`, `.state`, `node_modules`, `__pycache__`, `.venv`, `venv`, `.tox`, `.nox`, `dist`, `build`, `.eggs`. `.claude` is not in the list; `match_blocked_dir` is a path-component name match | `enforcement-policy.json:6-18`; `match_blocked_dir` @ `pre_tool_use.rs:1651-1655` |
+| 8 | bypassPermissions prompt for `.claude/` non-exempt subdir | Prompts (interactive only) | CLAUDE.md §5: in bypassPermissions, `.claude/agents/*.md`, `.claude/commands/*.md`, `.claude/skills/**` are EXEMPT; other `.claude/` paths prompt. `.claude/workflows/` is not in the exempt list, so a write there would prompt under bypassPermissions — a harness behavior, not a hook block. Autorun has no human; protection-guard + edit-write-guard early-exit on `is_autorun_session()`. | CLAUDE.md §5 (Teammate Permissions); autorun early-exit @ `pre_tool_use.rs:2228`, `:1712` |
+
+**Implication for migration sequencing:** the **only** hook-enforced block on `.claude/workflows/` edits is the universal pf-3 gate (scenario 1) — there is no path-specific protected-resource block. WP-1+ tasks that create/edit `.claude/workflows/**` need only the normal pf-3 unlock on the validation branch; no protection-tier carve-out or staging workflow is required for that directory (contrast `.claude/settings.json`, `.claude/CLAUDE.md`, `.claude/hooks/**`, which DO require staging). If a future task sets `scope_policy=hard`, `.claude/workflows/**` must be added to that task's `file_scope` (scenario 4). The LD-4 phrase "gate-check … currently BLOCKS workflow edits" is precise only in the path-agnostic pre-pf-3 sense (scenario 1), not a `.claude/workflows/`-specific rule.
 
 ### Verified Source Locations (firsthand, apply to all tasks)
 
