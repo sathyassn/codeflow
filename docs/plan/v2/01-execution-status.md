@@ -24,16 +24,34 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 
 ## Day 2 — new builds + integration
 
-- [ ] git-guard, integrate, recall + orient + session-summary, remote protect (GitHub), status
-- [ ] init end-to-end; full suite green; doctor clean
+- [x] F — hooks plane: 170 tests green (git-guard PreToolUse handler, git client
+  hook stages, orient digest, session-summary ledger capture; end-to-end hook
+  coverage in tempdir repos)
+- [x] G — work-landing flow: 56 tests green (test gate with config + runtime
+  stack resolution, `validate --docs` referential-integrity lint, generated
+  status view, integrate primitive with gate-context token + path flock)
+- [x] H — recall + remote: 39 tests green (FTS5 recall, `~/.codeflow`
+  registry, remote protect GitHub adapter with degradation report)
+- [x] Integration: F/G/H landed serially; integrated mains 1080 → 1181 tests
+  green, clippy 0 workspace-wide
 
 ## Day 3 — dogfood + release
 
-- [ ] `codeflow init` on this repo (consumer #1); EPC-001 recorded
+- [x] Binary installed on PATH: `codeflow 2.0.0-dev` (replacing the v1 binary)
+- [x] `codeflow init` dogfood on this repo (consumer #1), idempotent rerun
+  verified; full-tier additive upgrade (`project-management/`) on the closure
+  branch
+- [x] Doctor wired and clean (5 checks)
+- [x] `codeflow integrate` used for all landings (4 integrations)
+- [x] Live AC demos: #1, #3, #5, #6, #13 — including the `policy_armed` bug
+  found during #1, fixed with a regression test (612ec23d)
+- [x] EPC-001 retroactive bootstrap record (`project-management/epics/EPC-001/`)
+- [ ] AC #4 / #10 demos (running in parallel)
 - [ ] `codeflow init` on first real user project
-- [ ] v2.0.0 tag + cargo-dist release (PAUSE for user go)
+- [ ] v2.0.0 tag + cargo-dist release staging (PAUSED for user go)
 
 ## Notes / deviations
 
 - Sandbox guardrails required explicit bypasses for: `.git/config` write (hooksPath), worktree dir deletion, residual `.claude/` deletion. All sanctioned transition steps; logged here for the record.
-- Remote protection unavailable on this repo (private + GitHub Free, API 403). Perimeter = CI + discipline until public/Pro. `codeflow remote protect` must report this exact degradation (charter AC #4 caveat verified empirically).
+- Remote protection unavailable on this repo (private + GitHub Free, API 403). Perimeter = CI + discipline until public/Pro. `codeflow remote protect` must report this exact degradation (charter AC #4 caveat verified empirically). Follow-on: ADR-0002 sets `push_to_protected = "warn"` here so the integrated main can sync to origin.
+- Nuance (Day 3): a raw local ff-merge while on a protected branch fires no git hook (no commit or push event to intercept), but the result cannot be pushed — the perimeter holds per D19. Local layers are fast feedback, not the line.
