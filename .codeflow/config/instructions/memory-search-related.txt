@@ -1,1 +1,0 @@
-🔒 MUST delegate to cf-knowledge-layer: SendMessage(recipient="cf-knowledge-layer", content="search-related-work keywords=[...] all_worktrees=true") BEFORE begin-work. ⛔ FORBIDDEN: begin-work without search first.

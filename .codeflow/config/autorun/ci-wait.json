@@ -1,8 +1,0 @@
-{
-  "timeout_minutes": 30,
-  "poll_interval_seconds": 30,
-  "include_checks": [],
-  "exclude_checks": [],
-  "fall_back_to_all_checks_when_no_required": true,
-  "$comment": "INF-TSK-048-001 AC #10. Loaded by codeflow_core::autorun::ci_wait::CiWaitConfig::load. Autorun worker polls gh pr checks at poll_interval_seconds, surrounds gh pr merge with this gate. On failing required checks or timeout, PR is left open and the task is marked blocked. Defaults are safe: 30 min wall-clock budget, 30 s poll cadence, include/exclude filters empty, fall back to treating every reported check as required when GitHub branch protection lists no required contexts."
-}

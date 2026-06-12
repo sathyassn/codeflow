@@ -1,7 +1,0 @@
-{
-  "event": "session_end",
-  "session_id": "ses-conformance000000000005",
-  "project_dir": "/tmp/conformance-test",
-  "source": "compact",
-  "transcript_path": "/tmp/conformance-test/.state/transcripts/session.jsonl"
-}

@@ -1,2 +1,0 @@
-🔒 External model (Gemini/Codex)? MUST consult cf-security first: SendMessage(recipient="cf-security", content="validate-external-model model=... scope=...").
-Check scope conflicts before delegating. ⛔ FORBIDDEN: Spawning external models without cf-security validation.

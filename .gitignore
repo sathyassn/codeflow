@@ -1,120 +1,24 @@
-# Claude Code local settings (personal)
-.claude/settings.local.json
-
-# Parallel work local config (personal overrides)
-.codeflow/config/parallel-work/parallel-work-config.local.json
-
-# State files - Untracked (machine-specific, regeneratable)
-# coordination, logs, runtime, db, registry, backups are untracked (no trailing slash to match symlinks in worktrees)
-# ledger/ is tracked (Tier 0 rebuild authority data) -- subdirectory layout with session fragments
-.state/coordination
-.state/interactive
-.state/logs
-.state/runtime
-.state/db
-.state/registry
-.state/backups
-# Sentinel and session state (session-scoped, not persistent)
-.state/sentinels/skill/*
-!.state/sentinels/skill/.gitkeep
-.state/sentinels/pathflow/*
-!.state/sentinels/pathflow/.gitkeep
-.state/session/*
-!.state/session/.gitkeep
-
-# Worktree registry (machine-specific runtime state, no trailing slash to match symlinks)
-.state/worktrees
-
-# Lock files across all .state/ directories (including compaction locks)
-.state/**/*.lock
-
-# Process ID files
-.state/**/*.pid
-
-# Temporary state files
-.state/tmp/
-
-
-# Rust workspace runtime state (created by cargo test or binary when cwd is codeflow-cli/)
-codeflow-cli/.state/
-
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-package-lock.json
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-.venv/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Logs
-*.log
-
-# Temporary files
-*.tmp
-.cache/
-tmp/
-
-# Git worktrees (parallel work isolation)
-.git-worktrees/
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
-
-# Claude Code plan files (ephemeral, session-specific)
-.claude/plans/*
-!.claude/plans/.gitkeep
-
-# Rust
-codeflow-cli/target/
-
-# Test artifacts
-.codeflow/testing/results/
-.codeflow/testing/coverage/
-.codeflow/testing/coverage_reports/
-coverage/
-
-# Autorun state (operational telemetry, reports, session state — not tier-0)
-.state/ledger/autorun-events/
-.state/ledger/coordination-events/
-.state/autorun/
-
-# Autorun local batch files (ad-hoc, not tracked)
-.codeflow/config/autorun/local/*
-!.codeflow/config/autorun/local/.gitkeep
-
-# Generic testing engine ephemeral artifacts (per-worktree)
-.state/test-reports/
-.state/coverage/
-
-# Ephemeral test artifacts produced by per-target runners
-# (dropped into target cwd; never committed)
+# build
+/target
+**/target/
+*.lcov
 lcov.info
-ctrf.json
-*.junit.xml
+
+# secrets — never tracked
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*
+
+# runtime state (codeflow v2 runtime lives in .git/codeflow/, never tracked)
+.codeflow/runtime/
+
+# os / editor
+.DS_Store
+*.swp
+
+# local-only claude settings
+.claude/settings.local.json

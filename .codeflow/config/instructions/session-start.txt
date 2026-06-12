@@ -1,8 +1,0 @@
-🔒 SESSION START: 1. Review CLAUDE.md (routing, teammates, memory). 2. TeamCreate to establish team infrastructure. 3. PF1-INIT: Spawn cf-security. 4. PF2-CONTEXT: Spawn cf-knowledge-layer, query for active work.
-Active work? Offer: 1.Resume(/cf-resume) 2.Fresh start. No active? "Ready for new task." WAIT for user.
-⛔ FORBIDDEN: Auto-loading context, skipping active work check, acting without CLAUDE.md, spawning Task sub-agents for work (use teammates).
-
-🔒 MUST delegate to cf-knowledge-layer for all memory/context operations: SendMessage(recipient="cf-knowledge-layer", content="load-work-context domain=..."). ⛔ FORBIDDEN: Raw grep on memory files, direct DB/JSONL access.
-
-📌 Breadcrumbs: Session init → CLAUDE.md Section 3 (Session Start). Phase progression → Section 4 (PathFlow). Teammate spawning → Section 5 (Coordination). Task routing → Section 6 (Routing).
-🔒 Enforcement gate: Edit/Write operations are BLOCKED until PF3-CLASSIFY creates the pathflow-pf-3 sentinel. See CLAUDE.md Section 4 (Phase Progression) and Section 10 (Enforcement Model).

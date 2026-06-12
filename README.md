@@ -1,126 +1,20 @@
 # CodeFlow
 
-AI-native development framework template for Claude Code.
+**The AI-development discipline layer you install into any repo.**
 
-## Overview
+One Rust binary (`codeflow`) that scaffolds, enforces, verifies, and remembers — while Claude Code (or any harness) does the developing.
 
-CodeFlow provides structured workflows, memory management, and git enforcement for AI-assisted development. It transforms Claude Code into a disciplined development partner with:
+## Status
 
-- **Structured Agents** - Specialized sub-agents for planning, development, review, QA, and documentation
-- **Persistent Memory** - Domain-based memory organization that persists across sessions
-- **Git Enforcement** - PR-only workflow with branch protection and commit validation
-- **Skill Procedures** - Validated operations that ensure consistent, quality work
-- **Coordination** - CRDT-based state management for parallel agent work
+**v2 under construction.** The v1 framework (PathFlow, agent teams, CRDT coordination) is archived in full at branch [`archive/v1`](../../tree/archive/v1) (tag `v1-final`). v2 is a ground-up rebaseline for Fable-class models: clarity in, light rails through, verification out.
 
-## Quick Start
+The plan of record is [`docs/plan/v2/00-charter.md`](docs/plan/v2/00-charter.md).
 
-```bash
-# Initialize CodeFlow in your project
-codeflow init
+## What v2 will provide
 
-# Check system health
-codeflow doctor
-
-# Start Claude Code
-claude
-
-# Use commands
-/cf-plan "Add user authentication"
-/cf-develop INF-TSK-008-001
-/cf-review
-```
-
-## Key Commands
-
-| Command | Purpose |
-|---------|---------|
-| `/cf-resume` | Resume previous work with context |
-| `/cf-plan` | Create epics and tasks |
-| `/cf-develop` | Implement features/fixes |
-| `/cf-review` | Code review |
-| `/cf-test` | Run tests |
-| `/cf-ship` | Prepare for merge |
-
-## Project Structure
-
-```text
-.claude/           # Claude Code configuration
-  agents/          # Specialized sub-agents
-  commands/        # Slash commands
-  skills/          # Validated procedures
-  hooks/           # Lifecycle automation
-  memory/          # Persistent context
-
-.codeflow/         # CodeFlow infrastructure
-  scripts/         # Shell and Python utilities
-  testing/         # Test framework
-  config/          # Configuration
-
-.state/            # Runtime state
-  db/              # SurrealDB database
-  ledger/          # JSONL event logs
-```
-
-## Testing
-
-CodeFlow uses a single CLI entry point for all test execution. Configure targets once; the engine handles runners, coverage, and reporting.
-
-**Run the full suite:**
-
-```bash
-codeflow test --mode full
-```
-
-**Quick example: Rust workspace config** (`.codeflow/config/testing/test-config.json`):
-
-```json
-{
-  "targets": [
-    {
-      "name": "rust-core",
-      "runner": "cargo",
-      "path": "codeflow-cli",
-      "coverage": {
-        "format": "llvm-cov",
-        "rules": { "type": "per_file", "threshold": 85 }
-      }
-    }
-  ]
-}
-```
-
-**Common commands:**
-
-```bash
-# Run only critical and high priority targets
-codeflow test --mode full --only-tag critical,high
-
-# Run a single target
-codeflow test --mode full --only rust-core
-
-# Structural integrity check (verifies source-to-test mappings)
-codeflow test structural-check
-
-# Show last run report
-codeflow test report show
-```
-
-For the complete guide including multi-target configs, coverage exceptions, tag-based filtering, and CI integration, see [Generic Testing Framework Guide](.codeflow/docs/guides/generic-testing-framework.md).
-
-## Documentation
-
-- [PROJECT.md](PROJECT.md) - Full project context
-- [AGENTS.md](AGENTS.md) - External AI instructions
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guide
-
-## Requirements
-
-- Claude Code CLI
-- Git 2.25+
-- Bash 4.0+
-- Python 3.8+ (optional, for Python scripts)
-- jq (for JSON processing)
-
-## License
-
-MIT
+- `codeflow init` — scaffold the AI-dev discipline layer into any repo (three tiers: minimal / standard / full)
+- Git discipline as config-driven policy: protected branches, commit standards, secrets, enforced at git-hook + harness + CI + remote planes
+- A generic, stack-agnostic test gate (`codeflow test`)
+- A knowledge model that doesn't rot: product → capabilities → architecture/ADRs → work → trace
+- Cross-repo work records and recall (`codeflow status --all`, `codeflow recall`)
+- Native-first: rides Claude Code's worktrees, subagents, workflows, and memory — never reimplements them

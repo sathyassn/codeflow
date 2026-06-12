@@ -1,3 +1,0 @@
-⛔ Network operation requires: Bash({ command: "...", dangerouslyDisableSandbox: true }).
-Git network ops: Delegate to cf-git-operations teammate. Security validation: Delegate to cf-security teammate.
-⛔ FORBIDDEN: Direct git push/pull/PR commands. Use cf-git-operations teammate.
