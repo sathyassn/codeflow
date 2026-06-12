@@ -180,65 +180,52 @@ pub fn split_command_segments(cmd: &str) -> Vec<String> {
 }
 
 /// Inner segmentation logic operating on a cleaned command string.
+///
+/// Iterates characters (not bytes) so multi-byte UTF-8 content — e.g. emoji
+/// in commit messages or PR bodies — survives segmentation intact.
 fn split_command_segments_inner(cmd: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut segment = String::new();
-    let bytes = cmd.as_bytes();
     let mut in_single = false;
     let mut in_double = false;
-    let mut i = 0;
+    let mut iter = cmd.chars().peekable();
 
-    while i < bytes.len() {
-        let ch = bytes[i];
-
+    while let Some(ch) = iter.next() {
         // Track quote state.
-        if ch == b'\'' && !in_double {
+        if ch == '\'' && !in_double {
             in_single = !in_single;
-            segment.push(ch as char);
-            i += 1;
+            segment.push(ch);
             continue;
         }
-        if ch == b'"' && !in_single {
+        if ch == '"' && !in_single {
             in_double = !in_double;
-            segment.push(ch as char);
-            i += 1;
+            segment.push(ch);
             continue;
         }
 
         if !in_single && !in_double {
-            // Check for && or ||.
-            if i + 1 < bytes.len() {
-                if ch == b'&' && bytes[i + 1] == b'&' {
-                    segments.push(segment.clone());
-                    segment.clear();
-                    i += 2;
-                    continue;
-                }
-                if ch == b'|' && bytes[i + 1] == b'|' {
-                    segments.push(segment.clone());
-                    segment.clear();
-                    i += 2;
-                    continue;
-                }
-            }
-            // Semicolon.
-            if ch == b';' {
-                segments.push(segment.clone());
-                segment.clear();
-                i += 1;
+            // && separator (single & is an ordinary character).
+            if ch == '&' && iter.peek() == Some(&'&') {
+                iter.next();
+                segments.push(std::mem::take(&mut segment));
                 continue;
             }
-            // Single pipe (not ||).
-            if ch == b'|' {
-                segments.push(segment.clone());
-                segment.clear();
-                i += 1;
+            // || and single-pipe separators.
+            if ch == '|' {
+                if iter.peek() == Some(&'|') {
+                    iter.next();
+                }
+                segments.push(std::mem::take(&mut segment));
+                continue;
+            }
+            // Semicolon.
+            if ch == ';' {
+                segments.push(std::mem::take(&mut segment));
                 continue;
             }
         }
 
-        segment.push(ch as char);
-        i += 1;
+        segment.push(ch);
     }
 
     if !segment.is_empty() {
@@ -431,6 +418,16 @@ mod tests {
     fn test_split_command_segments_or() {
         let segments = split_command_segments("cmd1 || cmd2");
         assert_eq!(segments.len(), 2);
+    }
+
+    #[test]
+    fn test_split_command_segments_preserves_utf8() {
+        // Regression: byte-wise iteration mangled multi-byte characters,
+        // breaking emoji detection in PR bodies and commit messages.
+        let segments = split_command_segments("echo 'ship it \u{1F680}' && echo ümlaut");
+        assert_eq!(segments.len(), 2);
+        assert!(segments[0].contains('\u{1F680}'), "{:?}", segments[0]);
+        assert!(segments[1].contains("ümlaut"));
     }
 
     // -- heredoc stripping --
