@@ -1,0 +1,762 @@
+//! Integration tests for the scaffold engine — the trust gate.
+//!
+//! Everything runs in tempdirs against fixture asset trees (`DirSource`),
+//! with git config isolated from the host machine.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use codeflow_core::scaffold::{
+    self, Action, DirSource, InitAnswers, InitOptions, Report, Tier, UpdateOptions,
+};
+
+// --- fixtures ---------------------------------------------------------------
+
+fn isolate_git() {
+    // Same values from every test; benign under parallelism.
+    std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
+    std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
+}
+
+const MANIFEST: &str = r#"
+schema_version = 1
+
+[[entry]]
+src = "AGENTS.md.tmpl"
+dest = "AGENTS.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["minimal", "standard", "full"]
+template = true
+
+[[entry]]
+src = "gitignore"
+dest = ".gitignore"
+ownership = "managed-region"
+region = "hash"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "policy.json"
+dest = ".codeflow/policy.json"
+ownership = "user-owned"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "git-hooks/pre-commit"
+dest = ".codeflow/git-hooks/pre-commit"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+exec = true
+
+[[entry]]
+src = "claude/workflows/develop.md"
+dest = ".claude/workflows/develop.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "settings/default.json"
+dest = ".claude/settings.json"
+ownership = "managed-region"
+region = "json"
+tiers = ["standard", "full"]
+preset = "default"
+
+[[entry]]
+src = "settings/acceptEdits.json"
+dest = ".claude/settings.json"
+ownership = "managed-region"
+region = "json"
+tiers = ["standard", "full"]
+preset = "acceptEdits"
+
+[[entry]]
+src = "docs/product.md.tmpl"
+dest = "docs/product.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "ci/codeflow-ci.yml"
+dest = ".github/workflows/codeflow-ci.yml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "pm/epic.md.tmpl"
+dest = "project-management/templates/epic.md"
+ownership = "managed"
+tiers = ["full"]
+
+# Deliberately never authored in the fixture: missing-asset grace.
+[[entry]]
+src = "claude/agents/cf-reviewer.md"
+dest = ".claude/agents/cf-reviewer.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+"#;
+
+const DEVELOP_V1: &str = "# develop workflow\n\nstep one\nstep two\nstep three\nstep four\nstep five\nstep six\nstep seven\nstep eight\n";
+const DEVELOP_V2: &str = "# develop workflow\n\nstep one (improved)\nstep two\nstep three\nstep four (v2)\nstep five\nstep six\nstep seven\nstep eight\n";
+
+/// Builds a fixture asset tree. `v2` flips the upstream content forward.
+fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
+    let dir = tempfile::tempdir().expect("assets tempdir");
+    let base = dir.path().join("base");
+    let write = |rel: &str, content: &str| {
+        let path = base.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+
+    write("scaffold-manifest.toml", MANIFEST.trim_start());
+    let rules = if v2 { "rules v2 for {{PROJECT_NAME}}\nextra rule" } else { "rules v1 for {{PROJECT_NAME}}" };
+    write(
+        "AGENTS.md.tmpl",
+        &format!(
+            "# {{{{PROJECT_NAME}}}} contract\n\nIntro outside markers.\n\n<!-- codeflow:managed:begin scaffold={{{{SCAFFOLD_VERSION}}}} -->\n{rules}\n<!-- codeflow:managed:end -->\n\nFooter outside markers.\n"
+        ),
+    );
+    write("gitignore", ".env\n*.pem\n");
+    let policy = if v2 {
+        r#"{
+  "schema_version": 2,
+  "git": {
+    "commit_to_protected": "block",
+    "commit_format": "block",
+    "secret_scan": "block",
+    "test_gate_on_push": "warn",
+    "new_gate": "warn"
+  },
+  "recall": { "share": false }
+}"#
+    } else {
+        r#"{
+  "schema_version": 1,
+  "git": {
+    "commit_to_protected": "block",
+    "commit_format": "block",
+    "secret_scan": "block",
+    "test_gate_on_push": "warn"
+  }
+}"#
+    };
+    write("policy.json", policy);
+    write("git-hooks/pre-commit", "#!/bin/sh\nexit 0\n");
+    write(
+        "claude/workflows/develop.md",
+        if v2 { DEVELOP_V2 } else { DEVELOP_V1 },
+    );
+    let settings = |mode: &str| {
+        if v2 {
+            format!(
+                r#"{{
+  "permissions": {{ "defaultMode": "{mode}", "deny": ["Read(**/.env)", "Read(**/*.pem)"] }},
+  "hooks": {{
+    "PreToolUse": [ {{"matcher": "Bash", "hooks": [{{"type": "command", "command": "codeflow hook git-guard"}}]}} ],
+    "SessionStart": [ {{"hooks": [{{"type": "command", "command": "codeflow hook session-orient"}}]}} ]
+  }}
+}}"#
+            )
+        } else {
+            format!(
+                r#"{{
+  "permissions": {{ "defaultMode": "{mode}", "deny": ["Read(**/.env)"] }},
+  "hooks": {{
+    "PreToolUse": [ {{"matcher": "Bash", "hooks": [{{"type": "command", "command": "codeflow hook git-guard"}}]}} ]
+  }}
+}}"#
+            )
+        }
+    };
+    write("settings/default.json", &settings("default"));
+    write("settings/acceptEdits.json", &settings("acceptEdits"));
+    write(
+        "docs/product.md.tmpl",
+        "# {{PROJECT_NAME}}\n\n{{PROJECT_ONE_LINER}}\n\nstack: {{STACK}}\nareas: {{AREAS}}\npurpose: {{PRODUCT_PURPOSE}}\n",
+    );
+    write("ci/codeflow-ci.yml", "name: codeflow-ci\non: [push]\n");
+    write("pm/epic.md.tmpl", "# {{EPIC_ID}} - {{TITLE}}\n");
+
+    let source = DirSource::new(dir.path());
+    (dir, source)
+}
+
+fn opts(tier: Option<Tier>, version: &str) -> InitOptions {
+    InitOptions {
+        tier,
+        force: false,
+        binary_version: version.to_string(),
+        answers: InitAnswers::default(),
+    }
+}
+
+fn update_opts(version: &str) -> UpdateOptions {
+    UpdateOptions {
+        force: false,
+        binary_version: version.to_string(),
+        diff_out: None,
+    }
+}
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("git runs");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn read(root: &Path, rel: &str) -> String {
+    std::fs::read_to_string(root.join(rel))
+        .unwrap_or_else(|e| panic!("read {rel}: {e}"))
+}
+
+fn action_of(report: &Report, dest: &str) -> Action {
+    report
+        .files
+        .iter()
+        .find(|f| f.dest == dest)
+        .unwrap_or_else(|| panic!("no report entry for {dest}; have {:?}",
+            report.files.iter().map(|f| &f.dest).collect::<Vec<_>>()))
+        .action
+}
+
+fn project_dir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("project tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    (dir, root)
+}
+
+// --- init -------------------------------------------------------------------
+
+#[test]
+fn fresh_init_empty_dir_bootstrap_grace() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+
+    // Bootstrap grace: repo created, exactly one commit, made by init itself.
+    assert_eq!(git(&root, &["rev-list", "--count", "HEAD"]), "1");
+    let subject = git(&root, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, "chore: scaffold codeflow standard tier");
+    let body = git(&root, &["log", "-1", "--format=%B"]);
+    assert!(!body.contains("Co-Authored-By"), "no AI attribution");
+
+    // Policy armed only after the scaffold commit.
+    let project_toml = read(&root, ".codeflow/project.toml");
+    assert!(project_toml.contains("policy_armed = true"));
+    let committed = git(&root, &["show", "HEAD:.codeflow/project.toml"]);
+    assert!(
+        committed.contains("policy_armed = false"),
+        "scaffold commit happened while disarmed"
+    );
+    assert!(project_toml.contains("tier = \"standard\""));
+    assert!(project_toml.contains("scaffold_version = \"2.0.0\""));
+
+    // Files, substitution, ownership records.
+    let agents = read(&root, "AGENTS.md");
+    assert!(agents.contains("# proj contract"));
+    assert!(agents.contains("rules v1 for proj"));
+    let product = read(&root, "docs/product.md");
+    assert!(product.contains("# proj"));
+    assert!(product.contains("stack: unset"));
+    assert!(product.contains("areas: core"));
+    assert!(product.contains("{{PRODUCT_PURPOSE}}"), "unknown placeholder survives");
+    assert!(root.join(".codeflow/manifest.json").exists());
+    assert!(root.join(".codeflow/.baseline/AGENTS.md").exists());
+    assert!(root.join(".claude/settings.json").exists());
+
+    // Hook wiring + exec bit.
+    assert_eq!(git(&root, &["config", "core.hooksPath"]), ".codeflow/git-hooks");
+    assert!(project_toml.contains("git_hooks = \"wired\""));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(root.join(".codeflow/git-hooks/pre-commit"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "hook shim is executable");
+    }
+
+    // Missing asset: skipped + warned, init still succeeded.
+    assert_eq!(action_of(&report, ".claude/agents/cf-reviewer.md"), Action::MissingAsset);
+    assert!(report.warnings.iter().any(|w| w.contains("cf-reviewer")));
+    assert_eq!(action_of(&report, "AGENTS.md"), Action::Created);
+    assert_eq!(action_of(&report, ".github/workflows/codeflow-ci.yml"), Action::Created);
+}
+
+#[test]
+fn init_minimal_tier_subset_and_softened_policy() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+
+    assert!(root.join("AGENTS.md").exists());
+    assert!(root.join(".gitignore").exists());
+    assert!(root.join(".codeflow/git-hooks/pre-commit").exists());
+    assert!(!root.join(".claude/settings.json").exists(), "standard-only");
+    assert!(!root.join("docs/product.md").exists(), "standard-only");
+    assert!(!root.join("project-management").exists(), "full-only");
+
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(policy["git"]["commit_to_protected"], "warn", "softened");
+    assert_eq!(policy["git"]["secret_scan"], "block", "never softened");
+    assert_eq!(policy["git"]["test_gate_on_push"], "off");
+    assert!(read(&root, ".codeflow/project.toml").contains("tier = \"minimal\""));
+}
+
+#[test]
+fn tier_upgrade_is_additive() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+    // User customizes AGENTS.md outside the markers.
+    let agents = read(&root, "AGENTS.md");
+    std::fs::write(root.join("AGENTS.md"), format!("{agents}\nMy own rules.\n")).unwrap();
+
+    let report = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.0.0")).unwrap();
+    assert_eq!(action_of(&report, "AGENTS.md"), Action::Unchanged);
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Created);
+    assert_eq!(action_of(&report, ".codeflow/git-hooks/pre-commit"), Action::Unchanged);
+    assert!(read(&root, "AGENTS.md").contains("My own rules."));
+    assert!(read(&root, ".codeflow/project.toml").contains("tier = \"standard\""));
+
+    let report = scaffold::init(&assets, &root, &opts(Some(Tier::Full), "2.0.0")).unwrap();
+    assert_eq!(
+        action_of(&report, "project-management/templates/epic.md"),
+        Action::Created
+    );
+    assert!(read(&root, "project-management/templates/epic.md").contains("{{EPIC_ID}}"));
+
+    // Downgrade request is refused (stop managing, never delete).
+    let report = scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+    assert!(read(&root, ".codeflow/project.toml").contains("tier = \"full\""));
+    assert!(report.notes.iter().any(|n| n.contains("downgrade")));
+}
+
+#[test]
+fn init_into_existing_repo_is_nondestructive() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    // A lived-in repo: commits, AGENTS.md, settings.json, husky, gitignore.
+    git(&root, &["init", "--quiet"]);
+    std::fs::write(root.join("AGENTS.md"), "# My agents\n\ncustom instructions\n").unwrap();
+    std::fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{
+  "model": "opus",
+  "permissions": { "defaultMode": "plan", "deny": ["Read(secrets/**)"] },
+  "hooks": {
+    "PreToolUse": [ {"matcher": "Bash", "hooks": [{"type": "command", "command": "./my-guard.sh"}]} ]
+  }
+}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join(".husky")).unwrap();
+    std::fs::write(root.join(".husky/pre-commit"), "npx lint-staged\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(
+        &root,
+        &["-c", "user.name=u", "-c", "user.email=u@x", "commit", "-qm", "chore: seed"],
+    );
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+
+    // AGENTS.md: block appended, user content untouched.
+    assert_eq!(action_of(&report, "AGENTS.md"), Action::Merged);
+    let agents = read(&root, "AGENTS.md");
+    assert!(agents.starts_with("# My agents"));
+    assert!(agents.contains("custom instructions"));
+    assert!(agents.contains("codeflow:managed:begin"));
+    assert!(agents.contains("rules v1 for proj"));
+
+    // .gitignore: hash-marker block appended.
+    let gitignore = read(&root, ".gitignore");
+    assert!(gitignore.starts_with("node_modules/"));
+    assert!(gitignore.contains("# codeflow:managed:begin"));
+    assert!(gitignore.contains(".env"));
+
+    // settings.json: structured merge with a printed report.
+    assert_eq!(action_of(&report, ".claude/settings.json"), Action::Merged);
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    assert_eq!(settings["model"], "opus");
+    assert_eq!(settings["permissions"]["defaultMode"], "plan", "user value preserved");
+    let deny = settings["permissions"]["deny"].as_array().unwrap();
+    assert!(deny.iter().any(|d| d == "Read(secrets/**)"));
+    assert!(deny.iter().any(|d| d == "Read(**/.env)"));
+    let hooks = settings["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
+    assert!(hooks.iter().any(|h| h["command"] == "./my-guard.sh"));
+    assert!(hooks.iter().any(|h| h["command"] == "codeflow hook git-guard"));
+    let merge_notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".claude/settings.json")
+        .unwrap()
+        .notes;
+    assert!(merge_notes.iter().any(|n| n.contains("git-guard")), "merge report printed");
+
+    // husky: hooks left alone, recorded unwired, instructions printed.
+    assert_eq!(git(&root, &["config", "core.hooksPath"]), "");
+    assert!(read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""));
+    assert!(report.notes.iter().any(|n| n.contains("husky")));
+    assert_eq!(read(&root, ".husky/pre-commit"), "npx lint-staged\n");
+
+    // Existing history: no scaffold commit on top of the user's branch.
+    assert_eq!(git(&root, &["rev-list", "--count", "HEAD"]), "1");
+}
+
+#[test]
+fn init_is_idempotent() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    let agents_before = read(&root, "AGENTS.md");
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+
+    assert_eq!(report.count(Action::Created), 0, "second run creates nothing");
+    assert_eq!(report.count(Action::Changed), 0);
+    assert_eq!(read(&root, "AGENTS.md"), agents_before);
+    assert!(report.count(Action::Unchanged) > 0);
+}
+
+#[test]
+fn init_force_overwrites_unmanaged_file() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    std::fs::create_dir_all(root.join(".claude/workflows")).unwrap();
+    std::fs::write(root.join(".claude/workflows/develop.md"), "mine\n").unwrap();
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Skipped);
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), "mine\n");
+
+    let mut forced = opts(None, "2.0.0");
+    forced.force = true;
+    let report = scaffold::init(&assets, &root, &forced).unwrap();
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Forced);
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V1);
+}
+
+#[test]
+fn init_records_answers_and_detects_stack() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
+
+    let options = InitOptions {
+        tier: None,
+        force: false,
+        binary_version: "2.0.0".to_string(),
+        answers: InitAnswers {
+            product_one_liner: Some("a discipline layer".to_string()),
+            areas: Some(vec!["core".to_string(), "cli".to_string()]),
+            permission_preset: Some("acceptEdits".to_string()),
+        },
+    };
+    scaffold::init(&assets, &root, &options).unwrap();
+
+    let product = read(&root, "docs/product.md");
+    assert!(product.contains("a discipline layer"));
+    assert!(product.contains("stack: rust"));
+    assert!(product.contains("areas: core, cli"));
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    assert_eq!(settings["permissions"]["defaultMode"], "acceptEdits");
+    let toml = read(&root, ".codeflow/project.toml");
+    assert!(toml.contains("permission_preset = \"acceptEdits\""));
+    assert!(toml.contains("stack = \"rust\""));
+}
+
+// --- update -----------------------------------------------------------------
+
+fn init_v1(root: &Path) -> tempfile::TempDir {
+    let (assets_dir, assets) = fixture_assets(false);
+    scaffold::init(&assets, root, &opts(None, "2.0.0")).unwrap();
+    assets_dir
+}
+
+#[test]
+fn update_replaces_unmodified_managed_files() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Changed);
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V2);
+    assert_eq!(
+        read(&root, ".codeflow/.baseline/.claude/workflows/develop.md"),
+        DEVELOP_V2,
+        "baseline refreshed"
+    );
+    assert!(read(&root, ".codeflow/project.toml").contains("scaffold_version = \"2.1.0\""));
+    assert!(read(&root, ".codeflow/manifest.json").contains("\"scaffold_version\": \"2.1.0\""));
+}
+
+#[test]
+fn update_three_way_merges_user_modified_file() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    // User edits the tail; upstream v2 edits the head. Disjoint = clean merge.
+    let mine = read(&root, ".claude/workflows/develop.md").replace("step eight", "step eight (mine)");
+    std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Merged);
+    let merged = read(&root, ".claude/workflows/develop.md");
+    assert!(merged.contains("step one (improved)"), "upstream change applied");
+    assert!(merged.contains("step eight (mine)"), "user change kept");
+    assert!(!root.join(".claude/workflows/develop.md.new").exists());
+}
+
+#[test]
+fn update_conflict_writes_dot_new_and_never_clobbers() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    // User and upstream both rewrite the same line: conflict.
+    let mine = read(&root, ".claude/workflows/develop.md").replace("step one", "step one (user)");
+    std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Conflicted);
+    assert!(report.has_conflicts());
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), mine, "file untouched");
+    assert_eq!(read(&root, ".claude/workflows/develop.md.new"), DEVELOP_V2);
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".claude/workflows/develop.md")
+        .unwrap()
+        .notes;
+    assert!(notes.iter().any(|n| n.contains(".new")));
+}
+
+#[test]
+fn update_keeps_user_modified_file_when_upstream_unchanged() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let assets_v1_dir = init_v1(&root);
+
+    let mine = read(&root, ".claude/workflows/develop.md").replace("step two", "step two (mine)");
+    std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
+
+    // Same assets, same version: nothing upstream changed.
+    let report = scaffold::update(
+        &DirSource::new(assets_v1_dir.path()),
+        &root,
+        &update_opts("2.0.0"),
+    )
+    .unwrap();
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::KeptUserModified
+    );
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), mine);
+}
+
+#[test]
+fn update_regenerates_agents_region_round_trip() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    // User wraps the managed block with their own content.
+    let agents = read(&root, "AGENTS.md");
+    std::fs::write(
+        root.join("AGENTS.md"),
+        format!("PREFACE BY USER\n\n{agents}\nAPPENDIX BY USER\n"),
+    )
+    .unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, "AGENTS.md"), Action::Changed);
+
+    let updated = read(&root, "AGENTS.md");
+    assert!(updated.starts_with("PREFACE BY USER"));
+    assert!(updated.ends_with("APPENDIX BY USER\n"));
+    assert!(updated.contains("rules v2 for proj"));
+    assert!(updated.contains("extra rule"));
+    assert!(!updated.contains("rules v1"));
+    assert!(updated.contains("scaffold=2.1.0"));
+
+    // Round-trip: a second identical update is a no-op.
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, "AGENTS.md"), Action::Unchanged);
+    assert_eq!(read(&root, "AGENTS.md"), updated);
+}
+
+#[test]
+fn update_settings_merge_preserves_foreign_keys() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    // User adds their own keys and hooks after init.
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    settings["model"] = "opus".into();
+    settings["hooks"]["PreToolUse"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "command", "command": "./mine.sh"}));
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, ".claude/settings.json"), Action::Merged);
+
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    assert_eq!(after["model"], "opus");
+    let hooks = after["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
+    assert!(hooks.iter().any(|h| h["command"] == "./mine.sh"));
+    assert!(hooks.iter().any(|h| h["command"] == "codeflow hook git-guard"));
+    assert_eq!(
+        after["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        "codeflow hook session-orient",
+        "new v2 hook arrived"
+    );
+    let deny = after["permissions"]["deny"].as_array().unwrap();
+    assert!(deny.iter().any(|d| d == "Read(**/*.pem)"), "new v2 deny rule arrived");
+}
+
+#[test]
+fn update_adds_new_policy_keys_without_mutating_user_values() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    // User flips a value and deletes a key they do not want.
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["commit_format"] = "warn".into();
+    policy["git"].as_object_mut().unwrap().remove("test_gate_on_push");
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, ".codeflow/policy.json"), Action::KeysAdded);
+
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(after["git"]["commit_format"], "warn", "user value never mutated");
+    assert!(
+        after["git"].get("test_gate_on_push").is_none(),
+        "user deletion respected"
+    );
+    assert_eq!(after["git"]["new_gate"], "warn", "new default key added");
+    assert_eq!(after["recall"]["share"], false, "new section added");
+    assert_eq!(after["schema_version"], 2, "schema_version advanced");
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".codeflow/policy.json")
+        .unwrap()
+        .notes;
+    assert!(notes.iter().any(|n| n.contains("git.new_gate")));
+}
+
+#[test]
+fn update_reinstalls_missing_managed_file() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let assets_dir = init_v1(&root);
+
+    std::fs::remove_file(root.join(".claude/workflows/develop.md")).unwrap();
+    let report = scaffold::update(
+        &DirSource::new(assets_dir.path()),
+        &root,
+        &update_opts("2.0.0"),
+    )
+    .unwrap();
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Added);
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V1);
+}
+
+#[test]
+fn update_requires_initialized_project() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+    let err = scaffold::update(&assets, &root, &update_opts("2.0.0")).unwrap_err();
+    assert!(err.to_string().contains("codeflow init"));
+}
+
+#[test]
+fn update_writes_diff_file() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let diff_path = root.join("update.diff");
+    let mut options = update_opts("2.1.0");
+    options.diff_out = Some(diff_path.clone());
+    scaffold::update(&assets_v2, &root, &options).unwrap();
+
+    let diff = std::fs::read_to_string(&diff_path).unwrap();
+    assert!(diff.contains("=== .claude/workflows/develop.md"));
+    assert!(diff.contains("+step one (improved)"));
+}
+
+// --- version skew -------------------------------------------------------------
+
+#[test]
+fn version_skew_warns_when_behind_only() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root); // records scaffold_version 2.0.0
+
+    let warning = scaffold::version_skew_warning(&root, "2.1.0").expect("warns when behind");
+    assert!(warning.contains("2.0.0"));
+    assert!(warning.contains("2.1.0"));
+    assert!(warning.contains("codeflow update"));
+    assert!(scaffold::version_skew_warning(&root, "2.0.0").is_none());
+
+    // Uninitialized directory: silent.
+    let (_q, other) = project_dir();
+    assert!(scaffold::version_skew_warning(&other, "2.1.0").is_none());
+}
