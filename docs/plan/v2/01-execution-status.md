@@ -9,17 +9,18 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] v1 local git hooks (symlinks into `.codeflow/scripts/git-hooks/`) superseded: `core.hooksPath` → `.git/hooks-v2/` with transition hooks (protected-branch commit/push block via `CODEFLOW_TRANSITION` escape, staged-.env block, conventional-commit + no-AI-attribution check). v1 hook content preserved in `archive/v1` and `.git/hooks-v1-backup/`
 - [x] Tree reset: all v1 content removed from working tree (preserved in archive)
 - [x] v2 skeleton: README, .gitignore, `docs/plan/v2/`
-- [ ] Cargo workspace skeleton (`crates/codeflow-core`, `crates/codeflow-cli`, `assets/`) compiling
-- [ ] Push main
+- [x] Cargo workspace skeleton (`crates/codeflow-core`, `crates/codeflow-cli`, `assets/`) compiling
+- [x] Push main
 - [x] Probe: native workflow rework-loop (charter §12 Day 0) — verdict Door A (native scripts suffice, no bespoke runtime); analysis + draft script in `docs/plan/v2/probe/`
 
 ## Day 1 — parallel workstreams
 
-- [ ] A — testing engine import (green)
-- [ ] B — records import: workgraph, ledger, store, validate, models subset (green)
-- [ ] C — guards import: security scanner, git/conflict + ci_wait, file_lock, error, doctor core, settings (green)
-- [ ] D — scaffold engine: init/update, manifest, ownership classes, 3-way merge, rust-embed (new)
-- [ ] E — corpus authoring: AGENTS.md, CLAUDE.md shim, cf-reviewer, cf-method, develop workflow, 3 commands, settings presets, policy.json, git-hook shims, CI + docs templates (new)
+- [x] A — testing engine import: 327 tests green, clippy clean (23 files; config path moved to `.codeflow/test-config.json`; schema+9 templates shipped in `assets/base/testing/`)
+- [x] B — records import: 180 tests green, clippy clean (models/ledger/workgraph/validate; SurrealDB NOT imported — `RecordStore` trait + `MarkdownStore` over markdown+frontmatter per D17; format ids simplified to `EPC-NNN`/`TSK-NNN-NNN`)
+- [x] C — guards import: 376 tests green, clippy clean (security scanner ×10 modules, git/conflict + ci, file_lock, error pruned 1178→476 lines, doctor v2 check table, settings structured-merge per §4.3 class 2)
+- [ ] D — scaffold engine: init/update, manifest, ownership classes, 3-way merge, rust-embed (new) — IN FLIGHT
+- [x] E — corpus authoring, all §4.4 caps respected: AGENTS.md.tmpl 116 lines, CLAUDE.md.tmpl 14, cf-reviewer 64, cf-method 131, 3 commands ≤26, policy.json (§6.1 exact), git-hook shims, 3 settings presets, CI template, docs+pm templates; repo's own AGENTS.md/CLAUDE.md instantiated (dogfood)
+- [x] Integration: probe+E+A+B+C merged serially into main; **883 tests green** (exact workstream sum), **clippy 0 warnings workspace-wide**
 
 ## Day 2 — new builds + integration
 
