@@ -351,6 +351,95 @@ fn tier_upgrade_is_additive() {
 }
 
 #[test]
+fn full_tier_init_after_standard_reports_pm_templates_created() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.0.0")).unwrap();
+    assert!(
+        !root.join("project-management").exists(),
+        "pm templates are full-tier only"
+    );
+
+    let report = scaffold::init(&assets, &root, &opts(Some(Tier::Full), "2.0.0")).unwrap();
+    let epic = report
+        .files
+        .iter()
+        .find(|f| f.dest == "project-management/templates/epic.md")
+        .expect("pm template reported");
+    assert_eq!(epic.action, Action::Created, "did not pre-exist: must be created");
+    assert!(
+        !epic.notes.iter().any(|n| n.contains("adopted")),
+        "a freshly installed file must never be reported as adopted"
+    );
+}
+
+#[test]
+fn rerun_after_interrupted_init_reports_created_not_adopted() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+
+    // Simulate an init that wrote the file (and its baseline) but died before
+    // storing the installed record: drop the record, keep file + baseline.
+    let manifest_path = root.join(".codeflow/manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+    manifest["files"]
+        .as_object_mut()
+        .unwrap()
+        .remove(".claude/workflows/develop.md")
+        .expect("record existed");
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    let file = report
+        .files
+        .iter()
+        .find(|f| f.dest == ".claude/workflows/develop.md")
+        .unwrap();
+    assert_eq!(
+        file.action,
+        Action::Created,
+        "codeflow wrote it (baseline matches): the rerun completes the create"
+    );
+    assert!(
+        !file.notes.iter().any(|n| n.contains("adopted")),
+        "must not claim adoption of a file the user never created"
+    );
+    // The record is restored: a third run is a plain unchanged.
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Unchanged);
+}
+
+#[test]
+fn init_adopts_genuinely_preexisting_identical_file_as_unchanged() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    // The user already has a file identical to the shipped asset, and
+    // codeflow never touched this project (no baseline): genuine adoption.
+    std::fs::create_dir_all(root.join(".claude/workflows")).unwrap();
+    std::fs::write(root.join(".claude/workflows/develop.md"), DEVELOP_V1).unwrap();
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    let file = report
+        .files
+        .iter()
+        .find(|f| f.dest == ".claude/workflows/develop.md")
+        .unwrap();
+    assert_eq!(file.action, Action::Unchanged, "pre-existing file: unchanged");
+    assert!(
+        file.notes.iter().any(|n| n.contains("adopted as managed")),
+        "adoption is reported, never silent"
+    );
+}
+
+#[test]
 fn init_into_existing_repo_is_nondestructive() {
     isolate_git();
     let (_a, assets) = fixture_assets(false);

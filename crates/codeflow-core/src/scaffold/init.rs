@@ -414,14 +414,33 @@ fn install_entry(
                 }
                 (_, None) => {
                     if current == rendered {
-                        // Identical content: adopt it as managed.
+                        // Identical content, no installed record. Two distinct
+                        // cases, told apart by the baseline (only codeflow
+                        // writes `.codeflow/.baseline/`): a matching baseline
+                        // means an earlier init wrote this file but never got
+                        // to record it (interrupted mid-run) — the file did
+                        // NOT pre-exist as a user file, so this run completes
+                        // its creation. No baseline means a genuinely
+                        // pre-existing user file: adopt it as managed.
+                        let written_by_codeflow =
+                            Baseline::read(root, &entry.dest).is_some_and(|b| b == rendered);
                         record(installed, entry, hash::sha256_hex(current.as_bytes()));
                         Baseline::write(root, &entry.dest, &rendered)?;
-                        report.file_with_notes(
-                            &entry.dest,
-                            Action::Unchanged,
-                            vec!["identical existing file adopted as managed".to_string()],
-                        );
+                        if written_by_codeflow {
+                            written.push(entry.dest.clone());
+                            report.file_with_notes(
+                                &entry.dest,
+                                Action::Created,
+                                vec!["written by an earlier interrupted init — record completed"
+                                    .to_string()],
+                            );
+                        } else {
+                            report.file_with_notes(
+                                &entry.dest,
+                                Action::Unchanged,
+                                vec!["identical existing file adopted as managed".to_string()],
+                            );
+                        }
                         return Ok(());
                     }
                     "exists and is not codeflow-managed — left untouched (--force to overwrite)"
