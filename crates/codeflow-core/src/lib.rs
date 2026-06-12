@@ -5,4 +5,5 @@
 
 pub mod ledger;
 pub mod models;
+pub mod validate;
 pub mod workgraph;
