@@ -8,7 +8,7 @@
 // named explicitly. The interactive default is /cf-develop's inline
 // build -> review -> verify loop — not this file.
 //
-// Args contract (the invoking command composes and passes this object as `input`):
+// Args contract (the invoking command passes this object; runtime global `args`):
 //   task       string     what to build (required)
 //   criteria   string[]   testable acceptance criteria (required)
 //   stages     string[]?  ordered preset drawn from: analyze, plan, build,
@@ -28,7 +28,12 @@
 // per-stage model, schema verdicts, bounded rework) validated live in run
 // wf_74f22cff-d1a; see docs/decisions/ADR-0004-composable-pipeline.md.
 
-const args = input ?? {};
+export const meta = {
+  name: 'pipeline',
+  description: 'CodeFlow composable develop pipeline: stages-as-data with bounded rework',
+  phases: [{ title: 'Pipeline' }],
+}
+
 if (typeof args.task !== 'string' || !Array.isArray(args.criteria) || args.criteria.length === 0) {
   throw new Error('pipeline: args.task (string) and args.criteria (non-empty string[]) are required');
 }
