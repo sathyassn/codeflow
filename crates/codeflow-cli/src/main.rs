@@ -1,5 +1,6 @@
 //! codeflow — the AI-development discipline layer CLI.
 
+mod cmd;
 mod embedded;
 mod prompts;
 
@@ -47,6 +48,12 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Claude-layer hooks, wired by the settings presets (charter §3.3).
+    Hook(cmd::hook::HookArgs),
+    /// Git client hook target — the .git/hooks shims exec this.
+    GitHook(cmd::git_hook::GitHookArgs),
+    /// Print the session-start digest (pointers, not content).
+    Orient,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -105,6 +112,9 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(2);
             }
         }
+        Command::Hook(args) => std::process::exit(cmd::hook::run(&args)),
+        Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
+        Command::Orient => std::process::exit(cmd::orient::run()),
     }
     Ok(())
 }
