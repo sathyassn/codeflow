@@ -57,3 +57,8 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - Nuance (Day 3): a raw local ff-merge while on a protected branch fires no git hook (no commit or push event to intercept), but the result cannot be pushed — the perimeter holds per D19. Local layers are fast feedback, not the line.
 - Amendment: `stack add` is removed from the planned CLI surface and `assets/profiles` is dropped — stack setup is agent-led via `/cf-stack`, with the test-config templates as the deterministic substrate (ADR-0003).
 - Pipeline mechanics validated live (run wf_74f22cff-d1a: per-stage model, schema verdicts, bounded rework — sabotaged build caught, recovered in 2 attempts); composable pipeline ships user-owned per ADR-0004, evidence artifact at `docs/plan/v2/probe/pipeline-validation.workflow.js`.
+- Composable pipeline validated end-to-end on the SHIPPED file (run wf_4de9066e-9d0:
+  2-stage preset composed via args, evidence-based approval, 1 attempt). The live-test
+  loop fixed three shipping defects first: missing meta export + args-as-JSON-string
+  runtime quirk (040a7f60), schema_version "1" lenience (f784fafc). Bounded-rework
+  exhaustion behavior proven by run wf_1380de05-e8f (threw loudly with findings).
