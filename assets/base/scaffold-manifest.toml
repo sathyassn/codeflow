@@ -181,10 +181,12 @@ dest = ".claude/commands/cf-stack.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# The pipeline workflow is user-owned by design (ADR-0004): seeded once,
+# never update-managed — consumers own and adapt their copy.
 [[entry]]
-src = "claude/workflows/develop.workflow.js"
-dest = ".claude/workflows/develop.workflow.js"
-ownership = "managed"
+src = "claude/workflows/pipeline.workflow.js"
+dest = ".claude/workflows/pipeline.workflow.js"
+ownership = "user-owned"
 tiers = ["standard", "full"]
 
 # --- docs (knowledge model seeds; user-owned: write once, never mutate) ------
