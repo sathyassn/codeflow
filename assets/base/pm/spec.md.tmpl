@@ -1,8 +1,10 @@
 ---
 id: SPC-{{NNN}}
-epic: EPC-{{NNN}}
+format_id: SPC-{{NNN}}   # SPC-NNN — must match the filename
+epic_id: EPC-{{NNN}}
 title: {{TITLE}}
-status: draft         # draft | implemented — set implemented (frozen) when the epic ships
+status: draft            # draft | implemented — set implemented (frozen) when the epic ships
+work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 created: {{DATE}}
 ---
 
@@ -11,8 +13,12 @@ created: {{DATE}}
 <!-- Specs are inputs to work, not living documents. Write one only when
      interfaces, formats, or behavior need pinning down before building —
      many epics need no spec. Frozen at ship: after that, truth lives in
-     architecture + capabilities + tests, and this file is historical.
-     Never update a frozen spec to match later reality. -->
+     architecture + capabilities + tests. Never update a frozen spec to
+     match later reality. -->
+
+## Summary
+
+<!-- What is being pinned down, and for which epic. -->
 
 ## Behavior
 
