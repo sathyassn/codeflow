@@ -31,3 +31,8 @@ serial_test = "3"
 [workspace.lints.clippy]
 all = "deny"
 pedantic = "warn"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
