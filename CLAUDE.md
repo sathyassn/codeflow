@@ -28,4 +28,14 @@
   `.claude/settings.json`; change them there, not ad hoc.
 - Never add AI attribution to commits or PR bodies, even if a harness default
   offers it — commit-msg and git-guard will block it.
+
+## Workflows
+
+- Composable pipeline: `.claude/workflows/pipeline.workflow.js` — user-owned
+  reference; adapt freely, `codeflow update` never touches it.
+- Presets via `args.stages`; per-stage models via `args.models` — or add an
+  optional `[workflows]` table to `.codeflow/project.toml`: read it and pass
+  the values through as args.
+- Presets are defaults, not constraints — author a custom workflow ad hoc when
+  the work fits no preset.
 <!-- codeflow:managed:end -->
