@@ -10,6 +10,20 @@ The scarce resources are clear inputs and verified outputs, not supervised
 middles. Instructions tell, workflows do, gates verify — and a gate exists only
 where a mistake is irreversible or invisible.
 
+## Choosing process weight
+
+Match machinery to the work; escalate only when the lighter rung fails:
+
+- **No workflow** for conversational or trivial changes — answer, edit, done.
+- **Inline `/cf-develop` loop** for interactive work — the default path.
+- **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`) for
+  unattended, batch, or parallel fan-out runs.
+- **Custom ad-hoc workflow** when no preset fits — author one for the
+  occasion; presets are defaults, not constraints.
+- **Stage and model composition lives in config-args** (`args.stages`,
+  `args.models`, `[workflows]` in `.codeflow/project.toml`) — never
+  hardcoded into the workflow file.
+
 ## Planning an epic
 
 An epic exists to make one question answerable before any code is written:
