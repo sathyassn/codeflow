@@ -6,11 +6,11 @@ use std::path::Path;
 
 use codeflow_core::scaffold::InitAnswers;
 
-fn ask(question: &str, default: &str) -> std::io::Result<String> {
+fn ask(input: &mut impl BufRead, question: &str, default: &str) -> std::io::Result<String> {
     print!("{question} [{default}]: ");
     std::io::stdout().flush()?;
     let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
+    input.read_line(&mut line)?;
     let answer = line.trim();
     Ok(if answer.is_empty() {
         default.to_string()
@@ -22,14 +22,20 @@ fn ask(question: &str, default: &str) -> std::io::Result<String> {
 /// Gathers the three init answers from stdin. Empty input keeps the default;
 /// closed stdin behaves like `--yes`.
 pub fn gather_answers(root: &Path) -> std::io::Result<InitAnswers> {
+    gather_answers_from(&mut std::io::stdin().lock(), root)
+}
+
+/// [`gather_answers`] over any reader — the testable core.
+fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result<InitAnswers> {
     let name = root
         .file_name()
         .map_or_else(|| "project".to_string(), |n| n.to_string_lossy().to_string());
 
-    let one_liner = ask("Product one-liner (what is this project?)", &name)?;
-    let areas = ask("Areas (comma-separated)", "core")?;
+    let one_liner = ask(input, "Product one-liner (what is this project?)", &name)?;
+    let areas = ask(input, "Areas (comma-separated)", "core")?;
     let preset = loop {
         let answer = ask(
+            input,
             "Permission preset (default | acceptEdits | bypassPermissions)",
             "default",
         )?;
@@ -50,4 +56,61 @@ pub fn gather_answers(root: &Path) -> std::io::Result<InitAnswers> {
         ),
         permission_preset: Some(preset),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gather(input: &str) -> InitAnswers {
+        let mut reader = input.as_bytes();
+        gather_answers_from(&mut reader, Path::new("/tmp/myproj")).unwrap()
+    }
+
+    #[test]
+    fn piped_answers_fill_all_three_questions() {
+        let answers = gather("a discipline layer\nengine, scaffold, docs\nacceptEdits\n");
+        assert_eq!(answers.product_one_liner.as_deref(), Some("a discipline layer"));
+        assert_eq!(
+            answers.areas,
+            Some(vec![
+                "engine".to_string(),
+                "scaffold".to_string(),
+                "docs".to_string()
+            ])
+        );
+        assert_eq!(answers.permission_preset.as_deref(), Some("acceptEdits"));
+    }
+
+    #[test]
+    fn empty_input_keeps_every_default() {
+        // Closed stdin (EOF on every question) behaves like --yes.
+        let answers = gather("");
+        assert_eq!(answers.product_one_liner.as_deref(), Some("myproj"));
+        assert_eq!(answers.areas, Some(vec!["core".to_string()]));
+        assert_eq!(answers.permission_preset.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn blank_lines_keep_defaults_too() {
+        let answers = gather("\n\n\n");
+        assert_eq!(answers.product_one_liner.as_deref(), Some("myproj"));
+        assert_eq!(answers.areas, Some(vec!["core".to_string()]));
+        assert_eq!(answers.permission_preset.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn unknown_preset_is_reasked_until_valid() {
+        let answers = gather("p\ncore\nyolo\nbypassPermissions\n");
+        assert_eq!(answers.permission_preset.as_deref(), Some("bypassPermissions"));
+    }
+
+    #[test]
+    fn areas_are_trimmed_and_empties_dropped() {
+        let answers = gather("p\n core ,, cli , \ndefault\n");
+        assert_eq!(
+            answers.areas,
+            Some(vec!["core".to_string(), "cli".to_string()])
+        );
+    }
 }
