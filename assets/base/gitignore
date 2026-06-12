@@ -1,0 +1,21 @@
+# managed by codeflow (scaffold) — extend freely below the marker block
+# codeflow:managed:begin
+# secrets — never tracked
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*
+
+# codeflow runtime (lives in .git/codeflow/, never tracked)
+.codeflow/runtime/
+
+# os / editor
+.DS_Store
+*.swp
+
+# local-only claude settings
+.claude/settings.local.json
+# codeflow:managed:end
