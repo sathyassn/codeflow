@@ -3,4 +3,5 @@
 //! Modules arrive via the charter's import waves (docs/plan/v2/00-charter.md §3.2):
 //! testing, workgraph/ledger, guards, scaffold, recall.
 
+pub mod ledger;
 pub mod models;
