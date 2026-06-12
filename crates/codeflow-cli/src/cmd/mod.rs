@@ -1,49 +1,54 @@
-//! CLI subcommand handlers. Each module owns its arg types and run function
-//! so `main.rs` stays a thin dispatcher (charter §3.1).
+//! CLI subcommand modules and dispatch.
+//!
+//! `main.rs` stays a thin parser (it is a known merge hotspot across
+//! parallel workstreams); everything else — the subcommand enum, argument
+//! structs, and dispatch — lives here.
 
-pub mod git_hook;
-pub mod hook;
-pub mod orient;
+pub mod integrate;
+pub mod status;
+pub mod test;
+pub mod validate;
 
 use std::path::PathBuf;
 
-use codeflow_core::hooks::{any_blocking, PolicyLevel, Violation, INTEGRATE_TOKEN_ENV};
+use clap::Subcommand;
 
-/// `true` when the `codeflow integrate` gate-context token is present in the
-/// environment (charter §6.2 / D9).
-#[must_use]
-pub fn integrate_token_present() -> bool {
-    std::env::var(INTEGRATE_TOKEN_ENV).is_ok_and(|v| !v.is_empty())
+/// Subcommands wired by the g-flow workstream (charter §3.1).
+#[derive(Subcommand)]
+pub enum Command {
+    /// Run the test gate (configured targets or runtime stack detection)
+    Test(test::TestArgs),
+    /// Validate record frontmatter; --docs adds the doc-graph integrity lint
+    Validate(validate::ValidateArgs),
+    /// Generated status view: branch, worktrees, in-flight work, capabilities
+    Status(status::StatusArgs),
+    /// Land a branch into a target: flock(rebase -> test -> ff-merge)
+    Integrate(integrate::IntegrateArgs),
 }
 
-/// Project root for hook evaluation: the repo containing `start`, or `start`
-/// itself when not in a repository (policy then falls back to defaults).
-#[must_use]
-pub fn project_root(start: &std::path::Path) -> PathBuf {
-    codeflow_core::hooks::RepoInfo::discover(start).map_or_else(|| start.to_path_buf(), |i| i.root)
+/// Dispatch a parsed subcommand; returns the process exit code.
+pub fn run(command: Command) -> i32 {
+    match command {
+        Command::Test(args) => test::run(&args),
+        Command::Validate(args) => validate::run(&args),
+        Command::Status(args) => status::run(&args),
+        Command::Integrate(args) => integrate::run(&args),
+    }
 }
 
-/// Print violations and notes for one enforcement plane; return the exit
-/// code (`block_code` when any violation is block-level, else 0).
-#[must_use]
-pub fn render_outcome(
-    plane: &str,
-    violations: &[Violation],
-    notes: &[String],
-    block_code: i32,
-) -> i32 {
-    for note in notes {
-        eprintln!("codeflow {plane}: {note}");
-    }
-    for v in violations {
-        eprintln!("{}", v.render(plane));
-    }
-    if any_blocking(violations) {
-        block_code
-    } else {
-        if violations.iter().any(|v| v.level == PolicyLevel::Warn) {
-            eprintln!("codeflow {plane}: warnings only — proceeding");
+/// Walk up from the current directory to the nearest git repository root.
+/// Falls back to the current directory when none is found (commands that
+/// don't need git still work there).
+pub(crate) fn repo_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut dir = cwd.clone();
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
         }
-        0
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return cwd,
+        }
     }
 }
