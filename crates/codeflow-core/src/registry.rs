@@ -171,8 +171,10 @@ pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
 /// This is the cheap per-command touch the CLI performs: it does nothing
 /// (returning `Ok(false)`) when `repo_root` is not an initialized codeflow
 /// repo, and otherwise upserts under the registry's flock sidecar so
-/// concurrent invocations never lose entries. Returns `Ok(true)` when an
-/// entry was written.
+/// concurrent invocations never lose entries. Entries whose recorded path
+/// no longer exists on disk (deleted or moved repos) are pruned in the same
+/// locked read-modify-write — the registry is a view, and stale rows make
+/// it lie. Returns `Ok(true)` when an entry was written.
 ///
 /// # Errors
 ///
@@ -196,6 +198,10 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
 
     locked_rmw_typed(&registry_path(home), Registry::default, |reg| {
         reg.schema_version = REGISTRY_SCHEMA_VERSION;
+        // Prune stale rows: a cheap existence check per entry, inside the
+        // same lock so concurrent touches never resurrect a pruned path.
+        reg.repos
+            .retain(|r| r.path == entry.path || Path::new(&r.path).exists());
         match reg.repos.iter_mut().find(|r| r.path == entry.path) {
             Some(existing) => *existing = entry.clone(),
             None => reg.repos.push(entry.clone()),
@@ -452,6 +458,88 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_touch_registry_prunes_stale_entries() {
+        let home = tempfile::tempdir().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        init_repo(live.path(), Some("live"));
+
+        let stale = tempfile::tempdir().unwrap();
+        init_repo(stale.path(), Some("stale"));
+        touch_registry(home.path(), stale.path()).unwrap();
+        touch_registry(home.path(), live.path()).unwrap();
+        assert_eq!(list_repos(home.path()).unwrap().len(), 2);
+
+        // The stale repo disappears from disk; the next touch prunes it.
+        let stale_path = stale.path().to_path_buf();
+        drop(stale);
+        assert!(!stale_path.exists());
+
+        touch_registry(home.path(), live.path()).unwrap();
+        let repos = list_repos(home.path()).unwrap();
+        assert_eq!(repos.len(), 1, "stale entry must be pruned");
+        assert_eq!(repos[0].name, "live");
+    }
+
+    #[test]
+    fn test_touch_registry_keeps_live_entries_when_pruning() {
+        let home = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let gone = tempfile::tempdir().unwrap();
+        init_repo(a.path(), Some("a"));
+        init_repo(b.path(), Some("b"));
+        init_repo(gone.path(), Some("gone"));
+
+        touch_registry(home.path(), a.path()).unwrap();
+        touch_registry(home.path(), b.path()).unwrap();
+        touch_registry(home.path(), gone.path()).unwrap();
+        drop(gone);
+
+        touch_registry(home.path(), a.path()).unwrap();
+        let mut names: Vec<String> = list_repos(home.path())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["a", "b"], "live entries survive the prune");
+    }
+
+    #[test]
+    fn test_touch_registry_concurrent_with_pruning() {
+        let home = tempfile::tempdir().unwrap();
+        let stale = tempfile::tempdir().unwrap();
+        init_repo(stale.path(), Some("stale"));
+        touch_registry(home.path(), stale.path()).unwrap();
+        drop(stale);
+
+        let repos: Vec<tempfile::TempDir> = (0..8)
+            .map(|i| {
+                let d = tempfile::tempdir().unwrap();
+                init_repo(d.path(), Some(&format!("repo-{i}")));
+                d
+            })
+            .collect();
+
+        std::thread::scope(|scope| {
+            for repo in &repos {
+                let home = home.path().to_path_buf();
+                scope.spawn(move || {
+                    touch_registry(&home, repo.path()).unwrap();
+                });
+            }
+        });
+
+        let listed = list_repos(home.path()).unwrap();
+        assert_eq!(
+            listed.len(),
+            8,
+            "all live touches survive; the stale entry is pruned exactly once"
+        );
+        assert!(listed.iter().all(|r| r.name != "stale"));
     }
 
     #[test]
