@@ -8,13 +8,10 @@ repository.workspace = true
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 toml.workspace = true
-regex.workspace = true
-git2.workspace = true
-fs2.workspace = true
-tokio.workspace = true
-which.workspace = true
+sha2.workspace = true
+diffy.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
