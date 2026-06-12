@@ -19,7 +19,12 @@ is expensive to reverse once capabilities ship on it.
 
 The project is built on **rust**.
 
-{{STACK_RATIONALE}}
+Rust ships a single static binary, which is exactly what the hook shims and
+installer story require — nothing to install on the consumer machine beyond
+the binary itself. The engine modules predate v2 as tested Rust code, so the
+stack was already proven in place rather than chosen on speculation. And the
+test/clippy gate culture (workspace deny lints, tests shipping with code)
+matches the discipline this project exists to enforce.
 
 ## Consequences
 
