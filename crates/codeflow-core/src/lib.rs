@@ -13,6 +13,7 @@ pub mod ledger;
 pub mod models;
 pub mod security;
 pub mod settings;
+pub mod status;
 pub mod testing;
 pub mod validate;
 pub mod workgraph;
