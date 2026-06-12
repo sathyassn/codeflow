@@ -1,0 +1,13 @@
+{
+  "_description": "Minimal config for fresh projects with no tests yet.",
+  "$schema": ".codeflow/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": []
+}

@@ -1,0 +1,27 @@
+{
+  "_description": "Custom runner escape hatch using a shell script.",
+  "$schema": ".codeflow/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": [
+    {
+      "name": "app",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "bash scripts/run-tests.sh essential"
+        },
+        "full": {
+          "command": "bash scripts/run-tests.sh full"
+        }
+      }
+    }
+  ]
+}

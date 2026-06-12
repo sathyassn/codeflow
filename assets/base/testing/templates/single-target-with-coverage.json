@@ -1,0 +1,49 @@
+{
+  "_description": "Single target with coverage rules and a sample exception.",
+  "$schema": ".codeflow/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": [
+    {
+      "name": "app",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "npm test"
+        },
+        "full": {
+          "command": "npm test -- --ci --coverage"
+        }
+      },
+      "coverage": {
+        "format": "lcov",
+        "path": "coverage/lcov.info",
+        "rules": [
+          {
+            "scope": "per_file",
+            "minimum": 85
+          },
+          {
+            "scope": "changed_files",
+            "minimum": 85
+          }
+        ],
+        "exceptions": [
+          {
+            "file": "src/generated/api-client.ts",
+            "threshold": 0,
+            "reason": "Auto-generated code from OpenAPI spec",
+            "remove_when": "Client is hand-written or coverage is added to codegen"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "_description": "Python project with pytest, JUnit XML report, and Cobertura coverage.",
+  "$schema": ".codeflow/test-config.schema.json",
+  "schema_version": "1.0",
+  "execution": {
+    "parallel": false,
+    "fail_fast": false
+  },
+  "defaults": {
+    "coverage": []
+  },
+  "targets": [
+    {
+      "name": "python",
+      "enabled": true,
+      "runner": "pytest",
+      "modes": {
+        "essential": {
+          "command": "pytest -q"
+        },
+        "full": {
+          "command": "pytest --cov --cov-report=xml --junitxml=report.xml"
+        }
+      },
+      "report": {
+        "format": "junit",
+        "path": "report.xml",
+        "derive_from": "junit"
+      },
+      "coverage": {
+        "format": "cobertura",
+        "path": "coverage.xml",
+        "rules": [
+          {
+            "scope": "per_file",
+            "minimum": 85
+          }
+        ]
+      }
+    }
+  ]
+}
