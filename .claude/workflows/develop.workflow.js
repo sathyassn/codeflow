@@ -1,3 +1,8 @@
+// EXPERIMENTAL — this workflow has not yet been executed end-to-end.
+// /cf-develop's inline build -> review -> verify loop is the proven path;
+// treat this file as the draft of the native-workflow port until a full
+// run is recorded.
+//
 // develop.workflow.js — CodeFlow v2 develop pipeline (Day 0 probe draft; charter section 12).
 // Topology: build -> review -> (changes_requested -> build again, max 3) -> verify.
 //
