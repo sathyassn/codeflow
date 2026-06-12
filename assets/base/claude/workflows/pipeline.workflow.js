@@ -34,15 +34,19 @@ export const meta = {
   phases: [{ title: 'Pipeline' }],
 }
 
-if (typeof args.task !== 'string' || !Array.isArray(args.criteria) || args.criteria.length === 0) {
-  throw new Error('pipeline: args.task (string) and args.criteria (non-empty string[]) are required');
+// Runtime quirk (probe wf_7c980f48-ec3): scriptPath invocations deliver
+// `args` as a JSON string; parse defensively before use.
+const A = typeof args === 'string' ? JSON.parse(args) : (args ?? {});
+
+if (typeof A.task !== 'string' || !Array.isArray(A.criteria) || A.criteria.length === 0) {
+  throw new Error('pipeline: A.task (string) and A.criteria (non-empty string[]) are required');
 }
 
-const TASK = args.task;
-const CRITERIA = args.criteria.map((c) => `- ${c}`).join('\n');
-const WHERE = args.dir ? `Working directory: ${args.dir}.` : '';
-const MAX_REWORK = args.maxRework ?? 3;
-const PRESET = args.stages ?? ['build', 'review', 'verify'];
+const TASK = A.task;
+const CRITERIA = A.criteria.map((c) => `- ${c}`).join('\n');
+const WHERE = A.dir ? `Working directory: ${A.dir}.` : '';
+const MAX_REWORK = A.maxRework ?? 3;
+const PRESET = A.stages ?? ['build', 'review', 'verify'];
 
 // Schema verdict for every gate stage — branch on the enum, never on prose.
 const VERDICT = {
@@ -62,7 +66,7 @@ const ctx = { analysis: '', spec: '', findings: [], buildSummary: '' };
 // validated run's reviewer shape; role text per .claude/agents/cf-reviewer.md.
 const gate = (name, charge) => ({
   kind: 'gate',
-  model: args.models?.[name] ?? 'inherit',
+  model: A.models?.[name] ?? 'inherit',
   schema: VERDICT,
   prompt: () => [
     `Independent ${name} review of the latest build for: ${TASK}`, WHERE,
@@ -79,7 +83,7 @@ const gate = (name, charge) => ({
 // prompt builder } plus optional schema/kind/apply. Add or reshape rows freely.
 const STAGES = {
   analyze: {
-    model: args.models?.analyze ?? 'inherit',
+    model: A.models?.analyze ?? 'inherit',
     schema: { type: 'object', required: ['findings'],
       properties: { findings: { type: 'array', items: { type: 'string' } } } },
     prompt: () => [
@@ -90,7 +94,7 @@ const STAGES = {
     apply: (out) => { ctx.analysis = out.findings.map((f) => `- ${f}`).join('\n'); },
   },
   plan: {
-    model: args.models?.plan ?? 'inherit',
+    model: A.models?.plan ?? 'inherit',
     schema: { type: 'object', required: ['spec'], properties: { spec: { type: 'string' } } },
     prompt: () => [
       `Draft a short implementation spec for: ${TASK}`, WHERE,
@@ -101,7 +105,7 @@ const STAGES = {
     apply: (out) => { ctx.spec = out.spec; },
   },
   build: {
-    model: args.models?.build ?? 'inherit',
+    model: A.models?.build ?? 'inherit',
     prompt: () => [
       `Build attempt ${attempts}/${MAX_REWORK} for: ${TASK}`, WHERE,
       `Acceptance criteria:\n${CRITERIA}`,
@@ -122,7 +126,7 @@ const STAGES = {
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
   verify: {
     kind: 'final',
-    model: args.models?.verify ?? 'inherit',
+    model: A.models?.verify ?? 'inherit',
     schema: VERDICT,
     prompt: () => [
       `Final verification gate for: ${TASK}`, WHERE,
