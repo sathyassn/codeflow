@@ -142,7 +142,8 @@ region = "json"
 tiers = ["standard", "full"]
 preset = "bypassPermissions"
 
-# --- Claude artifacts (charter §4.4 minimalism: 1 agent, 1 skill, 3 commands, 1 workflow)
+# --- Claude artifacts (charter §4.4 minimalism: 1 agent, 1 skill, 4 commands, 1 workflow;
+#     the 4th command, cf-stack, is the agent-led stack setup per ADR-0003)
 
 [[entry]]
 src = "claude/agents/cf-reviewer.md"
@@ -171,6 +172,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/commands/cf-ship.md"
 dest = ".claude/commands/cf-ship.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/commands/cf-stack.md"
+dest = ".claude/commands/cf-stack.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
