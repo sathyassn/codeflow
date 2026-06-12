@@ -10,6 +10,8 @@
 //! and PII file-scope warnings died with their subsystems (charter §3.2,
 //! D22).
 
+pub mod docs;
+
 use std::collections::HashMap;
 use std::path::Path;
 
