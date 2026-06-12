@@ -180,10 +180,16 @@ pub fn init(
     written.push(super::state::INSTALLED_MANIFEST.to_string());
     written.push(super::state::BASELINE_DIR.to_string());
 
-    // Phase 3: the scaffold commit (fresh repos only) — policy still
-    // disarmed, and hooks not yet wired: bootstrap must never depend on the
-    // capabilities of whatever `codeflow` binary is on PATH.
+    // Phase 3: the scaffold commit (fresh repos only). Policy is armed FIRST
+    // so the committed project.toml carries policy_armed = true — otherwise a
+    // later `git checkout <protected-branch>` or a fresh clone silently
+    // resurrects the disarmed bootstrap state. The commit itself is a
+    // sanctioned path: it passes the armed hooks via the gate-context token
+    // (and hooks are wired only in phase 4, so bootstrap never depends on the
+    // capabilities of whatever `codeflow` binary is on PATH).
     if fresh_repo {
+        state.policy_armed = true;
+        state.store(root)?;
         gitutil::add_and_commit(
             root,
             &written,
@@ -191,7 +197,7 @@ pub fn init(
         )?;
         report
             .notes
-            .push("scaffold commit created (branch policy was not yet armed)".to_string());
+            .push("scaffold commit created with branch policy armed".to_string());
     } else {
         report.notes.push(
             "existing repository: scaffold files left uncommitted — review and commit them on a branch".to_string(),

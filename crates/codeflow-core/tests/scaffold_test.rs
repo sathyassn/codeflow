@@ -250,13 +250,15 @@ fn fresh_init_empty_dir_bootstrap_grace() {
     let body = git(&root, &["log", "-1", "--format=%B"]);
     assert!(!body.contains("Co-Authored-By"), "no AI attribution");
 
-    // Policy armed only after the scaffold commit.
+    // Policy is armed BEFORE the scaffold commit, so the committed state is
+    // armed too — a later checkout of the protected branch (or a fresh clone)
+    // must never resurrect a disarmed bootstrap state.
     let project_toml = read(&root, ".codeflow/project.toml");
     assert!(project_toml.contains("policy_armed = true"));
     let committed = git(&root, &["show", "HEAD:.codeflow/project.toml"]);
     assert!(
-        committed.contains("policy_armed = false"),
-        "scaffold commit happened while disarmed"
+        committed.contains("policy_armed = true"),
+        "the scaffold commit must carry the armed state"
     );
     assert!(project_toml.contains("tier = \"standard\""));
     assert!(project_toml.contains("scaffold_version = \"2.0.0\""));

@@ -8,10 +8,19 @@ use std::process::Command;
 use super::ScaffoldError;
 
 fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, ScaffoldError> {
+    git_env(root, args, &[])
+}
+
+fn git_env(
+    root: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<std::process::Output, ScaffoldError> {
     Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
+        .envs(envs.iter().copied())
         .output()
         .map_err(|e| ScaffoldError::Git(format!("failed to run git {}: {e}", args.join(" "))))
 }
@@ -99,8 +108,19 @@ pub fn add_and_commit(root: &Path, paths: &[String], message: &str) -> Result<()
             "user.email=codeflow@localhost",
         ]);
     }
-    // No --no-verify: the scaffold commit passes through the freshly wired
-    // hooks legitimately because policy_armed is still false (bootstrap grace).
+    // No --no-verify: the scaffold commit is a sanctioned path (charter D9).
+    // Policy is armed BEFORE this commit so the committed project.toml carries
+    // policy_armed = true (a checkout must never resurrect a disarmed state);
+    // the commit itself passes the armed hooks via the gate-context token.
     args.extend(["commit", "--quiet", "-m", message]);
-    git_ok(root, &args)
+    let out = git_env(root, &args, &[(crate::integrate::GATE_TOKEN_ENV, "scaffold")])?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(ScaffoldError::Git(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
 }
