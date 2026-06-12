@@ -9,6 +9,7 @@ pub mod config;
 pub mod coverage;
 pub mod doctor;
 pub mod error;
+pub mod gate;
 pub mod pr_body;
 pub mod report;
 pub mod runner;
