@@ -1,27 +1,8 @@
-# build
+# build (cargo)
 /target
 **/target/
 *.lcov
 lcov.info
-
-# secrets — never tracked
-.env
-.env.*
-*.pem
-*.key
-*.p12
-*.pfx
-*credentials*
-
-# runtime state (codeflow v2 runtime lives in .git/codeflow/, never tracked)
-.codeflow/runtime/
-
-# os / editor
-.DS_Store
-*.swp
-
-# local-only claude settings
-.claude/settings.local.json
 
 # codeflow:managed:begin
 # secrets — never tracked
