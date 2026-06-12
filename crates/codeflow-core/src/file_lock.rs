@@ -220,6 +220,45 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Direct path locks
+// ---------------------------------------------------------------------------
+
+/// An exclusive advisory lock on an arbitrary lock-file path.
+///
+/// Unlike the JSON helpers above (which lock a `.lock` sidecar of a data
+/// file), here the file at the given path IS the lock. Used by the
+/// `integrate` primitive on `.git/codeflow/integrate.lock`. The lock is
+/// held until the guard is dropped.
+#[derive(Debug)]
+pub struct PathLock {
+    _file: fs::File,
+}
+
+/// Acquire an exclusive lock on `path` itself, creating parent directories
+/// and the file as needed. Blocks until the lock is available.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if the file cannot be opened or the lock cannot
+/// be acquired.
+pub fn lock_path_exclusive(path: &Path) -> Result<PathLock, String> {
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| format!("lock open: {e}"))?;
+
+    FileExt::lock_exclusive(&file).map_err(|e| format!("lock acquire: {e}"))?;
+
+    Ok(PathLock { _file: file })
+}
+
+// ---------------------------------------------------------------------------
 // Atomic write helper
 // ---------------------------------------------------------------------------
 
@@ -566,6 +605,20 @@ mod tests {
         let unchanged: Config = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(unchanged.name, "original");
         assert_eq!(unchanged.count, 5);
+    }
+
+    #[test]
+    fn test_lock_path_exclusive_creates_file_and_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codeflow").join("integrate.lock");
+
+        let guard = lock_path_exclusive(&path).unwrap();
+        assert!(path.exists(), "lock file should be created");
+        drop(guard);
+
+        // Reacquirable after drop.
+        let again = lock_path_exclusive(&path);
+        assert!(again.is_ok(), "lock should be reacquirable: {again:?}");
     }
 
     #[test]
