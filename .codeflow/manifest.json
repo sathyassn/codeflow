@@ -38,12 +38,6 @@
       "sha256": "86d82220256f2388afafde7b0ed080c0034184b994e45fa9cc72d74eaccce20f",
       "exec": false
     },
-    ".claude/workflows/develop.workflow.js": {
-      "src": "claude/workflows/develop.workflow.js",
-      "ownership": "managed",
-      "sha256": "1229352217e4aef4afafd572a5b199ed53a1026656fb43a8e739075ff50f6fa8",
-      "exec": false
-    },
     ".codeflow/git-hooks/commit-msg": {
       "src": "git-hooks/commit-msg",
       "ownership": "managed",
@@ -138,6 +132,12 @@
       "src": "pm/task.md.tmpl",
       "ownership": "managed",
       "sha256": "f82cf10add1370f6a3c5931eaa2e32b67fa5c86b6b19a7bb8ba46154c5588d2a",
+      "exec": false
+    },
+    ".claude/workflows/pipeline.workflow.js": {
+      "src": "claude/workflows/pipeline.workflow.js",
+      "ownership": "user-owned",
+      "sha256": "fdcdd7c7fcab3111788203e77228912b5e094ae2eb64fa111fb2c8398db8f09c",
       "exec": false
     }
   }
