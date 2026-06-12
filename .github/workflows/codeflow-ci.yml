@@ -102,3 +102,21 @@ jobs:
           fi
 
           exit "$fail"
+
+  # warn-first; threshold gate later — report-only, never fails the build
+  coverage:
+    name: coverage report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Coverage summary (printed to the job log)
+        run: cargo llvm-cov --workspace --summary-only
