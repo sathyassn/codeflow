@@ -9,10 +9,12 @@ repository.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 toml.workspace = true
+regex.workspace = true
+git2.workspace = true
 fs2.workspace = true
-ulid.workspace = true
+tokio.workspace = true
+which.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
