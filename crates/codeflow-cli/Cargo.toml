@@ -1,0 +1,18 @@
+[package]
+name = "codeflow-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "codeflow"
+path = "src/main.rs"
+
+[dependencies]
+codeflow-core = { path = "../codeflow-core" }
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true
