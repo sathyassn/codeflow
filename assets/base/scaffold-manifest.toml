@@ -1,0 +1,245 @@
+# scaffold-manifest.toml — the scaffold asset map (charter §4.1, §4.3, §4.2)
+#
+# Owned by workstream D (scaffold engine); consumed by `codeflow init` and
+# `codeflow update`. Workstream E authors the asset files themselves. An entry
+# whose `src` does not exist (yet) in assets/base/ is skipped with a warning —
+# the two streams merge cleanly in either order.
+#
+# ## Entry fields
+#
+#   src        Path of the shipped asset, relative to assets/base/.
+#   dest       Path written into the consumer project, relative to project root.
+#   ownership  File-ownership class (charter §4.3):
+#                "managed"        — fully managed. sha256 recorded in
+#                                   .codeflow/manifest.json, pristine copy kept
+#                                   under .codeflow/.baseline/<dest>. Unmodified
+#                                   files are replaced on update; user-modified
+#                                   files get a 3-way merge (base = baseline),
+#                                   conflicts produce <dest>.new + report.
+#                "managed-region" — only a marked region (or a known key set for
+#                                   JSON) is codeflow's; everything else in the
+#                                   file is project-owned and never touched.
+#                "user-owned"     — written only if absent; never mutated by
+#                                   update. JSON user-owned files (policy.json)
+#                                   may gain NEW keys from the shipped default,
+#                                   added with defaults and reported.
+#   tiers      Tiers at which the entry is installed: subset of
+#              ["minimal", "standard", "full"]. Tiers are cumulative in spirit;
+#              list every tier the entry belongs to explicitly.
+#   exec       Optional, default false. Set the executable mode bit on the
+#              written file (git hook shims).
+#   template   Optional, default false. Apply {{PLACEHOLDER}} substitution.
+#              Known keys: PROJECT_NAME, PROJECT_ONE_LINER, AREAS, STACK, TIER,
+#              SCAFFOLD_VERSION, DATE. Unknown placeholders are left intact
+#              (pm/docs templates carry agent-fill placeholders by design).
+#   preset     Optional. Entry applies only when the permission preset chosen
+#              at init matches ("default" | "acceptEdits" | "bypassPermissions").
+#   region     Required for ownership = "managed-region":
+#                "markdown" — HTML-comment marker block:
+#                             <!-- codeflow:managed:begin ... --> … <!-- codeflow:managed:end -->
+#                             (the short form <!-- codeflow:begin --> is also recognized)
+#                "hash"     — '# codeflow:managed:begin' … '# codeflow:managed:end'
+#                             comment markers (gitignore-style files)
+#                "json"     — structured merge: codeflow hook entries (command
+#                             prefix "codeflow ") and permission entries are
+#                             added/regenerated; every other key is preserved.
+#
+# ## Engine-generated files (no entry here)
+#
+#   .codeflow/project.toml   — tier, scaffold_version, stack, areas, policy_armed,
+#                              git_hooks, permission_preset (user-owned, schema-versioned)
+#   .codeflow/manifest.json  — installed-file record: dest → {src, ownership, sha256}
+#   .codeflow/.baseline/     — pristine rendered copies (3-way merge bases)
+#
+# ## Tier policy transform
+#
+#   At --minimal the engine rewrites the rendered policy.json before writing:
+#   every "block" value under `git` flips to "warn" except `secret_scan`;
+#   `test_gate_on_push` flips to "off" (charter §4.2: blocking policy on a
+#   scratch repo trains bypassing).
+
+schema_version = 1
+
+# --- root contracts ---------------------------------------------------------
+
+[[entry]]
+src = "AGENTS.md.tmpl"
+dest = "AGENTS.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["minimal", "standard", "full"]
+template = true
+
+[[entry]]
+src = "CLAUDE.md.tmpl"
+dest = "CLAUDE.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "gitignore"
+dest = ".gitignore"
+ownership = "managed-region"
+region = "hash"
+tiers = ["minimal", "standard", "full"]
+
+# --- policy (user-owned, schema-versioned) ----------------------------------
+
+[[entry]]
+src = "policy.json"
+dest = ".codeflow/policy.json"
+ownership = "user-owned"
+tiers = ["minimal", "standard", "full"]
+
+# --- git hook shims (wired via core.hooksPath unless another manager owns it) -
+
+[[entry]]
+src = "git-hooks/pre-commit"
+dest = ".codeflow/git-hooks/pre-commit"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+exec = true
+
+[[entry]]
+src = "git-hooks/commit-msg"
+dest = ".codeflow/git-hooks/commit-msg"
+ownership = "managed"
+tiers = ["standard", "full"]
+exec = true
+
+[[entry]]
+src = "git-hooks/pre-push"
+dest = ".codeflow/git-hooks/pre-push"
+ownership = "managed"
+tiers = ["standard", "full"]
+exec = true
+
+# --- Claude settings presets (exactly one applies, chosen at init) -----------
+
+[[entry]]
+src = "settings/default.json"
+dest = ".claude/settings.json"
+ownership = "managed-region"
+region = "json"
+tiers = ["standard", "full"]
+preset = "default"
+
+[[entry]]
+src = "settings/acceptEdits.json"
+dest = ".claude/settings.json"
+ownership = "managed-region"
+region = "json"
+tiers = ["standard", "full"]
+preset = "acceptEdits"
+
+[[entry]]
+src = "settings/bypass-sandboxed.json"
+dest = ".claude/settings.json"
+ownership = "managed-region"
+region = "json"
+tiers = ["standard", "full"]
+preset = "bypassPermissions"
+
+# --- Claude artifacts (charter §4.4 minimalism: 1 agent, 1 skill, 3 commands, 1 workflow)
+
+[[entry]]
+src = "claude/agents/cf-reviewer.md"
+dest = ".claude/agents/cf-reviewer.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-method/SKILL.md"
+dest = ".claude/skills/cf-method/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/commands/cf-plan.md"
+dest = ".claude/commands/cf-plan.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/commands/cf-develop.md"
+dest = ".claude/commands/cf-develop.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/commands/cf-ship.md"
+dest = ".claude/commands/cf-ship.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/workflows/develop.md"
+dest = ".claude/workflows/develop.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+# --- docs (knowledge model seeds; user-owned: write once, never mutate) ------
+
+[[entry]]
+src = "docs/product.md.tmpl"
+dest = "docs/product.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "docs/architecture.md.tmpl"
+dest = "docs/architecture.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "docs/capabilities.md.tmpl"
+dest = "docs/capabilities.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "docs/decisions/ADR-0001-stack-choice.md.tmpl"
+dest = "docs/decisions/ADR-0001-stack-choice.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "docs/decisions/template.md"
+dest = "docs/decisions/template.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+
+# --- CI (written only if absent — charter §4.1) ------------------------------
+
+[[entry]]
+src = "ci/codeflow-ci.yml"
+dest = ".github/workflows/codeflow-ci.yml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+# --- project management templates (--full tier) ------------------------------
+
+[[entry]]
+src = "pm/epic.md.tmpl"
+dest = "project-management/templates/epic.md"
+ownership = "managed"
+tiers = ["full"]
+
+[[entry]]
+src = "pm/task.md.tmpl"
+dest = "project-management/templates/task.md"
+ownership = "managed"
+tiers = ["full"]
+
+[[entry]]
+src = "pm/spec.md.tmpl"
+dest = "project-management/templates/spec.md"
+ownership = "managed"
+tiers = ["full"]
