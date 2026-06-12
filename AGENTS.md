@@ -6,7 +6,7 @@ while Claude Code (or any harness) does the developing.
 
 - **Stack:** rust
 - **Areas:** engine, scaffold, docs
-- **Tier:** standard
+- **Tier:** full
 
 This file is the canonical instruction set for any agent or human working in this
 repo. The block between the codeflow markers below is maintained by

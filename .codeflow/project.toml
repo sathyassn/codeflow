@@ -1,4 +1,8 @@
-areas = ["engine", "scaffold", "docs"]
+areas = [
+    "engine",
+    "scaffold",
+    "docs",
+]
 git_hooks = "wired"
 permission_preset = "default"
 policy_armed = true
@@ -6,4 +10,4 @@ product_one_liner = "The AI-development discipline layer you install into any re
 scaffold_version = "2.0.0-dev"
 schema_version = 1
 stack = "rust"
-tier = "standard"
+tier = "full"

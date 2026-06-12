@@ -121,6 +121,24 @@
       "ownership": "user-owned",
       "sha256": "b577b7071f0ebdc217bf5bff64a64e59bbf1b106b74ac5a6400fd9729c9c03b6",
       "exec": false
+    },
+    "project-management/templates/epic.md": {
+      "src": "pm/epic.md.tmpl",
+      "ownership": "managed",
+      "sha256": "c71741bbbcacfcec1c4c5be15a8405473bae1ed06d75790e4006071ccaf5ff1b",
+      "exec": false
+    },
+    "project-management/templates/spec.md": {
+      "src": "pm/spec.md.tmpl",
+      "ownership": "managed",
+      "sha256": "d670f770f5fd375f2289236cf74de27197bff9979d513deeb77622f0e29676cf",
+      "exec": false
+    },
+    "project-management/templates/task.md": {
+      "src": "pm/task.md.tmpl",
+      "ownership": "managed",
+      "sha256": "f82cf10add1370f6a3c5931eaa2e32b67fa5c86b6b19a7bb8ba46154c5588d2a",
+      "exec": false
     }
   }
 }
