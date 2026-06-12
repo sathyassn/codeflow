@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "git": {
+    "protected_branches": ["main", "master"],
+    "commit_to_protected": "block",
+    "push_to_protected": "block",
+    "force_push_protected": "block",
+    "force_push_unprotected": "allow",
+    "delete_protected": "block",
+    "hard_reset_protected": "block",
+    "commit_format": "block",
+    "commit_types": ["feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert"],
+    "ai_attribution": "block",
+    "commit_emoji": "block",
+    "branch_naming": "block",
+    "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "spike/", "experiment/"],
+    "secret_scan": "block",
+    "test_gate_on_push": "warn"
+  }
+}

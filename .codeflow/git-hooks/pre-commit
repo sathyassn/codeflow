@@ -1,0 +1,6 @@
+#!/bin/sh
+# codeflow git-hook shim — managed by `codeflow update`.
+# No-ops gracefully when the codeflow binary is not on PATH; all policy lives
+# in .codeflow/policy.json and is evaluated by the binary, never here.
+command -v codeflow >/dev/null 2>&1 || exit 0
+exec codeflow git-hook pre-commit "$@"

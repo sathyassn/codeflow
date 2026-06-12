@@ -1,0 +1,104 @@
+# codeflow CI — the perimeter. Re-runs every gate that matters so nothing
+# depends on local state. Written by `codeflow init` only if absent; after
+# that it is yours.
+name: codeflow-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: codeflow gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install codeflow
+        run: |
+          # PLACEHOLDER: replace with the release installer once published, e.g.
+          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "::warning::codeflow install step is a placeholder; binary gates are skipped until it is wired"
+
+      - name: codeflow test
+        run: |
+          if command -v codeflow >/dev/null 2>&1; then
+            codeflow test
+          else
+            echo "::warning::codeflow not installed — test gate skipped"
+          fi
+
+      - name: codeflow validate --docs
+        run: |
+          if command -v codeflow >/dev/null 2>&1; then
+            codeflow validate --docs
+          else
+            echo "::warning::codeflow not installed — validate gate skipped"
+          fi
+
+  commit-lint:
+    name: commit standards
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint PR commits (format, no AI attribution, no emoji)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          fail=0
+          types='feat|fix|docs|refactor|test|chore|ci|perf|build|revert'
+
+          while IFS= read -r subject; do
+            if ! printf '%s\n' "$subject" | grep -qE "^(${types})(\([a-zA-Z0-9._/-]+\))?!?: .+[^.]$"; then
+              echo "::error::malformed commit subject: ${subject}"
+              fail=1
+            fi
+          done < <(git log --no-merges --format=%s "${BASE_SHA}..${HEAD_SHA}")
+
+          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
+            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
+            echo "::error::AI attribution found in commit message(s)"
+            fail=1
+          fi
+
+          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
+            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
+            echo "::error::emoji found in commit message(s)"
+            fail=1
+          fi
+
+          exit "$fail"
+
+      - name: Lint PR body (no AI attribution, no emoji)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -u
+          fail=0
+
+          if printf '%s\n' "${PR_BODY}" \
+            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
+            echo "::error::AI attribution found in PR body"
+            fail=1
+          fi
+
+          if printf '%s\n' "${PR_BODY}" \
+            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
+            echo "::error::emoji found in PR body"
+            fail=1
+          fi
+
+          exit "$fail"

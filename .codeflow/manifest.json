@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "scaffold_version": "2.0.0-dev",
+  "files": {
+    ".claude/agents/cf-reviewer.md": {
+      "src": "claude/agents/cf-reviewer.md",
+      "ownership": "managed",
+      "sha256": "108e7e66a6f9a6a51018408561cc894b0a61c956676acd42f77a88f25e7fdd0c",
+      "exec": false
+    },
+    ".claude/commands/cf-develop.md": {
+      "src": "claude/commands/cf-develop.md",
+      "ownership": "managed",
+      "sha256": "dd7c924a23345bebbb67d96ad18a61931059f8d3251952b236f857ccdd312ade",
+      "exec": false
+    },
+    ".claude/commands/cf-plan.md": {
+      "src": "claude/commands/cf-plan.md",
+      "ownership": "managed",
+      "sha256": "0810f13ac9ec6fc6b1ce085cadf78f812a30572d7c37426a5d1dfce10705ecb5",
+      "exec": false
+    },
+    ".claude/commands/cf-ship.md": {
+      "src": "claude/commands/cf-ship.md",
+      "ownership": "managed",
+      "sha256": "7a30c9942fec2a93d896fc298c632786fc03be21ca7fa5d8869225a6f87f8a77",
+      "exec": false
+    },
+    ".claude/settings.json": {
+      "src": "settings/default.json",
+      "ownership": "managed-region",
+      "sha256": "d39e04495452bad289ed7d525d04f2e21e0d4e008fc18489ee313e73a2b14256",
+      "exec": false
+    },
+    ".claude/skills/cf-method/SKILL.md": {
+      "src": "claude/skills/cf-method/SKILL.md",
+      "ownership": "managed",
+      "sha256": "86d82220256f2388afafde7b0ed080c0034184b994e45fa9cc72d74eaccce20f",
+      "exec": false
+    },
+    ".claude/workflows/develop.workflow.js": {
+      "src": "claude/workflows/develop.workflow.js",
+      "ownership": "managed",
+      "sha256": "1229352217e4aef4afafd572a5b199ed53a1026656fb43a8e739075ff50f6fa8",
+      "exec": false
+    },
+    ".codeflow/git-hooks/commit-msg": {
+      "src": "git-hooks/commit-msg",
+      "ownership": "managed",
+      "sha256": "3c6e04f85e7d921ed2d6222b98d2e60893d3beacce011eb90e6e60ae8d1e4dee",
+      "exec": true
+    },
+    ".codeflow/git-hooks/pre-commit": {
+      "src": "git-hooks/pre-commit",
+      "ownership": "managed",
+      "sha256": "6df8b4180f04ea5791ae5c32a37993c7ae5f0c86fbf243f60268ff2dcc683c03",
+      "exec": true
+    },
+    ".codeflow/git-hooks/pre-push": {
+      "src": "git-hooks/pre-push",
+      "ownership": "managed",
+      "sha256": "0193e7907a48f8ad7ed81a64e80c17fa1e7464218f8c71fe1ba8465934c92295",
+      "exec": true
+    },
+    ".codeflow/policy.json": {
+      "src": "policy.json",
+      "ownership": "user-owned",
+      "sha256": "f720dbd0937f8e8d49a6663f01c65686f0781c6b8d0958ea2b1e693192f2dec9",
+      "exec": false
+    },
+    ".github/workflows/codeflow-ci.yml": {
+      "src": "ci/codeflow-ci.yml",
+      "ownership": "managed",
+      "sha256": "f2e73471eb1cbd41e7853d5a27e91166710f918dccf4dc5af1a0a3b45970a071",
+      "exec": false
+    },
+    ".gitignore": {
+      "src": "gitignore",
+      "ownership": "managed-region",
+      "sha256": "5095b2360d38ce017b714aea8c6ae70d37bdbe6afd482b8b4a851bf7a3642ab4",
+      "exec": false
+    },
+    "AGENTS.md": {
+      "src": "AGENTS.md.tmpl",
+      "ownership": "managed-region",
+      "sha256": "62d7e220cef8c39986d29c8eed20884e779d53dce3ce496ff9fa416262f09097",
+      "exec": false
+    },
+    "CLAUDE.md": {
+      "src": "CLAUDE.md.tmpl",
+      "ownership": "managed-region",
+      "sha256": "f0d9c9854d077e97f3d3439cf2422af7e9c200a86e583f700eaf6e24ee0f0584",
+      "exec": false
+    },
+    "docs/architecture.md": {
+      "src": "docs/architecture.md.tmpl",
+      "ownership": "user-owned",
+      "sha256": "5fb9f079d031983eb276e1506b675fefb50885c4af8aae73483a8f0f0bce9929",
+      "exec": false
+    },
+    "docs/capabilities.md": {
+      "src": "docs/capabilities.md.tmpl",
+      "ownership": "user-owned",
+      "sha256": "78c91cf6640b92fc556839f0ec99249e1122964fe3fc9883eca492a739de7072",
+      "exec": false
+    },
+    "docs/decisions/ADR-0001-stack-choice.md": {
+      "src": "docs/decisions/ADR-0001-stack-choice.md.tmpl",
+      "ownership": "user-owned",
+      "sha256": "69b1fa91640b35fa1e96e7107421aab8fe8dbfe5d8ad31f691883eee327943b6",
+      "exec": false
+    },
+    "docs/decisions/template.md": {
+      "src": "docs/decisions/template.md",
+      "ownership": "user-owned",
+      "sha256": "06759371e828ebf9e191ed21d13a4023646e9bd23524a7d4bea36cb8abc1c418",
+      "exec": false
+    },
+    "docs/product.md": {
+      "src": "docs/product.md.tmpl",
+      "ownership": "user-owned",
+      "sha256": "b577b7071f0ebdc217bf5bff64a64e59bbf1b106b74ac5a6400fd9729c9c03b6",
+      "exec": false
+    }
+  }
+}
