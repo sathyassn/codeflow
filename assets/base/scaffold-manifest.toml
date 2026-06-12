@@ -224,6 +224,12 @@ dest = ".github/workflows/codeflow-ci.yml"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "ci/pull_request_template.md"
+dest = ".github/pull_request_template.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # --- project management templates (--full tier) ------------------------------
 
 [[entry]]
