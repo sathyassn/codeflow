@@ -55,6 +55,9 @@ From `codeflow --help`:
 | `recall` | Search project memory: ledger, summaries, ADRs, epics, capabilities |
 | `remote` | Remote provider operations (branch protection) |
 
+The CLI stops at deterministic, judgment-free mechanics (ADR-0003); anything
+requiring project judgment is a Claude command — stack setup is `/cf-stack`.
+
 ## Enforcement planes
 
 All policy lives in `.codeflow/policy.json` (user-owned config, not code) and
