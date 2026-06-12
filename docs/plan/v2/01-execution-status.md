@@ -11,7 +11,7 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] v2 skeleton: README, .gitignore, `docs/plan/v2/`
 - [ ] Cargo workspace skeleton (`crates/codeflow-core`, `crates/codeflow-cli`, `assets/`) compiling
 - [ ] Push main
-- [ ] Probe: native workflow rework-loop (charter §12 Day 0)
+- [x] Probe: native workflow rework-loop (charter §12 Day 0) — verdict Door A (native scripts suffice, no bespoke runtime); analysis + draft script in `docs/plan/v2/probe/`
 
 ## Day 1 — parallel workstreams
 
