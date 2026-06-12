@@ -160,6 +160,7 @@ dependencies = [
  "clap",
  "codeflow-core",
  "rust-embed",
+ "tempfile",
 ]
 
 [[package]]
