@@ -3,7 +3,7 @@
   "git": {
     "protected_branches": ["main", "master"],
     "commit_to_protected": "block",
-    "push_to_protected": "block",
+    "push_to_protected": "warn",
     "force_push_protected": "block",
     "force_push_unprotected": "allow",
     "delete_protected": "block",
