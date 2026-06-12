@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::testing::error::TestingError;
 
 /// Supported schema versions.
-const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1.0"];
+const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1.0", "1"];
 
 /// Top-level test configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
