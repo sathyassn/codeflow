@@ -10,6 +10,13 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+glob.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true
 
 [lints]
 workspace = true

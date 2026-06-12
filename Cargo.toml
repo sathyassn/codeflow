@@ -15,6 +15,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
+glob = "0.3"
+quick-xml = "0.37"
+regex = "1"
+tempfile = "3"
+serial_test = "3"
 
 [workspace.lints.clippy]
 all = "deny"
