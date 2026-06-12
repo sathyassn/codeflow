@@ -12,7 +12,9 @@ Drive this work to done: $ARGUMENTS
    code; note what the change touches.
 3. Work on a correctly prefixed branch in a worktree — never on the root
    protected-branch checkout.
-4. If the develop workflow exists (`.claude/workflows/develop`), invoke it.
+4. Unattended/batch work, or the user names a preset: invoke the pipeline
+   workflow (`.claude/workflows/pipeline.workflow.js`) with composed args —
+   stages/models from `[workflows]` in `.codeflow/project.toml` when present.
    Otherwise run the loop inline:
    a. Build: implement with tests; small conventional commits.
    b. Review: spawn the `cf-reviewer` subagent with the criteria and branch.

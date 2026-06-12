@@ -24,3 +24,6 @@ You are planning work, not building it. Input: $ARGUMENTS
      boundary change).
 6. Run `codeflow validate`, then present the plan for approval. Do not start
    building — that is `/cf-develop`.
+7. Unattended/batch work or a named preset: plan the handoff as the pipeline
+   workflow with composed args (stages/models from `[workflows]` in
+   `.codeflow/project.toml` when present); otherwise the inline loop is it.
