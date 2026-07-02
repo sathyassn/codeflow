@@ -52,8 +52,16 @@ verified shape:
 
 ```
 codex exec --json [--cd DIR] [--skip-git-repo-check] \
-  --sandbox read-only|workspace-write [-a never] [--output-schema FILE] "TASK"
+  --sandbox read-only|workspace-write [--output-schema FILE] "TASK"
 ```
+
+`codex exec` takes **no approval flag** — `-a` / `--ask-for-approval` is a
+top-level `codex` option, and `codex exec -a never` is rejected outright
+(`error: unexpected argument '-a' found`). In headless `exec`, the `--sandbox`
+mode is the whole access control: `read-only` for a consult, `workspace-write`
+for a delegate that edits. Both verified live on 2026-07-02 (codex-cli 0.142.5);
+`--sandbox workspace-write` confirmed writing a file to disk with no approval
+prompt.
 
 Stdout is JSONL: `thread.started` (carries `thread_id`), `turn.started`,
 `item.completed` (the reply is `.item.text` where `.item.type=="agent_message"`),

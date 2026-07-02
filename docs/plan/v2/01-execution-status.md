@@ -33,7 +33,8 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] H — recall + remote: 39 tests green (FTS5 recall, `~/.codeflow`
   registry, remote protect GitHub adapter with degradation report)
 - [x] Integration: F/G/H landed serially; integrated mains 1080 → 1181 tests
-  green, clippy 0 workspace-wide
+  green, clippy 0 workspace-wide (suite now 1207 after Day 3 and the docs-truth
+  and engine-fix PRs below)
 
 ## Day 3 — dogfood + release
 
@@ -46,7 +47,10 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] Live AC demos: #1, #3, #5, #6, #13 — including the `policy_armed` bug
   found during #1, fixed with a regression test (612ec23d)
 - [x] EPC-001 retroactive bootstrap record (`project-management/epics/EPC-001/`)
-- [ ] AC #4 / #10 demos (running in parallel)
+- [x] AC #4 (force-push/push/delete/hard-reset blocked on protected;
+  force-push allowed on feature branches) and AC #10 (recall answers a "why"
+  from summaries + ADRs across ≥2 registered repos) demonstrated live in the
+  parallel enforcement/recall wave
 - [ ] `codeflow init` on first real user project
 - [ ] v2.0.0 tag + cargo-dist release staging (PAUSED for user go)
 
@@ -63,3 +67,15 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   loop fixed three shipping defects first: missing meta export + args-as-JSON-string
   runtime quirk (040a7f60), schema_version "1" lenience (f784fafc). Bounded-rework
   exhaustion behavior proven by run wf_1380de05-e8f (threw loudly with findings).
+- PR-based landings are now active on this repo (ADR-0006, superseding ADR-0002):
+  `push_to_protected` returns to `block` and work lands via `gh pr create` →
+  green CI → squash-merge. PR #330 (`chore(policy): switch this repo to pr-based
+  landings`) was the first; `codeflow integrate` stays a shipped capability but
+  is retired for this repo's day-to-day landings.
+- Docs-truth audit findings fixed across two PRs: the docs-truth PR (product and
+  architecture stubs, CLAUDE.md dedup, capability + hard-gate/lint overclaims,
+  AGENTS entry points, the cf-delegate write invocation, new `docs/adoption.md`)
+  and the parallel engine PR (test-mode vocabulary, managed-region wrap, real CI).
+- Coverage/CI job root cause — 5 environment-dependent tests (the conflict helper
+  and the doctor probe) — fixed in the parallel engine PR, so the suite is green
+  in CI, not just locally.

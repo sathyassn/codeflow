@@ -10,7 +10,8 @@ Ship this work: $ARGUMENTS
    `/cf-develop`.
 2. Same-PR doc mutations (this is how docs stay true):
    - capability entry created or updated — status, `verified_by` test tags,
-     epic and ADR links (a FEAT epic cannot close without this at full tier);
+     epic and ADR links (required discipline at full tier; keep `verified_by`
+     non-empty so `validate --docs` stays clean — it does not gate epic close);
    - ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
    - spec frozen (`status: implemented`); epic and task statuses updated.

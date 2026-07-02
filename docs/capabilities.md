@@ -2,7 +2,11 @@
 
 <!-- WHAT layer: the registry of what the system does. Consult before building
      ("does this exist? what does it touch?"). Updated in the same PR that
-     ships the work; a FEAT epic cannot close without its entry at full tier.
+     ships the work — the discipline is the ship flow, not a blocking gate.
+     `validate --docs` enforces referential integrity (each entry's epics[] and
+     adrs[] resolve to real files) and a non-empty verified_by on shipped
+     entries; it does not verify that the test tags resolve, and it does not
+     block an epic from closing.
      Statuses: planned → building → shipped → deprecated (never delete).
      At ~15 entries, graduate to docs/capabilities/CAP-*.md. -->
 
@@ -13,8 +17,8 @@ id: CAP-001
 name: scaffold-init
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-cli tests/scaffold_test.rs"]
-epics: []
+verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs"]
+epics: [EPC-001]
 adrs: []
 ```
 
@@ -33,7 +37,7 @@ name: scaffold-update
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::update", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest"]
-epics: []
+epics: [EPC-001]
 adrs: []
 ```
 
@@ -52,7 +56,7 @@ name: git-policy-gates
 area: engine
 status: shipped
 verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs"]
-epics: []
+epics: [EPC-001]
 adrs: [ADR-0002]
 ```
 
@@ -71,8 +75,8 @@ id: CAP-004
 name: test-gate
 area: engine
 status: shipped
-verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-cli tests/integration_testing_setup.rs"]
-epics: []
+verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
+epics: [EPC-001]
 adrs: []
 ```
 
@@ -89,7 +93,7 @@ name: integrate
 area: engine
 status: shipped
 verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
-epics: []
+epics: [EPC-001]
 adrs: []
 ```
 
@@ -107,7 +111,7 @@ name: recall-registry
 area: engine
 status: shipped
 verified_by: ["cargo test recall::", "cargo test registry::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: []
+epics: [EPC-001]
 adrs: []
 ```
 
@@ -125,7 +129,7 @@ name: orient-session-summary
 area: engine
 status: shipped
 verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "codeflow-cli tests/hooks_cli.rs"]
-epics: []
+epics: [EPC-001]
 adrs: []
 ```
 
@@ -143,7 +147,7 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: []
+epics: [EPC-001]
 adrs: [ADR-0002]
 ```
 

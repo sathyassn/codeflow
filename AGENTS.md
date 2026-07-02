@@ -41,7 +41,9 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 | Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
 | Build planned work | `/cf-develop` — build → independent review → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
-| Mechanics | `codeflow` CLI: `test`, `validate [--docs]`, `status`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>` |
+| Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
+| Get an outside opinion | `/cf-consult` — an independent second opinion (or handoff) from another vendor's CLI |
+| Mechanics | `codeflow` CLI: `test`, `validate [--docs]`, `status`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote` |
 
 ## Planning and tracking
 
@@ -129,6 +131,7 @@ edits the root checkout directly.
 - **Rust gates:** `cargo test` and `cargo clippy` (workspace lints: clippy all
   = deny, pedantic = warn) must be green before push. Edition 2021,
   workspace-managed dependency versions in the root `Cargo.toml`.
-- Until the v2 binary self-hosts this repo, `codeflow` CLI commands referenced
-  above may not exist yet — git-hook shims no-op gracefully by design. The
-  discipline still applies manually.
+- **This repo lands via PRs only (ADR-0006):** push a feature branch, open a PR
+  from the template, merge on green CI. `codeflow integrate` remains a shipped
+  product capability (the offline/no-remote sanctioned path) but is retired for
+  this repo's day-to-day landings.

@@ -90,10 +90,12 @@ Rules:
 
 - One entry per user-meaningful capability — what the system *does*, not how.
   "Secret scanning at commit time" is a capability; "the regex module" is not.
-- The entry is updated in the same PR that ships the work — at full tier a
-  FEAT epic cannot close without it (`codeflow validate` blocks).
-- `verified_by` names real test tags. An entry whose tests cannot be found is
-  a dangling claim; `validate --docs` treats it as an error.
+- The entry is updated in the same PR that ships the work — the discipline is
+  the ship flow itself, not a blocking gate; `validate --docs` does not gate an
+  epic from closing.
+- `verified_by` names the real test tags that prove the capability. `validate
+  --docs` requires a shipped entry to carry a non-empty `verified_by`, but it
+  does not resolve the tags — a stale tag is a lie only the reviewer will catch.
 - Deprecate, never delete — the ID spine must stay resolvable.
 - At roughly 15 entries, graduate the single file to `docs/capabilities/`
   (one CAP-*.md each); the registry file becomes an index.
