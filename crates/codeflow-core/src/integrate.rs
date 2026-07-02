@@ -247,7 +247,7 @@ pub fn integrate(
 fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
     match run_gate(repo_root, "full") {
         Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
-        Ok(GateOutcome::Completed { results, passed }) => {
+        Ok(GateOutcome::Completed { results, passed, .. }) => {
             if passed {
                 return Ok(TestGateSummary::Passed {
                     targets: results.into_iter().map(|r| r.name).collect(),

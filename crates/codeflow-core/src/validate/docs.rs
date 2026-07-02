@@ -126,7 +126,7 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     let epics_dir = repo_root.join("project-management/epics");
     let epics = if epics_dir.is_dir() {
         Some(
-            md_files(&epics_dir)
+            epic_files(&epics_dir)
                 .iter()
                 .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
                 .map(ToString::to_string)
@@ -196,7 +196,7 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
                         file: rel.clone(),
                         line: entry.line,
                         message: format!(
-                            "{}: epics[] references {epic_ref} but project-management/epics/{epic_ref}.md does not exist",
+                            "{}: epics[] references {epic_ref} but no epic file exists at project-management/epics/{epic_ref}.md or project-management/epics/{epic_ref}/{epic_ref}.md",
                             entry.id
                         ),
                     });
@@ -290,7 +290,7 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
         return; // absence already noted
     }
 
-    for path in md_files(&epics_dir) {
+    for path in epic_files(&epics_dir) {
         let rel = path
             .strip_prefix(repo_root)
             .unwrap_or(&path)
@@ -358,6 +358,35 @@ fn adr_files(dir: &Path) -> Vec<PathBuf> {
                 .is_some_and(|n| n.starts_with("ADR-"))
         })
         .collect()
+}
+
+/// Epic markdown files under `dir`, accepting BOTH layouts:
+/// * flat — `epics/EPC-001.md`
+/// * nested — `epics/EPC-001/EPC-001.md`, where the epic gets its own
+///   directory so `tasks/` and specs can live alongside it.
+///
+/// In the nested layout only the epic file itself (named for its directory) is
+/// returned; sibling task/spec files are ignored. Sorted for stable output.
+fn epic_files(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return paths;
+    };
+    for entry in rd.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "md") {
+            paths.push(path);
+        } else if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let nested = path.join(format!("{name}.md"));
+                if nested.is_file() {
+                    paths.push(nested);
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths
 }
 
 /// All `.md` files directly in a directory, sorted.
@@ -431,6 +460,17 @@ mod tests {
         );
     }
 
+    /// Nested (dogfood) layout: `epics/EPC-001/EPC-001.md`.
+    fn nested_epic_file(root: &Path, format_id: &str, caps: &str, adrs: &str) {
+        write(
+            root,
+            &format!("project-management/epics/{format_id}/{format_id}.md"),
+            &format!(
+                "---\nid: {format_id}\ntitle: epic\ncapabilities: {caps}\nadrs: {adrs}\n---\n\n## Intent\n"
+            ),
+        );
+    }
+
     /// A repo where every reference resolves: clean lint.
     fn clean_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -484,6 +524,85 @@ mod tests {
             "file:line format: {rendered}"
         );
         assert!(rendered.contains("project-management/epics/EPC-999.md"));
+    }
+
+    #[test]
+    fn nested_epic_layout_resolves_from_capability() {
+        // The canonical dogfood layout gives each epic its own directory:
+        // epics/EPC-001/EPC-001.md, so tasks/ and specs live alongside it.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "docs/capabilities.md",
+            &format!(
+                "# caps\n\n{}",
+                capability_block("CAP-001", "shipped", "[EPC-001]", "[ADR-0001]", "[gate-core]")
+            ),
+        );
+        adr(root, "ADR-0001-stack-choice.md", "ADR-0001", "accepted", "null");
+        nested_epic_file(root, "EPC-001", "[CAP-001]", "[ADR-0001]");
+        // A sibling task file inside the epic dir must NOT be treated as an epic.
+        write(
+            root,
+            "project-management/epics/EPC-001/tasks/TASK-001.md",
+            "---\nid: TASK-001\n---\n",
+        );
+
+        let report = lint_docs(root);
+        assert!(
+            report.is_clean(),
+            "nested epic must resolve; issues: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn nested_epic_backrefs_are_linted() {
+        // Proves lint_epics actually reads the nested epic file, not just flat.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "docs/capabilities.md",
+            &format!(
+                "# caps\n\n{}",
+                capability_block("CAP-001", "building", "[EPC-001]", "[]", "[]")
+            ),
+        );
+        nested_epic_file(root, "EPC-001", "[CAP-404]", "[]");
+
+        let report = lint_docs(root);
+        assert!(
+            report.issues.iter().any(|i| i.message.contains("CAP-404")
+                && i.file.as_path() == Path::new("project-management/epics/EPC-001/EPC-001.md")),
+            "nested epic back-ref must be linted; issues: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn flat_and_nested_epic_layouts_coexist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "docs/capabilities.md",
+            &format!(
+                "# caps\n\n{}\n{}",
+                capability_block("CAP-001", "building", "[EPC-001]", "[]", "[]"),
+                capability_block("CAP-002", "building", "[EPC-002]", "[]", "[]"),
+            ),
+        );
+        epic_file(root, "EPC-001", "[CAP-001]", "[]"); // flat
+        nested_epic_file(root, "EPC-002", "[CAP-002]", "[]"); // nested
+
+        let report = lint_docs(root);
+        assert!(
+            report.is_clean(),
+            "both epic layouts must resolve; issues: {:?}",
+            report.issues
+        );
     }
 
     #[test]

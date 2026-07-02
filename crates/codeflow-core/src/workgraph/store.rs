@@ -179,13 +179,7 @@ impl MarkdownStore {
         if !dir.is_dir() {
             return Ok(records);
         }
-        let mut paths: Vec<PathBuf> = fs::read_dir(dir)?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-            .collect();
-        paths.sort();
-        for path in paths {
+        for path in record_files(dir)? {
             match Self::read_record::<T>(&path) {
                 Ok((record, _body)) => records.push((path, record)),
                 Err(e) => eprintln!("warn: store: skipping {}: {e}", path.display()),
@@ -212,13 +206,7 @@ fn find_by<T: serde::de::DeserializeOwned>(
     if !dir.is_dir() {
         return Ok(None);
     }
-    let mut paths: Vec<PathBuf> = fs::read_dir(dir)?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    paths.sort();
-    for path in paths {
+    for path in record_files(dir)? {
         match MarkdownStore::read_record::<T>(&path) {
             Ok((record, body)) => {
                 if pred(&record) {
@@ -229,6 +217,36 @@ fn find_by<T: serde::de::DeserializeOwned>(
         }
     }
     Ok(None)
+}
+
+/// All record markdown files under `dir`, accepting BOTH layouts:
+/// * flat — `<dir>/EPC-001.md`
+/// * nested — `<dir>/EPC-001/EPC-001.md`, where a record gets its own
+///   directory so related files (tasks, specs) can live alongside it.
+///
+/// In the nested case only the record file named for its directory is
+/// returned; sibling files are ignored. Sorted for stable ordering.
+///
+/// # Errors
+///
+/// Returns `StoreError::Io` if `dir` cannot be read.
+fn record_files(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(dir)?.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "md") {
+            paths.push(path);
+        } else if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let nested = path.join(format!("{name}.md"));
+                if nested.is_file() {
+                    paths.push(nested);
+                }
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 /// Split markdown content into (frontmatter yaml, body).
@@ -598,6 +616,84 @@ mod tests {
             .unwrap();
         assert_eq!(in_progress.len(), 1);
         assert_eq!(in_progress[0].id, "task-01b");
+    }
+
+    #[test]
+    fn test_scan_finds_nested_epic_layout() {
+        // Dogfood layout: epics/EPC-001/EPC-001.md (dir per epic so tasks/ and
+        // specs live alongside). Discovery must find the record inside the dir.
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+        let nested_dir = store.root().join("epics/EPC-001");
+        fs::create_dir_all(&nested_dir).unwrap();
+        MarkdownStore::write_record(
+            &nested_dir.join("EPC-001.md"),
+            &make_epic("epic-01a", "EPC-001"),
+            "## body kept\n",
+        )
+        .unwrap();
+        // Sibling files inside the epic dir must NOT be treated as epics.
+        fs::write(nested_dir.join("spec.md"), "---\nid: x\n---\n").unwrap();
+        fs::create_dir_all(nested_dir.join("tasks")).unwrap();
+
+        let epics = store.list_epics(EpicFilter::default()).unwrap();
+        assert_eq!(epics.len(), 1, "nested epic must be discovered");
+        assert_eq!(epics[0].format_id, "EPC-001");
+
+        // find_by paths (get/update) must resolve the nested record too.
+        let by_fid = store.get_epic_by_format_id("EPC-001").unwrap().unwrap();
+        assert_eq!(by_fid.id, "epic-01a");
+    }
+
+    #[test]
+    fn test_scan_finds_both_flat_and_nested_epics() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap(); // flat
+        let nested_dir = store.root().join("epics/EPC-002");
+        fs::create_dir_all(&nested_dir).unwrap();
+        MarkdownStore::write_record(
+            &nested_dir.join("EPC-002.md"),
+            &make_epic("epic-01b", "EPC-002"),
+            "",
+        )
+        .unwrap();
+
+        let epics = store.list_epics(EpicFilter::default()).unwrap();
+        assert_eq!(epics.len(), 2, "both layouts must coexist");
+        assert_eq!(epics[0].format_id, "EPC-001");
+        assert_eq!(epics[1].format_id, "EPC-002");
+    }
+
+    #[test]
+    fn test_update_nested_epic_rewrites_in_place() {
+        // An update to a nested epic must rewrite the nested file, not create a
+        // stray flat one — find_by returns the real path.
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+        let nested = store.root().join("epics/EPC-001/EPC-001.md");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        MarkdownStore::write_record(&nested, &make_epic("epic-01a", "EPC-001"), "## keep\n")
+            .unwrap();
+
+        store
+            .update_epic(
+                "epic-01a",
+                EpicUpdate {
+                    status: Some(EpicStatus::Complete),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert!(nested.is_file(), "nested file must remain the record location");
+        assert!(
+            !store.root().join("epics/EPC-001.md").exists(),
+            "no stray flat file should be created"
+        );
+        let after = fs::read_to_string(&nested).unwrap();
+        assert!(after.contains("status: complete"));
+        assert!(after.contains("## keep"), "body preserved");
     }
 
     #[test]

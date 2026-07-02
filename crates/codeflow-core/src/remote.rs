@@ -332,9 +332,16 @@ impl GithubProvider {
         let mut child = cmd.spawn().map_err(|e| format!("gh spawn: {e}"))?;
         if let Some(data) = input {
             if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(data.as_bytes())
-                    .map_err(|e| format!("gh stdin: {e}"))?;
+                // If gh exits before consuming all of --input (an early auth
+                // failure, or a test shim that ignores stdin), the closed read
+                // end surfaces as BrokenPipe. That is not itself the verdict —
+                // let the child's exit status and stderr decide, rather than
+                // racing the write against the child's exit.
+                match stdin.write_all(data.as_bytes()) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+                    Err(e) => return Err(format!("gh stdin: {e}")),
+                }
             }
         }
         let output = child.wait_with_output().map_err(|e| format!("gh: {e}"))?;

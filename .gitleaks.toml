@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "codeflow test fixtures and the secret-scanner's own example patterns are not real credentials"
+paths = [
+  '''crates/codeflow-core/src/hooks/scan\.rs$''',
+  '''crates/codeflow-core/src/hooks/git_hook\.rs$''',
+  '''crates/codeflow-cli/tests/hooks_cli\.rs$''',
+  '''^codeflow-rs/''',
+]

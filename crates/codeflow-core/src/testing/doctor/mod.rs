@@ -271,7 +271,15 @@ fn run_probe(runner: &RunnerType, target_name: &str) -> DoctorCheck {
         }
     };
 
-    match run_with_timeout(cmd, &args, Duration::from_secs(PROBE_TIMEOUT_SECS)) {
+    probe_command(cmd, &args, target_name)
+}
+
+/// Probes a specific `cmd` with `args` and maps the result to a non-blocking
+/// [`DoctorCheck`]. Split out from [`run_probe`] so it can be exercised
+/// hermetically with a guaranteed-absent command name — the runner-name path
+/// depends on which tools happen to be installed on the host.
+fn probe_command(cmd: &str, args: &[&str], target_name: &str) -> DoctorCheck {
+    match run_with_timeout(cmd, args, Duration::from_secs(PROBE_TIMEOUT_SECS)) {
         ProbeResult::Success => DoctorCheck {
             name: format!("{target_name}.probe"),
             status: CheckStatus::Pass,
@@ -738,9 +746,12 @@ mod tests {
     // Check 4: probe — non-existent runner warns
     #[test]
     fn check_probe_missing_runner_warn() {
-        // phpunit is unlikely to be installed in the test environment
-        let check = run_probe(&RunnerType::Phpunit, "test");
+        // Hermetic: probe a guaranteed-absent binary rather than assuming a
+        // real runner (e.g. phpunit) is missing — it may be installed on CI
+        // runners like ubuntu-latest, which would flip this test.
+        let check = probe_command("codeflow-nonexistent-runner-xyzzy", &["--version"], "test");
         assert_eq!(check.status, CheckStatus::Warn);
+        assert!(check.message.contains("could not spawn"), "{}", check.message);
     }
 
     // Exit code tests

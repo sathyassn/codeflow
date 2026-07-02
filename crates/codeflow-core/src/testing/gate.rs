@@ -9,10 +9,12 @@
 
 use std::path::Path;
 
-use crate::testing::config::load_test_config;
+use crate::testing::config::{load_test_config, TargetConfig};
+use crate::testing::coverage::FileCoverage;
 use crate::testing::error::TestingError;
-use crate::testing::runner::run_all_targets;
+use crate::testing::runner::{run_all_targets, TargetRunResult};
 use crate::testing::setup::detect::detect_stacks;
+use crate::testing::validation;
 
 /// Relative path of the test configuration inside a project.
 pub const TEST_CONFIG_PATH: &str = ".codeflow/test-config.json";
@@ -39,16 +41,39 @@ impl GateTargetResult {
     }
 }
 
+/// Report-only coverage summary for one target (charter §3.1 coverage audit).
+///
+/// This never affects the gate verdict — it is surfaced so a full-mode run
+/// makes coverage visible instead of silently dropping it. Threshold gating is
+/// a future step; today the numbers are informational.
+#[derive(Debug, Clone)]
+pub struct CoverageReport {
+    pub target: String,
+    /// Overall line coverage percentage, or `None` when no coverage data was
+    /// collected (missing or empty artifact).
+    pub overall_percent: Option<f64>,
+    pub thresholds_passed: usize,
+    pub thresholds_failed: usize,
+    pub exceptions_applied: usize,
+    /// `(file, coverage_percent, threshold)` for each failing, non-excepted file.
+    pub failing_files: Vec<(String, f64, u32)>,
+    /// Set when coverage is configured but no usable data was produced.
+    pub note: Option<String>,
+}
+
 /// Outcome of running the test gate.
 #[derive(Debug)]
 pub enum GateOutcome {
     /// Nothing to run: no config targets and no detectable stack (or no
     /// target defines the requested mode). Callers must report this loudly.
     NoTargets { reason: String },
-    /// Targets ran; `passed` is the gate verdict.
+    /// Targets ran; `passed` is the gate verdict. `coverage` is report-only
+    /// (populated for full-mode runs of targets that configure coverage) and
+    /// does not influence `passed`.
     Completed {
         results: Vec<GateTargetResult>,
         passed: bool,
+        coverage: Vec<CoverageReport>,
     },
 }
 
@@ -81,11 +106,12 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
                 reason: format!("{TEST_CONFIG_PATH} defines no targets"),
             });
         }
+        let effective = resolve_mode(mode, &config.targets);
         (
             config.targets,
             config.execution.parallel,
             config.execution.fail_fast,
-            mode.to_string(),
+            effective,
         )
     } else {
         let detected = detect_stacks(project_dir);
@@ -94,15 +120,9 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
                 reason: format!("no {TEST_CONFIG_PATH} and no test stack detected"),
             });
         }
-        // Detected targets define `essential` and `full` modes; `quick`
-        // maps to the lighter `essential` command set.
-        let effective = if mode == "quick" { "essential" } else { mode };
-        (
-            detected.into_iter().map(|d| d.config).collect(),
-            false,
-            false,
-            effective.to_string(),
-        )
+        let targets: Vec<TargetConfig> = detected.into_iter().map(|d| d.config).collect();
+        let effective = resolve_mode(mode, &targets);
+        (targets, false, false, effective)
     };
 
     let raw = run_all_targets(
@@ -122,6 +142,17 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
             reason: format!("no enabled target defines mode \"{effective_mode}\""),
         });
     }
+
+    // Report-only coverage: for a full run, parse each covered target's artifact
+    // and summarize it. This never gates (that is a future step) — it just makes
+    // coverage visible rather than silently discarded.
+    let coverage = if effective_mode == "full" {
+        let ok_runs: Vec<TargetRunResult> =
+            raw.iter().filter_map(|r| r.as_ref().ok().cloned()).collect();
+        collect_coverage_reports(&targets, &ok_runs)
+    } else {
+        Vec::new()
+    };
 
     let results: Vec<GateTargetResult> = raw
         .into_iter()
@@ -146,7 +177,105 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
         .collect();
 
     let passed = results.iter().all(GateTargetResult::passed);
-    Ok(GateOutcome::Completed { results, passed })
+    Ok(GateOutcome::Completed {
+        results,
+        passed,
+        coverage,
+    })
+}
+
+/// Build report-only coverage summaries for the targets that ran successfully
+/// and configure coverage. Reuses the post-test parsing/threshold machinery in
+/// [`crate::testing::validation`]. Never blocks: a missing or unparseable
+/// artifact yields a note, not an error.
+fn collect_coverage_reports(
+    targets: &[TargetConfig],
+    runs: &[TargetRunResult],
+) -> Vec<CoverageReport> {
+    let mut reports = Vec::new();
+    for run in runs {
+        let Some(target) = targets.iter().find(|t| t.name == run.target_name) else {
+            continue;
+        };
+        if target.coverage.is_none() {
+            continue;
+        }
+
+        let coverages = match validation::parse_target_coverage(target, run) {
+            Ok(c) => c,
+            Err(e) => {
+                reports.push(CoverageReport {
+                    target: run.target_name.clone(),
+                    overall_percent: None,
+                    thresholds_passed: 0,
+                    thresholds_failed: 0,
+                    exceptions_applied: 0,
+                    failing_files: Vec::new(),
+                    note: Some(format!("coverage artifact could not be parsed: {e}")),
+                });
+                continue;
+            }
+        };
+        if coverages.is_empty() {
+            reports.push(CoverageReport {
+                target: run.target_name.clone(),
+                overall_percent: None,
+                thresholds_passed: 0,
+                thresholds_failed: 0,
+                exceptions_applied: 0,
+                failing_files: Vec::new(),
+                note: Some("no coverage data collected".to_string()),
+            });
+            continue;
+        }
+
+        let total_found: u64 = coverages.iter().map(|c| c.lines_found).sum();
+        let total_hit: u64 = coverages.iter().map(|c| c.lines_hit).sum();
+        let overall_percent =
+            (total_found > 0).then(|| FileCoverage::compute_percent(total_found, total_hit));
+
+        let thresholds = validation::evaluate_target_thresholds(target, &coverages, &[]);
+        let thresholds_passed = thresholds.iter().filter(|r| r.pass).count();
+        let thresholds_failed = thresholds
+            .iter()
+            .filter(|r| !r.pass && !r.exception_applied)
+            .count();
+        let exceptions_applied = thresholds.iter().filter(|r| r.exception_applied).count();
+        let failing_files = thresholds
+            .iter()
+            .filter(|r| !r.pass && !r.exception_applied)
+            .map(|r| (r.file.clone(), r.coverage_percent, r.threshold))
+            .collect();
+
+        reports.push(CoverageReport {
+            target: run.target_name.clone(),
+            overall_percent,
+            thresholds_passed,
+            thresholds_failed,
+            exceptions_applied,
+            failing_files,
+            note: None,
+        });
+    }
+    reports
+}
+
+/// Resolves the requested mode against the modes the targets actually define.
+///
+/// `quick` is an alias for `essential`. Every shipped test-config template and
+/// runtime stack detection defines `essential`/`full`, never `quick`, while the
+/// CLI default and the pre-push gate ([`crate::hooks::git_hook`]) speak
+/// `quick`. When the targets define `essential` but no `quick`, `quick`
+/// resolves to `essential`; otherwise the requested mode is passed through
+/// unchanged, so an unsatisfiable mode still surfaces as a loud no-op
+/// ([`GateOutcome::NoTargets`]) rather than silently mapping onto another mode.
+fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
+    let defines = |mode: &str| targets.iter().any(|t| t.modes.contains_key(mode));
+    if requested == "quick" && defines("essential") && !defines("quick") {
+        "essential".to_string()
+    } else {
+        requested.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -196,7 +325,7 @@ mod tests {
 
         let outcome = run_gate(dir.path(), "full").unwrap();
         match outcome {
-            GateOutcome::Completed { results, passed } => {
+            GateOutcome::Completed { results, passed, .. } => {
                 assert!(passed);
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].name, "ok");
@@ -212,18 +341,14 @@ mod tests {
         write_config(dir.path(), &format!("[{}]", echo_target("bad", "exit 3")));
 
         let outcome = run_gate(dir.path(), "full").unwrap();
+        assert!(!outcome.allows_proceed());
         match outcome {
-            GateOutcome::Completed { results, passed } => {
+            GateOutcome::Completed { results, passed, .. } => {
                 assert!(!passed);
                 assert_eq!(results[0].exit_code, 3);
-                assert!(!outcome_allows(&GateOutcome::Completed { results, passed }));
             }
             GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
         }
-    }
-
-    fn outcome_allows(o: &GateOutcome) -> bool {
-        o.allows_proceed()
     }
 
     #[test]
@@ -261,6 +386,164 @@ mod tests {
                 assert!(reason.contains("quick"), "{reason}");
             }
             GateOutcome::Completed { .. } => panic!("expected NoTargets"),
+        }
+    }
+
+    fn essential_full_target(name: &str, command: &str) -> String {
+        format!(
+            r#"{{"name": "{name}", "runner": "custom", "modes": {{"essential": {{"command": "{command}"}}, "full": {{"command": "{command}"}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn quick_resolves_to_essential_on_template_config() {
+        // Shipped templates (and stack detection) define `essential`/`full`,
+        // never `quick`. A `--mode quick` run must resolve to `essential` and
+        // actually execute — the pre-push gate depends on this.
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            &format!("[{}]", essential_full_target("ok", "exit 0")),
+        );
+
+        let outcome = run_gate(dir.path(), "quick").unwrap();
+        match outcome {
+            GateOutcome::Completed { results, passed, .. } => {
+                assert!(passed, "quick must run the essential command set");
+                assert_eq!(results.len(), 1);
+                assert!(results[0].passed());
+            }
+            GateOutcome::NoTargets { reason } => {
+                panic!("quick must resolve to essential and run, got NoTargets: {reason}")
+            }
+        }
+    }
+
+    #[test]
+    fn essential_mode_is_accepted_and_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            &format!("[{}]", essential_full_target("ok", "exit 0")),
+        );
+
+        let outcome = run_gate(dir.path(), "essential").unwrap();
+        assert!(
+            matches!(outcome, GateOutcome::Completed { passed: true, .. }),
+            "essential mode must run, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn quick_kept_when_config_defines_quick() {
+        // A config that actually defines `quick` keeps it — no aliasing.
+        let dir = tempfile::tempdir().unwrap();
+        write_config(dir.path(), &format!("[{}]", echo_target("ok", "exit 0")));
+
+        let outcome = run_gate(dir.path(), "quick").unwrap();
+        assert!(
+            matches!(outcome, GateOutcome::Completed { passed: true, .. }),
+            "explicit quick mode must run its own command, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn quick_without_essential_is_loud_no_op() {
+        // Only `full` is defined: `quick` has nothing to alias onto, so it
+        // stays `quick` and surfaces loudly rather than silently mapping.
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"[{"name": "only-full", "runner": "custom", "modes": {"full": {"command": "exit 0"}}}]"#,
+        );
+
+        let outcome = run_gate(dir.path(), "quick").unwrap();
+        match outcome {
+            GateOutcome::NoTargets { reason } => assert!(reason.contains("quick"), "{reason}"),
+            GateOutcome::Completed { .. } => panic!("expected loud NoTargets, got Completed"),
+        }
+    }
+
+    #[test]
+    fn resolve_mode_aliases_quick_only_when_unambiguous() {
+        let parse = |modes: &[&str]| -> TargetConfig {
+            let entries: Vec<String> = modes
+                .iter()
+                .map(|m| format!(r#""{m}": {{"command": "exit 0"}}"#))
+                .collect();
+            serde_json::from_str(&format!(
+                r#"{{"name": "t", "runner": "custom", "modes": {{{}}}}}"#,
+                entries.join(", ")
+            ))
+            .unwrap()
+        };
+
+        let essential_full = [parse(&["essential", "full"])];
+        assert_eq!(resolve_mode("quick", &essential_full), "essential");
+        assert_eq!(resolve_mode("full", &essential_full), "full");
+        assert_eq!(resolve_mode("essential", &essential_full), "essential");
+
+        assert_eq!(resolve_mode("quick", &[parse(&["quick", "full"])]), "quick");
+        assert_eq!(resolve_mode("quick", &[parse(&["full"])]), "quick");
+    }
+
+    #[test]
+    fn full_mode_reports_coverage_but_does_not_gate_on_it() {
+        // A target with coverage config + an lcov artifact below threshold must
+        // still PASS the gate (report-only) while surfacing the shortfall.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("cov.lcov"),
+            "SF:src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n",
+        )
+        .unwrap();
+        write_config(
+            dir.path(),
+            r#"[{"name": "cov", "runner": "custom",
+                "modes": {"full": {"command": "exit 0"}, "essential": {"command": "exit 0"}},
+                "coverage": {"format": "lcov", "path": "cov.lcov",
+                             "rules": [{"scope": "per_file", "minimum": 85}]}}]"#,
+        );
+
+        let outcome = run_gate(dir.path(), "full").unwrap();
+        match outcome {
+            GateOutcome::Completed {
+                passed, coverage, ..
+            } => {
+                assert!(passed, "coverage is report-only; the gate must still pass");
+                assert_eq!(coverage.len(), 1);
+                let cov = &coverage[0];
+                assert_eq!(cov.target, "cov");
+                assert_eq!(cov.overall_percent, Some(50.0));
+                assert_eq!(cov.thresholds_failed, 1);
+                assert_eq!(cov.failing_files.len(), 1);
+                assert_eq!(cov.failing_files[0].0, "src/lib.rs");
+            }
+            GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
+        }
+    }
+
+    #[test]
+    fn quick_mode_collects_no_coverage() {
+        // Coverage is a full-mode concern; quick(->essential) runs skip it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("cov.lcov"),
+            "SF:src/lib.rs\nDA:1,1\nend_of_record\n",
+        )
+        .unwrap();
+        write_config(
+            dir.path(),
+            r#"[{"name": "cov", "runner": "custom",
+                "modes": {"full": {"command": "exit 0"}, "essential": {"command": "exit 0"}},
+                "coverage": {"format": "lcov", "path": "cov.lcov",
+                             "rules": [{"scope": "per_file", "minimum": 85}]}}]"#,
+        );
+
+        let outcome = run_gate(dir.path(), "quick").unwrap();
+        match outcome {
+            GateOutcome::Completed { coverage, .. } => assert!(coverage.is_empty()),
+            GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
         }
     }
 

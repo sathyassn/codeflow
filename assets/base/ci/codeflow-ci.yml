@@ -1,6 +1,11 @@
 # codeflow CI — the perimeter. Re-runs every gate that matters so nothing
 # depends on local state. Written by `codeflow init` only if absent; after
 # that it is yours.
+#
+# IMPORTANT: the "Install codeflow" step below is a PLACEHOLDER. Until you
+# replace it with the release installer (or a from-source build), the codeflow
+# `test`/`validate` gates are skipped and this perimeter does not block. The
+# secret-scan and commit-lint jobs work out of the box.
 name: codeflow-ci
 
 on:
@@ -42,6 +47,23 @@ jobs:
           else
             echo "::warning::codeflow not installed — validate gate skipped"
           fi
+
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Run the gitleaks binary directly (pinned) rather than the
+      # gitleaks-action wrapper, which requires a GitHub token/license.
+      - name: gitleaks
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks detect --source . --redact --no-banner --exit-code 1
 
   commit-lint:
     name: commit standards

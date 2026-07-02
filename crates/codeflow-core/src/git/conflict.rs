@@ -146,8 +146,11 @@ pub enum RebaseResult {
 ///
 /// Returns `GitError` if git commands fail for non-conflict reasons.
 pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseResult, GitError> {
+    let mut args: Vec<String> = fallback_identity_args(repo_path);
+    args.push("rebase".to_string());
+    args.push(target_branch.to_string());
     let output = std::process::Command::new("git")
-        .args(["rebase", target_branch])
+        .args(&args)
         .current_dir(repo_path)
         .output()
         .map_err(|e| GitError::MergeFailed(format!("failed to run git rebase: {e}")))?;
@@ -183,6 +186,47 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
     Ok(RebaseResult::ConflictAborted { conflicting_files })
 }
 
+/// `-c user.name=… -c user.email=…` arguments supplying a fallback committer
+/// identity, but ONLY when the repository (and machine) has none configured.
+///
+/// A rebase writes new commit objects and so needs a committer identity;
+/// without one `git rebase` aborts with "Committer identity unknown". Fresh
+/// machines — CI runners, freshly provisioned dev boxes, consumer repos that
+/// never set a global identity — hit exactly that. When a real identity IS
+/// configured (local, global, or system) it is left untouched so the rebase is
+/// attributed correctly.
+fn fallback_identity_args(repo_path: &Path) -> Vec<String> {
+    identity_args_for(has_git_identity(repo_path))
+}
+
+/// Whether a committer identity (both `user.name` and `user.email`) is
+/// resolvable for `repo_path` via any config scope (local, global, system).
+fn has_git_identity(repo_path: &Path) -> bool {
+    let configured = |key: &str| {
+        std::process::Command::new("git")
+            .args(["config", key])
+            .current_dir(repo_path)
+            .output()
+            .is_ok_and(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
+    };
+    configured("user.name") && configured("user.email")
+}
+
+/// The `-c` argument list: empty when an identity already exists, or a fallback
+/// identity otherwise. Split from the config probe so it is testable directly.
+fn identity_args_for(has_identity: bool) -> Vec<String> {
+    if has_identity {
+        Vec::new()
+    } else {
+        vec![
+            "-c".to_string(),
+            "user.name=codeflow".to_string(),
+            "-c".to_string(),
+            "user.email=codeflow@localhost.invalid".to_string(),
+        ]
+    }
+}
+
 /// Collect file paths from merge conflicts in the index.
 fn collect_conflict_paths(index: &git2::Index) -> Vec<String> {
     let mut paths = Vec::new();
@@ -214,7 +258,12 @@ mod tests {
 
     /// Helper: create a git repo with an initial commit containing a file.
     fn init_repo_with_file(dir: &Path, filename: &str, content: &str) -> git2::Repository {
-        let repo = git2::Repository::init(dir).unwrap();
+        // Pin the initial branch to `main` so the `set_head("refs/heads/main")`
+        // calls below hold regardless of the host's `init.defaultBranch`
+        // (GitHub runners default to `master`, not `main`).
+        let mut init_opts = git2::RepositoryInitOptions::new();
+        init_opts.initial_head("main");
+        let repo = git2::Repository::init_opts(dir, &init_opts).unwrap();
         let sig = git2::Signature::now("Test", "test@example.com").unwrap();
 
         // Write file to disk and add to index.
@@ -583,6 +632,32 @@ mod tests {
 
         let result = attempt_rebase(dir.path(), "target").unwrap();
         assert!(matches!(result, RebaseResult::Success));
+    }
+
+    #[test]
+    fn identity_args_supply_fallback_only_when_unconfigured() {
+        // Configured → no override, so the rebase is attributed correctly.
+        assert!(identity_args_for(true).is_empty());
+        // Unconfigured → a fallback committer identity is injected, which is
+        // what lets `git rebase` create commits on a machine with no identity
+        // (fresh CI runners, freshly provisioned boxes, consumer repos).
+        let args = identity_args_for(false);
+        assert_eq!(args.iter().filter(|a| *a == "-c").count(), 2);
+        assert!(args.iter().any(|a| a.starts_with("user.name=")));
+        assert!(args.iter().any(|a| a.starts_with("user.email=")));
+    }
+
+    #[test]
+    fn has_git_identity_true_when_repo_local_identity_set() {
+        // A repo-local identity is seen regardless of ambient global config,
+        // so no fallback is injected.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_file(dir.path(), "f.txt", "x\n");
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "Real Dev").unwrap();
+        cfg.set_str("user.email", "real@example.com").unwrap();
+        assert!(has_git_identity(dir.path()));
+        assert!(fallback_identity_args(dir.path()).is_empty());
     }
 
     #[test]

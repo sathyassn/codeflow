@@ -94,7 +94,25 @@ pub fn upsert_block(existing: &str, block: &str, format: RegionFormat) -> (Strin
         return (text, BlockOutcome::Replaced);
     }
 
-    // No markers: append, never touch existing content.
+    // No markers in the dest. If the dest already contains the block's
+    // interior content verbatim — a pre-markers install of this same region,
+    // e.g. an asset that ships without markers (`CLAUDE.md.tmpl`) whose text
+    // was written straight to disk once — replace that span with the marked
+    // block instead of appending. Appending would duplicate the whole region.
+    // Idempotent: the next run finds the markers and takes the branch above.
+    if let Some((start, len)) = interior_line_span(&lines, block, format) {
+        let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+        out.extend_from_slice(&lines[..start]);
+        out.extend(block.lines());
+        out.extend_from_slice(&lines[start + len..]);
+        let mut text = out.join("\n");
+        if existing.ends_with('\n') || !text.ends_with('\n') {
+            text.push('\n');
+        }
+        return (text, BlockOutcome::Replaced);
+    }
+
+    // No markers and no matching content: append, never touch existing content.
     let mut text = existing.trim_end_matches('\n').to_string();
     if !text.is_empty() {
         text.push_str("\n\n");
@@ -102,6 +120,42 @@ pub fn upsert_block(existing: &str, block: &str, format: RegionFormat) -> (Strin
     text.push_str(block);
     text.push('\n');
     (text, BlockOutcome::Appended)
+}
+
+/// The interior lines of a marked `block` (everything between the begin and end
+/// markers), or an empty vec when the block has no interior.
+fn block_interior(block: &str, format: RegionFormat) -> Vec<&str> {
+    let lines: Vec<&str> = block.lines().collect();
+    let Some(b) = lines.iter().position(|l| is_begin(l, format)) else {
+        return Vec::new();
+    };
+    let Some(e) = lines[b..].iter().position(|l| is_end(l, format)).map(|e| e + b) else {
+        return Vec::new();
+    };
+    if e > b + 1 {
+        lines[b + 1..e].to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Finds the first run of lines in `haystack` matching the interior content of
+/// `block` verbatim, returning `(start, len)`. Whole-line matching keeps the
+/// match unambiguous — a region is many lines, so accidental collisions are
+/// not a practical concern.
+fn interior_line_span(
+    haystack: &[&str],
+    block: &str,
+    format: RegionFormat,
+) -> Option<(usize, usize)> {
+    let needle = block_interior(block, format);
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|w| w == needle.as_slice())
+        .map(|start| (start, needle.len()))
 }
 
 #[cfg(test)]
@@ -147,6 +201,61 @@ mod tests {
         let (out, outcome) = upsert_block(&doc, BLOCK_V1, RegionFormat::Markdown);
         assert_eq!(outcome, BlockOutcome::Unchanged);
         assert_eq!(out, doc);
+    }
+
+    #[test]
+    fn adopts_unmarked_region_in_place_without_duplicating() {
+        // Regression: an asset that ships WITHOUT markers (e.g. CLAUDE.md.tmpl)
+        // wraps its whole rendered body as the region. When the dest already
+        // holds that identical body unmarked, update must REPLACE it in place,
+        // not append — appending duplicated the entire region.
+        let rendered = "@AGENTS.md\n\n## Notes\n- one\n- two\n";
+        let block = wrap_block(rendered, RegionFormat::Markdown, "2.0.0");
+        let dest = rendered; // pre-markers install: identical unmarked content
+
+        let (out, outcome) = upsert_block(dest, &block, RegionFormat::Markdown);
+        assert_eq!(
+            outcome,
+            BlockOutcome::Replaced,
+            "unmarked-but-identical content must be adopted in place, not appended"
+        );
+        assert_eq!(
+            out.matches("## Notes").count(),
+            1,
+            "region must appear exactly once, got:\n{out}"
+        );
+        assert!(out.contains("codeflow:managed:begin"));
+
+        // Idempotent: a second run finds the markers and changes nothing.
+        let (out2, outcome2) = upsert_block(&out, &block, RegionFormat::Markdown);
+        assert_eq!(outcome2, BlockOutcome::Unchanged);
+        assert_eq!(out2, out);
+    }
+
+    #[test]
+    fn adopts_region_preserving_surrounding_project_content() {
+        let rendered = "@AGENTS.md\n\n## Notes\n- one\n";
+        let block = wrap_block(rendered, RegionFormat::Markdown, "2.0.0");
+        let dest = format!("# Project header\n\n{rendered}\n## My own section\nkeep me\n");
+
+        let (out, outcome) = upsert_block(&dest, &block, RegionFormat::Markdown);
+        assert_eq!(outcome, BlockOutcome::Replaced);
+        assert!(out.contains("# Project header"), "leading content preserved");
+        assert!(
+            out.contains("## My own section") && out.contains("keep me"),
+            "trailing project content preserved:\n{out}"
+        );
+        assert_eq!(out.matches("## Notes").count(), 1);
+        assert!(out.contains("codeflow:managed:end"));
+    }
+
+    #[test]
+    fn appends_when_no_marker_and_no_matching_content() {
+        // Distinct content still appends (the pre-existing behavior).
+        let block = wrap_block("region body\n", RegionFormat::Markdown, "2.0.0");
+        let (out, outcome) = upsert_block("# Unrelated\nstuff\n", &block, RegionFormat::Markdown);
+        assert_eq!(outcome, BlockOutcome::Appended);
+        assert!(out.starts_with("# Unrelated\nstuff\n\n<!-- codeflow:managed:begin"));
     }
 
     #[test]

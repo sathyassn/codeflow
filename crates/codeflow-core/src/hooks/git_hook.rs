@@ -9,8 +9,7 @@ use std::path::Path;
 use git2::Repository;
 
 use crate::error::HookError;
-use crate::testing::config::load_test_config;
-use crate::testing::runner::run_all_targets;
+use crate::testing::gate::{run_gate, GateOutcome};
 
 use super::policy::GitPolicy;
 use super::repo::current_branch;
@@ -362,56 +361,43 @@ fn run_test_gate(root: &Path, policy: &GitPolicy, report: &mut StageReport) {
     let cfg_path = root.join(".codeflow").join("test-config.json");
     if !cfg_path.exists() {
         report.notes.push(
-            "test gate skipped: no .codeflow/test-config.json (run `codeflow stack add` or `codeflow test --setup`)"
+            "test gate skipped: no .codeflow/test-config.json (run /cf-stack to add a stack, \
+             or create .codeflow/test-config.json)"
                 .to_string(),
         );
         return;
     }
-    let config = match load_test_config(&cfg_path) {
-        Ok(c) => c,
+    // Delegate to the shared gate so `quick` resolves to the `essential` mode
+    // that shipped test-configs actually define (see `gate::run_gate`).
+    match run_gate(root, "quick") {
+        Ok(GateOutcome::NoTargets { reason }) => {
+            report.notes.push(format!("test gate skipped: {reason}"));
+        }
+        Ok(GateOutcome::Completed { results, passed, .. }) => {
+            if passed {
+                report
+                    .notes
+                    .push(format!("quick test gate passed ({} target(s))", results.len()));
+            } else {
+                let failed: Vec<String> = results
+                    .iter()
+                    .filter(|r| !r.passed())
+                    .map(|r| r.name.clone())
+                    .collect();
+                report.violations.push(Violation::new(
+                    "git.test_gate_on_push",
+                    policy.test_gate_on_push,
+                    format!("quick test gate failed for: {}", failed.join(", ")),
+                    "fix the failing tests, or run `codeflow test --mode quick` to reproduce"
+                        .to_string(),
+                ));
+            }
+        }
         Err(e) => {
             report
                 .notes
                 .push(format!("test gate skipped: test-config.json unreadable: {e}"));
-            return;
         }
-    };
-
-    let results = run_all_targets(
-        &config.targets,
-        "quick",
-        root,
-        false,
-        true,
-        &[],
-        &[],
-        &[],
-        &[],
-    );
-    if results.is_empty() {
-        report
-            .notes
-            .push("test gate skipped: no enabled targets define a quick mode".to_string());
-        return;
-    }
-
-    let mut failed = Vec::new();
-    for res in results {
-        match res {
-            Ok(run) if run.exit_code != 0 => failed.push(run.target_name),
-            Ok(_) => {}
-            Err(e) => report
-                .notes
-                .push(format!("test gate: target could not run: {e}")),
-        }
-    }
-    if !failed.is_empty() {
-        report.violations.push(Violation::new(
-            "git.test_gate_on_push",
-            policy.test_gate_on_push,
-            format!("quick test gate failed for: {}", failed.join(", ")),
-            "fix the failing tests, or run `codeflow test --mode quick` to reproduce".to_string(),
-        ));
     }
 }
 
