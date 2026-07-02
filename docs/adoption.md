@@ -49,9 +49,10 @@ scan is the one rule that is never graced (charter §6.3).
 - **Your hook manager is respected.** If `.husky/` or a custom `core.hooksPath`
   already exists, codeflow detects it and does **not** take over hooks. It
   records `git_hooks = "unwired"`, and the report tells you how to call
-  codeflow's shims from your manager (add the `pre-commit`, `commit-msg`, and
-  `pre-push` shim paths to your existing steps). `codeflow doctor` surfaces the
-  unwired state so it stays visible.
+  codeflow's shims from your manager (add the `pre-commit`, `commit-msg`,
+  `pre-merge-commit`, `reference-transaction`, and `pre-push` shim paths to your
+  existing steps). `codeflow doctor` surfaces the unwired state so it stays
+  visible.
 
 Adopt gradually: start `--minimal` (just the secret scan + gitignore, policy at
 warn), run for a while, then re-init `--standard` and later `--full` as the work
@@ -80,6 +81,12 @@ baseline, and anything that cannot merge cleanly is written beside your file as
 `--diff <FILE>` writes the report plus unified diffs; `--force` replaces
 user-modified managed files instead of merging.
 
+New policy keys arrive this way too. When a codeflow upgrade adds a
+`.codeflow/policy.json` key (for example the `merge_to_protected`,
+`pr_merge_to_protected`, and `local_ref_protection` keys added in ADR-0007),
+`update` inserts it with its shipped default and reports it, and never touches
+the values you already set — so tightening ships without a manual migration.
+
 ## The daily flow
 
 1. **Orient.** The SessionStart digest (or `codeflow orient`) gives branch and
@@ -88,12 +95,42 @@ user-modified managed files instead of merging.
 2. **Branch in a worktree.** Work on a `{prefix}/{kebab-name}` branch in a
    worktree; never develop on the root protected-branch checkout.
 3. **Gates as you go.** pre-commit (secret scan), commit-msg (format, no AI
-   attribution, no emoji), pre-push (branch naming, protected-branch rules, test
-   gate). Keep `codeflow test` and `codeflow validate --docs` green before push.
-4. **Land by PR.** Push the branch, open a PR from the template (summary,
-   changes, test results, linked epic/capability IDs), merge on green CI. With
-   no remote, `codeflow integrate <branch> --into <target>` is the sanctioned
-   local path.
+   attribution, no emoji), pre-merge-commit and reference-transaction
+   (protected-branch merge/ref rules — the latter also catches fast-forward
+   merges, `reset --hard`, and `branch -D`), pre-push (branch naming,
+   protected-branch rules, test gate). Keep `codeflow test` and `codeflow
+   validate --docs` green before push.
+4. **Land by PR, merged by a human.** Push the branch, open a PR from the
+   template (summary, changes, test results, linked epic/capability IDs); a
+   human merges it on green CI (an agent-performed `gh pr merge` into a
+   protected base is blocked — that is the boundary). With no remote, `codeflow
+   integrate <branch> --into <target>` is the sanctioned local path, and a human
+   can override the git layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1`.
+
+## Enforcement planes — who catches what
+
+One policy (`.codeflow/policy.json`), four planes. Git hooks are
+harness-agnostic (any agent or human); the Claude `git-guard` is a fast
+in-session bonus; CI re-runs the gates as the perimeter; remote branch
+protection is the server-side backstop. Local planes are feedback — CI and
+remote are the authoritative line (charter §6.5).
+
+| Protection | git hooks | git-guard (Claude) | CI | remote |
+|---|---|---|---|---|
+| Commit / non-ff merge commit on protected | pre-commit / pre-merge-commit | yes | yes | yes |
+| FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | yes | — | yes (result unpushable) |
+| Push / force-push / delete to protected | pre-push | yes | — | yes |
+| `gh pr merge` into a protected base | — (hooks can't see a PR) | yes | — | yes |
+| Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
+| Override-token laundering, `--no-verify` bypass | — | yes (structural) | — | — |
+
+Two facts the matrix encodes. **PR-content checks are git-guard/CI by design** —
+a git hook never sees `gh pr create`/`gh pr merge`, so attribution/emoji scans
+and the protected-base check live in the Claude layer and CI, not the hooks.
+**The human override (`CODEFLOW_HUMAN_OVERRIDE=1`) and the integrate token apply
+to the git-hook plane only** — the git-guard never trusts them, because an agent
+in a session cannot prove it is a human. `reference-transaction` needs git ≥
+2.28; on older git it is absent and protection falls back to the other planes.
 
 ## Delegation quickstart (optional)
 
