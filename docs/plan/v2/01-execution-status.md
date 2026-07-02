@@ -104,3 +104,11 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   block, the human-only `CODEFLOW_HUMAN_OVERRIDE` (git layer only), and the
   `repo-integrity` doctor check (doctor 6→7). After this merges, agent-performed
   `gh pr merge` into a protected base is blocked — a human merges subsequent PRs.
+- Root cause of the four `core.bare` flips + a stray `chore: initial commit`
+  identified and fixed: git exports `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`
+  to hook subprocesses, and the pre-push `test_gate_on_push` ran `cargo test`
+  with those inherited, so the workspace's git-spawning tests mutated the real
+  repo instead of their tempdirs. Fix: the test-gate runner (`spawn_command`)
+  and the test git helpers clear the three vars. This supersedes the
+  worktree-interruption *correlation* in ADR-0007's wording; the ADR stays as
+  the historical record since it already states the mechanism was unconfirmed.

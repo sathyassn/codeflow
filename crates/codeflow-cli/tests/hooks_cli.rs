@@ -15,7 +15,10 @@ fn codeflow() -> Command {
     cmd.env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
     cmd
 }
 
@@ -41,6 +44,9 @@ fn git(dir: &Path, args: &[&str]) {
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("git runs");
     assert!(
@@ -409,6 +415,9 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
         .current_dir(dir.path())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
@@ -422,6 +431,9 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
         .current_dir(dir.path())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .env("CODEFLOW_HUMAN_OVERRIDE", "1")
         .output()
         .unwrap();
@@ -466,6 +478,9 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
             .current_dir(dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
             .env_remove("CODEFLOW_INTEGRATE_TOKEN")
             .env_remove("CODEFLOW_HUMAN_OVERRIDE")
             .output()
@@ -510,6 +525,9 @@ fn real_wired_hook_blocks_commit_via_git() {
         .current_dir(dir.path())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .output()
         .unwrap();

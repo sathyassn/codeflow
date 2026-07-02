@@ -206,6 +206,9 @@ fn git(root: &Path, args: &[&str]) -> String {
         .arg("-C")
         .arg(root)
         .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("git runs");
     String::from_utf8_lossy(&out.stdout).trim().to_string()

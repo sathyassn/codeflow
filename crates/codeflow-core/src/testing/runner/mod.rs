@@ -260,6 +260,17 @@ fn spawn_command(
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command).current_dir(cwd);
 
+    // The test gate can run inside a git hook (the pre-push `test_gate_on_push`,
+    // or `integrate`'s internal gate), where git exports GIT_DIR / GIT_WORK_TREE
+    // / GIT_INDEX_FILE. Those would redirect any `git` the test command spawns
+    // at the outer repo instead of the test's own fixtures — silently mutating
+    // the real repository (this is what flipped `core.bare` and planted a stray
+    // commit; ADR-0007 follow-up). Clear them so the test command and its
+    // children discover git normally from `cwd`.
+    cmd.env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+
     // Set TARGET env var
     cmd.env("TARGET", target_name);
 
@@ -646,6 +657,42 @@ mod tests {
             "ci_skip=true target must be skipped in CI"
         );
         assert_eq!(results[0].as_ref().unwrap().target_name, "fast");
+    }
+
+    /// Regression (ADR-0007 follow-up): the test gate runs inside git's pre-push
+    /// hook, where git exports `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`. If
+    /// those leaked into the test command, any `git` it spawns would mutate the
+    /// OUTER repo instead of its own fixtures — this is what flipped `core.bare`
+    /// and planted a stray commit. `spawn_command` must clear all three so the
+    /// test command discovers git from `cwd`.
+    #[test]
+    #[serial_test::serial(env_vars)]
+    fn spawn_command_clears_inherited_git_env() {
+        // SAFETY: test-only env var manipulation, gated by #[serial]. Simulate a
+        // decoy git env as a pre-push hook would export.
+        unsafe {
+            std::env::set_var("GIT_DIR", "/decoy/.git");
+            std::env::set_var("GIT_WORK_TREE", "/decoy");
+            std::env::set_var("GIT_INDEX_FILE", "/decoy/index");
+        }
+        let out = spawn_command(
+            "printf '%s|%s|%s' \"${GIT_DIR:-cleared}\" \"${GIT_WORK_TREE:-cleared}\" \"${GIT_INDEX_FILE:-cleared}\"",
+            Path::new("."),
+            &BTreeMap::new(),
+            "probe",
+        )
+        .expect("probe command runs");
+        // SAFETY: cleanup before asserting so a failure never leaks the decoy env.
+        unsafe {
+            std::env::remove_var("GIT_DIR");
+            std::env::remove_var("GIT_WORK_TREE");
+            std::env::remove_var("GIT_INDEX_FILE");
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "cleared|cleared|cleared",
+            "the test gate must not leak an inherited git env into the test command"
+        );
     }
 
     /// `ci_skip=true` targets still run OUTSIDE CI (local dev loop).
