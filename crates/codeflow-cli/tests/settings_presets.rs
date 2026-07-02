@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
-/// The known hook subcommands wired by the presets (charter §3.3).
-const HOOK_NAMES: [&str; 3] = ["git-guard", "session-orient", "session-summary"];
+/// The known hook subcommands wired by the presets (charter §3.3; the
+/// `exec-guard` security stage added in ADR-0008).
+const HOOK_NAMES: [&str; 4] = ["git-guard", "exec-guard", "session-orient", "session-summary"];
 
 /// Hardcoded union of top-level keys actually used across the three presets.
 /// A typo'd or stray key in any preset fails here; a deliberate new key means
@@ -114,6 +115,138 @@ fn deny_rules_cover_secret_files() {
         );
         assert!(has("*credentials*"), "{name}: *credentials* must be deny-read");
     }
+}
+
+/// Collect a `permissions.<key>` array as owned strings.
+fn perm_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value["permissions"][key]
+        .as_array()
+        .unwrap_or_else(|| panic!("permissions.{key} missing"))
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn exec_guard_wired_in_every_preset() {
+    // The security stage rides the same PreToolUse (Bash) matcher as git-guard.
+    for name in PRESET_FILES {
+        let value = load(name);
+        let mut commands = Vec::new();
+        collect_hook_commands(&value["hooks"], &mut commands);
+        assert!(
+            commands.iter().any(|c| c == "codeflow hook exec-guard"),
+            "{name}: exec-guard hook not wired"
+        );
+    }
+}
+
+#[test]
+fn allow_arrays_grant_project_autonomy() {
+    // The autonomy posture (ADR-0008): the common project toolchain runs
+    // promptless. Spot-check a representative entry from each family.
+    let expected = [
+        "Bash(cargo *)",
+        "Bash(codeflow *)",
+        "Bash(git commit *)",
+        "Bash(git push *)",
+        "Bash(gh pr create *)",
+        "Bash(npm test *)",
+        "Bash(python3 *)",
+        "Bash(uv *)",
+        "WebSearch",
+        "WebFetch(domain:docs.rs)",
+    ];
+    for name in PRESET_FILES {
+        let allow = perm_array(&load(name), "allow");
+        for entry in expected {
+            assert!(
+                allow.iter().any(|a| a == entry),
+                "{name}: allow missing {entry:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ask_arrays_gate_escalation_and_publish() {
+    // Hard protections stay: privilege escalation and irreversible publish/
+    // delete are prompted even under the most permissive preset (an `ask` rule
+    // fires in bypassPermissions mode too).
+    let expected = [
+        "Bash(sudo *)",
+        "Bash(su *)",
+        "Bash(doas *)",
+        "Bash(cargo publish *)",
+        "Bash(npm publish *)",
+        "Bash(gh release *)",
+        "Bash(gh repo delete *)",
+    ];
+    for name in PRESET_FILES {
+        let ask = perm_array(&load(name), "ask");
+        for entry in expected {
+            assert!(ask.iter().any(|a| a == entry), "{name}: ask missing {entry:?}");
+        }
+        // rm -rf on / and ~ is asked in some form.
+        assert!(
+            ask.iter().any(|a| a.starts_with("Bash(rm -") && a.contains('/')),
+            "{name}: ask missing an rm -rf / rule"
+        );
+        assert!(
+            ask.iter().any(|a| a.starts_with("Bash(rm -") && a.contains('~')),
+            "{name}: ask missing an rm -rf ~ rule"
+        );
+    }
+}
+
+#[test]
+fn deny_extends_to_home_credential_stores() {
+    // Read protection reaches beyond the project cwd to the home-dir secret
+    // stores an agent must never read (ADR-0008), while keeping the cwd globs.
+    let home_stores = [
+        "Read(~/.ssh/**)",
+        "Read(~/.aws/**)",
+        "Read(~/.gnupg/**)",
+        "Read(~/.config/gh/**)",
+        "Read(~/.kube/**)",
+        "Read(~/.docker/config.json)",
+        "Read(~/.claude/**)",
+    ];
+    for name in PRESET_FILES {
+        let deny = perm_array(&load(name), "deny");
+        for entry in home_stores {
+            assert!(deny.iter().any(|d| d == entry), "{name}: deny missing {entry:?}");
+        }
+        assert!(
+            deny.iter().any(|d| d.contains(".cargo/credentials")),
+            "{name}: deny missing ~/.cargo/credentials"
+        );
+        // The original cwd globs survive alongside the new home-dir rules.
+        assert!(deny.iter().any(|d| d == "Read(**/.env)"), "{name}: lost cwd .env deny");
+    }
+}
+
+#[test]
+fn bypass_sandbox_uses_schema_keys() {
+    // Regression for ADR-0008: the sandbox network key is `allowedDomains`
+    // (schema), NOT the pre-parity `allowedHosts`; and OS-level read blocking
+    // is wired via `filesystem.denyRead`.
+    let value = load("bypass-sandboxed.json");
+    let sandbox = &value["sandbox"];
+    assert!(
+        sandbox["network"].get("allowedHosts").is_none(),
+        "allowedHosts is not a schema key — must be allowedDomains"
+    );
+    let domains = sandbox["network"]["allowedDomains"]
+        .as_array()
+        .expect("sandbox.network.allowedDomains array");
+    assert!(domains.iter().any(|d| d == "github.com"));
+    let deny_read = sandbox["filesystem"]["denyRead"]
+        .as_array()
+        .expect("sandbox.filesystem.denyRead array");
+    let deny_read: Vec<&str> = deny_read.iter().filter_map(serde_json::Value::as_str).collect();
+    assert!(deny_read.contains(&"~/.ssh"), "denyRead missing ~/.ssh");
+    assert!(deny_read.contains(&"~/.aws"), "denyRead missing ~/.aws");
 }
 
 #[test]

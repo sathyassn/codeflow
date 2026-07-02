@@ -34,10 +34,14 @@ fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result
     let one_liner = ask(input, "Product one-liner (what is this project?)", &name)?;
     let areas = ask(input, "Areas (comma-separated)", "core")?;
     let preset = loop {
+        // Default to acceptEdits: the owner autonomy posture (ADR-0008) makes
+        // promptless project-scoped work the out-of-the-box experience. The
+        // choice stays the user's — the deny/ask tiers and the guard hooks are
+        // the protections, not the permission mode.
         let answer = ask(
             input,
             "Permission preset (default | acceptEdits | bypassPermissions)",
-            "default",
+            "acceptEdits",
         )?;
         match answer.as_str() {
             "default" | "acceptEdits" | "bypassPermissions" => break answer,
@@ -84,11 +88,12 @@ mod tests {
 
     #[test]
     fn empty_input_keeps_every_default() {
-        // Closed stdin (EOF on every question) behaves like --yes.
+        // Closed stdin (EOF on every question) behaves like --yes. The preset
+        // default is acceptEdits — the owner autonomy posture (ADR-0008).
         let answers = gather("");
         assert_eq!(answers.product_one_liner.as_deref(), Some("myproj"));
         assert_eq!(answers.areas, Some(vec!["core".to_string()]));
-        assert_eq!(answers.permission_preset.as_deref(), Some("default"));
+        assert_eq!(answers.permission_preset.as_deref(), Some("acceptEdits"));
     }
 
     #[test]
@@ -96,7 +101,7 @@ mod tests {
         let answers = gather("\n\n\n");
         assert_eq!(answers.product_one_liner.as_deref(), Some("myproj"));
         assert_eq!(answers.areas, Some(vec!["core".to_string()]));
-        assert_eq!(answers.permission_preset.as_deref(), Some("default"));
+        assert_eq!(answers.permission_preset.as_deref(), Some("acceptEdits"));
     }
 
     #[test]

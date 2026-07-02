@@ -87,7 +87,10 @@ pub fn init(
         .permission_preset
         .clone()
         .or_else(|| previous.as_ref().map(|s| s.permission_preset.clone()))
-        .unwrap_or_else(|| "default".to_string());
+        // Owner autonomy posture (ADR-0008): a brand-new init with no answer
+        // defaults to acceptEdits, not `default`. An existing repo keeps its
+        // recorded preset (the `.or_else` above), so update never surprises.
+        .unwrap_or_else(|| "acceptEdits".to_string());
     let areas = opts
         .answers
         .areas
