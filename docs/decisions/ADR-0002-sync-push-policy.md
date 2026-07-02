@@ -2,8 +2,8 @@
 id: ADR-0002
 title: sync push policy — push_to_protected warn on this repo
 date: 2026-06-12
-status: accepted
-superseded_by: null
+status: superseded
+superseded_by: ADR-0006
 architecture_impact: none
 ---
 
