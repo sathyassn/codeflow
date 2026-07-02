@@ -126,8 +126,12 @@ point of the doctrine: a delegate's commits pass through **CodeFlow's existing
 gates unchanged** — pre-commit secret scan, commit-msg format and
 no-AI-attribution, the test gate, and an independent `cf-reviewer` pass judge
 its work exactly as they judge Claude's. Enforcement is author-agnostic, so a
-delegate cannot lower the bar. Review the handoff before it ships; a delegate's
-output is a proposal, not a merge.
+delegate cannot lower the bar. The git-hook plane is harness-agnostic by design:
+the protected-branch merge and ref guards (`pre-merge-commit`,
+`reference-transaction`) bind a delegate exactly as they bind any agent, so it
+cannot ff-merge, `reset --hard`, or delete a protected branch. Review the
+handoff before it ships; a delegate's output is a proposal, not a merge — a
+human lands it.
 
 ## Interactive tier — the official plugin
 

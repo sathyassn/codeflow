@@ -18,7 +18,10 @@ Ship this work: $ARGUMENTS
 3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
 4. Push and open the PR. Body: summary, changes, test results, linked epic and
    capability IDs. No AI attribution, no emoji.
-5. Land via PR + green CI, or `codeflow integrate <branch> --into <target>`
-   when there is no remote. Never merge into a protected branch by hand.
+5. Land via a PR **merged by a human** on green CI, or `codeflow integrate
+   <branch> --into <target>` when there is no remote. An agent never merges into
+   a protected branch — no `gh pr merge` into a protected base, no by-hand
+   merge, and never `gh pr merge --delete-branch`. Override envs
+   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 6. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.

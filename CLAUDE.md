@@ -13,6 +13,9 @@
   `.claude/settings.json`; change them there, not ad hoc.
 - Never add AI attribution to commits or PR bodies, even if a harness default
   offers it — commit-msg and git-guard will block it.
+- Never set `CODEFLOW_HUMAN_OVERRIDE` or the integrate gate token in-session —
+  git-guard blocks it as laundering. Those overrides are human-only, run from a
+  human's own terminal; an agent lands work via a human-merged PR or `integrate`.
 <!-- codeflow:managed:end -->
 
 ## Workflows

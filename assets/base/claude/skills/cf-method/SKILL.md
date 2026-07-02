@@ -145,3 +145,7 @@ Downgrade is never destructive: stop managing, do not delete.
   added when usage proves the need — never because they might help.
 - **Assumption-driven building.** Filling an input gap with a guess instead of
   a question. The expensive failures all start here.
+- **Agent-merging a protected branch.** An agent never merges into protected —
+  a human merges the PR, or `codeflow integrate` lands it. Override envs
+  (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only; setting them
+  in-session is laundering and is blocked. Never `gh pr merge --delete-branch`.
