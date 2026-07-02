@@ -70,6 +70,14 @@ pub struct GitPolicy {
     /// A `gh pr merge` whose base branch is protected (git-guard only). A
     /// human merges via the GitHub UI or their own terminal; agents do not.
     pub pr_merge_to_protected: PolicyLevel,
+    /// Any local update of a protected branch ref that did not come from the
+    /// remote — the harness-agnostic backstop enforced by git's
+    /// `reference-transaction` hook (ADR-0007). Catches what classic client
+    /// hooks miss: fast-forward merges, `reset --hard`, and `branch -D` on a
+    /// protected branch. A move to (or behind) the remote-tracking head is a
+    /// legitimate sync and is allowed; the integrate token and human override
+    /// pass. Deletion is governed by `delete_protected`.
+    pub local_ref_protection: PolicyLevel,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     pub ai_attribution: PolicyLevel,
@@ -92,6 +100,7 @@ impl Default for GitPolicy {
             hard_reset_protected: PolicyLevel::Block,
             merge_to_protected: PolicyLevel::Block,
             pr_merge_to_protected: PolicyLevel::Block,
+            local_ref_protection: PolicyLevel::Block,
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build",
@@ -215,6 +224,7 @@ impl GitPolicy {
         self.hard_reset_protected = PolicyLevel::Off;
         self.merge_to_protected = PolicyLevel::Off;
         self.pr_merge_to_protected = PolicyLevel::Off;
+        self.local_ref_protection = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
@@ -259,6 +269,7 @@ mod tests {
         assert_eq!(g.hard_reset_protected, PolicyLevel::Block);
         assert_eq!(g.merge_to_protected, PolicyLevel::Block);
         assert_eq!(g.pr_merge_to_protected, PolicyLevel::Block);
+        assert_eq!(g.local_ref_protection, PolicyLevel::Block);
         assert_eq!(g.commit_format, PolicyLevel::Block);
         assert_eq!(g.commit_types.len(), 10);
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
@@ -286,6 +297,10 @@ mod tests {
         assert_eq!(
             from_asset.git.pr_merge_to_protected,
             defaults.pr_merge_to_protected
+        );
+        assert_eq!(
+            from_asset.git.local_ref_protection,
+            defaults.local_ref_protection
         );
         assert_eq!(
             from_asset.git.force_push_unprotected,
@@ -403,6 +418,7 @@ mod tests {
         assert_eq!(policy.git.push_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.merge_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.pr_merge_to_protected, PolicyLevel::Off);
+        assert_eq!(policy.git.local_ref_protection, PolicyLevel::Off);
         assert_eq!(policy.git.commit_format, PolicyLevel::Off);
         // Secrets are never graced (charter §6.3).
         assert_eq!(policy.git.secret_scan, PolicyLevel::Block);

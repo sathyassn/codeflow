@@ -247,6 +247,130 @@ pub fn pre_merge_commit(
 }
 
 // ---------------------------------------------------------------------------
+// reference-transaction
+// ---------------------------------------------------------------------------
+
+/// `true` when a `reference-transaction` stdin line updates a local branch
+/// (`refs/heads/…`). The cheap first-pass filter: remote-tracking refs, tags,
+/// stash, and `HEAD` are out of scope, so a fetch touching hundreds of
+/// `refs/remotes/…` never reaches policy evaluation.
+#[must_use]
+pub fn ref_line_touches_local_branch(line: &str) -> bool {
+    line.split_whitespace()
+        .nth(2)
+        .is_some_and(|r| r.starts_with("refs/heads/"))
+}
+
+/// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
+/// harness-agnostic backstop that classic client hooks miss. Git calls it
+/// during ref updates; on the `prepared` state a non-zero exit cancels the
+/// whole transaction.
+///
+/// For each `refs/heads/<protected>` update it enforces `local_ref_protection`
+/// (and `delete_protected` for deletions). A move to — or behind — the
+/// `refs/remotes/origin/<branch>` head is a legitimate sync (`git pull`,
+/// fetch fast-forward, branch creation from the remote) and passes; any other
+/// local move (a fast-forward merge, `reset --hard`, a local commit not yet on
+/// the remote) blocks. The integrate gate token and the human override pass.
+///
+/// Git < 2.28 never invokes this hook — the protection then degrades to the
+/// other planes, gracefully and silently (charter principle 8).
+///
+/// # Errors
+///
+/// Returns [`HookError::Config`] when `root` is not inside a git repository.
+pub fn reference_transaction(
+    root: &Path,
+    policy: &GitPolicy,
+    stdin: &str,
+    integrate_token: bool,
+    human_override: bool,
+) -> Result<StageReport, HookError> {
+    let mut report = StageReport::default();
+    if !policy.local_ref_protection.is_active() && !policy.delete_protected.is_active() {
+        return Ok(report); // nothing this stage enforces is on
+    }
+
+    let repo = Repository::discover(root)
+        .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
+    // The integrate token and a human's override sanction the transaction
+    // (git layer only — the git-guard never trusts the human override).
+    let sanctioned = integrate_token || human_override;
+
+    for line in stdin.lines() {
+        let Some((_old_oid, new_oid, refname)) = parse_ref_line(line) else {
+            continue;
+        };
+        let Some(branch) = refname.strip_prefix("refs/heads/") else {
+            continue;
+        };
+        if !policy.branch_is_protected(branch) {
+            continue; // feature branches stay fully free (rebase, force, etc.)
+        }
+
+        // Deletion (new-oid all zeros): governed by delete_protected, which
+        // never had a client-hook reach before (`git branch -D` fired nothing).
+        if is_zero_sha(new_oid) {
+            if policy.delete_protected.is_active() && !sanctioned {
+                report.violations.push(Violation::new(
+                    "git.delete_protected",
+                    policy.delete_protected,
+                    format!("deleting protected branch '{branch}' via a local ref update"),
+                    "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                ));
+            }
+            continue;
+        }
+
+        if !policy.local_ref_protection.is_active() || sanctioned {
+            continue;
+        }
+        // Allow a sync: the new tip is the remote-tracking head or an ancestor
+        // of it. Anything else is a local move that has not been through the
+        // remote (PR/CI) — block it.
+        if new_is_remote_head_or_ancestor(&repo, branch, new_oid) {
+            continue;
+        }
+        report.violations.push(Violation::new(
+            "git.local_ref_protection",
+            policy.local_ref_protection,
+            format!("local update of protected branch '{branch}' that is not a sync from origin"),
+            SANCTIONED.to_string(),
+        ));
+    }
+    Ok(report)
+}
+
+/// Parse one `<old-oid> <new-oid> <ref-name>` reference-transaction line.
+fn parse_ref_line(line: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = line.split_whitespace();
+    let old = parts.next()?;
+    let new = parts.next()?;
+    let refname = parts.next()?;
+    Some((old, new, refname))
+}
+
+/// `true` when `new_oid` equals `refs/remotes/origin/<branch>` or is an
+/// ancestor of it (a fetch-consistent sync). Absent remote-tracking ref or an
+/// unparsable oid means "cannot prove a sync" — the caller then blocks.
+fn new_is_remote_head_or_ancestor(repo: &Repository, branch: &str, new_oid: &str) -> bool {
+    let Ok(reference) = repo.find_reference(&format!("refs/remotes/origin/{branch}")) else {
+        return false;
+    };
+    let Some(remote_oid) = reference.target() else {
+        return false;
+    };
+    let Ok(new) = git2::Oid::from_str(new_oid) else {
+        return false;
+    };
+    if new == remote_oid {
+        return true;
+    }
+    // remote head descends from new  <=>  new is an ancestor of remote head.
+    repo.graph_descendant_of(remote_oid, new).unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
 // pre-push
 // ---------------------------------------------------------------------------
 
@@ -751,25 +875,176 @@ mod tests {
         assert_eq!(report.violations[0].rule, "git.merge_to_protected");
     }
 
+    // -- reference-transaction --
+
     #[test]
-    fn ff_merge_fires_no_client_hook() {
-        // Pins the honest boundary (ADR-0007): git runs pre-merge-commit only
-        // for a real merge COMMIT (non-fast-forward). A fast-forward merge
-        // creates no commit and fires no client hook, so it slips past this
-        // plane — caught only by the in-session git-guard; the push gate +
-        // remote protection stay the perimeter for other harnesses (D19).
+    fn test_ref_line_touches_local_branch() {
+        assert!(ref_line_touches_local_branch("aaa bbb refs/heads/main"));
+        assert!(ref_line_touches_local_branch("aaa bbb refs/heads/release/2.0"));
+        assert!(!ref_line_touches_local_branch("aaa bbb refs/remotes/origin/main"));
+        assert!(!ref_line_touches_local_branch("aaa bbb refs/tags/v1"));
+        assert!(!ref_line_touches_local_branch("aaa bbb HEAD"));
+        assert!(!ref_line_touches_local_branch("garbage line"));
+    }
+
+    /// Point `refs/remotes/origin/<branch>` at `oid` (a simulated fetched head).
+    fn set_origin_ref(dir: &Path, branch: &str, oid: &str) {
+        git(dir, &["update-ref", &format!("refs/remotes/origin/{branch}"), oid]);
+    }
+
+    const ZERO40: &str = "0000000000000000000000000000000000000000";
+    const FAKE40: &str = "1111111111111111111111111111111111111111";
+
+    #[test]
+    fn test_reference_transaction_blocks_local_move_ahead_of_origin() {
+        // A ff-merge / local commit moves main ahead of origin — blocked.
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: local"]);
+        let ahead = rev_parse(dir.path(), "HEAD");
+        let stdin = format!("{base} {ahead} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].rule, "git.local_ref_protection");
+        assert_eq!(report.violations[0].level, PolicyLevel::Block);
+    }
 
-        // An always-blocking pre-merge-commit hook. If it fires, the merge fails.
-        let hook = dir.path().join(".git/hooks/pre-merge-commit");
-        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+    #[test]
+    fn test_reference_transaction_allows_sync_to_origin_head() {
+        // main moved to exactly origin/main (a `git pull` fast-forward) — allowed.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: x"]);
+        let new = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &new);
+        let stdin = format!("{ZERO40} {new} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
 
+    #[test]
+    fn test_reference_transaction_allows_move_behind_origin() {
+        // main reset to an ancestor of origin/main — a sync-consistent state.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: ahead"]);
+        let ahead = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &ahead);
+        let stdin = format!("{ahead} {base} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_reference_transaction_feature_branch_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        let stdin = "aaa bbb refs/heads/feat/x\n";
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), stdin, false, false).unwrap();
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_reference_transaction_delete_protected_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let head = rev_parse(dir.path(), "HEAD");
+        let stdin = format!("{head} {ZERO40} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations[0].rule, "git.delete_protected");
+    }
+
+    #[test]
+    fn test_reference_transaction_token_and_override_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let head = rev_parse(dir.path(), "HEAD");
+        let stdin = format!("{head} {FAKE40} refs/heads/main\n");
+        // integrate token sanctions the git layer...
+        assert!(
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, true, false)
+                .unwrap()
+                .violations
+                .is_empty()
+        );
+        // ...and so does a human's override.
+        assert!(
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, true)
+                .unwrap()
+                .violations
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_reference_transaction_warn_level() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let head = rev_parse(dir.path(), "HEAD");
+        let policy = GitPolicy {
+            local_ref_protection: PolicyLevel::Warn,
+            ..GitPolicy::default()
+        };
+        let stdin = format!("{head} {FAKE40} refs/heads/main\n");
+        let report = reference_transaction(dir.path(), &policy, &stdin, false, false).unwrap();
+        assert_eq!(report.violations[0].level, PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_reference_transaction_off_still_blocks_delete() {
+        // local_ref_protection off → local moves allowed, but delete_protected
+        // still blocks a protected-branch deletion (its own key).
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let head = rev_parse(dir.path(), "HEAD");
+        let policy = GitPolicy {
+            local_ref_protection: PolicyLevel::Off,
+            ..GitPolicy::default()
+        };
+        let move_ahead = format!("{head} {FAKE40} refs/heads/main\n");
+        assert!(
+            reference_transaction(dir.path(), &policy, &move_ahead, false, false)
+                .unwrap()
+                .violations
+                .is_empty()
+        );
+        let delete = format!("{head} {ZERO40} refs/heads/main\n");
+        let report = reference_transaction(dir.path(), &policy, &delete, false, false).unwrap();
+        assert_eq!(report.violations[0].rule, "git.delete_protected");
+    }
+
+    #[test]
+    fn reference_transaction_closes_the_ff_merge_gap() {
+        // ADR-0007 boundary, now CLOSED. A fast-forward merge creates no commit
+        // (pre-merge-commit never fires) but it DOES move refs/heads/main, which
+        // fires reference-transaction. Proven at the git level: pre-merge-commit
+        // misses the ff-merge; reference-transaction catches the same move.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+
+        let set_exec = |p: &Path| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let _ = p;
+        };
         let git_try = |args: &[&str]| {
             Command::new("git")
                 .args(args)
@@ -780,32 +1055,33 @@ mod tests {
                 .expect("git runs")
         };
 
-        // Branch one commit ahead of main → merging it back fast-forwards.
+        // A branch one commit ahead → merging it back fast-forwards.
         git(dir.path(), &["checkout", "-b", "feat/ff"]);
         std::fs::write(dir.path().join("ff.txt"), "ff\n").unwrap();
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-m", "feat: ff"]);
         git(dir.path(), &["checkout", "main"]);
+
+        // (1) Only pre-merge-commit wired (always-block): the ff-merge slips past.
+        let pmc = dir.path().join(".git/hooks/pre-merge-commit");
+        std::fs::write(&pmc, "#!/bin/sh\nexit 1\n").unwrap();
+        set_exec(&pmc);
         let ff = git_try(&["merge", "--ff-only", "feat/ff"]);
         assert!(
             ff.status.success(),
-            "fast-forward merge fires no client hook, so the always-block hook never runs: {}",
-            String::from_utf8_lossy(&ff.stderr)
+            "pre-merge-commit does not fire on a fast-forward merge"
         );
 
-        // Now diverge main from a sibling branch to force a real merge commit.
-        git(dir.path(), &["checkout", "-b", "feat/div"]);
-        std::fs::write(dir.path().join("div.txt"), "div\n").unwrap();
-        git(dir.path(), &["add", "."]);
-        git(dir.path(), &["commit", "-m", "feat: div"]);
-        git(dir.path(), &["checkout", "main"]);
-        std::fs::write(dir.path().join("main.txt"), "main\n").unwrap();
-        git(dir.path(), &["add", "."]);
-        git(dir.path(), &["commit", "-m", "chore: main advance"]);
-        let non_ff = git_try(&["merge", "--no-ff", "feat/div"]);
+        // Reset main back (no reference-transaction hook wired yet), then wire
+        // an always-blocking reference-transaction and retry the same ff-merge.
+        git(dir.path(), &["reset", "--hard", &base]);
+        let rt = dir.path().join(".git/hooks/reference-transaction");
+        std::fs::write(&rt, "#!/bin/sh\n[ \"$1\" = prepared ] && exit 1\nexit 0\n").unwrap();
+        set_exec(&rt);
+        let ff2 = git_try(&["merge", "--ff-only", "feat/ff"]);
         assert!(
-            !non_ff.status.success(),
-            "a non-ff merge creates a commit and DOES fire pre-merge-commit"
+            !ff2.status.success(),
+            "reference-transaction fires on the ff-merge's ref update and closes the gap"
         );
     }
 

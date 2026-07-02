@@ -95,7 +95,7 @@ impl Options {
 }
 
 /// Hook subcommands that must be functional (charter section 3.3): the
-/// three Claude-layer hooks plus the three git-hook shims.
+/// three Claude-layer hooks plus the five git-hook shims.
 const HOOK_SUBCOMMANDS: &[(&str, &str)] = &[
     ("hook", "git-guard"),
     ("hook", "session-orient"),
@@ -103,6 +103,7 @@ const HOOK_SUBCOMMANDS: &[(&str, &str)] = &[
     ("git-hook", "pre-commit"),
     ("git-hook", "commit-msg"),
     ("git-hook", "pre-merge-commit"),
+    ("git-hook", "reference-transaction"),
     ("git-hook", "pre-push"),
 ];
 
@@ -640,7 +641,7 @@ mod tests {
         let result = check_hooks(&opts);
         assert_eq!(result.status, Status::Pass);
         assert!(result.message.contains("functional"));
-        assert!(result.message.contains('7'));
+        assert!(result.message.contains('8'));
     }
 
     #[test]

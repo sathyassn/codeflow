@@ -13,6 +13,7 @@
     "hard_reset_protected": "block",
     "merge_to_protected": "block",
     "pr_merge_to_protected": "block",
+    "local_ref_protection": "block",
     "commit_format": "block",
     "commit_types": [
       "feat",

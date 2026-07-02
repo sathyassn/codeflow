@@ -607,5 +607,6 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&softened).unwrap();
         assert_eq!(v["git"]["merge_to_protected"], "warn");
         assert_eq!(v["git"]["pr_merge_to_protected"], "warn");
+        assert_eq!(v["git"]["local_ref_protection"], "warn");
     }
 }

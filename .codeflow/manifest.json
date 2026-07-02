@@ -56,6 +56,12 @@
       "sha256": "e8b0cdabc38fd4689dc85ee542a1e0484aef4423ee9b405bbde8adca809b6bbf",
       "exec": true
     },
+    ".codeflow/git-hooks/reference-transaction": {
+      "src": "git-hooks/reference-transaction",
+      "ownership": "managed",
+      "sha256": "a014d53cba6760bbe612239a322313d5cb103d176169520e3de219bfad4700ee",
+      "exec": true
+    },
     ".codeflow/git-hooks/pre-push": {
       "src": "git-hooks/pre-push",
       "ownership": "managed",

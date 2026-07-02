@@ -371,19 +371,28 @@ fn pre_merge_commit_passes_on_feature_branch() {
 }
 
 #[test]
-fn real_wired_pre_merge_commit_blocks_nonff_but_ff_slips_past() {
-    // The full plane through git: the wired pre-merge-commit shim refuses a
-    // non-ff merge onto main, but a fast-forward merge fires no client hook
-    // and slips past (the honest boundary, ADR-0007).
+fn real_wired_reference_transaction_closes_ff_merge_gap() {
+    // The full plane through git (ADR-0007), boundary now CLOSED. A
+    // fast-forward merge fires no pre-merge-commit (no commit is created) but
+    // it moves refs/heads/main, which fires reference-transaction — so the
+    // ff-merge onto a protected branch is refused harness-agnostically, and a
+    // human's override still passes.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
 
-    let hook = dir.path().join(".git/hooks/pre-merge-commit");
+    // A fast-forwardable branch, built before the ref hook is wired.
+    git(dir.path(), &["checkout", "-b", "feat/ff"]);
+    std::fs::write(dir.path().join("ff.txt"), "ff\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "feat: ff"]);
+    git(dir.path(), &["checkout", "main"]);
+
+    let hook = dir.path().join(".git/hooks/reference-transaction");
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
     std::fs::write(
         &hook,
         format!(
-            "#!/bin/sh\nexec '{}' git-hook pre-merge-commit \"$@\"\n",
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
             env!("CARGO_BIN_EXE_codeflow")
         ),
     )
@@ -394,7 +403,64 @@ fn real_wired_pre_merge_commit_blocks_nonff_but_ff_slips_past() {
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let git_merge = |args: &[&str]| {
+    // ff-merge onto protected main is now refused at the git layer.
+    let ff = Command::new("git")
+        .args(["merge", "--ff-only", "feat/ff"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .unwrap();
+    assert!(!ff.status.success(), "ff-merge into protected is now refused");
+    assert!(String::from_utf8_lossy(&ff.stderr).contains("git.local_ref_protection"));
+
+    // A human's CODEFLOW_HUMAN_OVERRIDE=1 lets the same ff-merge through.
+    let ff_human = Command::new("git")
+        .args(["merge", "--ff-only", "feat/ff"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_HUMAN_OVERRIDE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        ff_human.status.success(),
+        "human override passes the git layer: {}",
+        String::from_utf8_lossy(&ff_human.stderr)
+    );
+}
+
+#[test]
+fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_protected() {
+    // The two ref updates classic client hooks never saw: `reset --hard` and
+    // `branch -D` on a protected branch (ADR-0007), now caught at the git layer.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: two"]);
+    // A protected sibling (master is protected by default) to attempt deleting.
+    git(dir.path(), &["branch", "master"]);
+
+    let hook = dir.path().join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let git_run = |args: &[&str]| {
         Command::new("git")
             .args(args)
             .current_dir(dir.path())
@@ -406,27 +472,15 @@ fn real_wired_pre_merge_commit_blocks_nonff_but_ff_slips_past() {
             .unwrap()
     };
 
-    // Fast-forwardable branch: merge succeeds despite the block (no hook fires).
-    git(dir.path(), &["checkout", "-b", "feat/ff"]);
-    std::fs::write(dir.path().join("ff.txt"), "ff\n").unwrap();
-    git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-m", "feat: ff"]);
-    git(dir.path(), &["checkout", "main"]);
-    let ff = git_merge(&["merge", "--ff-only", "feat/ff"]);
-    assert!(ff.status.success(), "ff-merge fires no client hook, so it slips past");
+    // reset --hard on protected main is refused.
+    let reset = git_run(&["reset", "--hard", "HEAD~1"]);
+    assert!(!reset.status.success(), "reset --hard on protected is refused");
+    assert!(String::from_utf8_lossy(&reset.stderr).contains("git.local_ref_protection"));
 
-    // Diverge, forcing a real merge commit: the wired hook now refuses it.
-    git(dir.path(), &["checkout", "-b", "feat/div"]);
-    std::fs::write(dir.path().join("div.txt"), "div\n").unwrap();
-    git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-m", "feat: div"]);
-    git(dir.path(), &["checkout", "main"]);
-    std::fs::write(dir.path().join("main.txt"), "main\n").unwrap();
-    git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-m", "chore: advance"]);
-    let non_ff = git_merge(&["merge", "--no-ff", "feat/div"]);
-    assert!(!non_ff.status.success(), "non-ff merge onto main is refused by the wired hook");
-    assert!(String::from_utf8_lossy(&non_ff.stderr).contains("git.merge_to_protected"));
+    // branch -D of a protected branch is refused (via delete_protected).
+    let del = git_run(&["branch", "-D", "master"]);
+    assert!(!del.status.success(), "branch -D of a protected branch is refused");
+    assert!(String::from_utf8_lossy(&del.stderr).contains("git.delete_protected"));
 }
 
 #[test]

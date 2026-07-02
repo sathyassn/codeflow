@@ -14,6 +14,7 @@ pub enum StageName {
     PreCommit,
     CommitMsg,
     PreMergeCommit,
+    ReferenceTransaction,
     PrePush,
 }
 
@@ -33,6 +34,15 @@ pub struct GitHookArgs {
 pub fn run(args: &GitHookArgs) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = super::project_root(&cwd);
+
+    // reference-transaction fires on every ref update, including the hundreds
+    // of remote-tracking refs a `git fetch` touches. Short-circuit before any
+    // policy load or full stdin parse when it cannot apply (charter §6.1
+    // performance note; ADR-0007).
+    if let StageName::ReferenceTransaction = args.stage {
+        return run_reference_transaction(&root, &args.args);
+    }
+
     let (policy, _armed) = Policy::load_effective(&root);
     let token = super::integrate_token_present();
 
@@ -48,6 +58,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 super::human_override_present(),
             ),
         ),
+        StageName::ReferenceTransaction => unreachable!("handled above"),
         StageName::PrePush => {
             let mut stdin = String::new();
             let _ = std::io::stdin().read_to_string(&mut stdin);
@@ -62,6 +73,38 @@ pub fn run(args: &GitHookArgs) -> i32 {
             // A hook that cannot evaluate must not block work invisibly:
             // report and pass (CI remains the hard line, charter D19).
             eprintln!("codeflow {plane}: warning: {e} — check skipped");
+            0
+        }
+    }
+}
+
+/// Handle `git-hook reference-transaction <state>`. Exit 1 on the `prepared`
+/// state cancels the transaction; every other path exits 0.
+fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
+    // Only the `prepared` phase can cancel a transaction; `committed`/`aborted`
+    // are notifications. Bail before touching stdin or policy.
+    if args.first().map(String::as_str) != Some("prepared") {
+        return 0;
+    }
+    let mut stdin = String::new();
+    if std::io::stdin().read_to_string(&mut stdin).is_err() {
+        return 0;
+    }
+    // Fast path: no local-branch update in this transaction (e.g. a fetch that
+    // only moved remote-tracking refs) — allow without loading policy.
+    if !stdin.lines().any(git_hook::ref_line_touches_local_branch) {
+        return 0;
+    }
+
+    let (policy, _armed) = Policy::load_effective(root);
+    let token = super::integrate_token_present();
+    let human = super::human_override_present();
+    match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
+        Ok(report) => {
+            super::render_outcome("reference-transaction", &report.violations, &report.notes, 1)
+        }
+        Err(e) => {
+            eprintln!("codeflow reference-transaction: warning: {e} — check skipped");
             0
         }
     }

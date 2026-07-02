@@ -123,6 +123,13 @@ ownership = "managed"
 tiers = ["standard", "full"]
 exec = true
 
+[[entry]]
+src = "git-hooks/reference-transaction"
+dest = ".codeflow/git-hooks/reference-transaction"
+ownership = "managed"
+tiers = ["standard", "full"]
+exec = true
+
 # --- Claude settings presets (exactly one applies, chosen at init) -----------
 
 [[entry]]
