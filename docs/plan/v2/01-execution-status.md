@@ -79,3 +79,21 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - Coverage/CI job root cause — 5 environment-dependent tests (the conflict helper
   and the doctor probe) — fixed in the parallel engine PR, so the suite is green
   in CI, not just locally.
+- Audit cycle closed (2026-07-02): the docs-truth + test-truth audit's 12 verified
+  defects fixed across three PRs — #331 (test-gate vocabulary so quick resolves and
+  the pre-push gate fires; managed-region wrap dedup; recursive flat+nested epic
+  discovery; runner-env test fixes incl. a production rebase-identity fallback and
+  a gh BrokenPipe race; real CI perimeter: from-source gates, blocking rust job,
+  pinned toolchain, gitleaks binary + allowlist), #332 (real product/architecture
+  content, adoption doc, capability epics[] spine populated, overclaims corrected,
+  cf-delegate write invocation live-verified), #333 (Epic model reads canonical
+  planning frontmatter; status counts hand-authored epics). Verified on merged
+  main: status "epics 1 / capabilities 9 shipped", validate --docs clean, doctor
+  6/6, quick test gate executing. Incident note: the root repo was found
+  core.bare=true with main checked out in a fix agent's worktree — recovered.
+  Attribution corrected after the agent's rebuttal: its refresh used only
+  fetch+merge from its own branch; the likelier trigger is `gh pr merge
+  --delete-branch` moving off a branch checked out in a worktree (integrator's
+  command), or the agent's sandbox-interrupted first worktree-add. Candidate
+  doctor check should detect the SYMPTOM (bare flag on a working repo,
+  protected branch checked out outside root) regardless of trigger.
