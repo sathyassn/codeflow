@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook git-guard", "timeout": 10 },
+          { "type": "command", "command": "codeflow hook exec-guard", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

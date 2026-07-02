@@ -156,6 +156,25 @@ region = "json"
 tiers = ["standard", "full"]
 preset = "bypassPermissions"
 
+# --- Codex starter (harness parity, ADR-0008) --------------------------------
+# The same `codeflow hook git-guard` / `codeflow hook exec-guard` binaries bind
+# Codex via .codex/hooks.json (byte-compatible PreToolUse payload); config.toml
+# enables the hooks engine and sets workspace autonomy. One-time trust via
+# `/hooks` inside codex. Fully managed: codeflow owns the harness wiring, with
+# the standard 3-way merge if a user edits their copy.
+
+[[entry]]
+src = "codex/hooks.json"
+dest = ".codex/hooks.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "codex/config.toml"
+dest = ".codex/config.toml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # --- Claude artifacts (charter §4.4 minimalism: 1 agent, 2 skills, 5 commands, 1 workflow;
 #     cf-stack is the agent-led stack setup (ADR-0003); cf-delegate + cf-consult
 #     are the cross-vendor delegation capability (ADR-0005), added when the

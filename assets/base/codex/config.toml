@@ -1,0 +1,24 @@
+# Codex config for a CodeFlow-managed repo (harness parity — ADR-0008).
+#
+# The same `codeflow hook git-guard` / `codeflow hook exec-guard` binaries that
+# bind a Claude session bind Codex here, via `.codex/hooks.json`. Their payload
+# contract is byte-compatible, so protection is identical across harnesses.
+#
+# ONE-TIME TRUST: Codex requires you to trust a hook source before it runs.
+# Run `/hooks` inside an interactive `codex` session once and approve the
+# CodeFlow hooks. For CI / headless `codex exec`, pass
+# `--dangerously-bypass-hook-trust` (only in an environment that already vets
+# the hook source — here, this repo's own committed config).
+
+# Workspace autonomy (owner posture): project-scoped work runs promptless.
+# `workspace-write` lets Codex edit the repo without approval; `on-request`
+# means it only asks when it needs to escalate BEYOND the workspace sandbox —
+# exactly where a human decision belongs. Tighten (`read-only` / `untrusted`)
+# or loosen (`never` for fully headless) per repo.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[features]
+# Enable the hooks engine (declared defensively; recent Codex enables it, but
+# an explicit value survives a default flip).
+hooks = true
