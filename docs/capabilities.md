@@ -153,3 +153,26 @@ deletion) with a legible report of anything the plan tier cannot apply.
 `codeflow doctor` reports the live enforcement matrix per plane — hooks,
 Claude wiring, config, permissions, network — so degradation is always
 visible, never silent.
+
+## CAP-009 — cross-vendor-delegation
+
+```yaml
+id: CAP-009
+name: cross-vendor-delegation
+area: scaffold
+status: shipped
+verified_by: ["cargo test doctor::tests::test_check_delegates", "live: codex exec --json consult + resume on registry.rs, thread 019f23e5-7bd7-7842-8a26-009e5a652759 (docs/plan/v2/01-execution-status.md)"]
+epics: []
+adrs: [ADR-0005]
+```
+
+Consult or delegate a unit of work to another vendor's coding CLI at the
+process boundary, each under its own subscription auth, with CodeFlow's gates
+judging the output author-agnostically (ADR-0005). `codex` is the primary tier
+(`codex exec --json` + `resume`, plus the official `codex-plugin-cc` documented
+as the interactive tier); Antigravity `agy` is a degraded, opt-in, read-only
+consult tier. It ships as Claude artifacts — the `cf-delegate` skill, the
+`cf-consult` command, and an optional `consult` pipeline stage — plus one
+deterministic `delegates` doctor check; delegates edit only inside a worktree on
+a feature branch, so pre-commit, commit-msg, the test gate, and `cf-reviewer`
+constrain them exactly as they do Claude. No engine orchestration code is added.
