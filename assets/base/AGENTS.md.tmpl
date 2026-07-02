@@ -74,6 +74,10 @@ Enforced by git hooks, the git-guard hook, remote protection, and CI — all rea
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
   can corrupt the root repo).
+- **Bodies of work:** a multi-task epic lands task-by-task on a non-protected
+  `integration/<epic>` branch (agents merge there); only the finished body
+  reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
+  work."
 - **PR bodies:** summary, changes, test results, linked epic/capability IDs.
 - When a gate blocks you, fix the cause — never bypass (`--no-verify`, editing
   hooks, exporting gate tokens). Gates exist only where mistakes are
