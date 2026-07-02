@@ -75,13 +75,43 @@ fn git_guard(stdin: &str) -> i32 {
         .map(|i| i.branch)
         .unwrap_or_default();
 
+    let lookup = gh_pr_base;
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
         current_branch: &branch,
         integrate_token: super::integrate_token_present(),
+        pr_base_lookup: Some(&lookup),
     };
     let violations = git_guard::evaluate(command, &ctx);
     super::render_outcome("git-guard", &violations, &[], 2)
+}
+
+/// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`
+/// (empty `arg` = the current branch's PR). Bounded (5s) and best-effort:
+/// any failure returns `None`, which the guard treats as doubt and blocks.
+fn gh_pr_base(arg: &str) -> Option<String> {
+    let arg = arg.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(gh_pr_base_blocking(&arg));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap_or(None)
+}
+
+fn gh_pr_base_blocking(arg: &str) -> Option<String> {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["pr", "view"]);
+    if !arg.is_empty() {
+        cmd.arg(arg);
+    }
+    cmd.args(["--json", "baseRefName", "-q", ".baseRefName"]);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let base = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!base.is_empty()).then_some(base)
 }
 
 fn session_summary(stdin: &str) -> i32 {
