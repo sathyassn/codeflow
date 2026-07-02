@@ -51,9 +51,11 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 `reset --hard`, and `branch -D` on protected, git ≥ 2.28), and `pre-push`
 (ADR-0007). The in-session guard plane is two handlers — `git-guard` (git
 policy) and `exec-guard` (the `security` section: destructive commands block,
-privilege escalation warns) — and binds Codex as well as Claude through a
-byte-compatible PreToolUse payload, wired per harness in `.claude/settings.json`
-and `.codex/hooks.json` (ADR-0008). PR-content checks (attribution/emoji,
+privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
+through a byte-compatible PreToolUse payload, for an interactive Codex session in
+`.codex/hooks.json` (ADR-0008; headless `codex exec` 0.142.5 does not run project
+PreToolUse hooks, so headless Codex relies on the git-hook plane). PR-content
+checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
 

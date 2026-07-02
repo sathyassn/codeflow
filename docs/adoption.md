@@ -144,11 +144,12 @@ backdoor to it. See cf-method's "Managing a body of work" for the full procedure
 ## Enforcement planes — who catches what
 
 One policy (`.codeflow/policy.json`), four planes. Git hooks are
-harness-agnostic (any agent or human); the in-session PreToolUse guards
-(`git-guard` + `exec-guard`) are a fast bonus that bind **both Claude and Codex**
-through a byte-compatible payload (ADR-0008); CI re-runs the gates as the
-perimeter; remote branch protection is the server-side backstop. Local planes
-are feedback — CI and remote are the authoritative line (charter §6.5).
+harness-agnostic (any agent or human — including Codex); the in-session
+PreToolUse guards (`git-guard` + `exec-guard`) are a fast bonus for Claude and,
+through a byte-compatible payload, an **interactive** Codex session (ADR-0008);
+CI re-runs the gates as the perimeter; remote branch protection is the
+server-side backstop. Local planes are feedback — CI and remote are the
+authoritative line (charter §6.5).
 
 | Protection | git hooks | in-session guard | CI | remote |
 |---|---|---|---|---|
@@ -186,21 +187,29 @@ Cross-vendor consult and delegation is opt-in (ADR-0005). One-time setup: run
 
 ### Codex parity
 
-When a repo is driven through OpenAI's Codex CLI instead of Claude, the same
-protection binds it. The scaffold ships a `.codex/` starter (standard and full
-tiers): `hooks.json` wires both `codeflow hook git-guard` and
-`codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event, and
-`config.toml` turns the hooks engine on with workspace autonomy
-(`sandbox_mode = "workspace-write"`, `approval_policy = "on-request"`). Codex's
-payload is byte-compatible with Claude's, so no separate guard logic exists —
-one binary, two harnesses.
+When a repo is driven through OpenAI's Codex CLI instead of Claude, protection
+comes from two layers, and it helps to be precise about which does what.
 
-One-time setup: Codex requires you to trust a hook source before it runs. Run
-`/hooks` inside an interactive `codex` session once and approve the CodeFlow
-hooks. For CI or headless `codex exec`, pass `--dangerously-bypass-hook-trust`
-— safe only where the hook source is already vetted, e.g. this repo's own
-committed `.codex/` config. After that, a `git push --force origin main` or an
-`rm -rf /` from a Codex session is blocked exactly as it is from Claude.
+- **The git-hook plane binds Codex unconditionally.** It is harness-agnostic —
+  a Codex `git push --force origin main` against protected `main` is refused by
+  the `pre-push` shim (`codeflow pre-push: BLOCKED — policy rule
+  git.push_to_protected`) exactly as any agent's would be. Verified live on
+  codex-cli 0.142.5. This needs no Codex configuration.
+- **The in-session PreToolUse guards are an interactive-Codex bonus.** The
+  scaffold ships a `.codex/` starter (standard and full tiers): `hooks.json`
+  wires `codeflow hook git-guard` and `codeflow hook exec-guard` onto Codex's
+  `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with
+  workspace autonomy (`sandbox_mode = "workspace-write"`,
+  `approval_policy = "on-request"`). Codex's hook payload is byte-compatible with
+  Claude's, so the same binaries run unchanged.
+
+One-time setup for the in-session guards: Codex loads a project's `.codex/hooks.json`
+only when that project's `.codex/` layer is trusted. Run `/hooks` inside an
+interactive `codex` session once to trust the CodeFlow hooks. **Note:** in testing
+on codex-cli 0.142.5, headless `codex exec` did not run project PreToolUse hooks
+even with `--dangerously-bypass-hook-trust` and the layer trusted — so treat the
+in-session guards as an interactive-session safeguard, and rely on the git-hook
+plane (which always applies) for headless Codex runs.
 
 Google's Antigravity `agy` is **not** bound automatically (its hook dialect
 differs and its macOS reliability is unresolved); the cf-delegate skill carries

@@ -117,10 +117,15 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   new `policy.json` `security` section (dangerous=block, privilege=warn); the
   three Claude presets adopt the autonomy posture (allow the project toolchain,
   ask for sudo/publish/delete, deny home-dir credential reads) and wire both
-  guards; a `.codex/` starter (hooks.json + config.toml) binds Codex through the
-  byte-compatible PreToolUse payload — verified live on codex-cli 0.142.5 (a
-  headless force-push to main blocked, a clean command untouched); the init
-  default preset flips to acceptEdits; `bypass-sandboxed` fixes the sandbox key
-  to the schema's `allowedDomains` and adds `filesystem.denyRead`. agy deferred
-  (dialect differs, macOS reliability open) with a manual experimental snippet
-  in cf-delegate.
+  guards; a `.codex/` starter (hooks.json + config.toml) wires the guards for
+  Codex; the init default preset flips to acceptEdits; `bypass-sandboxed` fixes
+  the sandbox key to the schema's `allowedDomains` and adds `filesystem.denyRead`.
+  Live validation (codex-cli 0.142.5), recorded honestly: the git-hook plane
+  refuses a Codex-driven force-push to main (`pre-push: BLOCKED — git.push_to_protected`)
+  and the hook payload schema is byte-compatible — but headless `codex exec` did
+  NOT run project PreToolUse hooks in testing (observable marker hook never fired
+  for either the hooks.json or inline-TOML form, with layer trust +
+  `--dangerously-bypass-hook-trust` + `features.hooks=true`), so the `.codex/`
+  in-session guards are an interactive-Codex safeguard and headless Codex leans
+  on the git-hook plane. agy deferred (dialect differs, macOS reliability open)
+  with a manual experimental snippet in cf-delegate.

@@ -8,10 +8,12 @@
 //! | `session-summary` | `SessionEnd` | [`session_summary`] |
 //! | git-hook shims | pre-commit / commit-msg / pre-merge-commit / reference-transaction / pre-push | [`git_hook`] |
 //!
-//! The two `PreToolUse` guards are harness-agnostic by design: the payload
-//! contract (`tool_name`, `tool_input.command`, `cwd`) is byte-compatible with
-//! the Codex hooks engine, so the same `codeflow hook <guard>` binaries bind a
-//! Codex session via `.codex/hooks.json` exactly as they bind Claude (ADR-0008).
+//! The two `PreToolUse` guards share a lenient payload contract (`tool_name`,
+//! `tool_input.command`, `cwd`) that is byte-compatible with the Codex hooks
+//! engine, so the same `codeflow hook <guard>` binaries can bind an interactive
+//! Codex session via `.codex/hooks.json` as well as Claude. (Headless
+//! `codex exec` 0.142.5 does not invoke project `PreToolUse` hooks, so headless
+//! Codex leans on the harness-agnostic git-hook plane instead — ADR-0008.)
 //!
 //! All enforcement levels are read from `.codeflow/policy.json` (charter D7:
 //! policy in config, not code) via [`policy::Policy`]; nothing is hardcoded.

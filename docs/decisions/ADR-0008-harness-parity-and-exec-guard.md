@@ -4,7 +4,7 @@ title: harness parity and the exec-guard security stage
 date: 2026-07-02
 status: accepted
 superseded_by: null
-architecture_impact: docs/architecture.md — the in-session guard plane gains a second PreToolUse (Bash) handler (exec-guard) and now binds Codex as well as Claude via a byte-compatible payload contract; the enforcement bullet and the four-planes description name it
+architecture_impact: docs/architecture.md — the in-session guard plane gains a second PreToolUse (Bash) handler (exec-guard) and can bind an interactive Codex session via a byte-compatible payload contract (headless codex exec 0.142.5 does not run project PreToolUse hooks, so headless Codex leans on the git-hook plane); the enforcement bullet and the four-planes description name it
 ---
 
 <!-- ADRs are append-only: written at the moment of decision, never edited
@@ -29,14 +29,18 @@ commands, and protected refs. The presets and this stage implement that
 posture; the guards must bind whatever harness is driving the repo, not just
 Claude.
 
-Codex 0.142.5 turns out to ship a hooks engine whose `PreToolUse` payload is
-byte-compatible with Claude's: the same field names (`hook_event_name`,
-`tool_name:"Bash"`, `tool_input.command`, `session_id`, `cwd`, a nullable
-`transcript_path`) plus a few extras (`turn_id`, `model`, `permission_mode`),
-the same exit-code contract (0 allow / 2 block with a stderr reason), and a
-per-project `<repo>/.codex/hooks.json` config with a one-time `/hooks` trust
-step. That compatibility makes a single guard binary serving both harnesses
-possible with no dialect layer.
+Codex 0.142.5 ships a hooks engine whose `PreToolUse` payload is byte-compatible
+with Claude's: the same field names (`hook_event_name`, `tool_name:"Bash"`,
+`tool_input.command`, `session_id`, `cwd`, a nullable `transcript_path`) plus a
+few extras (`turn_id`, `model`, `permission_mode`), the same exit-code contract
+(0 allow / 2 block with a stderr reason — the binary carries the string
+`Tool call blocked by PreToolUse hook`), and a per-project `<repo>/.codex/hooks.json`
+config with a one-time `/hooks` trust step. That schema compatibility means a
+single guard binary can serve both harnesses with no dialect layer — the
+in-session guard binds an interactive Codex session exactly as it binds Claude.
+(Live testing surfaced one important limit, recorded under Consequences: headless
+`codex exec` did not invoke project PreToolUse hooks in 0.142.5, so headless
+Codex leans on the git-hook plane rather than the in-session guard.)
 
 ## Decision
 
@@ -63,14 +67,17 @@ is deliberate:
 **Harness parity.** The exec-guard payload parsing reuses the git-guard
 `HookPayload`, which is lenient by construction (serde ignores unknown fields
 and tolerates the nullable `transcript_path`), so both `codeflow hook <guard>`
-binaries serve Claude and Codex unchanged. Ship a `.codex/` starter — a
+binaries serve Claude and Codex from one code path. Ship a `.codex/` starter — a
 `hooks.json` wiring both guards on the `^Bash$` matcher (10s timeout) and a
 `config.toml` (hooks engine on, `sandbox_mode = "workspace-write"`,
 `approval_policy = "on-request"`) — as managed scaffold assets at the standard
-and full tiers. One-time hook trust is a `/hooks` step inside an interactive
-Codex session; CI/headless runs pass `--dangerously-bypass-hook-trust`, which
-runs enabled hooks without persisted trust and is safe only where the hook
-source is already vetted (here, the repo's own committed config).
+and full tiers. Codex auto-discovers a project `.codex/hooks.json` **only when
+the project `.codex/` layer is trusted**; the trust is granted once via the
+`/hooks` command inside an interactive Codex session (it records a per-hook hash).
+`--dangerously-bypass-hook-trust` bypasses only the per-hook trust check, not the
+project-layer trust. These in-session guards are therefore an **interactive**
+Codex safeguard; headless `codex exec` is covered by the git-hook plane (see
+Consequences for the measured behavior).
 
 **Presets.** The three Claude settings presets adopt the autonomy posture:
 `allow` grants the common project toolchain promptlessly (cargo/codeflow/git/gh
@@ -98,12 +105,27 @@ manual, experimental opt-in snippet instead.
 
 ## Consequences
 
-- Destructive Bash commands are blocked in-session for any bound harness;
-  privilege escalation surfaces as feedback without overriding a human prompt.
-- The same protection binds Codex, verified live: a headless `codex exec`
-  instructed to force-push to `main` in a worktree is blocked by the git-guard
-  the `.codex/hooks.json` wires (see the PR for captured evidence), and a clean
-  command runs untouched.
+- Destructive Bash commands are blocked in-session (Claude, and interactive
+  Codex once its `.codex/` layer is trusted); privilege escalation surfaces as
+  feedback without overriding a human prompt.
+- **Live validation (codex-cli 0.142.5), recorded honestly.** Two facts hold and
+  one limit was found:
+  - *Git-hook plane binds Codex — verified.* A Codex-driven
+    `git push --force origin main` against protected `main` is refused:
+    `codeflow pre-push: BLOCKED — policy rule git.push_to_protected` (git exits 1,
+    nothing pushed). This is harness-agnostic and independent of Codex's hook
+    engine.
+  - *Payload schema is compatible — verified.* The Codex `PreToolUse` payload and
+    the exit-2 block contract match Claude's (confirmed against the Codex binary's
+    embedded schema and the `Tool call blocked by PreToolUse hook` string).
+  - *Headless `codex exec` did not run project PreToolUse hooks — measured limit.*
+    With the project layer trusted, `--dangerously-bypass-hook-trust`, and
+    `features.hooks = true`, an observable marker hook never fired for either the
+    `.codex/hooks.json` or the inline `[[hooks.PreToolUse]]` form, and a plain
+    `echo` ran unblocked. The `.codex/` in-session guards therefore apply to
+    interactive Codex sessions, not headless `exec`; headless Codex protection
+    rests on the git-hook plane above. The starter still ships (interactive Codex
+    is a real use), framed as an interactive safeguard.
 - The presets make project-scoped work promptless while the deny/ask tiers and
   the guard hooks carry the three hard protections — no reliance on the
   permission mode for safety.
@@ -116,7 +138,8 @@ manual, experimental opt-in snippet instead.
 ## Architecture impact
 
 `docs/architecture.md` updated in this PR: the in-session guard plane is now two
-PreToolUse (Bash) handlers (`git-guard` + `exec-guard`) rather than one, and it
-binds Codex as well as Claude through the byte-compatible payload contract. The
-plane count is unchanged (the exec-guard is a second guard within the existing
-harness-guard plane, not a fifth plane); the doctor check count is unchanged.
+PreToolUse (Bash) handlers (`git-guard` + `exec-guard`) rather than one, and can
+bind an interactive Codex session through the byte-compatible payload contract
+(headless `codex exec` protection stays on the git-hook plane). The plane count
+is unchanged (the exec-guard is a second guard within the existing harness-guard
+plane, not a fifth plane); the doctor check count is unchanged.

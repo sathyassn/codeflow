@@ -68,9 +68,11 @@ One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent
 - **In-session PreToolUse guards** — `git-guard` (git policy, plus the checks
   git hooks cannot see: `gh pr merge` into a protected base, AI attribution /
   emoji in `gh pr create` bodies) and `exec-guard` (destructive commands block,
-  privilege escalation warns). The same guards bind Codex via `.codex/hooks.json`
-  as bind Claude via `.claude/settings.json` — one byte-compatible payload,
-  two harnesses (ADR-0008).
+  privilege escalation warns). Wired for Claude via `.claude/settings.json` and,
+  through a byte-compatible payload, for an interactive Codex session via
+  `.codex/hooks.json` (ADR-0008). Codex-driven work is bound unconditionally by
+  the git-hook plane above; the in-session guards are an interactive-Codex bonus
+  (headless `codex exec` 0.142.5 does not run project PreToolUse hooks).
 - **CI** — re-runs the gates as the authoritative perimeter; PR-content checks
   are CI-plane by design (a git hook never sees a PR).
 - **Remote branch protection** — the server-side backstop (`codeflow remote
