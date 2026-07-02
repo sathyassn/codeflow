@@ -123,6 +123,24 @@ the values you already set — so tightening ships without a manual migration.
    integrate <branch> --into <target>` is the sanctioned local path, and a human
    can override the git layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
+### A body of work — the integration branch
+
+The loop above lands one branch per PR onto `main`. When the work is an epic —
+several tasks, some serial, some parallel — landing each on `main` floods the
+human with reviews and makes agents wait on one another. Instead, cut a shared
+**integration branch** and land the tasks there:
+
+- `integration/<epic>` is branched off `main` and is **non-protected**, so
+  agents merge tasks into it — by `codeflow integrate <task> --into
+  integration/<…>` or a PR based on the integration branch. Every other gate
+  (commits, secrets, tests, protected-branch rules) still applies.
+- Only the finished body reaches `main`, as **one** human-reviewed
+  `integration → main` PR raised after the ship flow runs on the integration
+  branch.
+
+`main` stays human-merge-only throughout — the integration branch is never a
+backdoor to it. See cf-method's "Managing a body of work" for the full procedure.
+
 ## Enforcement planes — who catches what
 
 One policy (`.codeflow/policy.json`), four planes. Git hooks are
