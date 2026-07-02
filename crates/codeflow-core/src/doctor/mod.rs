@@ -102,6 +102,7 @@ const HOOK_SUBCOMMANDS: &[(&str, &str)] = &[
     ("hook", "session-summary"),
     ("git-hook", "pre-commit"),
     ("git-hook", "commit-msg"),
+    ("git-hook", "pre-merge-commit"),
     ("git-hook", "pre-push"),
 ];
 
@@ -113,6 +114,7 @@ const CHECK_NAMES: &[&str] = &[
     "permissions",
     "network",
     "delegates",
+    "repo-integrity",
 ];
 
 /// Return the ordered list of all available check names.
@@ -133,6 +135,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
     m.insert("delegates", check_delegates);
+    m.insert("repo-integrity", check_repo_integrity);
     m
 }
 
@@ -414,6 +417,102 @@ fn check_delegates(opts: &Options) -> CheckResult {
     }
 }
 
+/// Repository structural integrity (ADR-0007). Two failure signatures, both
+/// reproduced from a `gh pr merge --delete-branch` / worktree mishap:
+///
+/// 1. `core.bare = true` on a repo that still has a working tree — the root
+///    checkout got flipped to bare; remedy `git config core.bare false`.
+/// 2. A protected branch checked out in a non-root (linked) worktree —
+///    remedy: switch that worktree to its feature branch.
+///
+/// Passes otherwise, and stays quiet where it cannot determine repo state
+/// (not a git repo, git unavailable): this check flags, it never guesses.
+fn check_repo_integrity(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let pass = |msg: &str| CheckResult {
+        name: "repo-integrity".into(),
+        status: Status::Pass,
+        message: msg.into(),
+        duration: start.elapsed(),
+    };
+    let fail = |msg: String| CheckResult {
+        name: "repo-integrity".into(),
+        status: Status::Fail,
+        message: msg,
+        duration: start.elapsed(),
+    };
+
+    // Signal 1: core.bare on a repo that still holds a working tree. A working
+    // checkout keeps its git dir under `.git`; a genuinely bare repo has none.
+    let is_bare = opts
+        .do_exec(
+            "git",
+            &["-C", opts.project_dir.as_str(), "rev-parse", "--is-bare-repository"],
+        )
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false);
+    if is_bare && root.join(".git").exists() {
+        return fail(
+            "core.bare=true on a repo with a working tree — a merge/worktree mishap flipped it; run `git config core.bare false`".into(),
+        );
+    }
+
+    // Signal 2: a protected branch checked out in a non-root worktree.
+    let policy = crate::hooks::policy::Policy::load(&root).git;
+    if let Ok(list) = opts.do_exec(
+        "git",
+        &["-C", opts.project_dir.as_str(), "worktree", "list", "--porcelain"],
+    ) {
+        let worktrees = parse_worktree_list(&list);
+        // The main (root) worktree is listed first and may hold a protected
+        // branch; only linked worktrees (the rest) must not.
+        for wt in worktrees.iter().skip(1) {
+            if let Some(branch) = &wt.branch {
+                if policy.branch_is_protected(branch) {
+                    return fail(format!(
+                        "protected branch '{branch}' is checked out in a non-root worktree ({}) — switch that worktree to its feature branch",
+                        wt.path
+                    ));
+                }
+            }
+        }
+    }
+
+    pass("repo layout healthy: not bare, no protected branch in a linked worktree")
+}
+
+/// One entry parsed from `git worktree list --porcelain`.
+struct WorktreeEntry {
+    path: String,
+    /// Checked-out branch (short name), `None` when detached.
+    branch: Option<String>,
+}
+
+fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
+    let mut out = Vec::new();
+    let mut cur: Option<WorktreeEntry> = None;
+    for line in porcelain.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(w) = cur.take() {
+                out.push(w);
+            }
+            cur = Some(WorktreeEntry {
+                path: path.to_string(),
+                branch: None,
+            });
+        } else if let Some(refname) = line.strip_prefix("branch ") {
+            if let Some(w) = cur.as_mut() {
+                w.branch = Some(refname.strip_prefix("refs/heads/").unwrap_or(refname).to_string());
+            }
+        }
+    }
+    if let Some(w) = cur.take() {
+        out.push(w);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 6);
+        assert_eq!(check_names().len(), 7);
     }
 
     #[test]
@@ -541,7 +640,7 @@ mod tests {
         let result = check_hooks(&opts);
         assert_eq!(result.status, Status::Pass);
         assert!(result.message.contains("functional"));
-        assert!(result.message.contains('6'));
+        assert!(result.message.contains('7'));
     }
 
     #[test]
@@ -668,6 +767,75 @@ mod tests {
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Pass);
         assert!(result.message.contains("agy present"), "got: {}", result.message);
+    }
+
+    #[test]
+    fn test_repo_integrity_bare_with_working_tree_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        opts.exec_command = Some(|_, args| {
+            if args.contains(&"--is-bare-repository") {
+                Ok("true\n".into())
+            } else {
+                Ok(String::new())
+            }
+        });
+        let r = check_repo_integrity(&opts);
+        assert_eq!(r.status, Status::Fail);
+        assert!(r.message.contains("core.bare"), "got: {}", r.message);
+        assert!(r.message.contains("git config core.bare false"), "remedy: {}", r.message);
+    }
+
+    #[test]
+    fn test_repo_integrity_protected_in_linked_worktree_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        opts.exec_command = Some(|_, args| {
+            if args.contains(&"--is-bare-repository") {
+                Ok("false\n".into())
+            } else if args.contains(&"worktree") {
+                // Root on a feature branch; a LINKED worktree holds main.
+                Ok("worktree /repo/root\nHEAD aaa\nbranch refs/heads/feat/x\n\nworktree /repo/wt\nHEAD bbb\nbranch refs/heads/main\n".into())
+            } else {
+                Ok(String::new())
+            }
+        });
+        let r = check_repo_integrity(&opts);
+        assert_eq!(r.status, Status::Fail);
+        assert!(r.message.contains("main"), "got: {}", r.message);
+        assert!(r.message.contains("worktree"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_repo_integrity_healthy_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        opts.exec_command = Some(|_, args| {
+            if args.contains(&"--is-bare-repository") {
+                Ok("false\n".into())
+            } else if args.contains(&"worktree") {
+                // Root holds main (allowed); the linked worktree is a feature.
+                Ok("worktree /repo/root\nHEAD aaa\nbranch refs/heads/main\n\nworktree /repo/wt\nHEAD bbb\nbranch refs/heads/feat/x\n".into())
+            } else {
+                Ok(String::new())
+            }
+        });
+        let r = check_repo_integrity(&opts);
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_repo_integrity_non_repo_passes_quietly() {
+        // git unavailable / not a repo → no signal → pass, never guess.
+        let opts = test_opts(); // exec_command returns Err
+        let r = check_repo_integrity(&opts);
+        assert_eq!(r.status, Status::Pass);
     }
 
     #[test]
