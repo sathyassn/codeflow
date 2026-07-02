@@ -41,7 +41,8 @@
       "hotfix/",
       "plan/",
       "spike/",
-      "experiment/"
+      "experiment/",
+      "integration/"
     ],
     "secret_scan": "block",
     "test_gate_on_push": "warn"

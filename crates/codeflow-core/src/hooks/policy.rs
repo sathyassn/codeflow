@@ -124,6 +124,7 @@ impl Default for GitPolicy {
                 "plan/",
                 "spike/",
                 "experiment/",
+                "integration/",
             ]
             .iter()
             .map(ToString::to_string)
@@ -275,7 +276,7 @@ mod tests {
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
-        assert_eq!(g.branch_prefixes.len(), 11);
+        assert_eq!(g.branch_prefixes.len(), 12);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
         assert_eq!(g.test_gate_on_push, PolicyLevel::Warn);
     }
@@ -385,6 +386,16 @@ mod tests {
         assert!(!g.branch_name_ok("my-cool-branch"));
         // Protected branches are exempt from naming.
         assert!(g.branch_name_ok("main"));
+    }
+
+    #[test]
+    fn test_default_prefixes_include_integration() {
+        // Body-of-work epics land their tasks on an `integration/<epic>` branch
+        // (see cf-method, "Managing a body of work"), so the prefix must be a
+        // sanctioned default in every plane.
+        let g = GitPolicy::default();
+        assert!(g.branch_prefixes.iter().any(|p| p == "integration/"));
+        assert!(g.branch_name_ok("integration/ep-12-new-flow"));
     }
 
     #[test]

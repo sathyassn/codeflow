@@ -16,7 +16,7 @@
     "ai_attribution": "block",
     "commit_emoji": "block",
     "branch_naming": "block",
-    "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "spike/", "experiment/"],
+    "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "spike/", "experiment/", "integration/"],
     "secret_scan": "block",
     "test_gate_on_push": "warn"
   }
