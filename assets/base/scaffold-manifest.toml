@@ -142,8 +142,10 @@ region = "json"
 tiers = ["standard", "full"]
 preset = "bypassPermissions"
 
-# --- Claude artifacts (charter §4.4 minimalism: 1 agent, 1 skill, 4 commands, 1 workflow;
-#     the 4th command, cf-stack, is the agent-led stack setup per ADR-0003)
+# --- Claude artifacts (charter §4.4 minimalism: 1 agent, 2 skills, 5 commands, 1 workflow;
+#     cf-stack is the agent-led stack setup (ADR-0003); cf-delegate + cf-consult
+#     are the cross-vendor delegation capability (ADR-0005), added when the
+#     process-boundary consult pattern proved out — not speculatively)
 
 [[entry]]
 src = "claude/agents/cf-reviewer.md"
@@ -154,6 +156,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-method/SKILL.md"
 dest = ".claude/skills/cf-method/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/SKILL.md"
+dest = ".claude/skills/cf-delegate/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -178,6 +186,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/commands/cf-stack.md"
 dest = ".claude/commands/cf-stack.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/commands/cf-consult.md"
+dest = ".claude/commands/cf-consult.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
