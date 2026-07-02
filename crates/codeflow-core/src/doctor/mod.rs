@@ -106,7 +106,14 @@ const HOOK_SUBCOMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Ordered list of all check names.
-const CHECK_NAMES: &[&str] = &["hooks", "claude", "config", "permissions", "network"];
+const CHECK_NAMES: &[&str] = &[
+    "hooks",
+    "claude",
+    "config",
+    "permissions",
+    "network",
+    "delegates",
+];
 
 /// Return the ordered list of all available check names.
 #[must_use]
@@ -125,6 +132,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
+    m.insert("delegates", check_delegates);
     m
 }
 
@@ -362,6 +370,50 @@ fn check_network(opts: &Options) -> CheckResult {
     }
 }
 
+/// Cross-vendor delegation readiness (ADR-0005). Optional by design, so a
+/// missing or unauthenticated delegate warns — never fails. `codex` is the
+/// primary tier: authenticated under the user's own subscription. `agy`
+/// (Antigravity) is a degraded, opt-in consult tier reported informationally.
+fn check_delegates(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+
+    // `agy` presence is informational; codex authentication decides pass/warn.
+    let agy_note = if opts.do_look_path("agy").is_ok() {
+        "; agy present (degraded read-only consult tier, opt-in)"
+    } else {
+        ""
+    };
+
+    let Ok(codex_bin) = opts.do_look_path("codex") else {
+        return CheckResult {
+            name: "delegates".into(),
+            status: Status::Warn,
+            message: format!(
+                "codex not found in PATH — cross-vendor delegation unavailable (optional){agy_note}"
+            ),
+            duration: start.elapsed(),
+        };
+    };
+
+    // `codex login status` exits 0 only when subscription-authenticated.
+    match opts.do_exec(&codex_bin, &["login", "status"]) {
+        Ok(_) => CheckResult {
+            name: "delegates".into(),
+            status: Status::Pass,
+            message: format!("codex: subscription-authenticated{agy_note}"),
+            duration: start.elapsed(),
+        },
+        Err(_) => CheckResult {
+            name: "delegates".into(),
+            status: Status::Warn,
+            message: format!(
+                "codex present but not authenticated — run `codex login` to enable delegation{agy_note}"
+            ),
+            duration: start.elapsed(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 5);
+        assert_eq!(check_names().len(), 6);
     }
 
     #[test]
@@ -561,6 +613,61 @@ mod tests {
 
         assert_eq!(result.status, Status::Fail);
         assert!(result.message.contains("not writable"));
+    }
+
+    #[test]
+    fn test_check_delegates_codex_authenticated_passes() {
+        let mut opts = test_opts();
+        opts.look_path = Some(|name| {
+            if name == "codex" {
+                Ok("/usr/local/bin/codex".into())
+            } else {
+                Err("not found".into())
+            }
+        });
+        opts.exec_command = Some(|_, _| Ok("Logged in using ChatGPT".into()));
+        let result = check_delegates(&opts);
+        assert_eq!(result.status, Status::Pass);
+        assert!(result.message.contains("subscription-authenticated"), "got: {}", result.message);
+    }
+
+    #[test]
+    fn test_check_delegates_codex_missing_warns_not_fails() {
+        // test_opts look_path always errs → codex absent. Optional, so warn.
+        let opts = test_opts();
+        let result = check_delegates(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(result.message.contains("optional"), "got: {}", result.message);
+    }
+
+    #[test]
+    fn test_check_delegates_codex_present_unauthenticated_warns_with_remedy() {
+        let mut opts = test_opts();
+        opts.look_path = Some(|name| {
+            if name == "codex" {
+                Ok("/usr/local/bin/codex".into())
+            } else {
+                Err("not found".into())
+            }
+        });
+        // exec_command errs → `codex login status` nonzero → unauthenticated.
+        let result = check_delegates(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(result.message.contains("codex login"), "remedy line: {}", result.message);
+    }
+
+    #[test]
+    fn test_check_delegates_agy_presence_is_informational() {
+        let mut opts = test_opts();
+        opts.look_path = Some(|name| match name {
+            "codex" => Ok("/usr/local/bin/codex".into()),
+            "agy" => Ok("/usr/local/bin/agy".into()),
+            _ => Err("not found".into()),
+        });
+        opts.exec_command = Some(|_, _| Ok("Logged in".into()));
+        let result = check_delegates(&opts);
+        assert_eq!(result.status, Status::Pass);
+        assert!(result.message.contains("agy present"), "got: {}", result.message);
     }
 
     #[test]
