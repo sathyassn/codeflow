@@ -97,3 +97,10 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   command), or the agent's sandbox-interrupted first worktree-add. Candidate
   doctor check should detect the SYMPTOM (bare flag on a working repo,
   protected branch checked out outside root) regardless of trigger.
+- Merge controls shipped (ADR-0007): `merge_to_protected` + `pr_merge_to_protected`
+  policy keys, a `pre-merge-commit` git-hook stage (with the honest ff-merge
+  boundary), git-guard interception of `git merge`/`cherry-pick`/`gh pr merge`
+  plus anti-laundering of override envs and a `gh pr merge --delete-branch`
+  block, the human-only `CODEFLOW_HUMAN_OVERRIDE` (git layer only), and the
+  `repo-integrity` doctor check (doctor 6→7). After this merges, agent-performed
+  `gh pr merge` into a protected base is blocked — a human merges subsequent PRs.

@@ -35,14 +35,18 @@ Core modules grouped by responsibility:
   lint), the capability registry parser, FTS5 recall, and the cross-repo
   registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (6 checks — hooks, claude, config,
-  permissions, network, delegates), structured settings merge, generated status
-  views, the test-gate engine, path flock, and pruned error types.
+  `error.rs`): the doctor check table (7 checks — hooks, claude, config,
+  permissions, network, delegates, repo-integrity), structured settings merge,
+  generated status views, the test-gate engine, path flock, and pruned error
+  types.
 
 Enforcement is spread across four planes, all reading one config
 (`.codeflow/policy.json`): git client hooks, the Claude `git-guard` hook,
 remote branch protection, and CI. Local planes are fast feedback; CI + remote
-protection are the authoritative perimeter (ADR-0002; charter §6.5).
+protection are the authoritative perimeter (ADR-0002; charter §6.5). The git
+client plane adds a `pre-merge-commit` shim that blocks non-fast-forward merge
+commits onto protected branches (ADR-0007); fast-forward merges fire no client
+hook and are caught only in-session by `git-guard`.
 
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite

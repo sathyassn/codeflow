@@ -68,9 +68,12 @@ Enforced by git hooks, the git-guard hook, remote protection, and CI — all rea
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
 - **No emoji** in commit subjects or PR bodies.
-- **Protected branches** (`main`/`master` + policy globs): never commit, push,
-  force-push, delete, or hard-reset on them. Work lands by exactly two paths:
-  PR → green CI → merge, or `codeflow integrate <branch> --into <target>`.
+- **Protected branches** (`main`/`master` + policy globs): never commit, merge,
+  push, force-push, delete, or hard-reset on them. Work lands by exactly two
+  paths: PR → green CI → merged by a human, or `codeflow integrate <branch>
+  --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
+  tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
+  can corrupt the root repo).
 - **PR bodies:** summary, changes, test results, linked epic/capability IDs.
 - When a gate blocks you, fix the cause — never bypass (`--no-verify`, editing
   hooks, exporting gate tokens). Gates exist only where mistakes are
