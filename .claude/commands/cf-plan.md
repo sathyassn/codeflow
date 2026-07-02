@@ -22,6 +22,9 @@ You are planning work, not building it. Input: $ARGUMENTS
    - spec only where interfaces, formats, or behavior need pinning down;
    - ADR draft if a Tier-3 decision is involved (new dependency, schema change,
      boundary change).
+   - for a multi-task epic (serial and/or parallel tasks), propose the
+     integration-branch flow and name the branch `integration/<epic-id>-<slug>`
+     (see cf-method, "Managing a body of work").
 6. Run `codeflow validate`, then present the plan for approval. Do not start
    building — that is `/cf-develop`.
 7. Unattended/batch work or a named preset: plan the handoff as the pipeline
