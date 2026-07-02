@@ -200,8 +200,13 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         reg.schema_version = REGISTRY_SCHEMA_VERSION;
         // Prune stale rows: a cheap existence check per entry, inside the
         // same lock so concurrent touches never resurrect a pruned path.
-        reg.repos
-            .retain(|r| r.path == entry.path || Path::new(&r.path).exists());
+        // try_exists distinguishes "definitively missing" (Ok(false), prune)
+        // from permission/transient stat errors (Err, KEEP) — exists() would
+        // collapse both and could permanently drop a live repo row.
+        reg.repos.retain(|r| {
+            r.path == entry.path
+                || !matches!(Path::new(&r.path).try_exists(), Ok(false))
+        });
         match reg.repos.iter_mut().find(|r| r.path == entry.path) {
             Some(existing) => *existing = entry.clone(),
             None => reg.repos.push(entry.clone()),
@@ -481,6 +486,54 @@ mod tests {
         let repos = list_repos(home.path()).unwrap();
         assert_eq!(repos.len(), 1, "stale entry must be pruned");
         assert_eq!(repos[0].name, "live");
+    }
+
+    /// A stat ERROR (here: an unreadable parent directory) must KEEP the
+    /// entry — only a definitive `Ok(false)` prunes. `exists()` would have
+    /// collapsed the error into "missing" and dropped a live repo row.
+    #[test]
+    #[cfg(unix)]
+    fn test_touch_registry_keeps_entries_behind_stat_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        init_repo(live.path(), Some("live"));
+
+        let guarded_parent = tempfile::tempdir().unwrap();
+        let guarded = guarded_parent.path().join("repo");
+        std::fs::create_dir(&guarded).unwrap();
+        init_repo(&guarded, Some("guarded"));
+        touch_registry(home.path(), &guarded).unwrap();
+
+        // Remove traversal permission on the parent: stat on the child now
+        // errors with EACCES instead of reporting "missing".
+        let mut perms = std::fs::metadata(guarded_parent.path()).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(guarded_parent.path(), perms).unwrap();
+        assert!(
+            Path::new(&guarded).try_exists().is_err(),
+            "precondition: stat must error, not report missing"
+        );
+
+        touch_registry(home.path(), live.path()).unwrap();
+
+        // Restore permissions before asserting so tempdir cleanup works.
+        let mut restore = std::fs::metadata(guarded_parent.path()).unwrap().permissions();
+        restore.set_mode(0o755);
+        std::fs::set_permissions(guarded_parent.path(), restore).unwrap();
+
+        let mut names: Vec<String> = list_repos(home.path())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["guarded", "live"],
+            "entry behind a stat error must be kept"
+        );
     }
 
     #[test]
