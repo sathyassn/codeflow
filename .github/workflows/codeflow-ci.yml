@@ -22,9 +22,11 @@ jobs:
 
       # This repo IS codeflow, so it builds the binary from source rather than
       # using the release installer a consumer project would. These gates block.
-      # Pinned to the dev toolchain so CI is reproducible and a new stable
-      # clippy lint cannot break the build out from under a green local run.
-      - uses: dtolnay/rust-toolchain@1.94.0
+      # The toolchain is pinned in rust-toolchain.toml (the single source of
+      # truth rustup honors locally and here); installing from it means a
+      # floating stable clippy cannot break CI out from under a green local run.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
       - name: Build codeflow from source
@@ -43,9 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.94.0
-        with:
-          components: clippy
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test --workspace
@@ -139,9 +140,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.94.0
-        with:
-          components: llvm-tools-preview
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

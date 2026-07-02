@@ -90,8 +90,7 @@ pub fn any_blocking(violations: &[Violation]) -> bool {
 pub fn rfc3339_utc_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     rfc3339_from_unix(secs)
 }
 

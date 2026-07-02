@@ -62,17 +62,15 @@ pub(crate) fn parse_cobertura_str(
                             lines_hit = 0;
                         }
                     }
-                    b"line" => {
-                        if current_file.is_some() {
-                            lines_found += 1;
-                            for attr in e.attributes().flatten() {
-                                if attr.key.local_name().as_ref() == b"hits" {
-                                    if let Ok(hits) =
-                                        String::from_utf8_lossy(&attr.value).parse::<u64>()
-                                    {
-                                        if hits > 0 {
-                                            lines_hit += 1;
-                                        }
+                    b"line" if current_file.is_some() => {
+                        lines_found += 1;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"hits" {
+                                if let Ok(hits) =
+                                    String::from_utf8_lossy(&attr.value).parse::<u64>()
+                                {
+                                    if hits > 0 {
+                                        lines_hit += 1;
                                     }
                                 }
                             }

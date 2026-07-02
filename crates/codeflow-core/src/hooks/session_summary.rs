@@ -104,8 +104,7 @@ fn diff_stats(root: &Path, base: Option<&str>) -> (Option<String>, usize, usize)
         .find_commit(merge_base)
         .and_then(|c| c.tree())
         .and_then(|tree| repo.diff_tree_to_workdir_with_index(Some(&tree), None))
-        .map(|diff| diff.deltas().len())
-        .unwrap_or(0);
+        .map_or(0, |diff| diff.deltas().len());
 
     let commits = repo
         .revwalk()

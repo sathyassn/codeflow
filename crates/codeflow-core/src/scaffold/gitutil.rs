@@ -41,15 +41,13 @@ fn git_ok(root: &Path, args: &[&str]) -> Result<(), ScaffoldError> {
 /// Is `root` inside a git work tree?
 pub fn is_repo(root: &Path) -> bool {
     git(root, &["rev-parse", "--is-inside-work-tree"])
-        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
 }
 
 /// Does the repo have at least one commit?
 pub fn has_commits(root: &Path) -> bool {
     git(root, &["rev-parse", "--verify", "HEAD"])
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 pub fn init_repo(root: &Path) -> Result<(), ScaffoldError> {

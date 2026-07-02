@@ -1147,7 +1147,7 @@ mod tests {
             &cfg,
             &required,
             fetch,
-            stepping_now(Duration::from_secs(120)),
+            stepping_now(Duration::from_mins(2)),
             noop_sleep,
         )
         .await;
@@ -1174,7 +1174,7 @@ mod tests {
             &cfg,
             &required,
             fetch,
-            stepping_now(Duration::from_secs(120)),
+            stepping_now(Duration::from_mins(2)),
             noop_sleep,
         )
         .await;

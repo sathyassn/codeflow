@@ -297,15 +297,13 @@ pub(crate) fn parse_junit_str(xml: &str, source_path: &Path) -> Result<JunitRepo
                         in_system_out = false;
                     }
                 }
-                b"system-err" => {
-                    if in_system_err {
-                        if let Some(ref mut case) = current_case {
-                            if !text_buf.is_empty() {
-                                case.system_err = Some(text_buf.clone());
-                            }
+                b"system-err" if in_system_err => {
+                    if let Some(ref mut case) = current_case {
+                        if !text_buf.is_empty() {
+                            case.system_err = Some(text_buf.clone());
                         }
-                        in_system_err = false;
                     }
+                    in_system_err = false;
                 }
                 _ => {}
             },

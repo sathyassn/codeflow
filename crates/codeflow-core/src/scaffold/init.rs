@@ -526,8 +526,7 @@ fn install_entry(
 fn today_utc() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     #[allow(clippy::cast_possible_wrap)]
     let days = (secs / 86_400) as i64;
     let (y, m, d) = civil_from_days(days);
