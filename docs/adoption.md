@@ -144,19 +144,22 @@ backdoor to it. See cf-method's "Managing a body of work" for the full procedure
 ## Enforcement planes — who catches what
 
 One policy (`.codeflow/policy.json`), four planes. Git hooks are
-harness-agnostic (any agent or human); the Claude `git-guard` is a fast
-in-session bonus; CI re-runs the gates as the perimeter; remote branch
-protection is the server-side backstop. Local planes are feedback — CI and
-remote are the authoritative line (charter §6.5).
+harness-agnostic (any agent or human); the in-session PreToolUse guards
+(`git-guard` + `exec-guard`) are a fast bonus that bind **both Claude and Codex**
+through a byte-compatible payload (ADR-0008); CI re-runs the gates as the
+perimeter; remote branch protection is the server-side backstop. Local planes
+are feedback — CI and remote are the authoritative line (charter §6.5).
 
-| Protection | git hooks | git-guard (Claude) | CI | remote |
+| Protection | git hooks | in-session guard | CI | remote |
 |---|---|---|---|---|
-| Commit / non-ff merge commit on protected | pre-commit / pre-merge-commit | yes | yes | yes |
-| FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | yes | — | yes (result unpushable) |
-| Push / force-push / delete to protected | pre-push | yes | — | yes |
-| `gh pr merge` into a protected base | — (hooks can't see a PR) | yes | — | yes |
+| Commit / non-ff merge commit on protected | pre-commit / pre-merge-commit | git-guard | yes | yes |
+| FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | git-guard | — | yes (result unpushable) |
+| Push / force-push / delete to protected | pre-push | git-guard | — | yes |
+| `gh pr merge` into a protected base | — (hooks can't see a PR) | git-guard | — | yes |
+| Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
+| Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
-| Override-token laundering, `--no-verify` bypass | — | yes (structural) | — | — |
+| Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
 
 Two facts the matrix encodes. **PR-content checks are git-guard/CI by design** —
 a git hook never sees `gh pr create`/`gh pr merge`, so attribution/emoji scans
@@ -180,3 +183,25 @@ Cross-vendor consult and delegation is opt-in (ADR-0005). One-time setup: run
   is author-agnostic.
 - Missing or unauthenticated `codex` degrades legibly: do the work yourself and
   say so.
+
+### Codex parity
+
+When a repo is driven through OpenAI's Codex CLI instead of Claude, the same
+protection binds it. The scaffold ships a `.codex/` starter (standard and full
+tiers): `hooks.json` wires both `codeflow hook git-guard` and
+`codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event, and
+`config.toml` turns the hooks engine on with workspace autonomy
+(`sandbox_mode = "workspace-write"`, `approval_policy = "on-request"`). Codex's
+payload is byte-compatible with Claude's, so no separate guard logic exists —
+one binary, two harnesses.
+
+One-time setup: Codex requires you to trust a hook source before it runs. Run
+`/hooks` inside an interactive `codex` session once and approve the CodeFlow
+hooks. For CI or headless `codex exec`, pass `--dangerously-bypass-hook-trust`
+— safe only where the hook source is already vetted, e.g. this repo's own
+committed `.codex/` config. After that, a `git push --force origin main` or an
+`rm -rf /` from a Codex session is blocked exactly as it is from Claude.
+
+Google's Antigravity `agy` is **not** bound automatically (its hook dialect
+differs and its macOS reliability is unresolved); the cf-delegate skill carries
+an experimental, manual opt-in snippet for those who want it.

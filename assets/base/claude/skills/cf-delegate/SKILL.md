@@ -162,6 +162,17 @@ only when the user names it, and only for read-only consult. Known hazards:
 Because output handling is fragile, prefer `codex` for anything structured and
 reserve `agy` for a genuinely-wanted second model's read-only take.
 
+**Experimental — binding the CodeFlow guards to `agy`.** Unlike Codex, `agy` is
+not shipped as a bound harness (ADR-0008): its hook dialect differs (an
+`allow_tool` JSON contract, and hooks that always exit 0), so the exit-2 block
+that stops a bad command under Claude/Codex is at best *advisory* here — do not
+rely on it as a guard. If you still want the CodeFlow guards to run for feedback,
+opt in by hand: create `~/.gemini/config/hooks.json` with
+`{"hooks":{"PreToolUse":[{"matcher":"^Bash$","hooks":[{"type":"command","command":"codeflow hook git-guard"},{"type":"command","command":"codeflow hook exec-guard"}]}]}}`.
+Treat this as experimental and unverified on macOS; the authoritative protection
+for `agy` output stays the same as for any delegate — CodeFlow's git-hook plane,
+CI, and an independent review of the handoff before it lands.
+
 ## Guardrails
 
 - **Never automate vendor auth.** The user runs `codex login` / `agy` auth by

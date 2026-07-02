@@ -112,3 +112,15 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   and the test git helpers clear the three vars. This supersedes the
   worktree-interruption *correlation* in ADR-0007's wording; the ADR stays as
   the historical record since it already states the mechanism was unconfirmed.
+- Harness parity + exec-guard shipped (ADR-0008): a `codeflow hook exec-guard`
+  PreToolUse (Bash) stage runs the dangerous/privilege security modules per a
+  new `policy.json` `security` section (dangerous=block, privilege=warn); the
+  three Claude presets adopt the autonomy posture (allow the project toolchain,
+  ask for sudo/publish/delete, deny home-dir credential reads) and wire both
+  guards; a `.codex/` starter (hooks.json + config.toml) binds Codex through the
+  byte-compatible PreToolUse payload — verified live on codex-cli 0.142.5 (a
+  headless force-push to main blocked, a clean command untouched); the init
+  default preset flips to acceptEdits; `bypass-sandboxed` fixes the sandbox key
+  to the schema's `allowedDomains` and adds `filesystem.denyRead`. agy deferred
+  (dialect differs, macOS reliability open) with a manual experimental snippet
+  in cf-delegate.

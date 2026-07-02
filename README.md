@@ -57,7 +57,7 @@ greenfield/brownfield paths, tiers, ownership model, and the daily flow.
 
 ## Enforcement planes
 
-One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent-human-merge-boundary.md)):
+One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent-human-merge-boundary.md), [ADR-0008](docs/decisions/ADR-0008-harness-parity-and-exec-guard.md)):
 
 - **Git client hooks** — harness-agnostic, five shims: `pre-commit` (secret
   scan, protected-branch commit), `commit-msg` (conventional format, no AI
@@ -65,9 +65,12 @@ One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent
   onto protected), `reference-transaction` (the backstop for fast-forward
   merges, `reset --hard`, and `branch -D` on protected; git ≥ 2.28), and
   `pre-push` (branch naming, protected push/force/delete, test gate).
-- **Claude `git-guard`** — a `PreToolUse` hook for instant in-session feedback,
-  including the checks git hooks cannot see: `gh pr merge` into a protected base,
-  and AI attribution / emoji in `gh pr create` bodies.
+- **In-session PreToolUse guards** — `git-guard` (git policy, plus the checks
+  git hooks cannot see: `gh pr merge` into a protected base, AI attribution /
+  emoji in `gh pr create` bodies) and `exec-guard` (destructive commands block,
+  privilege escalation warns). The same guards bind Codex via `.codex/hooks.json`
+  as bind Claude via `.claude/settings.json` — one byte-compatible payload,
+  two harnesses (ADR-0008).
 - **CI** — re-runs the gates as the authoritative perimeter; PR-content checks
   are CI-plane by design (a git hook never sees a PR).
 - **Remote branch protection** — the server-side backstop (`codeflow remote

@@ -26,9 +26,10 @@ Core modules grouped by responsibility:
 - **Scaffold** (`scaffold/`): `init`, `update`, manifest, 3-way merge, and the
   ownership classes below; sourced from the rust-embed asset provider.
 - **Enforcement** (`hooks/`, `security/`, `git/`, `integrate.rs`, `remote.rs`):
-  the `git-guard` PreToolUse handler and git-client hook stages, the secret
-  scanner, git conflict detection + CI wait, the flock-guarded `integrate`
-  primitive with its gate-context token, and the GitHub remote-protect adapter.
+  the `git-guard` and `exec-guard` PreToolUse handlers and git-client hook
+  stages, the secret scanner, git conflict detection + CI wait, the flock-guarded
+  `integrate` primitive with its gate-context token, and the GitHub
+  remote-protect adapter.
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity
@@ -41,15 +42,20 @@ Core modules grouped by responsibility:
   types.
 
 Enforcement is spread across four planes, all reading one config
-(`.codeflow/policy.json`): git client hooks, the Claude `git-guard` hook,
-remote branch protection, and CI. Local planes are fast feedback; CI + remote
-protection are the authoritative perimeter (ADR-0002; charter §6.5). The git
-client plane carries five shims — `pre-commit`, `commit-msg`, `pre-merge-commit`
-(non-fast-forward merge commits onto protected), `reference-transaction` (the
-harness-agnostic backstop: fast-forward merges, `reset --hard`, and `branch -D`
-on protected, git ≥ 2.28), and `pre-push` (ADR-0007). PR-content checks
-(attribution/emoji, `gh pr merge` base) are git-guard/CI concerns by design —
-git hooks cannot see PR creation.
+(`.codeflow/policy.json`): git client hooks, the in-session PreToolUse (Bash)
+guards, remote branch protection, and CI. Local planes are fast feedback; CI +
+remote protection are the authoritative perimeter (ADR-0002; charter §6.5). The
+git client plane carries five shims — `pre-commit`, `commit-msg`,
+`pre-merge-commit` (non-fast-forward merge commits onto protected),
+`reference-transaction` (the harness-agnostic backstop: fast-forward merges,
+`reset --hard`, and `branch -D` on protected, git ≥ 2.28), and `pre-push`
+(ADR-0007). The in-session guard plane is two handlers — `git-guard` (git
+policy) and `exec-guard` (the `security` section: destructive commands block,
+privilege escalation warns) — and binds Codex as well as Claude through a
+byte-compatible PreToolUse payload, wired per harness in `.claude/settings.json`
+and `.codex/hooks.json` (ADR-0008). PR-content checks (attribution/emoji,
+`gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
+PR creation.
 
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite
