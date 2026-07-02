@@ -201,6 +201,52 @@ fn strip_commit_comments(message: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// pre-merge-commit
+// ---------------------------------------------------------------------------
+
+/// The pre-merge-commit stage (charter §6.1 plane 1): git fires this hook
+/// just before recording a **non-fast-forward** merge commit. When the branch
+/// being merged into is protected, block per `merge_to_protected` — unless the
+/// `codeflow integrate` gate token or a human's [`HUMAN_OVERRIDE_ENV`] is
+/// present (both sanctioned paths, ADR-0007).
+///
+/// HONEST BOUNDARY: git fires **no** client hook for a fast-forward merge
+/// (no merge commit is created), so a ff-merge onto a protected branch cannot
+/// be caught here — the Claude-layer `git-guard` catches it in-session, and the
+/// push gate + remote protection remain the perimeter for other harnesses
+/// (charter D19). See `tests::ff_merge_fires_no_client_hook` and ADR-0007.
+///
+/// # Errors
+///
+/// Returns [`HookError::Config`] when `root` is not inside a git repository.
+pub fn pre_merge_commit(
+    root: &Path,
+    policy: &GitPolicy,
+    integrate_token: bool,
+    human_override: bool,
+) -> Result<StageReport, HookError> {
+    let repo = Repository::discover(root)
+        .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
+    let mut report = StageReport::default();
+
+    let branch = current_branch(&repo);
+    if policy.merge_to_protected.is_active()
+        && policy.branch_is_protected(&branch)
+        && !integrate_token
+        && !human_override
+    {
+        report.violations.push(Violation::new(
+            "git.merge_to_protected",
+            policy.merge_to_protected,
+            format!("merge commit on protected branch '{branch}'"),
+            SANCTIONED.to_string(),
+        ));
+    }
+
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // pre-push
 // ---------------------------------------------------------------------------
 
@@ -634,6 +680,133 @@ mod tests {
     fn test_commit_msg_merge_subject_exempt_from_format() {
         let report = commit_msg(&GitPolicy::default(), "Merge branch 'main' into feat/x\n");
         assert!(report.violations.is_empty());
+    }
+
+    // -- pre-merge-commit --
+
+    #[test]
+    fn test_pre_merge_commit_blocks_on_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let report = pre_merge_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].rule, "git.merge_to_protected");
+        assert_eq!(report.violations[0].level, PolicyLevel::Block);
+    }
+
+    #[test]
+    fn test_pre_merge_commit_feature_branch_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        let report = pre_merge_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_pre_merge_commit_integrate_token_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let report = pre_merge_commit(dir.path(), &GitPolicy::default(), true, false).unwrap();
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_pre_merge_commit_human_override_passes() {
+        // ADR-0007: a human's CODEFLOW_HUMAN_OVERRIDE lets the git layer pass.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let report = pre_merge_commit(dir.path(), &GitPolicy::default(), false, true).unwrap();
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_pre_merge_commit_warn_level() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let policy = GitPolicy {
+            merge_to_protected: PolicyLevel::Warn,
+            ..GitPolicy::default()
+        };
+        let report = pre_merge_commit(dir.path(), &policy, false, false).unwrap();
+        assert_eq!(report.violations[0].level, PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_pre_merge_commit_off_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let policy = GitPolicy {
+            merge_to_protected: PolicyLevel::Off,
+            ..GitPolicy::default()
+        };
+        let report = pre_merge_commit(dir.path(), &policy, false, false).unwrap();
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_pre_merge_commit_release_glob_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "release/2.0");
+        let report = pre_merge_commit(dir.path(), &release_policy(), false, false).unwrap();
+        assert_eq!(report.violations[0].rule, "git.merge_to_protected");
+    }
+
+    #[test]
+    fn ff_merge_fires_no_client_hook() {
+        // Pins the honest boundary (ADR-0007): git runs pre-merge-commit only
+        // for a real merge COMMIT (non-fast-forward). A fast-forward merge
+        // creates no commit and fires no client hook, so it slips past this
+        // plane — caught only by the in-session git-guard; the push gate +
+        // remote protection stay the perimeter for other harnesses (D19).
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+
+        // An always-blocking pre-merge-commit hook. If it fires, the merge fails.
+        let hook = dir.path().join(".git/hooks/pre-merge-commit");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let git_try = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("git runs")
+        };
+
+        // Branch one commit ahead of main → merging it back fast-forwards.
+        git(dir.path(), &["checkout", "-b", "feat/ff"]);
+        std::fs::write(dir.path().join("ff.txt"), "ff\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: ff"]);
+        git(dir.path(), &["checkout", "main"]);
+        let ff = git_try(&["merge", "--ff-only", "feat/ff"]);
+        assert!(
+            ff.status.success(),
+            "fast-forward merge fires no client hook, so the always-block hook never runs: {}",
+            String::from_utf8_lossy(&ff.stderr)
+        );
+
+        // Now diverge main from a sibling branch to force a real merge commit.
+        git(dir.path(), &["checkout", "-b", "feat/div"]);
+        std::fs::write(dir.path().join("div.txt"), "div\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: div"]);
+        git(dir.path(), &["checkout", "main"]);
+        std::fs::write(dir.path().join("main.txt"), "main\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "chore: main advance"]);
+        let non_ff = git_try(&["merge", "--no-ff", "feat/div"]);
+        assert!(
+            !non_ff.status.success(),
+            "a non-ff merge creates a commit and DOES fire pre-merge-commit"
+        );
     }
 
     // -- pre-push --

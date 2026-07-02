@@ -14,7 +14,9 @@ pub mod validate;
 
 use std::path::PathBuf;
 
-use codeflow_core::hooks::{any_blocking, PolicyLevel, Violation, INTEGRATE_TOKEN_ENV};
+use codeflow_core::hooks::{
+    any_blocking, PolicyLevel, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV,
+};
 use codeflow_core::registry;
 
 /// `true` when the `codeflow integrate` gate-context token is present in the
@@ -22,6 +24,14 @@ use codeflow_core::registry;
 #[must_use]
 pub fn integrate_token_present() -> bool {
     std::env::var(INTEGRATE_TOKEN_ENV).is_ok_and(|v| !v.is_empty())
+}
+
+/// `true` when a human's `CODEFLOW_HUMAN_OVERRIDE=1` is present (ADR-0007).
+/// Honored only by the git-client hook plane; the git-guard never consults it
+/// and blocks in-session attempts to set it.
+#[must_use]
+pub fn human_override_present() -> bool {
+    std::env::var(HUMAN_OVERRIDE_ENV).is_ok_and(|v| v == "1")
 }
 
 /// Project root for hook evaluation: the repo containing `start`, or `start`

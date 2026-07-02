@@ -116,6 +116,13 @@ ownership = "managed"
 tiers = ["standard", "full"]
 exec = true
 
+[[entry]]
+src = "git-hooks/pre-merge-commit"
+dest = ".codeflow/git-hooks/pre-merge-commit"
+ownership = "managed"
+tiers = ["standard", "full"]
+exec = true
+
 # --- Claude settings presets (exactly one applies, chosen at init) -----------
 
 [[entry]]

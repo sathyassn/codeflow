@@ -13,6 +13,7 @@ use codeflow_core::hooks::{git_hook, policy::Policy};
 pub enum StageName {
     PreCommit,
     CommitMsg,
+    PreMergeCommit,
     PrePush,
 }
 
@@ -38,6 +39,15 @@ pub fn run(args: &GitHookArgs) -> i32 {
     let (plane, result) = match args.stage {
         StageName::PreCommit => ("pre-commit", git_hook::pre_commit(&root, &policy.git, token)),
         StageName::CommitMsg => ("commit-msg", commit_msg(&policy, &args.args)),
+        StageName::PreMergeCommit => (
+            "pre-merge-commit",
+            git_hook::pre_merge_commit(
+                &root,
+                &policy.git,
+                token,
+                super::human_override_present(),
+            ),
+        ),
         StageName::PrePush => {
             let mut stdin = String::new();
             let _ = std::io::stdin().read_to_string(&mut stdin);

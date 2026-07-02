@@ -50,6 +50,12 @@
       "sha256": "6df8b4180f04ea5791ae5c32a37993c7ae5f0c86fbf243f60268ff2dcc683c03",
       "exec": true
     },
+    ".codeflow/git-hooks/pre-merge-commit": {
+      "src": "git-hooks/pre-merge-commit",
+      "ownership": "managed",
+      "sha256": "e8b0cdabc38fd4689dc85ee542a1e0484aef4423ee9b405bbde8adca809b6bbf",
+      "exec": true
+    },
     ".codeflow/git-hooks/pre-push": {
       "src": "git-hooks/pre-push",
       "ownership": "managed",

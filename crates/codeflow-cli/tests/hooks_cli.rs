@@ -13,6 +13,7 @@ fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
     // Isolate from the developer's environment.
     cmd.env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null");
     cmd
@@ -318,6 +319,114 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
         &stdin,
     );
     assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn pre_merge_commit_blocks_on_protected_and_honors_overrides() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+
+    // Default: a merge commit on main is blocked.
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-merge-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.merge_to_protected"));
+
+    // A human's CODEFLOW_HUMAN_OVERRIDE=1 passes the git layer (ADR-0007).
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-merge-commit"])
+            .env("CODEFLOW_HUMAN_OVERRIDE", "1")
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(0), "human override passes the git layer");
+
+    // The integrate gate token also passes (sanctioned local merge).
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-merge-commit"])
+            .env("CODEFLOW_INTEGRATE_TOKEN", "gate")
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn pre_merge_commit_passes_on_feature_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-merge-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn real_wired_pre_merge_commit_blocks_nonff_but_ff_slips_past() {
+    // The full plane through git: the wired pre-merge-commit shim refuses a
+    // non-ff merge onto main, but a fast-forward merge fires no client hook
+    // and slips past (the honest boundary, ADR-0007).
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+
+    let hook = dir.path().join(".git/hooks/pre-merge-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook pre-merge-commit \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let git_merge = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+            .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+            .output()
+            .unwrap()
+    };
+
+    // Fast-forwardable branch: merge succeeds despite the block (no hook fires).
+    git(dir.path(), &["checkout", "-b", "feat/ff"]);
+    std::fs::write(dir.path().join("ff.txt"), "ff\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "feat: ff"]);
+    git(dir.path(), &["checkout", "main"]);
+    let ff = git_merge(&["merge", "--ff-only", "feat/ff"]);
+    assert!(ff.status.success(), "ff-merge fires no client hook, so it slips past");
+
+    // Diverge, forcing a real merge commit: the wired hook now refuses it.
+    git(dir.path(), &["checkout", "-b", "feat/div"]);
+    std::fs::write(dir.path().join("div.txt"), "div\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "feat: div"]);
+    git(dir.path(), &["checkout", "main"]);
+    std::fs::write(dir.path().join("main.txt"), "main\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: advance"]);
+    let non_ff = git_merge(&["merge", "--no-ff", "feat/div"]);
+    assert!(!non_ff.status.success(), "non-ff merge onto main is refused by the wired hook");
+    assert!(String::from_utf8_lossy(&non_ff.stderr).contains("git.merge_to_protected"));
 }
 
 #[test]
