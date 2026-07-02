@@ -5,7 +5,7 @@
 //! | `git-guard` | `PreToolUse` (Bash) | [`git_guard`] |
 //! | `session-orient` | `SessionStart` | [`orient`] |
 //! | `session-summary` | `SessionEnd` | [`session_summary`] |
-//! | git-hook shims | pre-commit / commit-msg / pre-push | [`git_hook`] |
+//! | git-hook shims | pre-commit / commit-msg / pre-merge-commit / reference-transaction / pre-push | [`git_hook`] |
 //!
 //! All enforcement levels are read from `.codeflow/policy.json` (charter D7:
 //! policy in config, not code) via [`policy::Policy`]; nothing is hardcoded.

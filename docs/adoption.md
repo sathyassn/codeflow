@@ -4,6 +4,22 @@ How a project takes on the discipline layer — greenfield or brownfield — wha
 gets at each tier, what codeflow owns versus what stays yours, and the daily
 loop. Every claim here reflects current behavior; nothing aspirational.
 
+## Install the binary
+
+**Once v2.0.0 is published**, install a prebuilt binary (macOS arm64/x64, Linux
+x64) onto your `PATH` with the release's shell installer:
+
+```sh
+curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+```
+
+The installer (cargo-dist) fetches the right prebuilt binary for your platform
+and places `codeflow` in your Cargo bin dir; the exact asset name is on the
+[releases page](https://github.com/sathyassn/codeflow/releases). **Works today**
+from a checkout, with a Rust toolchain: `cargo install --path crates/codeflow-cli`.
+Upgrading the binary improves every repo at once, because hooks call `codeflow`
+from `PATH` (see "The update story").
+
 ## What each tier installs
 
 Tier is recorded in `.codeflow/project.toml`; re-running `init` at a higher tier
