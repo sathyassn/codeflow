@@ -20,6 +20,10 @@ Match machinery to the work; escalate only when the lighter rung fails:
   unattended, batch, or parallel fan-out runs.
 - **Custom ad-hoc workflow** when no preset fits — author one for the
   occasion; presets are defaults, not constraints.
+- **Integration-branch flow** for a multi-task body of work — an epic of serial
+  and/or parallel tasks lands task-by-task on a shared `integration/<epic>`
+  branch, not on `main`, and the human reviews one final PR. See "Managing a
+  body of work" below.
 - **Stage and model composition lives in config-args** (`args.stages`,
   `args.models`, `[workflows]` in `.codeflow/project.toml`) — never
   hardcoded into the workflow file.
@@ -50,6 +54,41 @@ restating the implementation plan (that is design, not acceptance).
 
 Right-size the epic: it should ship in days, not weeks. If the criteria list
 will not fit on one screen, split the epic.
+
+## Managing a body of work
+
+When an epic is a multi-task body — serial chains and/or parallel tasks — do
+**not** land each task on `main`. Land them on a shared **integration branch**
+so agents proceed autonomously and the human reviews **one** final PR. Every
+other gate (commit standards, secret scan, destructive-op rules, the test gate)
+still applies on every branch; only the merge-into-`main` step is deferred.
+
+1. **Plan.** One epic with per-task acceptance criteria; mark each task
+   dependent (serial) or independent (parallelizable).
+2. **Integration branch.** Cut `integration/<epic-id>-<slug>` off `main` and
+   push it. It is **non-protected** — agents merge into it freely.
+3. **Task branches.** Each task on `feat/<epic-id>-<task-slug>`, branched *from
+   the integration branch*: serial tasks branch from the updated integration
+   after their predecessor lands; parallel tasks branch concurrently, one
+   agent + worktree each.
+4. **Land a task** by one of two sanctioned modes:
+   - **Local** — `codeflow integrate <task-branch> --into integration/<…>`:
+     flock-serialized (safe for parallel agents), rebases the task branch, runs
+     the full test gate, fast-forward-merges. Preferred for tight loops.
+   - **PR** — open a PR with base = the integration branch; CI runs (the
+     `pull_request` trigger fires regardless of base) and the agent merges on
+     green, because the base is non-protected.
+5. **Drift control** (long-running epics): periodically **merge** `origin/main`
+   *into* the integration branch. Merge only — never rebase a shared branch;
+   rebase only task branches.
+6. **Finish.** After the last task lands, run the ship flow *on the integration
+   branch* (full suite, `validate --docs`, capability/doc/epic-record updates as
+   the final commits), then raise **one** PR `integration → main` with the epic
+   summary. The human reviews and merges; delete the integration branch after.
+
+Boundaries are unchanged: `main` and every protected branch stay
+human-merge-only. The integration branch is not a backdoor — its content reaches
+`main` only through that final reviewed PR.
 
 ## When an ADR is warranted — Tier-3 triggers
 
