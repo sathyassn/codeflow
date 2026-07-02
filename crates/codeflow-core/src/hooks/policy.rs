@@ -169,12 +169,44 @@ impl GitPolicy {
     }
 }
 
+/// The `security` section of `.codeflow/policy.json` — the two levels the
+/// `exec-guard` hook enforces against a Bash command (ADR-0008). Separate from
+/// the `git` section so the `--minimal` tier transform (which only softens
+/// `git`) never touches it: `dangerous_commands` stays `block` on a scratch
+/// repo, exactly as `secret_scan` does.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecuritySection {
+    /// Destructive commands the `dangerous` module catches (rm -rf on `/`, `~`,
+    /// or system dirs; `dd` to a block device; `mkfs`; fork bombs; recursive
+    /// chmod/chown on system paths). Default `block`: never legitimate in a
+    /// project, so no sanctioned path exists — the guard is the hard line.
+    pub dangerous_commands: PolicyLevel,
+    /// Privilege escalation the `privilege` module catches (sudo/su/doas/pkexec,
+    /// shell `-c` chains, `LD_PRELOAD`/PATH injection). Default `warn`, NOT
+    /// block: a hook exit-2 here would override even an explicit human
+    /// ask-approval, and the settings `ask` tier is what owns sudo prompting.
+    /// The exec-guard only surfaces in-session feedback; it never vetoes the
+    /// human decision the ask tier exists to capture.
+    pub privilege_escalation: PolicyLevel,
+}
+
+impl Default for SecuritySection {
+    fn default() -> Self {
+        Self {
+            dangerous_commands: PolicyLevel::Block,
+            privilege_escalation: PolicyLevel::Warn,
+        }
+    }
+}
+
 /// Full `.codeflow/policy.json` shape (only the parts the hook plane reads).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Policy {
     pub schema_version: u32,
     pub git: GitPolicy,
+    pub security: SecuritySection,
 }
 
 impl Policy {
@@ -306,6 +338,46 @@ mod tests {
         assert_eq!(
             from_asset.git.force_push_unprotected,
             defaults.force_push_unprotected
+        );
+    }
+
+    #[test]
+    fn test_security_section_defaults() {
+        // Owner posture (ADR-0008): destructive commands are the hard line,
+        // privilege escalation is advisory (the settings `ask` tier prompts).
+        let s = SecuritySection::default();
+        assert_eq!(s.dangerous_commands, PolicyLevel::Block);
+        assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_policy_default_carries_security_section() {
+        let p = Policy::default();
+        assert_eq!(p.security.dangerous_commands, PolicyLevel::Block);
+        assert_eq!(p.security.privilege_escalation, PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_security_section_missing_falls_back_to_defaults() {
+        // Consumer policy.json predating ADR-0008 has no `security` key; the
+        // struct-level serde default must fill it with the strict baseline.
+        let p: Policy = serde_json::from_str(r#"{"schema_version":1,"git":{}}"#).unwrap();
+        assert_eq!(p.security.dangerous_commands, PolicyLevel::Block);
+        assert_eq!(p.security.privilege_escalation, PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_shipped_asset_security_matches_defaults() {
+        let asset = include_str!("../../../../assets/base/policy.json");
+        let from_asset: Policy = serde_json::from_str(asset).unwrap();
+        let defaults = SecuritySection::default();
+        assert_eq!(
+            from_asset.security.dangerous_commands,
+            defaults.dangerous_commands
+        );
+        assert_eq!(
+            from_asset.security.privilege_escalation,
+            defaults.privilege_escalation
         );
     }
 

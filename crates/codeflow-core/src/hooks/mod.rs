@@ -1,17 +1,24 @@
-//! The v2 hook plane (charter §3.3): exactly four custom hooks.
+//! The v2 hook plane (charter §3.3; harness parity ADR-0008): the custom hooks.
 //!
 //! | Hook | Event | Module |
 //! |---|---|---|
 //! | `git-guard` | `PreToolUse` (Bash) | [`git_guard`] |
+//! | `exec-guard` | `PreToolUse` (Bash) | [`exec_guard`] |
 //! | `session-orient` | `SessionStart` | [`orient`] |
 //! | `session-summary` | `SessionEnd` | [`session_summary`] |
 //! | git-hook shims | pre-commit / commit-msg / pre-merge-commit / reference-transaction / pre-push | [`git_hook`] |
+//!
+//! The two `PreToolUse` guards are harness-agnostic by design: the payload
+//! contract (`tool_name`, `tool_input.command`, `cwd`) is byte-compatible with
+//! the Codex hooks engine, so the same `codeflow hook <guard>` binaries bind a
+//! Codex session via `.codex/hooks.json` exactly as they bind Claude (ADR-0008).
 //!
 //! All enforcement levels are read from `.codeflow/policy.json` (charter D7:
 //! policy in config, not code) via [`policy::Policy`]; nothing is hardcoded.
 //! Every blocking message names the violated policy rule and the sanctioned
 //! path (charter §6.2).
 
+pub mod exec_guard;
 pub mod git_guard;
 pub mod git_hook;
 pub mod orient;
@@ -21,7 +28,7 @@ pub mod scan;
 pub mod session_summary;
 pub mod standards;
 
-pub use policy::{GitPolicy, Policy, PolicyLevel};
+pub use policy::{GitPolicy, Policy, PolicyLevel, SecuritySection};
 pub use repo::RepoInfo;
 
 /// Environment variable carrying the `codeflow integrate` gate-context token

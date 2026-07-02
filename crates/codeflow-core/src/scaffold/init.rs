@@ -609,4 +609,15 @@ mod tests {
         assert_eq!(v["git"]["pr_merge_to_protected"], "warn");
         assert_eq!(v["git"]["local_ref_protection"], "warn");
     }
+
+    #[test]
+    fn minimal_leaves_security_section_untouched() {
+        // The transform only softens `git` (ADR-0008): on a scratch repo a
+        // destructive `rm -rf /` stays blocked, exactly as `secret_scan` does.
+        let asset = include_str!("../../../../assets/base/policy.json");
+        let softened = soften_policy_for_minimal(asset).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&softened).unwrap();
+        assert_eq!(v["security"]["dangerous_commands"], "block");
+        assert_eq!(v["security"]["privilege_escalation"], "warn");
+    }
 }

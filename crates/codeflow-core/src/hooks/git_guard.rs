@@ -740,6 +740,28 @@ mod tests {
     }
 
     #[test]
+    fn test_payload_parses_codex_shaped_extra_fields() {
+        // The Codex hooks engine sends the same field names PLUS extras
+        // (turn_id, model, permission_mode "dontAsk") and a nullable
+        // transcript_path. The lenient payload must ignore the extras and parse
+        // — this is what lets one `codeflow hook <guard>` serve both harnesses.
+        let json = r#"{
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "session_id": "abc",
+            "cwd": "/repo",
+            "transcript_path": null,
+            "turn_id": "t-1",
+            "model": "gpt-5.5",
+            "permission_mode": "dontAsk"
+        }"#;
+        let p = HookPayload::parse(json).unwrap();
+        assert_eq!(p.bash_command(), Some("git status"));
+        assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
+    }
+
+    #[test]
     fn test_payload_non_bash_tool_ignored() {
         let json = r#"{"tool_name":"Write","tool_input":{"file_path":"a"}}"#;
         let p = HookPayload::parse(json).unwrap();

@@ -4,6 +4,9 @@
 //! Exit-code contract:
 //! - `git-guard`: 0 allow, 2 block (`PreToolUse` deny) with the violated rule
 //!   and sanctioned path on stderr.
+//! - `exec-guard`: 0 allow (or warn), 2 block — same `PreToolUse` (Bash)
+//!   contract, enforcing the `security` policy section (ADR-0008). Payload is
+//!   parsed leniently so the same subcommand serves the Codex hooks engine.
 //! - `session-orient`: digest on stdout, always 0.
 //! - `session-summary`: always 0 — a failed summary must never fail the
 //!   session (warn on stderr instead).
@@ -11,13 +14,16 @@
 use std::io::Read;
 
 use clap::Args;
-use codeflow_core::hooks::{git_guard, orient, policy::Policy, session_summary};
+use codeflow_core::hooks::{exec_guard, git_guard, orient, policy::Policy, session_summary};
 
 /// Which Claude-layer hook to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum HookName {
     /// `PreToolUse` (Bash): enforce policy.json git rules in-session.
     GitGuard,
+    /// `PreToolUse` (Bash): enforce policy.json `security` rules (dangerous
+    /// commands, privilege escalation). Harness-agnostic — also serves Codex.
+    ExecGuard,
     /// `SessionStart`: emit the orient digest to stdout.
     SessionOrient,
     /// `SessionEnd`: append the session record to the ledger.
@@ -41,6 +47,7 @@ pub fn run(args: &HookArgs) -> i32 {
 
     match args.name {
         HookName::GitGuard => git_guard(&stdin),
+        HookName::ExecGuard => exec_guard(&stdin),
         HookName::SessionOrient => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
             print!("{}", orient::generate(&super::project_root(&cwd)));
@@ -84,6 +91,39 @@ fn git_guard(stdin: &str) -> i32 {
     };
     let violations = git_guard::evaluate(command, &ctx);
     super::render_outcome("git-guard", &violations, &[], 2)
+}
+
+/// `exec-guard` (`PreToolUse` Bash): run the dangerous/privilege security
+/// modules against the command per the `security` policy section (ADR-0008).
+///
+/// Payload parsing reuses [`git_guard::HookPayload`], which is lenient by
+/// construction (serde ignores the extra `turn_id`/`model`/`permission_mode`
+/// fields and the nullable `transcript_path` a Codex payload carries), so this
+/// one handler serves both the Claude and Codex hooks engines unchanged.
+fn exec_guard(stdin: &str) -> i32 {
+    let payload = match git_guard::HookPayload::parse(stdin) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("codeflow exec-guard: warning: unreadable hook payload ({e}); allowing");
+            return 0;
+        }
+    };
+    let Some(command) = payload.bash_command() else {
+        return 0; // not a Bash tool call
+    };
+
+    let cwd = payload
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| ".".into());
+    let root = super::project_root(&cwd);
+    // The `security` section is not touched by bootstrap grace (like
+    // `secret_scan`, a dangerous command is never graced), so a plain load is
+    // enough — no need for `load_effective`.
+    let policy = Policy::load(&root);
+    let violations = exec_guard::evaluate(command, &policy.security);
+    super::render_outcome("exec-guard", &violations, &[], 2)
 }
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`

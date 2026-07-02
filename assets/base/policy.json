@@ -19,5 +19,9 @@
     "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "spike/", "experiment/", "integration/"],
     "secret_scan": "block",
     "test_gate_on_push": "warn"
+  },
+  "security": {
+    "dangerous_commands": "block",
+    "privilege_escalation": "warn"
   }
 }
