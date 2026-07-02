@@ -4,11 +4,11 @@
 //! pathflow domains, file-scope claims, external task-tracker mirroring)
 //! are removed. Markdown + JSONL are the source of truth (charter D17).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::status::EpicStatus;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Epic {
     /// ULID-based internal id (e.g., `epic-01abc...`).
     pub id: String,
@@ -23,6 +23,49 @@ pub struct Epic {
     pub pr_number: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Deserialization tolerates the canonical hand-authored planning
+/// frontmatter (the pm-template/validator shape): `created` is accepted as
+/// an alias of `created_at`, and a missing `updated_at` falls back to the
+/// creation timestamp. Serialization stays canonical (`created_at` +
+/// `updated_at`), so store rewrites normalize the record. Fields the
+/// docs-lint owns (capabilities/adrs/specs) are ignored here by design.
+impl<'de> Deserialize<'de> for Epic {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            id: String,
+            format_id: String,
+            title: String,
+            #[serde(default)]
+            summary: Option<String>,
+            status: EpicStatus,
+            work_type: String,
+            priority: String,
+            #[serde(default)]
+            pr_number: Option<i64>,
+            #[serde(alias = "created")]
+            created_at: String,
+            #[serde(default)]
+            updated_at: Option<String>,
+        }
+
+        let w = Wire::deserialize(deserializer)?;
+        let updated_at = w.updated_at.unwrap_or_else(|| w.created_at.clone());
+        Ok(Epic {
+            id: w.id,
+            format_id: w.format_id,
+            title: w.title,
+            summary: w.summary,
+            status: w.status,
+            work_type: w.work_type,
+            priority: w.priority,
+            pr_number: w.pr_number,
+            created_at: w.created_at,
+            updated_at,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +154,57 @@ mod tests {
         let epic = make_epic();
         let debug = format!("{epic:?}");
         assert!(debug.contains("Test Epic"));
+    }
+}
+
+#[cfg(test)]
+mod planning_frontmatter_tests {
+    use super::*;
+
+    /// The literal EPC-001 frontmatter shape (hand-authored planning doc):
+    /// `created` instead of `created_at`, no `updated_at`, plus doc-graph
+    /// fields (capabilities/adrs/specs) the model deliberately ignores.
+    #[test]
+    fn test_epic_parses_canonical_planning_frontmatter() {
+        let yaml = r"
+id: EPC-001
+format_id: EPC-001
+title: v2 bootstrap
+status: complete
+work_type: feat
+priority: high
+capabilities: [CAP-001, CAP-002]
+adrs: [ADR-0001, ADR-0002]
+specs: []
+created: 2026-06-11
+";
+        let epic: Epic = serde_yaml::from_str(yaml).expect("planning frontmatter must parse");
+        assert_eq!(epic.format_id, "EPC-001");
+        assert_eq!(epic.created_at, "2026-06-11");
+        assert_eq!(
+            epic.updated_at, "2026-06-11",
+            "updated_at falls back to created"
+        );
+        assert_eq!(epic.status, EpicStatus::Complete);
+    }
+
+    /// The canonical store shape still round-trips unchanged.
+    #[test]
+    fn test_epic_canonical_shape_round_trips() {
+        let yaml = r"
+id: epic-01abc123
+format_id: EPC-002
+title: canonical
+status: draft
+work_type: feat
+priority: normal
+created_at: 2026-07-01T00:00:00Z
+updated_at: 2026-07-02T00:00:00Z
+";
+        let epic: Epic = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(epic.updated_at, "2026-07-02T00:00:00Z");
+        let out = serde_yaml::to_string(&epic).unwrap();
+        assert!(out.contains("created_at:"), "serialization stays canonical");
+        assert!(out.contains("updated_at:"));
     }
 }
