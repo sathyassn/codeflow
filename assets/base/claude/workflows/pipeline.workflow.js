@@ -12,8 +12,10 @@
 //   task       string     what to build (required)
 //   criteria   string[]   testable acceptance criteria (required)
 //   stages     string[]?  ordered preset drawn from: analyze, plan, build,
-//                         security, review, qa, verify.
+//                         security, review, consult, qa, verify.
 //                         Default: ['build', 'review', 'verify'].
+//                         'consult' is an optional cross-vendor second opinion
+//                         (codex, read-only); off unless named (ADR-0005).
 //   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
 //                         stage defaults to 'inherit' (the caller's model).
 //   maxRework  number?    build-attempt budget shared by all gate back-edges
@@ -124,6 +126,24 @@ const STAGES = {
     'Run `codeflow validate` and `codeflow test --mode quick`; any nonzero exit is an automatic changes_requested.'),
   qa: gate('qa',
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
+  // Optional cross-vendor consult (ADR-0005): a Bash-driven agent step that runs
+  // an independent read-only codex review of the built diff via the cf-delegate
+  // skill's canonical invocation, then synthesizes it. kind 'gate' so its verdict
+  // shares the one rework budget with review; off unless 'consult' is in the preset.
+  consult: {
+    kind: 'gate',
+    model: A.models?.consult ?? 'inherit',
+    schema: VERDICT,
+    prompt: () => [
+      `Independent cross-vendor consult on the latest build for: ${TASK}`, WHERE,
+      `Acceptance criteria:\n${CRITERIA}`,
+      `Builder summary:\n${ctx.buildSummary || '(not captured)'}`,
+      'Load the cf-delegate skill. First run `codex login status`: if codex is missing or unauthenticated, this optional tier is unavailable — return verdict approved with one finding noting the consult was skipped (degrade legibly; never block the pipeline on an optional delegate).',
+      'Otherwise run a READ-ONLY codex consult via the skill\'s canonical invocation — `codex exec --json --cd "$PWD" --skip-git-repo-check --sandbox read-only "<review the built diff against the criteria; cite file:line; end with VERDICT: approved or changes_requested>"` — and read the reply from the item.completed agent_message (.item.text).',
+      'Synthesize codex\'s reply against your own read of the diff; verify each point yourself (never paste it verbatim).',
+      "Return verdict 'changes_requested' ONLY for substantive defects you can confirm; otherwise 'approved'. One finding string per issue.",
+    ].filter(Boolean).join('\n\n'),
+  },
   verify: {
     kind: 'final',
     model: A.models?.verify ?? 'inherit',
