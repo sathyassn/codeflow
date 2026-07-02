@@ -61,6 +61,15 @@ pub struct GitPolicy {
     pub force_push_unprotected: PolicyLevel,
     pub delete_protected: PolicyLevel,
     pub hard_reset_protected: PolicyLevel,
+    /// A merge commit landing on a protected branch (the git layer's
+    /// `pre-merge-commit` stage and git-guard's `git merge`/`git cherry-pick`
+    /// interception). Agents land protected merges only via PR or
+    /// `codeflow integrate`; a human may override the git layer with
+    /// [`HUMAN_OVERRIDE_ENV`](super::HUMAN_OVERRIDE_ENV).
+    pub merge_to_protected: PolicyLevel,
+    /// A `gh pr merge` whose base branch is protected (git-guard only). A
+    /// human merges via the GitHub UI or their own terminal; agents do not.
+    pub pr_merge_to_protected: PolicyLevel,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     pub ai_attribution: PolicyLevel,
@@ -81,6 +90,8 @@ impl Default for GitPolicy {
             force_push_unprotected: PolicyLevel::Allow,
             delete_protected: PolicyLevel::Block,
             hard_reset_protected: PolicyLevel::Block,
+            merge_to_protected: PolicyLevel::Block,
+            pr_merge_to_protected: PolicyLevel::Block,
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build",
@@ -202,6 +213,8 @@ impl GitPolicy {
         self.force_push_unprotected = PolicyLevel::Off;
         self.delete_protected = PolicyLevel::Off;
         self.hard_reset_protected = PolicyLevel::Off;
+        self.merge_to_protected = PolicyLevel::Off;
+        self.pr_merge_to_protected = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
@@ -244,6 +257,8 @@ mod tests {
         assert_eq!(g.force_push_unprotected, PolicyLevel::Allow);
         assert_eq!(g.delete_protected, PolicyLevel::Block);
         assert_eq!(g.hard_reset_protected, PolicyLevel::Block);
+        assert_eq!(g.merge_to_protected, PolicyLevel::Block);
+        assert_eq!(g.pr_merge_to_protected, PolicyLevel::Block);
         assert_eq!(g.commit_format, PolicyLevel::Block);
         assert_eq!(g.commit_types.len(), 10);
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
@@ -267,6 +282,11 @@ mod tests {
         assert_eq!(from_asset.git.commit_types, defaults.commit_types);
         assert_eq!(from_asset.git.branch_prefixes, defaults.branch_prefixes);
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);
+        assert_eq!(from_asset.git.merge_to_protected, defaults.merge_to_protected);
+        assert_eq!(
+            from_asset.git.pr_merge_to_protected,
+            defaults.pr_merge_to_protected
+        );
         assert_eq!(
             from_asset.git.force_push_unprotected,
             defaults.force_push_unprotected
@@ -381,6 +401,8 @@ mod tests {
         assert!(!armed);
         assert_eq!(policy.git.commit_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.push_to_protected, PolicyLevel::Off);
+        assert_eq!(policy.git.merge_to_protected, PolicyLevel::Off);
+        assert_eq!(policy.git.pr_merge_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.commit_format, PolicyLevel::Off);
         // Secrets are never graced (charter §6.3).
         assert_eq!(policy.git.secret_scan, PolicyLevel::Block);

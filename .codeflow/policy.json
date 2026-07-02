@@ -11,6 +11,8 @@
     "force_push_unprotected": "allow",
     "delete_protected": "block",
     "hard_reset_protected": "block",
+    "merge_to_protected": "block",
+    "pr_merge_to_protected": "block",
     "commit_format": "block",
     "commit_types": [
       "feat",

@@ -31,6 +31,17 @@ pub use repo::RepoInfo;
 /// the hard line.
 pub const INTEGRATE_TOKEN_ENV: &str = "CODEFLOW_INTEGRATE_TOKEN";
 
+/// Environment variable a **human** exports to override the git-layer merge
+/// guard — `CODEFLOW_HUMAN_OVERRIDE=1 git merge …` lets a person land a merge
+/// on a protected branch from their own terminal (ADR-0007).
+///
+/// HUMAN-ONLY by contract: it is honored **only** by the git-client hook
+/// plane (which cannot tell who invoked git), never by the Claude `git-guard`
+/// layer — an agent does not get to claim humanity. The git-guard actively
+/// blocks any in-session attempt to set this (or [`INTEGRATE_TOKEN_ENV`]):
+/// setting an override token from inside a session is bypass, not override.
+pub const HUMAN_OVERRIDE_ENV: &str = "CODEFLOW_HUMAN_OVERRIDE";
+
 /// A single policy violation found by a hook plane.
 #[derive(Debug, Clone)]
 pub struct Violation {

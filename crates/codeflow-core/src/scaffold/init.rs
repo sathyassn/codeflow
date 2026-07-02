@@ -597,4 +597,15 @@ mod tests {
         assert_eq!(v["git"]["test_gate_on_push"], "off");
         assert_eq!(v["git"]["protected_branches"][0], "main");
     }
+
+    #[test]
+    fn minimal_softens_new_merge_keys_from_shipped_asset() {
+        // The transform enumerates keys generically, so the shipped asset's
+        // new merge keys must soften to `warn` with no per-key wiring.
+        let asset = include_str!("../../../../assets/base/policy.json");
+        let softened = soften_policy_for_minimal(asset).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&softened).unwrap();
+        assert_eq!(v["git"]["merge_to_protected"], "warn");
+        assert_eq!(v["git"]["pr_merge_to_protected"], "warn");
+    }
 }
