@@ -12,14 +12,19 @@ where a mistake is irreversible or invisible.
 
 ## Choosing process weight
 
-Match machinery to the work; escalate only when the lighter rung fails:
+Match machinery to the work; escalate only when the lighter rung fails. Every
+rung that builds code carries an independent `cf-reviewer` pass — review is a
+stage, not a courtesy, and self-review is not review.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Inline `/cf-develop` loop** for interactive work — the default path.
-- **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`) for
-  unattended, batch, or parallel fan-out runs.
-- **Custom ad-hoc workflow** when no preset fits — author one for the
-  occasion; presets are defaults, not constraints.
+- **Inline `/cf-develop` loop** for interactive work — the default path:
+  build → independent review → verify, with bounded rework.
+- **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`) for unattended,
+  batch, or parallel fan-out runs — the same build/review/verify stages,
+  composed from a named preset.
+- **Custom ad-hoc workflow** when no preset fits — for genuinely novel
+  orchestration (a one-off audit sweep, a migration), not a shortcut around the
+  review stage. Presets are defaults, not constraints.
 - **Integration-branch flow** for a multi-task body of work — an epic of serial
   and/or parallel tasks lands task-by-task on a shared `integration/<epic>`
   branch, not on `main`, and the human reviews one final PR. See "Managing a

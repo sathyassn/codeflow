@@ -16,14 +16,18 @@
 - Never set `CODEFLOW_HUMAN_OVERRIDE` or the integrate gate token in-session —
   git-guard blocks it as laundering. Those overrides are human-only, run from a
   human's own terminal; an agent lands work via a human-merged PR or `integrate`.
-<!-- codeflow:managed:end -->
 
 ## Workflows
 
-- Composable pipeline: `.claude/workflows/pipeline.workflow.js` — user-owned
-  reference; adapt freely, `codeflow update` never touches it.
-- Presets via `args.stages`; per-stage models via `args.models` — or add an
-  optional `[workflows]` table to `.codeflow/project.toml`: read it and pass
-  the values through as args.
-- Presets are defaults, not constraints — author a custom workflow ad hoc when
-  the work fits no preset.
+- Build work through build → independent review → verify: `/cf-develop` inline
+  for a feature or change; the pipeline (`.claude/workflows/pipeline.workflow.js`)
+  for batch, parallel, or unattended runs. Review is a stage, not optional —
+  `cf-reviewer` is the independent evaluator, and self-review is not review.
+- Match weight to work: trivial → just do it; a feature or change → `/cf-develop`;
+  a batch/parallel or multi-task epic → the pipeline preset or the
+  integration-branch flow; nothing fits → author a custom ad-hoc workflow. Full
+  ladder in the `cf-method` skill.
+- Compose stages and models in config (`args.stages`, `args.models`, or a
+  `[workflows]` table in `.codeflow/project.toml`) — never hardcode them; the
+  pipeline file is user-owned and `codeflow update` never touches it.
+<!-- codeflow:managed:end -->
