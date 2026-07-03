@@ -6,17 +6,25 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-**Once v2.0.0 is published**, install a prebuilt binary (macOS arm64/x64, Linux
-x64) onto your `PATH` with the release's shell installer:
+`codeflow` is a single binary. **This repo is private**, so its prebuilt GitHub
+Release assets are not anonymously downloadable — installation is authenticated.
+
+Primary path (needs a Rust toolchain), from a checkout:
 
 ```sh
-curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+cargo install --path crates/codeflow-cli
 ```
 
-The installer (cargo-dist) fetches the right prebuilt binary for your platform
-and places `codeflow` in your Cargo bin dir; the exact asset name is on the
-[releases page](https://github.com/sathyassn/codeflow/releases). **Works today**
-from a checkout, with a Rust toolchain: `cargo install --path crates/codeflow-cli`.
+Prebuilt binaries (macOS arm64/x64, Linux x64) are published as private Release
+assets by cargo-dist on each `vX.Y.Z` tag. Installing them on another machine
+requires a GitHub token with read access to the repo — your own `gh auth token`,
+or a PAT with the `repo` (classic) or Contents: Read (fine-grained) scope. The
+token authenticates both the download of `codeflow-cli-installer.sh` and the
+installer's own fetch of the platform tarball from the private release; see the
+[releases page](https://github.com/sathyassn/codeflow/releases) for the assets.
+If the repo is later made public, the standard installer works with no token:
+`curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh`.
+
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
 
