@@ -119,6 +119,17 @@ re-threading the call sites.
       the honest-agent floor; a determined agent with an interpreter or a
       pipe-to-shell bypasses local guards, which is precisely why the boundary
       is remote branch protection + CI, not the client.
+    - **Transparent process launchers are the same unbounded family.** The
+      guard resolves the grammar-free launcher prefixes (`command`, `builtin`,
+      `exec`, the `env` family) to the real program, but the wider set that runs
+      a following command in a modified environment — `nohup`, `timeout`,
+      `nice`, `stdbuf`, `setsid`, `ionice`, `taskset`, … — is open-ended and
+      each carries its own option/positional grammar. Enumerating a handful
+      gives false assurance (the next one still passes) and fragile per-launcher
+      parsing risks false positives on legitimate use (`timeout 5 cargo test`),
+      so they are deliberately not enumerated; a `nohup bash -c 'git …'` on a
+      protected branch is a floor-residual backstopped by remote + CI, not the
+      client.
     - The reference-transaction stage still consults the local `refs/remotes`
       ref for the exact-match sync case, so an off-Claude agent that both writes
       `refs/remotes` and fast-forwards onto it can still pass that one check.
