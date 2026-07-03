@@ -2,7 +2,7 @@
 
 <!-- WHY layer. Human-owned: agents propose changes here, the human accepts.
      Keep it small and stable — this file should change rarely.
-     `codeflow doctor` flags epics whose scope violates the non-goals below. -->
+     The non-goals below are what planning is checked against. -->
 
 ## Purpose
 

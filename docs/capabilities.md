@@ -60,13 +60,16 @@ epics: [EPC-001]
 adrs: [ADR-0002]
 ```
 
-Git discipline enforced across three local planes reading one config
-(`.codeflow/policy.json.git`): git client hooks (pre-commit secret scan +
-staged-.env, commit-msg format/attribution/emoji, pre-push branch naming and
-protected-branch rules), the Claude `git-guard` PreToolUse hook (instant
-in-session feedback on force-push/hard-reset/delete dodges client hooks can't
-see), and CI re-running the same checks as the perimeter. Every rule is a
-policy value, user-flippable per repo.
+Git discipline enforced across four planes reading one config (the `git`
+section of `.codeflow/policy.json`). Two give fast local feedback — the git
+client hooks (pre-commit secret scan + staged-.env, commit-msg
+format/attribution/emoji, pre-merge-commit and reference-transaction
+protected-branch merge/ref rules, pre-push branch naming and protected-branch
+rules) and the Claude `git-guard` PreToolUse hook (in-session immediacy, plus
+the `gh pr merge` and PR-body checks no client hook can see). Two are the
+authoritative perimeter — CI re-running the same checks and remote branch
+protection (`codeflow remote protect`). Every rule is a policy value,
+user-flippable per repo.
 
 ## CAP-004 — test-gate
 
@@ -80,10 +83,11 @@ epics: [EPC-001]
 adrs: []
 ```
 
-`codeflow test [--mode full|quick]` runs the generic test engine against
-configured targets (`.codeflow/test-config.json`) or runtime stack detection.
-No stack detected is a loud no-op; with a stack it is a real gate, wired into
-pre-push via the `test_gate_on_push` policy and re-run in CI.
+`codeflow test [--mode full|quick|essential]` runs the generic test engine
+against configured targets (`.codeflow/test-config.json`) or runtime stack
+detection (`quick` is an alias for `essential`, the lighter mode). No stack
+detected is a loud no-op; with a stack it is a real gate, wired into pre-push
+via the `test_gate_on_push` policy and re-run in CI.
 
 ## CAP-005 — integrate
 
@@ -154,9 +158,9 @@ adrs: [ADR-0002]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` reports the live enforcement matrix per plane — hooks,
-Claude wiring, config, permissions, network — so degradation is always
-visible, never silent.
+`codeflow doctor` runs seven health checks — hooks, Claude wiring, config,
+permissions, network, delegates, and repo integrity — so degradation is
+always visible, never silent.
 
 ## CAP-009 — cross-vendor-delegation
 
