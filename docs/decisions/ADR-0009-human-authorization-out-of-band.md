@@ -47,31 +47,45 @@ floor**, never as a boundary against a determined one, and harden it on that
 basis while recording the residuals honestly:
 
 - **Hook/policy integrity** (`git.hook_integrity`, default `block`,
-  `--minimal`-softenable): the guard blocks `git config core.hooksPath` (set and
-  `--unset`, but not a `--get` read), `git -c core.hooksPath=`, the hook-skip env
+  `--minimal`-softenable): the guard blocks hook-path manipulation via
+  `git config core.hooksPath` (set and `--unset`, not a `--get` read),
+  `git -c core.hooksPath=`, and git's `GIT_CONFIG_*` env mechanism
+  (`GIT_CONFIG_KEY_n=core.hooksPath`, `GIT_CONFIG_PARAMETERS`); the hook-skip env
   prefixes (`GIT_SKIP_HOOKS=`, `HUSKY=0`, `SKIP_HOOKS=`,
-  `PRE_COMMIT_ALLOW_NO_CONFIG=`, `GIT_HOOKS_PATH=`), and Bash writes/removes
+  `PRE_COMMIT_ALLOW_NO_CONFIG=`, `GIT_HOOKS_PATH=`); and Bash writes/removes
   (`rm`/`mv`/`cp`-dest/`tee`/`chmod`/`sed -i`/`git rm`/redirects) targeting the
   hook shims (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
-  (`.codeflow/policy.json`, `.codeflow/project.toml`). Reads stay allowed.
+  (`.codeflow/policy.json`, `.codeflow/project.toml`). The matchers are
+  *generalized*, not spelling lists: config keys compare case-insensitively
+  (git keys are case-insensitive); paths are normalized (`//`, `/./`, trailing
+  and leading `./`) before comparison; the redirect matcher recognizes the
+  operator *shape* (`\d*>`, `>>`, `>|`) rather than a fixed set. Reads stay
+  allowed.
 - **Reference-transaction oracle**: the sync allowance narrows to an *exact*
-  match with `refs/remotes/origin/<branch>` (the state a `git pull`
-  fast-forward produces); the prior "or an ancestor of it" allowance is dropped.
-  The git-guard additionally forbids writing `refs/remotes/*/<protected>` so the
-  oracle cannot be poisoned in the Claude plane. `git pull` on a protected
-  branch stays allowed (verified end-to-end).
+  match with the branch's remote-tracking head (the state a `git pull`
+  fast-forward produces) — the branch's *configured* upstream when set (so a
+  non-origin `git pull upstream main` is not a false positive), else
+  `refs/remotes/origin/<branch>`; the prior "or an ancestor of it" allowance is
+  dropped. The git-guard additionally forbids writing `refs/remotes/*/<protected>`
+  so the oracle cannot be poisoned in the Claude plane. `git pull` on a
+  protected branch stays allowed (verified end-to-end).
 - **Bootstrap grace**: `policy_armed = false` is honored only in the genuine
   pre-first-commit window (an unborn HEAD). Once any commit exists, a disarmed
   flag is ignored and the policy is armed — so a mid-session flip is inert
   however it is written.
 - **Token detection**: the guard expands the shell constructs an agent can hide
-  a `git`/`gh` behind — subshells `( )`, brace groups `{ }`, `bash -c '…'`,
-  `$(…)`/backticks, newlines, backgrounding `&` — and resolves the effective
-  target of a retargeted op (`-C`, `--git-dir`, `GIT_DIR=`, `cd X &&`) against
-  the *target* repo's branch via an injected resolver. Unknown ref-writers
-  (`update-ref` of a protected `refs/heads`/`refs/remotes`, `symbolic-ref`,
-  `fast-import`) and bulk pushes (`--all`/`--mirror`/wildcard refspecs, counted
-  as touching every protected branch) are evaluated conservatively.
+  a `git`/`gh` behind — subshells `( )`, brace groups `{ }`, `bash -c '…'`
+  (including a clustered `-lc` and an `env FOO=1 bash -c …` prefix),
+  `eval '…'`, `$(…)`/backticks, newlines, backgrounding `&` — resolving the
+  effective program through a shared launcher-normalization (leading `VAR=val`,
+  `command`/`builtin`/`exec`, and the `env` family in any path form), so the
+  program is judged by what runs, not the surface word. It resolves the
+  effective target of a retargeted op (`-C`, `--git-dir`, `GIT_DIR=`, `cd X &&`)
+  against the *target* repo's branch via an injected resolver. Unknown
+  ref-writers (`update-ref` of a protected `refs/heads`/`refs/remotes`,
+  `symbolic-ref`, `fast-import`) and bulk pushes (`--all`/`--mirror`/wildcard
+  refspecs, counted as touching every protected branch) are evaluated
+  conservatively.
 - **Override laundering**: also catches `/usr/bin/env VAR=`, `command env`,
   `declare -x`/`typeset`/`readonly`, and an override carried inside a
   `git config alias.*` value.
@@ -94,12 +108,23 @@ re-threading the call sites.
   sees only Bash tool calls, so the Write/Edit tools can still overwrite a hook
   or `project.toml` without passing through it — which is exactly why the
   bootstrap-grace fix is a *runtime* inertness, not merely a write-block.
-  Residuals, all backstopped by remote + CI (D19): the reference-transaction
-  stage still consults the local `refs/remotes` ref for the exact-match sync
-  case, so an off-Claude agent that both writes `refs/remotes` and
-  fast-forwards onto it can still pass that one check; effective-cwd resolution
-  falls back to the session branch when no resolver is available or the target
-  dir is unreadable; and deeply obfuscated shell nesting can still hide a token.
+  Residuals, all backstopped by remote + CI (D19):
+    - **Interpreter / pipe-to-shell indirection is unbounded and deliberately
+      not enumerated.** An interpreter (`python3 -c '…'`, `perl -e`, `ruby -e`,
+      `node -e`) or a pipe-to-shell (`echo 'git …' | sh`, `| bash`, `xargs
+      git`) can run any git command or write any file with no spelling the
+      guard can match — chasing each interpreter and pipe form is whack-a-mole.
+      The guard blocks the direct and common-wrapper spellings
+      (shell `-c`, `eval`, subshells, substitution, launcher prefixes) to raise
+      the honest-agent floor; a determined agent with an interpreter or a
+      pipe-to-shell bypasses local guards, which is precisely why the boundary
+      is remote branch protection + CI, not the client.
+    - The reference-transaction stage still consults the local `refs/remotes`
+      ref for the exact-match sync case, so an off-Claude agent that both writes
+      `refs/remotes` and fast-forwards onto it can still pass that one check.
+    - Effective-cwd resolution falls back to the session branch when no resolver
+      is available or the target dir is unreadable; path normalization does not
+      resolve `..` traversal.
   These are floor-raises against honest mistakes, not defenses against a
   determined adversary.
 - The env-var human override remains a convenience, not authentication — it is
