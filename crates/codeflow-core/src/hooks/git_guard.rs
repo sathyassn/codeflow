@@ -469,22 +469,39 @@ enum RedirectTarget<'a> {
 
 /// If `token` is a write-redirect operator, classify where its target is.
 /// Handles an optional leading file-descriptor number (`1>`, `2>>`), clobber
-/// `>|`, and append `>>` — a *shape*, not an enumerated set. A bare `>&` fd
-/// duplication (`2>&1`) is not a file write.
+/// `>|`, append `>>`, and the both-streams forms (`&>file`, `>&file`) — a
+/// *shape*, not an enumerated set. A `>&`/`&>` followed by a digit or `-`
+/// (`2>&1`, `>&-`) duplicates or closes an fd and is not a file write; a `>&`
+/// followed by a filename (csh/bash `>&file`) writes both streams to it.
 fn redirect_target(token: &str) -> Option<RedirectTarget<'_>> {
+    // `&>file` / `&>>file`: bash redirect of both stdout and stderr to a file.
+    if let Some(rest) = token.strip_prefix("&>>").or_else(|| token.strip_prefix("&>")) {
+        return Some(classify_redirect_rest(rest));
+    }
     let after_fd = token.trim_start_matches(|c: char| c.is_ascii_digit());
     let rest = after_fd
         .strip_prefix(">>")
         .or_else(|| after_fd.strip_prefix(">|"))
         .or_else(|| after_fd.strip_prefix('>'))?;
-    if rest.starts_with('&') {
-        return None;
+    if let Some(after_amp) = rest.strip_prefix('&') {
+        // `>&1` / `>&-` duplicate or close an fd; `>&file` is a write.
+        return match after_amp.chars().next() {
+            Some(c) if c.is_ascii_digit() || c == '-' => None,
+            None => Some(RedirectTarget::Next),
+            Some(_) => Some(RedirectTarget::Attached(after_amp)),
+        };
     }
-    Some(if rest.is_empty() {
+    Some(classify_redirect_rest(rest))
+}
+
+/// A redirect operator's trailing text names its target inline (`>file`), or the
+/// operator stands alone and the next token is the target (`> file`).
+fn classify_redirect_rest(rest: &str) -> RedirectTarget<'_> {
+    if rest.is_empty() {
         RedirectTarget::Next
     } else {
         RedirectTarget::Attached(rest)
-    })
+    }
 }
 
 /// A write redirect (`>`, `>>`, `>|`, `1>`, `2>>`, …) whose target is an
@@ -704,6 +721,15 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
             }
             '}' if i == 0 || chars[i - 1].is_whitespace() => {
                 push_segment(out, &mut cur);
+                i += 1;
+            }
+            // `&&` is a segment boundary; a `&` that is part of a redirect
+            // operator (`>&`, `&>`, `2>&1`) is not — keep it with the segment so
+            // redirect detection sees the whole `>&target`, not a bare `>`.
+            '&' if chars.get(i + 1) != Some(&'&')
+                && (cur.ends_with('>') || chars.get(i + 1) == Some(&'>')) =>
+            {
+                cur.push(c);
                 i += 1;
             }
             '&' => {
@@ -2580,10 +2606,37 @@ mod tests {
     #[test]
     fn test_b3_fd_dup_and_normal_redirect_not_flagged() {
         let p = default_policy();
-        // fd duplication is not a file write; a redirect to a normal file is fine.
-        assert!(evaluate("git status 2>&1", &ctx(&p, "feat/x")).is_empty());
-        assert!(evaluate("echo hi > out.txt", &ctx(&p, "feat/x")).is_empty());
-        assert!(evaluate("echo hi 2> /tmp/err.log", &ctx(&p, "feat/x")).is_empty());
+        // fd duplication/close is not a file write; a redirect to a normal file
+        // is fine — including the `>&`/`&>` forms whose target is an fd, not a
+        // filename (the N1 fix must not over-block these).
+        for cmd in [
+            "git status 2>&1",
+            "echo hi > out.txt",
+            "echo hi 2> /tmp/err.log",
+            "echo hi >& out.txt",
+            "make 1>&2",
+            "exec 3>&-",
+            "cargo test &> out.txt",
+        ] {
+            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_n1_both_streams_write_to_integrity_path_blocked() {
+        let p = default_policy();
+        // csh/bash `>&file` and `&>file` write BOTH streams to `file`. When that
+        // file is an integrity path it is a disarm write, not an fd dup — the
+        // round-2 `>&`-exclusion (added for `2>&1`) had over-excluded these.
+        for cmd in [
+            "echo x >&.codeflow/policy.json",
+            "echo x >& .codeflow/policy.json",
+            "echo x &>.codeflow/policy.json",
+            "echo x &>>.codeflow/project.toml",
+            "echo x >>&.git/hooks/pre-commit",
+        ] {
+            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+        }
     }
 
     #[test]
