@@ -42,7 +42,7 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] `codeflow init` dogfood on this repo (consumer #1), idempotent rerun
   verified; full-tier additive upgrade (`project-management/`) on the closure
   branch
-- [x] Doctor wired and clean (5 checks)
+- [x] Doctor wired and clean (7 checks)
 - [x] `codeflow integrate` used for all landings (4 integrations)
 - [x] Live AC demos: #1, #3, #5, #6, #13 — including the `policy_armed` bug
   found during #1, fixed with a regression test (612ec23d)
