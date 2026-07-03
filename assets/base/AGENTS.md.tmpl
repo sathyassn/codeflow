@@ -56,8 +56,12 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Git rules
 
-Enforced by git hooks, the git-guard hook, remote protection, and CI — all reading
-`.codeflow/policy.json`. The rules, compressed:
+Four planes read `.codeflow/policy.json`, as defense in depth. Local git hooks and
+the `git-guard` PreToolUse hook are **fast feedback** — they catch the normal ways
+work goes wrong, in-session, before a push. CI and remote branch protection are the
+**authoritative perimeter**: server-enforced, so an agent on the local host cannot
+bypass them (arm it with `codeflow remote protect`). The local layer is convenience;
+the remote layer is the real boundary. The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ spike/ experiment/`. Pick by work intent.
@@ -73,7 +77,8 @@ Enforced by git hooks, the git-guard hook, remote protection, and CI — all rea
   paths: PR → green CI → merged by a human, or `codeflow integrate <branch>
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
-  can corrupt the root repo).
+  can corrupt the root repo). The override is a human-terminal convenience, not
+  authentication; it is contained because the boundary is remote.
 - **Bodies of work:** a multi-task epic lands task-by-task on a non-protected
   `integration/<epic>` branch (agents merge there); only the finished body
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of

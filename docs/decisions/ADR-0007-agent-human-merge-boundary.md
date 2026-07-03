@@ -111,3 +111,13 @@ commits, git-guard in-session, push gate and remote), gracefully and silently.
 `docs/architecture.md` updated in this PR: the doctor check count moves from 6
 to 7 (adds `repo-integrity`), and the enforcement-planes description names the
 new `pre-merge-commit` and `reference-transaction` git-hook shims.
+
+## Note — 2026-07-02 (appended)
+
+Framing clarification, no mechanism change: the scaffold's git-rules guidance
+(the AGENTS.md managed block) was reframed to say plainly that local git hooks
+and `git-guard` are fast in-session feedback, while CI and remote branch
+protection are the authoritative, server-enforced perimeter. `CODEFLOW_HUMAN_OVERRIDE`
+is a local convenience for a human at their own terminal, not authentication —
+any agent sharing the host can set an env var — and is contained only because
+that authoritative boundary is remote.
