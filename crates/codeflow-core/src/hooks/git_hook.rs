@@ -358,23 +358,32 @@ fn parse_ref_line(line: &str) -> Option<(&str, &str, &str)> {
     Some((old, new, refname))
 }
 
-/// `true` when `new_oid` equals `refs/remotes/origin/<branch>` exactly — the
+/// `true` when `new_oid` equals the branch's remote-tracking head exactly — the
 /// state a `git pull` fast-forward produces. The prior "or an ancestor of it"
 /// allowance is dropped (ADR-0009): it was not needed for `git pull` (which
 /// lands on the tip, not behind it) and only widened trust in the
-/// agent-writable `refs/remotes` ref. Absent remote-tracking ref or an
-/// unparsable oid means "cannot prove a sync" — the caller then blocks.
+/// agent-writable `refs/remotes` ref. The candidate ref is the branch's
+/// *configured* upstream when set (so `git pull upstream main` on a
+/// non-origin-tracked branch is not a false positive), falling back to
+/// `refs/remotes/origin/<branch>`. Absent ref or an unparsable oid means
+/// "cannot prove a sync" — the caller then blocks.
 fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bool {
-    let Ok(reference) = repo.find_reference(&format!("refs/remotes/origin/{branch}")) else {
-        return false;
-    };
-    let Some(remote_oid) = reference.target() else {
-        return false;
-    };
     let Ok(new) = git2::Oid::from_str(new_oid) else {
         return false;
     };
-    new == remote_oid
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{branch}")) {
+        if let Some(name) = upstream.as_str() {
+            candidates.push(name.to_string());
+        }
+    }
+    candidates.push(format!("refs/remotes/origin/{branch}"));
+    candidates.iter().any(|refname| {
+        repo.find_reference(refname)
+            .ok()
+            .and_then(|r| r.target())
+            .is_some_and(|remote_oid| new == remote_oid)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -934,6 +943,28 @@ mod tests {
         git(dir.path(), &["commit", "-m", "feat: x"]);
         let new = rev_parse(dir.path(), "HEAD");
         set_origin_ref(dir.path(), "main", &new);
+        let stdin = format!("{ZERO40} {new} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_reference_transaction_allows_sync_to_configured_upstream() {
+        // B10: the ff-sync oracle follows the branch's CONFIGURED upstream, not
+        // a hardcoded origin. A branch tracking `upstream` fast-forwards to
+        // refs/remotes/upstream/main without a false-positive block (origin is
+        // absent here).
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: x"]);
+        let new = rev_parse(dir.path(), "HEAD");
+        git(dir.path(), &["remote", "add", "upstream", "."]);
+        git(dir.path(), &["update-ref", "refs/remotes/upstream/main", &new]);
+        git(dir.path(), &["config", "branch.main.remote", "upstream"]);
+        git(dir.path(), &["config", "branch.main.merge", "refs/heads/main"]);
         let stdin = format!("{ZERO40} {new} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();

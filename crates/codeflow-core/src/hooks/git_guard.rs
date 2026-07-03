@@ -149,7 +149,17 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
             continue;
         }
 
-        let Some((program, args)) = strip_env_assignments(&tokens) else {
+        // GIT_CONFIG_* env injection of a protected config key (parallel to the
+        // hook-skip env vars) — `GIT_CONFIG_KEY_0=core.hooksPath …`.
+        if ctx.policy.hook_integrity.is_active() && git_config_env_sets_hooks_path(&tokens) {
+            violations.push(hook_integrity_violation(
+                ctx.policy.hook_integrity,
+                "command injects core.hooksPath via GIT_CONFIG_* env".to_string(),
+            ));
+            continue;
+        }
+
+        let Some((program, args)) = strip_launchers(&tokens) else {
             continue;
         };
         let git_dir_env = git_dir_env_prefix(&tokens);
@@ -293,6 +303,55 @@ fn hook_integrity_violation(level: PolicyLevel, message: String) -> Violation {
 // hook / policy integrity (task: HOOK-PLANE SELF-DISARM)
 // ---------------------------------------------------------------------------
 
+/// `true` when `s` names the `core.hooksPath` config key. Git config
+/// section+name are case-insensitive (`core.hookspath` sets the same key), so
+/// the comparison is too — matching a spelling, not a case.
+fn mentions_hooks_path(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("core.hookspath")
+}
+
+/// Collect the leading `VAR=val` assignments of a simple command — the env
+/// prefixes plus those carried by `env`/`export`/`declare`-family/`command`.
+fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < tokens.len() {
+        let t = tokens[idx].as_str();
+        if let Some((n, v)) = t.split_once('=') {
+            if is_identifier(n) {
+                out.push((n, v));
+                idx += 1;
+                continue;
+            }
+        }
+        break;
+    }
+    if let Some(t) = tokens.get(idx) {
+        let word = basename(t);
+        if word == "env" || t == "export" || is_declare_builtin(t) || t == "command" {
+            for a in &tokens[idx + 1..] {
+                if let Some((n, v)) = a.split_once('=') {
+                    if is_identifier(n) {
+                        out.push((n, v));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Detect a `core.hooksPath` set through git's `GIT_CONFIG_*` env mechanism —
+/// `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=…` or
+/// the older `GIT_CONFIG_PARAMETERS='core.hooksPath=…'`. Parallel to the
+/// hook-skip env vars: an env-set of a protected key disarms the plane.
+fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
+    leading_env_assignments(tokens).into_iter().any(|(name, val)| {
+        (name.starts_with("GIT_CONFIG_KEY_") || name == "GIT_CONFIG_PARAMETERS")
+            && mentions_hooks_path(val)
+    })
+}
+
 /// Env vars whose in-session assignment disables the client hooks. `HUSKY`
 /// only disarms at `=0`; the rest disarm at any value.
 const HOOK_SKIP_ENV_VARS: &[&str] =
@@ -368,13 +427,31 @@ fn git_dir_env_prefix(tokens: &[String]) -> Option<String> {
 const INTEGRITY_PREFIXES: &[&str] = &[".git/hooks", ".codeflow/git-hooks"];
 const INTEGRITY_FILES: &[&str] = &[".codeflow/policy.json", ".codeflow/project.toml"];
 
-/// The integrity path a single argument token names, when any.
+/// Collapse the path spellings that name the same file — `//`, `/./`, a
+/// trailing `/`, and a leading `./` — so a matcher compares the real path, not
+/// a literal contiguous substring (the review's `.codeflow//policy.json` /
+/// `.codeflow/./policy.json` / `.git//hooks` variants). `..` is deliberately
+/// left unresolved (traversal is a separate, documented residual).
+fn normalize_path(s: &str) -> String {
+    let absolute = s.starts_with('/');
+    let parts: Vec<&str> = s.split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+/// The integrity path a single argument token names, when any. The token is
+/// normalized first so equivalent spellings match.
 fn token_integrity_path(token: &str) -> Option<&'static str> {
+    let norm = normalize_path(token);
     INTEGRITY_PREFIXES
         .iter()
         .chain(INTEGRITY_FILES.iter())
         .copied()
-        .find(|p| is_path_targeted(token, p))
+        .find(|p| is_path_targeted(&norm, p))
 }
 
 /// The integrity path named by any argument in `args`.
@@ -382,19 +459,52 @@ fn arg_integrity_path(args: &[String]) -> Option<&'static str> {
     args.iter().find_map(|a| token_integrity_path(a))
 }
 
-/// A redirect (`>`/`>>`) writing an integrity path, from the token stream.
+/// Where a write-redirect operator's target sits.
+enum RedirectTarget<'a> {
+    /// Attached to the operator (`>policy.json`).
+    Attached(&'a str),
+    /// The following token (`> policy.json`).
+    Next,
+}
+
+/// If `token` is a write-redirect operator, classify where its target is.
+/// Handles an optional leading file-descriptor number (`1>`, `2>>`), clobber
+/// `>|`, and append `>>` — a *shape*, not an enumerated set. A bare `>&` fd
+/// duplication (`2>&1`) is not a file write.
+fn redirect_target(token: &str) -> Option<RedirectTarget<'_>> {
+    let after_fd = token.trim_start_matches(|c: char| c.is_ascii_digit());
+    let rest = after_fd
+        .strip_prefix(">>")
+        .or_else(|| after_fd.strip_prefix(">|"))
+        .or_else(|| after_fd.strip_prefix('>'))?;
+    if rest.starts_with('&') {
+        return None;
+    }
+    Some(if rest.is_empty() {
+        RedirectTarget::Next
+    } else {
+        RedirectTarget::Attached(rest)
+    })
+}
+
+/// A write redirect (`>`, `>>`, `>|`, `1>`, `2>>`, …) whose target is an
+/// integrity path, from the token stream — target attached (`>policy.json`) or
+/// the next token (`> policy.json`).
 fn redirect_integrity_path(tokens: &[String]) -> Option<&'static str> {
     let mut i = 0;
     while i < tokens.len() {
-        let t = tokens[i].as_str();
-        if t == ">" || t == ">>" {
-            if let Some(p) = tokens.get(i + 1).and_then(|n| token_integrity_path(n)) {
-                return Some(p);
+        match redirect_target(&tokens[i]) {
+            Some(RedirectTarget::Attached(t)) => {
+                if let Some(p) = token_integrity_path(t) {
+                    return Some(p);
+                }
             }
-        } else if let Some(rest) = t.strip_prefix(">>").or_else(|| t.strip_prefix('>')) {
-            if let Some(p) = token_integrity_path(rest) {
-                return Some(p);
+            Some(RedirectTarget::Next) => {
+                if let Some(p) = tokens.get(i + 1).and_then(|n| token_integrity_path(n)) {
+                    return Some(p);
+                }
             }
+            None => {}
         }
         i += 1;
     }
@@ -413,7 +523,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
             format!("redirect would overwrite the integrity path `{p}`"),
         ));
     }
-    let (program, args) = strip_env_assignments(tokens)?;
+    let (program, args) = strip_launchers(tokens)?;
     let cmd = basename(program);
 
     if matches!(
@@ -467,9 +577,12 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
 /// shell constructs an agent can hide a `git`/`gh` token behind so it is not
 /// only the first word of a `&&`/`||`/`;`/`|` segment that is inspected:
 /// newlines, backgrounding `&`, subshells `( )`, brace groups `{ }`,
-/// `$(…)`/backtick command substitution, and `bash -c '…'` wrappers. A
-/// floor-raise, not a solve — deep or obfuscated nesting is a documented
-/// residual (ADR-0009), backstopped by CI + remote protection.
+/// `$(…)`/backtick command substitution, `bash -c '…'`, and `eval '…'`. Program
+/// resolution goes through [`strip_launchers`], so an env/`command` prefix on
+/// the wrapper (`env FOO=1 bash -c …`) and a clustered short flag (`bash -lc`)
+/// are both handled. A floor-raise, not a solve — arbitrary interpreters
+/// (`python3 -c`) and pipe-to-shell (`echo … | sh`) are the genuinely unbounded
+/// tail and stay a documented residual (ADR-0009), backstopped by CI + remote.
 fn expand_commands(command: &str) -> Vec<String> {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0);
@@ -478,19 +591,43 @@ fn expand_commands(command: &str) -> Vec<String> {
     for seg in raw {
         let toks = shell_tokens(&seg);
         out.push(seg);
-        // `bash -c '<cmd>'` (and sh/zsh/dash/ksh): the wrapped command is an
-        // argument — expand it so a git op inside is evaluated.
-        if let Some((prog, args)) = strip_env_assignments(&toks) {
-            if matches!(basename(prog), "bash" | "sh" | "zsh" | "dash" | "ksh") {
-                if let Some(pos) = args.iter().position(|a| a == "-c") {
-                    if let Some(inner) = args.get(pos + 1) {
-                        split_into_segments(inner, &mut out, 1);
-                    }
-                }
+        let Some((prog, args)) = strip_launchers(&toks) else {
+            continue;
+        };
+        let name = basename(prog);
+        if is_shell(name) {
+            // `-c`/`--command`, or a clustered short flag containing `c`
+            // (`-lc`, `-ec`): the wrapped command is the following argument.
+            if let Some(inner) = shell_c_argument(args) {
+                split_into_segments(inner, &mut out, 1);
             }
+        } else if name == "eval" {
+            // `eval '<cmd>'` runs its (joined) arguments as a command.
+            let joined = args.join(" ");
+            split_into_segments(&joined, &mut out, 1);
         }
     }
     out
+}
+
+/// The command-string argument of a shell invocation: the token after a `-c`,
+/// `--command`, or a clustered short flag that contains `c` (`-lc`, `-ec`).
+fn shell_c_argument(args: &[String]) -> Option<&String> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let is_c_flag = a == "-c"
+            || a == "--command"
+            || (a.starts_with('-')
+                && !a.starts_with("--")
+                && a.len() > 1
+                && a.contains('c'));
+        if is_c_flag {
+            return args.get(i + 1);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Split a command into simple-command segments, recursing into `$(…)` and
@@ -572,6 +709,11 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
             '&' => {
                 push_segment(out, &mut cur);
                 i += if chars.get(i + 1) == Some(&'&') { 2 } else { 1 };
+            }
+            // `>|` is the clobber-redirect operator, not a pipe — keep it.
+            '|' if i > 0 && chars[i - 1] == '>' => {
+                cur.push(c);
+                i += 1;
             }
             '|' => {
                 push_segment(out, &mut cur);
@@ -803,7 +945,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
         let t = args[idx].as_str();
         match t {
             "-c" => {
-                if args.get(idx + 1).is_some_and(|v| v.starts_with("core.hooksPath")) {
+                if args.get(idx + 1).is_some_and(|v| mentions_hooks_path(v)) {
                     hooks_path = true;
                 }
                 idx += 2;
@@ -834,7 +976,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
 /// `true` when a `git config` invocation *writes* `core.hooksPath` (a set or an
 /// `--unset`), as opposed to a pure `--get`/`--list` read.
 fn config_writes_hooks_path(rest: &[String]) -> bool {
-    if !rest.iter().any(|t| t.contains("core.hooksPath")) {
+    if !rest.iter().any(|t| mentions_hooks_path(t)) {
         return false;
     }
     let is_read = rest.iter().any(|t| {
@@ -1253,21 +1395,59 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
 }
 
 /// Skip leading `VAR=value` assignments; return `(program, args)`.
-fn strip_env_assignments(tokens: &[String]) -> Option<(&str, &[String])> {
+/// Resolve the *effective* program of a simple command, stripping the command
+/// launchers an agent can hide it behind so the program is judged by what
+/// actually runs, not the surface word: leading `VAR=val` assignments, the
+/// `command`/`builtin` prefixes, and the `env` family (any path form, e.g.
+/// `/usr/bin/env`, plus its leading `VAR=val` args). Returns the effective
+/// program token and its arguments. This is a *general* normalization — the
+/// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
+/// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
+fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
-    while idx < tokens.len() {
-        let t = &tokens[idx];
-        let is_assignment = t
-            .split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name));
-        if is_assignment {
-            idx += 1;
-        } else {
-            break;
+    loop {
+        // Skip leading VAR=val assignments.
+        while idx < tokens.len() {
+            let t = tokens[idx].as_str();
+            if t.split_once('=')
+                .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+            {
+                idx += 1;
+            } else {
+                break;
+            }
         }
+        let t = tokens.get(idx)?.as_str();
+        if t == "command" || t == "builtin" || t == "exec" {
+            idx += 1;
+            continue;
+        }
+        if basename(t) == "env" {
+            idx += 1;
+            // `env [-i] [-u NAME] [VAR=val]... command` — skip its own options
+            // and assignments up to the wrapped command.
+            while idx < tokens.len() {
+                let a = tokens[idx].as_str();
+                if a == "-u" {
+                    idx += 2; // -u NAME
+                } else if a.starts_with('-')
+                    || a.split_once('=')
+                        .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+                {
+                    idx += 1; // an env option or a VAR=val pair
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        return Some((t, &tokens[idx + 1..]));
     }
-    let program = tokens.get(idx)?;
-    Some((program.as_str(), &tokens[idx + 1..]))
+}
+
+/// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
+fn is_shell(name: &str) -> bool {
+    matches!(name, "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash")
 }
 
 fn is_identifier(s: &str) -> bool {
@@ -2353,5 +2533,111 @@ mod tests {
         assert!(evaluate("/usr/bin/env FOO=1 git status", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("declare -x EDITOR=vim", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("git config alias.st status", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    // -- review round 2: generalized matchers (B1-B7) --
+
+    #[test]
+    fn test_b1_hooks_path_case_insensitive() {
+        let p = default_policy();
+        for cmd in [
+            "git config core.hookspath /tmp/x",
+            "git config CORE.HOOKSPATH /tmp/x",
+            "git -c core.HooksPath=/dev/null commit -m x",
+        ] {
+            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_b2_integrity_path_normalized_spellings() {
+        let p = default_policy();
+        for cmd in [
+            "rm -rf .codeflow//policy.json",
+            "rm .codeflow/./policy.json",
+            "rm -rf .git//hooks",
+            "rm -rf .git/hooks/",
+            "tee ./.codeflow/policy.json",
+        ] {
+            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_b3_redirect_fd_and_clobber_forms() {
+        let p = default_policy();
+        for cmd in [
+            "echo x 1> .codeflow/policy.json",
+            "echo x 2> .git/hooks/pre-commit",
+            "echo x >| .codeflow/policy.json",
+            "echo x 1>>.codeflow/project.toml",
+            "echo x >|.codeflow/policy.json",
+        ] {
+            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_b3_fd_dup_and_normal_redirect_not_flagged() {
+        let p = default_policy();
+        // fd duplication is not a file write; a redirect to a normal file is fine.
+        assert!(evaluate("git status 2>&1", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("echo hi > out.txt", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("echo hi 2> /tmp/err.log", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
+    fn test_b4_git_config_env_injection() {
+        let p = default_policy();
+        for cmd in [
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
+            "GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x",
+        ] {
+            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+        }
+        // A non-hooksPath GIT_CONFIG_* injection is not an integrity concern.
+        assert!(
+            evaluate(
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
+                &ctx(&p, "feat/x")
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_b6_env_prefixed_and_clustered_wrappers() {
+        let p = default_policy();
+        // Each hides a commit on main; strip_launchers + clustered -c re-expose it.
+        for cmd in [
+            "bash -lc 'git commit -m x'",
+            "env FOO=1 bash -c 'git commit -m x'",
+            "env FOO=1 git commit -m x",
+            "command git commit -m x",
+            "sh -ec 'git commit -m x'",
+        ] {
+            assert!(has_rule(&evaluate(cmd, &ctx(&p, "main")), "git.commit_to_protected"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_b7_eval_wrapper() {
+        let p = default_policy();
+        assert!(has_rule(&evaluate("eval 'git commit -m x'", &ctx(&p, "main")), "git.commit_to_protected"));
+        assert!(has_rule(&evaluate("eval git commit -m x", &ctx(&p, "main")), "git.commit_to_protected"));
+    }
+
+    #[test]
+    fn test_round2_no_false_positives() {
+        let p = default_policy();
+        // Normal operations that MUST stay allowed (reviewer's FP set).
+        assert!(evaluate("git config user.email you@example.com", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("git config --global user.name 'A B'", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("bash script.sh", &ctx(&p, "main")).is_empty());
+        assert!(evaluate("bash -x script.sh", &ctx(&p, "main")).is_empty());
+        assert!(evaluate("env NODE_ENV=test npm test", &ctx(&p, "main")).is_empty());
+        // `git -C <subdir>` resolving to a feature branch stays allowed.
+        let resolver = |_dir: &str| Some("feat/y".to_string());
+        assert!(evaluate("git -C sub status", &ctx_with_dir_branch(&p, "main", &resolver)).is_empty());
     }
 }
