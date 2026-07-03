@@ -267,11 +267,14 @@ pub fn ref_line_touches_local_branch(line: &str) -> bool {
 /// whole transaction.
 ///
 /// For each `refs/heads/<protected>` update it enforces `local_ref_protection`
-/// (and `delete_protected` for deletions). A move to — or behind — the
-/// `refs/remotes/origin/<branch>` head is a legitimate sync (`git pull`,
-/// fetch fast-forward, branch creation from the remote) and passes; any other
-/// local move (a fast-forward merge, `reset --hard`, a local commit not yet on
-/// the remote) blocks. The integrate gate token and the human override pass.
+/// (and `delete_protected` for deletions). Only a move to EXACTLY the
+/// `refs/remotes/origin/<branch>` head passes — the `git pull` fast-forward,
+/// the one legitimate sync; any other local move (a fast-forward merge,
+/// `reset --hard`, a move merely behind origin, a local commit not yet on the
+/// remote) blocks. The remote-tracking ref is agent-writable, so it is not a
+/// full authorization oracle (ADR-0009): the git-guard forbids writing it, and
+/// remote+CI remain the boundary. The integrate gate token and the human
+/// override pass.
 ///
 /// Git < 2.28 never invokes this hook — the protection then degrades to the
 /// other planes, gracefully and silently (charter principle 8).
@@ -325,10 +328,15 @@ pub fn reference_transaction(
         if !policy.local_ref_protection.is_active() || sanctioned {
             continue;
         }
-        // Allow a sync: the new tip is the remote-tracking head or an ancestor
-        // of it. Anything else is a local move that has not been through the
-        // remote (PR/CI) — block it.
-        if new_is_remote_head_or_ancestor(&repo, branch, new_oid) {
+        // Allow the one legitimate sync: the new tip is EXACTLY the
+        // remote-tracking head (a `git pull` fast-forward lands there). Any
+        // other local move — including one merely *behind* origin — is not a
+        // sync and blocks. The narrower rule (exact match, no ancestor
+        // allowance) shrinks reliance on the agent-writable `refs/remotes` ref,
+        // which the git-guard additionally forbids writing (ADR-0009); the
+        // residual (an off-Claude agent that both writes refs/remotes and
+        // fast-forwards onto it) is why remote+CI is the boundary (charter D19).
+        if new_matches_remote_head(&repo, branch, new_oid) {
             continue;
         }
         report.violations.push(Violation::new(
@@ -350,10 +358,13 @@ fn parse_ref_line(line: &str) -> Option<(&str, &str, &str)> {
     Some((old, new, refname))
 }
 
-/// `true` when `new_oid` equals `refs/remotes/origin/<branch>` or is an
-/// ancestor of it (a fetch-consistent sync). Absent remote-tracking ref or an
+/// `true` when `new_oid` equals `refs/remotes/origin/<branch>` exactly — the
+/// state a `git pull` fast-forward produces. The prior "or an ancestor of it"
+/// allowance is dropped (ADR-0009): it was not needed for `git pull` (which
+/// lands on the tip, not behind it) and only widened trust in the
+/// agent-writable `refs/remotes` ref. Absent remote-tracking ref or an
 /// unparsable oid means "cannot prove a sync" — the caller then blocks.
-fn new_is_remote_head_or_ancestor(repo: &Repository, branch: &str, new_oid: &str) -> bool {
+fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bool {
     let Ok(reference) = repo.find_reference(&format!("refs/remotes/origin/{branch}")) else {
         return false;
     };
@@ -363,11 +374,7 @@ fn new_is_remote_head_or_ancestor(repo: &Repository, branch: &str, new_oid: &str
     let Ok(new) = git2::Oid::from_str(new_oid) else {
         return false;
     };
-    if new == remote_oid {
-        return true;
-    }
-    // remote head descends from new  <=>  new is an ancestor of remote head.
-    repo.graph_descendant_of(remote_oid, new).unwrap_or(false)
+    new == remote_oid
 }
 
 // ---------------------------------------------------------------------------
@@ -934,8 +941,11 @@ mod tests {
     }
 
     #[test]
-    fn test_reference_transaction_allows_move_behind_origin() {
-        // main reset to an ancestor of origin/main — a sync-consistent state.
+    fn test_reference_transaction_blocks_move_behind_origin() {
+        // ADR-0009: a move merely *behind* origin/main (e.g. `reset --hard` to
+        // an ancestor) is no longer a sanctioned sync — the ancestor allowance
+        // is dropped, so only an exact match to the remote head passes. Reset
+        // of a protected branch to an ancestor is a history loss and blocks.
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
@@ -947,7 +957,28 @@ mod tests {
         let stdin = format!("{ahead} {base} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].rule, "git.local_ref_protection");
+    }
+
+    #[test]
+    fn test_reference_transaction_poisoned_remote_ref_still_blocks_non_matching_move() {
+        // The oracle is narrowed to EXACT equality: even if the agent-writable
+        // refs/remotes/origin/main is poisoned to some tip, a local move to a
+        // DIFFERENT tip is not a sync and blocks. (The exact-match case that a
+        // real `git pull` produces stays allowed — see the sync test.)
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base); // "poisoned"/stale at base
+        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: local"]);
+        let ahead = rev_parse(dir.path(), "HEAD");
+        let stdin = format!("{base} {ahead} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations[0].rule, "git.local_ref_protection");
     }
 
     #[test]
