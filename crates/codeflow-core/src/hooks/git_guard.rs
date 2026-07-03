@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::security::pattern::split_command_segments;
+use crate::security::pattern::is_path_targeted;
 
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
@@ -23,6 +23,15 @@ use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 /// unrecognized argument — so the guard blocks conservatively. The CLI wires a
 /// bounded `gh pr view` implementation; tests inject a stub.
 pub type PrBaseLookup<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
+
+/// Resolves a directory (a `-C`/`--git-dir`/`GIT_DIR`/`cd` target, possibly
+/// relative to the session cwd) to the branch checked out there, so a git op
+/// retargeted at another repository is evaluated against *that* repo's branch,
+/// not the session's (charter §6.1; the review's wrong-dir evasion). `None`
+/// means the branch could not be read; the guard then falls back to the session
+/// branch (documented residual — the git-hook plane in the target repo is the
+/// backstop). The CLI wires a `.git/HEAD` reader; tests inject a stub.
+pub type DirBranchLookup<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
 
 /// Parsed Claude Code `PreToolUse` hook payload (the fields the guard reads).
 #[derive(Debug, Deserialize)]
@@ -76,6 +85,11 @@ pub struct GuardContext<'a> {
     pub integrate_token: bool,
     /// How to resolve a `gh pr merge` target to its base branch (injected).
     pub pr_base_lookup: PrBaseLookup<'a>,
+    /// How to resolve a retargeted directory (`-C`/`--git-dir`/`GIT_DIR`/`cd`)
+    /// to the branch checked out there (injected). `None` disables cross-repo
+    /// resolution and the guard evaluates against `current_branch` — the
+    /// behavior in unit tests that do not exercise retargeting.
+    pub dir_branch_lookup: DirBranchLookup<'a>,
 }
 
 /// Evaluate a Bash command against the git policy.
@@ -87,25 +101,88 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
     let mut violations = Vec::new();
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branch = ctx.current_branch.to_string();
+    // A `cd <dir>` earlier in the chain retargets subsequent git ops.
+    let mut cd_dir: Option<String> = None;
 
-    for segment in split_command_segments(command) {
+    // `expand_commands` unwraps the shell constructs an agent can hide a git
+    // token behind — subshells `( )`, brace groups `{ }`, `bash -c '…'`,
+    // `$(…)`/backticks, newlines, and backgrounding `&` — so a git/gh
+    // invocation is evaluated wherever it sits, not only as a segment's first
+    // word (the review's wrapper evasions).
+    for segment in expand_commands(command) {
         let tokens = shell_tokens(&segment);
+        if tokens.is_empty() {
+            continue;
+        }
+
+        // Hook/policy integrity: writes or removes that would disarm or tamper
+        // with the enforcement plane, evaluated on ANY command (not just git).
+        if ctx.policy.hook_integrity.is_active() {
+            if let Some(v) = integrity_write_violation(&tokens, ctx.policy.hook_integrity) {
+                violations.push(v);
+                continue;
+            }
+        }
+
         // Anti-laundering: setting an override token in-session is bypass, not
         // override — block it before evaluating whatever it prefixed.
         if let Some(var) = laundered_override(&tokens) {
             violations.push(laundering_violation(var));
             continue;
         }
+
+        // Hook-skip env prefixes (`GIT_SKIP_HOOKS=`, `HUSKY=0`, …) disarm the
+        // client hooks; block regardless of the branch (charter §6.1, ADR-0009).
+        if ctx.policy.hook_integrity.is_active() {
+            if let Some(var) = hook_skip_env(&tokens) {
+                violations.push(hook_integrity_violation(
+                    ctx.policy.hook_integrity,
+                    format!("command sets the hook-skip env var `{var}`"),
+                ));
+                continue;
+            }
+        }
+
+        // A `cd <dir>` (as its own simple command) retargets later git ops.
+        if let Some(dir) = cd_target(&tokens) {
+            cd_dir = Some(dir);
+            continue;
+        }
+
         let Some((program, args)) = strip_env_assignments(&tokens) else {
             continue;
         };
-        match program {
-            "git" => check_git(args, &mut branch, ctx, &mut violations),
-            "gh" => check_gh(args, ctx, &mut violations),
-            _ => {}
+        let git_dir_env = git_dir_env_prefix(&tokens);
+        match program_kind(program) {
+            ProgramKind::Git => {
+                check_git(args, &mut branch, cd_dir.as_deref(), git_dir_env, ctx, &mut violations);
+            }
+            ProgramKind::Gh => check_gh(args, ctx, &mut violations),
+            ProgramKind::Other => {}
         }
     }
     violations
+}
+
+/// Which program a segment invokes, for dispatch. The basename is taken so a
+/// path form (`/usr/bin/git`) is still recognized.
+enum ProgramKind {
+    Git,
+    Gh,
+    Other,
+}
+
+fn program_kind(program: &str) -> ProgramKind {
+    match basename(program) {
+        "git" => ProgramKind::Git,
+        "gh" => ProgramKind::Gh,
+        _ => ProgramKind::Other,
+    }
+}
+
+/// The final path component of a token (`/usr/bin/git` -> `git`).
+fn basename(token: &str) -> &str {
+    token.rsplit('/').next().unwrap_or(token)
 }
 
 /// The override env vars a human may set in their own terminal but an agent
@@ -113,13 +190,30 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 /// gate token.
 const OVERRIDE_ENV_VARS: &[&str] = &[HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV];
 
-/// Detect an in-session attempt to set an override token — as an env-prefix
-/// assignment (`VAR=1 git …`), via `export VAR=…`/`export VAR`, or via
-/// `env VAR=… …`. Returns the offending variable name.
+/// Detect an in-session attempt to set an override token. Covers the env-prefix
+/// assignment (`VAR=1 git …`); `export VAR[=…]`; the `env` family including a
+/// path form (`env`, `/usr/bin/env`) and a `command`/`builtin` prefix
+/// (`command env VAR=…`); the shell declaration builtins (`declare -x`,
+/// `typeset`, `readonly`, `local`); and an override carried inside a
+/// `git config alias.*` value (`git config alias.x '!VAR=1 git …'`). These are
+/// floor-raises, not a solve — an env var is not authentication (ADR-0009);
+/// a determined agent has other ways to set its own environment.
 fn laundered_override(tokens: &[String]) -> Option<&'static str> {
     let assigns = |t: &str| OVERRIDE_ENV_VARS.iter().copied().find(|v| is_assignment_of(t, v));
+    let names = |t: &str| OVERRIDE_ENV_VARS.iter().copied().find(|v| **v == *t);
 
-    // Leading env-prefix assignments and bare `env`/`export` invocations.
+    // An override var carried inside any token (e.g. a `git config alias.*`
+    // value `!CODEFLOW_HUMAN_OVERRIDE=1 git …`) — the assignment is embedded,
+    // not a leading prefix, so the positional scan below would miss it.
+    if tokens.first().map(|t| basename(t)) == Some("git")
+        && tokens.iter().any(|t| t == "config")
+    {
+        if let Some(var) = tokens.iter().find_map(|t| embedded_override_assignment(t)) {
+            return Some(var);
+        }
+    }
+
+    // Leading env-prefix assignments and the env/declare/command builtins.
     let mut idx = 0;
     while idx < tokens.len() {
         let t = tokens[idx].as_str();
@@ -130,21 +224,44 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
             idx += 1; // some other harmless assignment prefix — keep scanning
             continue;
         }
-        // First real word: `export`/`env` carry the assignment in their args.
-        if t == "export" || t == "env" {
+        // `command`/`builtin` just prefix another simple command — skip and
+        // re-examine the word they wrap (`command env VAR=…`).
+        if t == "command" || t == "builtin" {
+            idx += 1;
+            continue;
+        }
+        // `env` (any path form), `export`, and the declaration builtins all
+        // carry the assignment in their arguments.
+        let word = basename(t);
+        if word == "env" || t == "export" || is_declare_builtin(t) {
             for arg in &tokens[idx + 1..] {
                 if let Some(var) = assigns(arg) {
                     return Some(var);
                 }
                 // `export VAR` (no value) still primes a later assignment.
-                if t == "export" && OVERRIDE_ENV_VARS.contains(&arg.as_str()) {
-                    return Some(OVERRIDE_ENV_VARS.iter().find(|v| **v == arg.as_str()).unwrap());
+                if (t == "export" || is_declare_builtin(t)) && names(arg).is_some() {
+                    return names(arg);
                 }
             }
         }
         break;
     }
     None
+}
+
+/// `true` for the shell declaration builtins that can set/export a variable.
+fn is_declare_builtin(t: &str) -> bool {
+    matches!(t, "declare" | "typeset" | "readonly" | "local")
+}
+
+/// If `token` contains `<OVERRIDE_VAR>=` anywhere (not only as a leading
+/// prefix), return that variable — for override tokens smuggled inside a quoted
+/// value such as a git alias body.
+fn embedded_override_assignment(token: &str) -> Option<&'static str> {
+    OVERRIDE_ENV_VARS
+        .iter()
+        .copied()
+        .find(|v| token.contains(&format!("{v}=")))
 }
 
 /// `true` when `token` is `VAR=<anything>` for exactly `var`.
@@ -163,24 +280,409 @@ fn laundering_violation(var: &str) -> Violation {
     )
 }
 
+fn hook_integrity_violation(level: PolicyLevel, message: String) -> Violation {
+    Violation::new(
+        "git.hook_integrity",
+        level,
+        message,
+        "the enforcement hooks and their policy are not agent-editable — fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)".to_string(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// hook / policy integrity (task: HOOK-PLANE SELF-DISARM)
+// ---------------------------------------------------------------------------
+
+/// Env vars whose in-session assignment disables the client hooks. `HUSKY`
+/// only disarms at `=0`; the rest disarm at any value.
+const HOOK_SKIP_ENV_VARS: &[&str] =
+    &["GIT_SKIP_HOOKS", "SKIP_HOOKS", "PRE_COMMIT_ALLOW_NO_CONFIG", "GIT_HOOKS_PATH"];
+
+/// Detect a hook-skip env var set as a leading prefix or via the env/declare
+/// builtins (`GIT_SKIP_HOOKS=1 git …`, `HUSKY=0 …`, `env HUSKY=0 …`).
+fn hook_skip_env(tokens: &[String]) -> Option<&'static str> {
+    let matches_var = |t: &str| -> Option<&'static str> {
+        let (name, val) = t.split_once('=')?;
+        if name == "HUSKY" && val == "0" {
+            return Some("HUSKY");
+        }
+        HOOK_SKIP_ENV_VARS.iter().copied().find(|v| **v == *name)
+    };
+
+    let mut idx = 0;
+    while idx < tokens.len() {
+        let t = tokens[idx].as_str();
+        if let Some(v) = matches_var(t) {
+            return Some(v);
+        }
+        if t.contains('=') && is_identifier(t.split_once('=').map_or("", |(n, _)| n)) {
+            idx += 1;
+            continue;
+        }
+        if t == "command" || t == "builtin" {
+            idx += 1;
+            continue;
+        }
+        let word = basename(t);
+        if word == "env" || t == "export" || is_declare_builtin(t) {
+            for arg in &tokens[idx + 1..] {
+                if let Some(v) = matches_var(arg) {
+                    return Some(v);
+                }
+            }
+        }
+        break;
+    }
+    None
+}
+
+/// A `cd <dir>`/`pushd <dir>` simple command that retargets later git ops.
+fn cd_target(tokens: &[String]) -> Option<String> {
+    let first = tokens.first()?.as_str();
+    if first != "cd" && first != "pushd" {
+        return None;
+    }
+    tokens[1..]
+        .iter()
+        .find(|t| !t.starts_with('-'))
+        .map(|t| t.trim_matches(|c| c == '"' || c == '\'').to_string())
+        .filter(|d| !d.is_empty())
+}
+
+/// A leading `GIT_DIR=<dir>` env-prefix assignment, when present.
+fn git_dir_env_prefix(tokens: &[String]) -> Option<String> {
+    for t in tokens {
+        let (name, val) = t.split_once('=')?;
+        if !is_identifier(name) {
+            break;
+        }
+        if name == "GIT_DIR" {
+            return Some(val.to_string());
+        }
+    }
+    None
+}
+
+/// The hook shims and the integrity files: directory prefixes and exact files
+/// whose mutation would disarm or falsify the enforcement plane.
+const INTEGRITY_PREFIXES: &[&str] = &[".git/hooks", ".codeflow/git-hooks"];
+const INTEGRITY_FILES: &[&str] = &[".codeflow/policy.json", ".codeflow/project.toml"];
+
+/// The integrity path a single argument token names, when any.
+fn token_integrity_path(token: &str) -> Option<&'static str> {
+    INTEGRITY_PREFIXES
+        .iter()
+        .chain(INTEGRITY_FILES.iter())
+        .copied()
+        .find(|p| is_path_targeted(token, p))
+}
+
+/// The integrity path named by any argument in `args`.
+fn arg_integrity_path(args: &[String]) -> Option<&'static str> {
+    args.iter().find_map(|a| token_integrity_path(a))
+}
+
+/// A redirect (`>`/`>>`) writing an integrity path, from the token stream.
+fn redirect_integrity_path(tokens: &[String]) -> Option<&'static str> {
+    let mut i = 0;
+    while i < tokens.len() {
+        let t = tokens[i].as_str();
+        if t == ">" || t == ">>" {
+            if let Some(p) = tokens.get(i + 1).and_then(|n| token_integrity_path(n)) {
+                return Some(p);
+            }
+        } else if let Some(rest) = t.strip_prefix(">>").or_else(|| t.strip_prefix('>')) {
+            if let Some(p) = token_integrity_path(rest) {
+                return Some(p);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Block a Bash write/remove that would disarm or falsify the enforcement
+/// plane: a redirect into, or a mutating command targeting, the hook shims
+/// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
+/// (`.codeflow/policy.json`, `.codeflow/project.toml`). Reads (`cat`, a `cp`
+/// *from* an integrity path) stay allowed.
+fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Violation> {
+    if let Some(p) = redirect_integrity_path(tokens) {
+        return Some(hook_integrity_violation(
+            level,
+            format!("redirect would overwrite the integrity path `{p}`"),
+        ));
+    }
+    let (program, args) = strip_env_assignments(tokens)?;
+    let cmd = basename(program);
+
+    if matches!(
+        cmd,
+        "rm" | "unlink" | "mv" | "tee" | "dd" | "truncate" | "shred" | "chmod" | "chown" | "ln"
+            | "install"
+    ) {
+        if let Some(p) = arg_integrity_path(args) {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`{cmd}` targets the integrity path `{p}`"),
+            ));
+        }
+    }
+    if cmd == "sed" && args.iter().any(|a| a == "-i" || a.starts_with("-i")) {
+        if let Some(p) = arg_integrity_path(args) {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`sed -i` edits the integrity path `{p}`"),
+            ));
+        }
+    }
+    if cmd == "cp" {
+        // Only a write matters: the integrity path as the destination (the last
+        // non-flag argument). A `cp` *from* an integrity path is a read.
+        if let Some(dest) = args.iter().rev().find(|a| !a.starts_with('-')) {
+            if let Some(p) = token_integrity_path(dest) {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("`cp` writes the integrity path `{p}`"),
+                ));
+            }
+        }
+    }
+    if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
+        if let Some(p) = arg_integrity_path(&args[1..]) {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`git {}` removes the integrity path `{p}`", args[0]),
+            ));
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// command expansion (task: TOKEN DETECTION HARDENING — wrapper evasions)
+// ---------------------------------------------------------------------------
+
+/// Expand a raw command into candidate simple-command strings, unwrapping the
+/// shell constructs an agent can hide a `git`/`gh` token behind so it is not
+/// only the first word of a `&&`/`||`/`;`/`|` segment that is inspected:
+/// newlines, backgrounding `&`, subshells `( )`, brace groups `{ }`,
+/// `$(…)`/backtick command substitution, and `bash -c '…'` wrappers. A
+/// floor-raise, not a solve — deep or obfuscated nesting is a documented
+/// residual (ADR-0009), backstopped by CI + remote protection.
+fn expand_commands(command: &str) -> Vec<String> {
+    let mut raw = Vec::new();
+    split_into_segments(command, &mut raw, 0);
+
+    let mut out = Vec::new();
+    for seg in raw {
+        let toks = shell_tokens(&seg);
+        out.push(seg);
+        // `bash -c '<cmd>'` (and sh/zsh/dash/ksh): the wrapped command is an
+        // argument — expand it so a git op inside is evaluated.
+        if let Some((prog, args)) = strip_env_assignments(&toks) {
+            if matches!(basename(prog), "bash" | "sh" | "zsh" | "dash" | "ksh") {
+                if let Some(pos) = args.iter().position(|a| a == "-c") {
+                    if let Some(inner) = args.get(pos + 1) {
+                        split_into_segments(inner, &mut out, 1);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Split a command into simple-command segments, recursing into `$(…)` and
+/// backtick substitutions. Honors single/double quotes; treats unquoted
+/// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
+/// boundaries.
+fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
+    if depth > 8 {
+        return; // bound pathological nesting
+    }
+    let chars: Vec<char> = command.chars().collect();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_single {
+            cur.push(c);
+            if c == '\'' {
+                in_single = false;
+            }
+            i += 1;
+            continue;
+        }
+        // Command substitution executes even inside double quotes.
+        if c == '$' && chars.get(i + 1) == Some(&'(') {
+            let (inner, ni) = capture_balanced(&chars, i + 2);
+            split_into_segments(&inner, out, depth + 1);
+            i = ni;
+            continue;
+        }
+        if c == '`' {
+            let (inner, ni) = capture_backtick(&chars, i + 1);
+            split_into_segments(&inner, out, depth + 1);
+            i = ni;
+            continue;
+        }
+        if in_double {
+            cur.push(c);
+            if c == '"' {
+                in_double = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_single = true;
+                cur.push(c);
+                i += 1;
+            }
+            '"' => {
+                in_double = true;
+                cur.push(c);
+                i += 1;
+            }
+            '\\' => {
+                cur.push(c);
+                if i + 1 < chars.len() {
+                    cur.push(chars[i + 1]);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            '\n' | ';' | '(' | ')' => {
+                push_segment(out, &mut cur);
+                i += 1;
+            }
+            '{' if i + 1 >= chars.len() || chars[i + 1].is_whitespace() => {
+                push_segment(out, &mut cur);
+                i += 1;
+            }
+            '}' if i == 0 || chars[i - 1].is_whitespace() => {
+                push_segment(out, &mut cur);
+                i += 1;
+            }
+            '&' => {
+                push_segment(out, &mut cur);
+                i += if chars.get(i + 1) == Some(&'&') { 2 } else { 1 };
+            }
+            '|' => {
+                push_segment(out, &mut cur);
+                i += if chars.get(i + 1) == Some(&'|') { 2 } else { 1 };
+            }
+            _ => {
+                cur.push(c);
+                i += 1;
+            }
+        }
+    }
+    push_segment(out, &mut cur);
+}
+
+/// Push the accumulated segment (trimmed) unless it is blank.
+fn push_segment(out: &mut Vec<String>, cur: &mut String) {
+    let s = std::mem::take(cur);
+    let t = s.trim();
+    if !t.is_empty() {
+        out.push(t.to_string());
+    }
+}
+
+/// Capture up to the matching `)` for a `$(` opened before `start`, honoring
+/// nesting. Returns the inner text and the index just past the `)`.
+fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
+    let mut depth = 1;
+    let mut s = String::new();
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (s, i + 1);
+                }
+            }
+            _ => {}
+        }
+        s.push(chars[i]);
+        i += 1;
+    }
+    (s, i)
+}
+
+/// Capture up to the closing backtick. Returns the inner text and the index
+/// just past the backtick.
+fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
+    let mut s = String::new();
+    let mut i = start;
+    while i < chars.len() {
+        if chars[i] == '`' {
+            return (s, i + 1);
+        }
+        s.push(chars[i]);
+        i += 1;
+    }
+    (s, i)
+}
+
 const SANCTIONED: &str = "land work via PR (gh pr create → merge on green CI) or `codeflow integrate <branch> --into <target>`";
 
 #[allow(clippy::too_many_lines)]
 fn check_git(
     args: &[String],
-    branch: &mut String,
+    session_branch: &mut String,
+    cd_dir: Option<&str>,
+    git_dir_env: Option<String>,
     ctx: &GuardContext<'_>,
     out: &mut Vec<Violation>,
 ) {
     let policy = ctx.policy;
+
+    // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
+    // core.hooksPath=…`) disarms the client hooks (ADR-0009); `-C`/`--git-dir`
+    // retarget the op at another repository.
+    let (hooks_path_override, retarget_flag) = scan_git_globals(args);
+    if hooks_path_override && policy.hook_integrity.is_active() {
+        out.push(hook_integrity_violation(
+            policy.hook_integrity,
+            "`git -c core.hooksPath=…` overrides the hook path for this command".to_string(),
+        ));
+        return;
+    }
+
     let Some((sub, rest)) = git_subcommand(args) else {
         return;
     };
 
+    // Effective target: an explicit `--git-dir`/`-C`, else `GIT_DIR=`, else a
+    // chained `cd`. When retargeted, evaluate against that repo's branch (via
+    // the injected resolver) instead of the session branch — the review's
+    // wrong-dir evasion. No resolver / unreadable dir falls back to the session
+    // branch (documented residual; the target repo's git-hook plane backstops).
+    let retarget_dir = retarget_flag.or(git_dir_env).or_else(|| cd_dir.map(str::to_string));
+    let retargeted = retarget_dir.is_some();
+    let eval_branch: String = match (&retarget_dir, ctx.dir_branch_lookup) {
+        (Some(dir), Some(resolver)) => resolver(dir).unwrap_or_else(|| session_branch.clone()),
+        _ => session_branch.clone(),
+    };
+    let branch = eval_branch.as_str();
+
     match sub {
         "checkout" | "switch" => {
-            if let Some(target) = checkout_target(rest) {
-                *branch = target;
+            // A checkout in a *retargeted* dir does not change the session's
+            // branch, so only track it for the session case.
+            if !retargeted {
+                if let Some(target) = checkout_target(rest) {
+                    *session_branch = target;
+                }
             }
         }
         "commit" => {
@@ -258,8 +760,207 @@ fn check_git(
                 }
             }
         }
+        "config" => {
+            // Hook-path manipulation via config (`git config core.hooksPath …`
+            // / `--unset core.hooksPath`) disarms the client hooks. A pure read
+            // (`--get`) is harmless and stays allowed.
+            if policy.hook_integrity.is_active() && config_writes_hooks_path(rest) {
+                out.push(hook_integrity_violation(
+                    policy.hook_integrity,
+                    "`git config core.hooksPath` changes where git looks for hooks".to_string(),
+                ));
+            }
+        }
+        "update-ref" => check_update_ref(rest, ctx, out),
+        "symbolic-ref" => check_symbolic_ref(rest, ctx, out),
+        "fast-import" => {
+            // A bulk history import can write any ref, including a protected
+            // branch, and its stream is opaque to the guard — treat it
+            // conservatively (charter §6.1: unknown ref-writers deny).
+            if policy.local_ref_protection.is_active() && !ctx.integrate_token {
+                out.push(Violation::new(
+                    "git.local_ref_protection",
+                    policy.local_ref_protection,
+                    "`git fast-import` can rewrite any ref, including protected branches".to_string(),
+                    SANCTIONED.to_string(),
+                ));
+            }
+        }
         "push" => check_push(rest, branch, ctx, out),
         _ => {}
+    }
+}
+
+/// Scan the git global flags that precede the subcommand for a hook-path
+/// override (`-c core.hooksPath=…`) and a retarget (`-C <dir>` /
+/// `--git-dir <dir>` / `--git-dir=<dir>`). Returns `(hook_path_override,
+/// retarget_dir)`.
+fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
+    let mut hooks_path = false;
+    let mut retarget: Option<String> = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        let t = args[idx].as_str();
+        match t {
+            "-c" => {
+                if args.get(idx + 1).is_some_and(|v| v.starts_with("core.hooksPath")) {
+                    hooks_path = true;
+                }
+                idx += 2;
+            }
+            "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
+                if (t == "-C" || t == "--git-dir") && retarget.is_none() {
+                    retarget = args.get(idx + 1).cloned();
+                }
+                idx += 2;
+            }
+            _ => {
+                if let Some(v) = t.strip_prefix("--git-dir=") {
+                    if retarget.is_none() {
+                        retarget = Some(v.to_string());
+                    }
+                    idx += 1;
+                } else if t.starts_with('-') {
+                    idx += 1;
+                } else {
+                    break; // the subcommand
+                }
+            }
+        }
+    }
+    (hooks_path, retarget)
+}
+
+/// `true` when a `git config` invocation *writes* `core.hooksPath` (a set or an
+/// `--unset`), as opposed to a pure `--get`/`--list` read.
+fn config_writes_hooks_path(rest: &[String]) -> bool {
+    if !rest.iter().any(|t| t.contains("core.hooksPath")) {
+        return false;
+    }
+    let is_read = rest.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "-l" | "--list"
+        )
+    });
+    !is_read
+}
+
+/// Guard `git update-ref` (ADR-0009). Two vectors: (1) a direct write to a
+/// protected `refs/heads/*` — a local move outside the sanctioned path; (2) a
+/// write to `refs/remotes/*/<protected>` — poisoning the remote-tracking ref
+/// the reference-transaction plane consults as its sync oracle. Deletions of a
+/// protected ref route to `delete_protected`.
+fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
+    let policy = ctx.policy;
+    let deleting = rest.iter().any(|t| t == "-d" || t == "--delete");
+    // `--stdin` carries the refs out-of-band; block conservatively.
+    if rest.iter().any(|t| t == "--stdin") {
+        if policy.local_ref_protection.is_active() && !ctx.integrate_token {
+            out.push(Violation::new(
+                "git.local_ref_protection",
+                policy.local_ref_protection,
+                "`git update-ref --stdin` updates refs from an opaque stream that may touch protected branches".to_string(),
+                SANCTIONED.to_string(),
+            ));
+        }
+        return;
+    }
+    let Some(refname) = update_ref_name(rest) else {
+        return;
+    };
+
+    if let Some(branch) = protected_component_of_remote_ref(refname, policy) {
+        if policy.local_ref_protection.is_active() {
+            out.push(Violation::new(
+                "git.local_ref_protection",
+                policy.local_ref_protection,
+                format!("`git update-ref` writes the remote-tracking ref for protected branch '{branch}' — the reference-transaction sync oracle must not be agent-set"),
+                "let a real `git fetch`/`git pull` update refs/remotes; never set it by hand".to_string(),
+            ));
+        }
+        return;
+    }
+
+    if let Some(branch) = refname.strip_prefix("refs/heads/") {
+        if !policy.branch_is_protected(branch) {
+            return;
+        }
+        if deleting {
+            if policy.delete_protected.is_active() && !ctx.integrate_token {
+                out.push(Violation::new(
+                    "git.delete_protected",
+                    policy.delete_protected,
+                    format!("`git update-ref -d` deletes protected branch '{branch}'"),
+                    "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                ));
+            }
+        } else if policy.local_ref_protection.is_active() && !ctx.integrate_token {
+            out.push(Violation::new(
+                "git.local_ref_protection",
+                policy.local_ref_protection,
+                format!("`git update-ref` moves protected branch '{branch}' outside the sanctioned path"),
+                SANCTIONED.to_string(),
+            ));
+        }
+    }
+}
+
+/// The ref name argument of `git update-ref` — the first non-flag token, past
+/// `-m <reason>` (which consumes a value) and the boolean flags.
+fn update_ref_name(rest: &[String]) -> Option<&str> {
+    let mut idx = 0;
+    while idx < rest.len() {
+        let t = rest[idx].as_str();
+        if t == "-m" {
+            idx += 2;
+        } else if t.starts_with('-') {
+            idx += 1;
+        } else {
+            return Some(t);
+        }
+    }
+    None
+}
+
+/// When `refname` is `refs/remotes/<remote>/<branch>` and `<branch>` is
+/// protected, return the branch; else `None`.
+fn protected_component_of_remote_ref<'a>(refname: &'a str, policy: &GitPolicy) -> Option<&'a str> {
+    let rest = refname.strip_prefix("refs/remotes/")?;
+    // rest is `<remote>/<branch...>`; the branch is everything after the first
+    // path component.
+    let (_remote, branch) = rest.split_once('/')?;
+    policy.branch_is_protected(branch).then_some(branch)
+}
+
+/// Guard `git symbolic-ref` writes (`git symbolic-ref <name> <target>`) that
+/// point a ref at, or repoint, a protected branch. The read form (a single
+/// argument) is allowed.
+fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
+    let policy = ctx.policy;
+    if !policy.local_ref_protection.is_active() || ctx.integrate_token {
+        return;
+    }
+    let positionals: Vec<&str> = rest
+        .iter()
+        .filter(|t| !t.starts_with('-'))
+        .map(String::as_str)
+        .collect();
+    // A write needs a value (2+ positionals). Flag when either the ref being
+    // set or its target names a protected branch.
+    if positionals.len() >= 2 {
+        let touches_protected = positionals.iter().any(|p| {
+            let name = p.strip_prefix("refs/heads/").unwrap_or(p);
+            policy.branch_is_protected(name)
+        });
+        if touches_protected {
+            out.push(Violation::new(
+                "git.local_ref_protection",
+                policy.local_ref_protection,
+                "`git symbolic-ref` repoints a protected branch ref".to_string(),
+                SANCTIONED.to_string(),
+            ));
+        }
     }
 }
 
@@ -270,12 +971,54 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
     // `--no-verify` skips the pre-push hook; on a protected target that is a
     // gate bypass (an anti-bypass structural block, ADR-0007).
     if has_no_verify("push", rest) {
-        for target in push.updates.iter().chain(push.deletions.iter()) {
-            if policy.branch_is_protected(target) {
-                out.push(no_verify_violation("push", target));
-                break;
+        let bulk_touches_protected =
+            push.touches_all_branches && !policy.protected_branch_names().is_empty();
+        if bulk_touches_protected {
+            out.push(no_verify_violation("push", "all branches"));
+        } else {
+            for target in push.updates.iter().chain(push.deletions.iter()) {
+                if policy.branch_is_protected(target) {
+                    out.push(no_verify_violation("push", target));
+                    break;
+                }
             }
         }
+    }
+
+    // `--all` / `--mirror` / a wildcard refspec (`refs/heads/*`, `*:*`) update
+    // — and `--mirror` also deletes — *every* branch on the remote, protected
+    // ones included; an explicit target list can never be trusted to exclude
+    // them (the review's bulk-push evasion). Treat it as touching all protected
+    // branches (charter §6.1).
+    if push.touches_all_branches {
+        let protected = policy.protected_branch_names();
+        if !protected.is_empty() {
+            let names = protected.join(", ");
+            if push.force && policy.force_push_protected.is_active() {
+                out.push(Violation::new(
+                    "git.force_push_protected",
+                    policy.force_push_protected,
+                    format!("bulk force-push (--all/--mirror/wildcard) reaches protected branches: {names}"),
+                    SANCTIONED.to_string(),
+                ));
+            } else if policy.push_to_protected.is_active() && !ctx.integrate_token {
+                out.push(Violation::new(
+                    "git.push_to_protected",
+                    policy.push_to_protected,
+                    format!("bulk push (--all/--mirror/wildcard) reaches protected branches: {names}"),
+                    SANCTIONED.to_string(),
+                ));
+            }
+            if push.mirror && policy.delete_protected.is_active() {
+                out.push(Violation::new(
+                    "git.delete_protected",
+                    policy.delete_protected,
+                    format!("`git push --mirror` can delete protected branches to mirror local: {names}"),
+                    "protected branches are never deleted remotely; --mirror is unsafe here".to_string(),
+                ));
+            }
+        }
+        return;
     }
 
     for target in &push.deletions {
@@ -575,6 +1318,12 @@ struct PushIntent {
     updates: Vec<String>,
     /// Remote branch names being deleted.
     deletions: Vec<String>,
+    /// `--all`, `--mirror`, or a wildcard refspec (`refs/heads/*`, `*:*`): the
+    /// push reaches every branch on the remote, so any protected branch is in
+    /// scope regardless of the explicit target list.
+    touches_all_branches: bool,
+    /// `--mirror`: also *deletes* remote branches absent locally.
+    mirror: bool,
 }
 
 /// Push flags that consume the following token.
@@ -583,6 +1332,8 @@ const PUSH_VALUE_FLAGS: &[&str] = &["-o", "--push-option", "--receive-pack", "--
 fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
     let mut force = false;
     let mut delete_mode = false;
+    let mut all = false;
+    let mut mirror = false;
     let mut positional: Vec<&str> = Vec::new();
 
     let mut idx = 0;
@@ -596,6 +1347,11 @@ fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
             force = true;
         } else if t == "--delete" {
             delete_mode = true;
+        } else if t == "--all" || t == "--branches" {
+            all = true;
+        } else if t == "--mirror" {
+            mirror = true;
+            force = true; // a mirror force-updates refs to match local
         } else if t.starts_with("--") {
             // other long flag, no value consumed
         } else if let Some(cluster) = t.strip_prefix('-') {
@@ -622,6 +1378,11 @@ fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
     } else {
         &[][..]
     };
+
+    // A wildcard refspec (`refs/heads/*:refs/heads/*`, `*:*`, `+refs/heads/*`)
+    // fans out across branches just like `--all`/`--mirror`.
+    let wildcard_refspec = refspecs.iter().any(|s| s.contains('*'));
+    let touches_all_branches = all || mirror || wildcard_refspec;
 
     if refspecs.is_empty() {
         // `git push` / `git push origin`: updates the current branch.
@@ -659,6 +1420,8 @@ fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
         force,
         updates,
         deletions,
+        touches_all_branches,
+        mirror,
     }
 }
 
@@ -701,6 +1464,7 @@ mod tests {
             current_branch: branch,
             integrate_token: false,
             pr_base_lookup: None,
+            dir_branch_lookup: None,
         }
     }
 
@@ -715,6 +1479,22 @@ mod tests {
             current_branch: branch,
             integrate_token: false,
             pr_base_lookup: Some(lookup),
+            dir_branch_lookup: None,
+        }
+    }
+
+    /// A guard context with an injected retarget-dir → branch resolver.
+    fn ctx_with_dir_branch<'a>(
+        policy: &'a GitPolicy,
+        branch: &'a str,
+        resolver: &'a dyn Fn(&str) -> Option<String>,
+    ) -> GuardContext<'a> {
+        GuardContext {
+            policy,
+            current_branch: branch,
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_branch_lookup: Some(resolver),
         }
     }
 
@@ -799,6 +1579,7 @@ mod tests {
             current_branch: "main",
             integrate_token: true,
             pr_base_lookup: None,
+            dir_branch_lookup: None,
         };
         assert!(evaluate("git commit -m 'feat: x'", &c).is_empty());
     }
@@ -820,6 +1601,7 @@ mod tests {
             current_branch: "main",
             integrate_token: true,
             pr_base_lookup: None,
+            dir_branch_lookup: None,
         };
         assert!(evaluate("git merge feat/x", &c).is_empty());
     }
@@ -1267,5 +2049,309 @@ mod tests {
     #[test]
     fn test_shell_tokens_escapes() {
         assert_eq!(shell_tokens(r"echo a\ b"), vec!["echo", "a b"]);
+    }
+
+    fn has_rule(v: &[Violation], rule: &str) -> bool {
+        v.iter().any(|x| x.rule == rule)
+    }
+
+    // -- hook/policy integrity (HOOK-PLANE SELF-DISARM) --
+
+    #[test]
+    fn test_hook_path_manipulation_blocked() {
+        let p = default_policy();
+        for cmd in [
+            "git config core.hooksPath /tmp/evil",
+            "git config --global core.hooksPath /tmp/evil",
+            "git config --unset core.hooksPath",
+            "git -c core.hooksPath=/dev/null commit -m x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_config_get_hooks_path_allowed() {
+        // Reading the value is harmless.
+        let p = default_policy();
+        assert!(evaluate("git config --get core.hooksPath", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
+    fn test_hook_skip_env_prefixes_blocked_on_feature_branch() {
+        // These disarm the client hooks regardless of branch — a feature branch
+        // commit is normally fine, so the block proves it is the env var, not
+        // the commit-to-protected rule, being caught.
+        let p = default_policy();
+        for cmd in [
+            "GIT_SKIP_HOOKS=1 git commit -m x",
+            "HUSKY=0 git commit -m x",
+            "SKIP_HOOKS=1 git commit -m x",
+            "env GIT_SKIP_HOOKS=1 git commit -m x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_integrity_file_writes_blocked() {
+        let p = default_policy();
+        for cmd in [
+            "rm -f .git/hooks/pre-commit",
+            "rm -rf .codeflow/git-hooks",
+            "mv .codeflow/git-hooks /tmp/x",
+            "chmod -x .git/hooks/pre-push",
+            "echo bad > .codeflow/policy.json",
+            "echo more >> .codeflow/project.toml",
+            "tee .codeflow/policy.json",
+            "cp /tmp/evil.json .codeflow/policy.json",
+            "sed -i s/block/off/ .codeflow/policy.json",
+            "git rm .codeflow/policy.json",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_integrity_reads_allowed() {
+        let p = default_policy();
+        for cmd in [
+            "cat .codeflow/policy.json",
+            "cp .codeflow/policy.json /tmp/backup.json",
+            "git config --get core.hooksPath",
+            "grep block .codeflow/policy.json",
+        ] {
+            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_hook_integrity_off_is_silent() {
+        let p = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        assert!(evaluate("rm -rf .git/hooks", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("git config core.hooksPath /x", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
+    fn test_hook_integrity_warn_softens() {
+        // --minimal softens hook_integrity to warn like its siblings.
+        let p = GitPolicy {
+            hook_integrity: PolicyLevel::Warn,
+            ..default_policy()
+        };
+        let v = evaluate("rm -rf .git/hooks", &ctx(&p, "feat/x"));
+        assert_eq!(v[0].rule, "git.hook_integrity");
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+    }
+
+    // -- wrapper evasions (TOKEN DETECTION HARDENING 4a) --
+
+    #[test]
+    fn test_wrapped_git_on_protected_still_caught() {
+        // Session branch is main; each wrapper hides the commit from the naive
+        // first-word check, but expansion re-exposes it.
+        let p = default_policy();
+        for cmd in [
+            "(git commit -m x)",
+            "{ git commit -m x; }",
+            "bash -c 'git commit -m x'",
+            "sh -c \"git commit -m x\"",
+            "true\ngit commit -m x",
+            "foo & git commit -m x",
+            "$(git commit -m x)",
+            "`git commit -m x`",
+            "true; (git commit -m x)",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "main"));
+            assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_chained_checkout_then_wrapped_commit() {
+        // checkout main (tracked) then a wrapped commit — caught on main.
+        let p = default_policy();
+        let v = evaluate("git checkout main && (git commit -m x)", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_wrapper_does_not_false_positive_on_feature() {
+        let p = default_policy();
+        assert!(evaluate("(git commit -m x)", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("bash -c 'git commit -m x'", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    // -- effective target resolution (4b) --
+
+    #[test]
+    fn test_retarget_dash_c_evaluated_against_target_branch() {
+        // Session is feat/x; -C points at a repo the resolver says is on main.
+        let p = default_policy();
+        let resolver = |_dir: &str| Some("main".to_string());
+        let v = evaluate(
+            "git -C /root commit -m x",
+            &ctx_with_dir_branch(&p, "feat/x", &resolver),
+        );
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_retarget_cd_then_commit() {
+        let p = default_policy();
+        let resolver = |_dir: &str| Some("main".to_string());
+        let v = evaluate(
+            "cd /root && git commit -m x",
+            &ctx_with_dir_branch(&p, "feat/x", &resolver),
+        );
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_retarget_git_dir_env_prefix() {
+        let p = default_policy();
+        let resolver = |_dir: &str| Some("main".to_string());
+        let v = evaluate(
+            "GIT_DIR=/root/.git git commit -m x",
+            &ctx_with_dir_branch(&p, "feat/x", &resolver),
+        );
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_retarget_to_feature_dir_allowed() {
+        // Resolver reports the target repo is on a feature branch — allowed.
+        let p = default_policy();
+        let resolver = |_dir: &str| Some("feat/y".to_string());
+        assert!(
+            evaluate(
+                "git -C /other commit -m x",
+                &ctx_with_dir_branch(&p, "main", &resolver)
+            )
+            .is_empty()
+        );
+    }
+
+    // -- unknown ref-writers (4c) --
+
+    #[test]
+    fn test_update_ref_self_move_protected_blocked() {
+        let p = default_policy();
+        let v = evaluate("git update-ref refs/heads/main deadbeef", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.local_ref_protection"), "{v:?}");
+    }
+
+    #[test]
+    fn test_update_ref_delete_protected_blocked() {
+        let p = default_policy();
+        let v = evaluate("git update-ref -d refs/heads/main", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.delete_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_update_ref_feature_branch_allowed() {
+        let p = default_policy();
+        assert!(evaluate("git update-ref refs/heads/feat/x abc", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
+    fn test_symbolic_ref_and_fast_import_blocked() {
+        let p = default_policy();
+        let v = evaluate("git symbolic-ref HEAD refs/heads/main", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.local_ref_protection"), "symbolic-ref: {v:?}");
+        let v = evaluate("git fast-import", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.local_ref_protection"), "fast-import: {v:?}");
+    }
+
+    // -- refs/remotes oracle poisoning (REFERENCE-TRANSACTION ORACLE, 2a) --
+
+    #[test]
+    fn test_update_ref_remote_tracking_protected_blocked() {
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/remotes/origin/main deadbeef",
+            "git update-ref refs/remotes/upstream/master deadbeef",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.local_ref_protection"), "{cmd}: {v:?}");
+            assert!(v[0].message.contains("remote-tracking"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_update_ref_remote_tracking_feature_allowed() {
+        let p = default_policy();
+        assert!(
+            evaluate(
+                "git update-ref refs/remotes/origin/feat/x abc",
+                &ctx(&p, "feat/x")
+            )
+            .is_empty()
+        );
+    }
+
+    // -- bulk push (4d) --
+
+    #[test]
+    fn test_bulk_push_reaches_protected() {
+        let p = default_policy();
+        for cmd in [
+            "git push --all origin",
+            "git push origin refs/heads/*:refs/heads/*",
+            "git push origin '*:*'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.push_to_protected"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_mirror_push_flags_force_and_delete() {
+        let p = default_policy();
+        let v = evaluate("git push --mirror origin", &ctx(&p, "feat/x"));
+        // --mirror force-updates and can delete protected branches.
+        assert!(has_rule(&v, "git.force_push_protected"), "{v:?}");
+        assert!(has_rule(&v, "git.delete_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_normal_feature_push_not_bulk() {
+        let p = default_policy();
+        assert!(evaluate("git push origin feat/x", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    // -- override-laundering extra forms (OVERRIDE-LAUNDERING, 5) --
+
+    #[test]
+    fn test_laundering_extra_forms_blocked() {
+        let p = default_policy();
+        for cmd in [
+            "/usr/bin/env CODEFLOW_HUMAN_OVERRIDE=1 git merge feat/y",
+            "command env CODEFLOW_HUMAN_OVERRIDE=1 git merge feat/y",
+            "declare -x CODEFLOW_HUMAN_OVERRIDE=1",
+            "typeset -x CODEFLOW_INTEGRATE_TOKEN=abc",
+            "readonly CODEFLOW_HUMAN_OVERRIDE=1",
+            "git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git merge'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(
+                has_rule(&v, "git.override_token_laundering"),
+                "{cmd}: {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_laundering_extra_forms_do_not_flag_unrelated() {
+        let p = default_policy();
+        assert!(evaluate("/usr/bin/env FOO=1 git status", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("declare -x EDITOR=vim", &ctx(&p, "feat/x")).is_empty());
+        assert!(evaluate("git config alias.st status", &ctx(&p, "feat/x")).is_empty());
     }
 }

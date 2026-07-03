@@ -83,14 +83,37 @@ fn git_guard(stdin: &str) -> i32 {
         .unwrap_or_default();
 
     let lookup = gh_pr_base;
+    // Resolve a retargeted directory (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to the
+    // branch checked out there, so a wrong-dir git op is judged against the
+    // target repo, not the session (charter §6.1).
+    let dir_cwd = cwd.clone();
+    let dir_branch = move |dir: &str| resolve_dir_branch(&dir_cwd, dir);
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
         current_branch: &branch,
         integrate_token: super::integrate_token_present(),
         pr_base_lookup: Some(&lookup),
+        dir_branch_lookup: Some(&dir_branch),
     };
     let violations = git_guard::evaluate(command, &ctx);
     super::render_outcome("git-guard", &violations, &[], 2)
+}
+
+/// Resolve a `-C`/`--git-dir`/`GIT_DIR`/`cd` target `dir` (relative to the
+/// session `cwd`) to the branch checked out there. `--git-dir` may point at a
+/// `.git` directory; discovery from its parent handles that. `None` when the
+/// branch cannot be read — the guard then falls back to the session branch.
+fn resolve_dir_branch(cwd: &std::path::Path, dir: &str) -> Option<String> {
+    let p = std::path::Path::new(dir);
+    let abs = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+    let start = if abs.file_name().is_some_and(|n| n == ".git") {
+        abs.parent().map_or(abs.clone(), std::path::Path::to_path_buf)
+    } else {
+        abs
+    };
+    codeflow_core::hooks::RepoInfo::discover(&start)
+        .map(|i| i.branch)
+        .filter(|b| !b.is_empty())
 }
 
 /// `exec-guard` (`PreToolUse` Bash): run the dangerous/privilege security

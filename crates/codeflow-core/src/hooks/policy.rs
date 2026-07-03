@@ -78,6 +78,17 @@ pub struct GitPolicy {
     /// legitimate sync and is allowed; the integrate token and human override
     /// pass. Deletion is governed by `delete_protected`.
     pub local_ref_protection: PolicyLevel,
+    /// Integrity of the enforcement plane itself (git-guard only, ADR-0009):
+    /// attempts to disarm or tamper with the hooks and their policy — hook-path
+    /// manipulation (`git config core.hooksPath`, `git -c core.hooksPath=…`,
+    /// `--unset core.hooksPath`), hook-skip env prefixes (`GIT_SKIP_HOOKS=`,
+    /// `HUSKY=0`), and Bash writes/removes targeting the hook shims
+    /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
+    /// (`.codeflow/policy.json`, `.codeflow/project.toml`). A floor-raise for
+    /// honest agents, not a boundary: the Write tool bypasses it and remote+CI
+    /// stay the hard line (charter D19). Softened by `--minimal` with the
+    /// siblings; suspended only in the pre-first-commit bootstrap window.
+    pub hook_integrity: PolicyLevel,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     pub ai_attribution: PolicyLevel,
@@ -101,6 +112,7 @@ impl Default for GitPolicy {
             merge_to_protected: PolicyLevel::Block,
             pr_merge_to_protected: PolicyLevel::Block,
             local_ref_protection: PolicyLevel::Block,
+            hook_integrity: PolicyLevel::Block,
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build",
@@ -158,6 +170,13 @@ impl GitPolicy {
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))
     }
 
+    /// The configured protected branch entries (names and glob patterns), for
+    /// display when a bulk operation is judged to reach all of them.
+    #[must_use]
+    pub fn protected_branch_names(&self) -> Vec<String> {
+        self.protected_branches.clone()
+    }
+
     /// The first non-glob protected branch — used as the default integration
     /// base (e.g. for session-summary diff stats).
     #[must_use]
@@ -200,6 +219,41 @@ impl Default for SecuritySection {
     }
 }
 
+/// How a genuine *human* authorization of an irreversible/security action is
+/// established (ADR-0009). The principle: an agent sharing the host shares any
+/// in-band credential (an env var, a token file, the TTY), so real human-only
+/// authorization needs an OUT-OF-BAND factor on a channel the agent cannot
+/// reach. Today the de-facto out-of-band factor is the remote PR-merge
+/// (server-enforced, agent-unreachable) — which is why remote+CI is the
+/// authoritative boundary and the local env-var override is only a convenience.
+///
+/// This is an inert seam: only `None` exists, the future adapters
+/// (`totp`/`push`/`webauthn`) are deferred. The guards read it as a no-op
+/// check-point so an adapter can slot in without re-threading the call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HumanAuthorization {
+    /// No additional out-of-band factor is required — current behavior. The
+    /// env-var human override stands on its own, contained because the
+    /// authoritative boundary is the remote (ADR-0009).
+    #[default]
+    None,
+}
+
+impl HumanAuthorization {
+    /// Whether a claimed human override is honored under this mode. The single
+    /// no-op check-point the future out-of-band adapter replaces: today `None`
+    /// simply passes the in-band env override through unchanged; an adapter
+    /// would additionally require its out-of-band factor here before returning
+    /// `true`. See ADR-0009.
+    #[must_use]
+    pub fn authorizes_override(self, human_override_env: bool) -> bool {
+        match self {
+            Self::None => human_override_env,
+        }
+    }
+}
+
 /// Full `.codeflow/policy.json` shape (only the parts the hook plane reads).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -207,6 +261,8 @@ pub struct Policy {
     pub schema_version: u32,
     pub git: GitPolicy,
     pub security: SecuritySection,
+    /// Out-of-band human-authorization mode (ADR-0009). Default `none`.
+    pub human_authorization: HumanAuthorization,
 }
 
 impl Policy {
@@ -230,20 +286,54 @@ impl Policy {
 
     /// Load the policy as the enforcement planes should apply it.
     ///
-    /// During bootstrap grace (`policy_armed = false` in
-    /// `.codeflow/project.toml`, charter AC #1: the first hour has zero
-    /// policy walls) every rule except `secret_scan` is suspended — secrets
-    /// are never graced (charter §6.3, the `--minimal` floor). Returns the
-    /// effective policy and whether the policy is armed.
+    /// Bootstrap grace (`policy_armed = false` in `.codeflow/project.toml`,
+    /// charter AC #1) suspends every rule except `secret_scan` — but ONLY for
+    /// its real purpose, the very first scaffold commit. Grace is honored only
+    /// while the repo has no commit yet (the pre-scaffold-commit window); once
+    /// any commit exists the flag is treated as armed regardless of its value,
+    /// so `policy_armed = false` is not a persistent, agent-flippable
+    /// off-switch (ADR-0009). Secrets are never graced (charter §6.3). Returns
+    /// the effective policy and whether the policy is armed.
     #[must_use]
     pub fn load_effective(root: &Path) -> (Self, bool) {
         let mut policy = Self::load(root);
-        let armed = policy_armed(root);
+        let armed = effective_armed(root);
         if !armed {
             policy.git.suspend_for_bootstrap();
         }
         (policy, armed)
     }
+}
+
+/// Whether the enforcement planes should treat the policy as armed.
+///
+/// `policy_armed = true` (the fail-safe default) is always armed. A disarmed
+/// flag is honored only in the pre-first-commit bootstrap window: the moment a
+/// scaffold (or any) commit exists, a disarmed flag is ignored and the policy
+/// is armed. This confines the grace to its intended purpose — letting the
+/// first scaffold commit through — and neutralizes a mid-session re-disarm
+/// (ADR-0009). The complementary `git.hook_integrity` write-block stops an
+/// agent flipping the flag via Bash; this makes the flip inert however it is
+/// written (e.g. via a non-Bash editor the git-guard never sees).
+#[must_use]
+fn effective_armed(root: &Path) -> bool {
+    policy_armed(root) || repo_has_commit(root)
+}
+
+/// `true` when the repository containing `root` has at least one commit.
+/// A fresh repo with an unborn HEAD (the scaffold-commit window) has none;
+/// a non-repository has none. Any error resolving HEAD is treated as "no
+/// commit" — that only ever *widens* grace in the harmless no-history case,
+/// never narrows enforcement on a real repo.
+#[must_use]
+fn repo_has_commit(root: &Path) -> bool {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return false;
+    };
+    // `head()` errs on an unborn HEAD (the pre-scaffold-commit window); a
+    // resolved HEAD carries the tip commit's oid. `target()` yields a `Copy`
+    // oid, so no borrow of `repo` escapes.
+    repo.head().ok().and_then(|head| head.target()).is_some()
 }
 
 impl GitPolicy {
@@ -258,6 +348,7 @@ impl GitPolicy {
         self.merge_to_protected = PolicyLevel::Off;
         self.pr_merge_to_protected = PolicyLevel::Off;
         self.local_ref_protection = PolicyLevel::Off;
+        self.hook_integrity = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
@@ -266,11 +357,14 @@ impl GitPolicy {
     }
 }
 
-/// Read `policy_armed` from `.codeflow/project.toml`.
+/// Read the raw `policy_armed` flag from `.codeflow/project.toml`.
 ///
 /// Absent file, absent key, or parse failure all mean **armed** — the
 /// fail-safe direction. Init writes `policy_armed = false`, makes the
-/// scaffold commit, then flips it to `true`.
+/// scaffold commit, then flips it to `true`. Callers enforcing policy should
+/// use [`effective_armed`] (via [`Policy::load_effective`]), which additionally
+/// ignores a disarmed flag once the repo has a commit (ADR-0009); this raw
+/// reader is the on-disk value only.
 #[must_use]
 pub fn policy_armed(root: &Path) -> bool {
     read_project_toml(root)
@@ -513,6 +607,98 @@ mod tests {
         let (policy, armed) = Policy::load_effective(dir.path());
         assert!(armed);
         assert_eq!(policy.git.commit_to_protected, PolicyLevel::Block);
+    }
+
+    /// Make a real one-commit git repo at `dir` and write a project.toml with
+    /// the given `policy_armed` value.
+    fn committed_repo_with_armed(dir: &Path, armed: bool) {
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("git runs")
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "chore: init"]);
+        let cf = dir.join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(
+            cf.join("project.toml"),
+            format!("schema_version = 1\npolicy_armed = {armed}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_load_effective_disarm_flag_is_inert_after_first_commit() {
+        // ADR-0009: policy_armed=false is not a persistent off-switch. In a
+        // repo that already has a (scaffold) commit, the disarmed flag is
+        // ignored and rules stay armed.
+        let dir = tempfile::tempdir().unwrap();
+        committed_repo_with_armed(dir.path(), false);
+        let (policy, armed) = Policy::load_effective(dir.path());
+        assert!(armed, "a committed repo is armed despite policy_armed=false");
+        assert_eq!(policy.git.commit_to_protected, PolicyLevel::Block);
+        assert_eq!(policy.git.hook_integrity, PolicyLevel::Block);
+    }
+
+    #[test]
+    fn test_load_effective_grace_only_before_first_commit() {
+        // Grace is still honored in the genuine pre-scaffold-commit window: a
+        // repo with an unborn HEAD (no commit yet) and policy_armed=false is
+        // graced, so the first scaffold commit is not walled.
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        let cf = dir.path().join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(cf.join("project.toml"), "policy_armed = false\n").unwrap();
+        let (policy, armed) = Policy::load_effective(dir.path());
+        assert!(!armed, "pre-first-commit bootstrap window is graced");
+        assert_eq!(policy.git.commit_to_protected, PolicyLevel::Off);
+        // Secrets are never graced, even in the bootstrap window.
+        assert_eq!(policy.git.secret_scan, PolicyLevel::Block);
+    }
+
+    #[test]
+    fn test_hook_integrity_default_block_and_suspended_by_grace() {
+        assert_eq!(GitPolicy::default().hook_integrity, PolicyLevel::Block);
+        let mut g = GitPolicy::default();
+        g.suspend_for_bootstrap();
+        assert_eq!(g.hook_integrity, PolicyLevel::Off);
+    }
+
+    #[test]
+    fn test_human_authorization_default_none_is_noop() {
+        let p = Policy::default();
+        assert_eq!(p.human_authorization, HumanAuthorization::None);
+        // `none` passes the in-band env override straight through (no-op seam).
+        assert!(HumanAuthorization::None.authorizes_override(true));
+        assert!(!HumanAuthorization::None.authorizes_override(false));
+    }
+
+    #[test]
+    fn test_human_authorization_parses_and_defaults() {
+        let p: Policy = serde_json::from_str(r#"{"human_authorization":"none"}"#).unwrap();
+        assert_eq!(p.human_authorization, HumanAuthorization::None);
+        // Missing key falls back to the default `none`.
+        let p: Policy = serde_json::from_str(r#"{"schema_version":1}"#).unwrap();
+        assert_eq!(p.human_authorization, HumanAuthorization::None);
     }
 
     #[test]

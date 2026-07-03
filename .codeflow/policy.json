@@ -14,6 +14,7 @@
     "merge_to_protected": "block",
     "pr_merge_to_protected": "block",
     "local_ref_protection": "block",
+    "hook_integrity": "block",
     "commit_format": "block",
     "commit_types": [
       "feat",
@@ -46,5 +47,6 @@
     ],
     "secret_scan": "block",
     "test_gate_on_push": "warn"
-  }
+  },
+  "human_authorization": "none"
 }

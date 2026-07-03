@@ -166,6 +166,61 @@ fn git_guard_integrate_token_allows_protected_commit() {
 }
 
 #[test]
+fn git_guard_blocks_hook_plane_self_disarm_with_exit_2() {
+    // Hook-plane self-disarm on a *feature* branch (where a plain commit is
+    // fine): the block proves the hook-integrity rule, not commit-to-protected.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for cmd in [
+        "rm -rf .git/hooks",
+        "git config core.hooksPath /tmp/evil",
+        "git -c core.hooksPath=/dev/null commit -m x",
+        "GIT_SKIP_HOOKS=1 git commit -m x",
+        "echo bad > .codeflow/policy.json",
+    ] {
+        let payload = guard_payload(cmd, dir.path());
+        let out = run_with_stdin(
+            codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+            &payload,
+        );
+        assert_eq!(out.status.code(), Some(2), "{cmd}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity"),
+            "{cmd}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn git_guard_blocks_remote_tracking_ref_poisoning_with_exit_2() {
+    // Task 2a: the agent-writable sync oracle cannot be hand-set.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let payload = guard_payload("git update-ref refs/remotes/origin/main deadbeef", dir.path());
+    let out = run_with_stdin(
+        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.local_ref_protection"));
+}
+
+#[test]
+fn exec_guard_blocks_dangerous_command_with_exit_2() {
+    // Task 6: a PreToolUse block must map to exit 2, not 0.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let payload = guard_payload("rm -rf /", dir.path());
+    let out = run_with_stdin(
+        codeflow().args(["hook", "exec-guard"]).current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2), "dangerous command must block with exit 2");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
+}
+
+#[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
     let dir = tempfile::tempdir().unwrap();
@@ -445,6 +500,75 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
 }
 
 #[test]
+fn real_wired_reference_transaction_allows_git_pull_sync() {
+    // ADR-0009: narrowing the sync oracle to an exact remote-head match must
+    // not break the one legitimate protected-branch sync — `git pull` that
+    // fast-forwards main onto the freshly fetched origin/main.
+    let origin = tempfile::tempdir().unwrap();
+    init_repo(origin.path(), "main");
+
+    let workroot = tempfile::tempdir().unwrap();
+    let work = workroot.path().join("repo");
+    let clone = Command::new("git")
+        .args([
+            "clone",
+            origin.path().to_str().unwrap(),
+            work.to_str().unwrap(),
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "clone: {}", String::from_utf8_lossy(&clone.stderr));
+    git(&work, &["config", "user.email", "t@example.com"]);
+    git(&work, &["config", "user.name", "t"]);
+
+    let hook = work.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // Advance origin so there is something to sync.
+    std::fs::write(origin.path().join("o.txt"), "o\n").unwrap();
+    git(origin.path(), &["add", "."]);
+    git(origin.path(), &["commit", "-m", "feat: origin advance"]);
+
+    // `git pull --ff-only`: the fetch updates refs/remotes/origin/main, then the
+    // fast-forward moves refs/heads/main onto exactly that head — allowed.
+    let pull = Command::new("git")
+        .args(["pull", "--ff-only", "origin", "main"])
+        .current_dir(&work)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .unwrap();
+    assert!(
+        pull.status.success(),
+        "git pull ff-only on protected main must stay allowed: {}",
+        String::from_utf8_lossy(&pull.stderr)
+    );
+}
+
+#[test]
 fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_protected() {
     // The two ref updates classic client hooks never saw: `reset --hard` and
     // `branch -D` on a protected branch (ADR-0007), now caught at the git layer.
@@ -623,26 +747,58 @@ fn hook_session_summary_never_fails_outside_repo() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn bootstrap_grace_suspends_branch_rules_not_secrets() {
-    // AC #1: policy_armed=false gives the first hour zero policy walls —
-    // except the secret scan.
+fn bootstrap_grace_is_inert_after_first_commit() {
+    // ADR-0009: policy_armed=false is not a persistent, agent-flippable
+    // off-switch. `init_repo` already made a commit, so a disarmed flag written
+    // afterwards is ignored — protected-branch rules stay armed.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
     let cf = dir.path().join(".codeflow");
     std::fs::create_dir_all(&cf).unwrap();
     std::fs::write(cf.join("project.toml"), "policy_armed = false\n").unwrap();
 
-    // Protected-branch commit: allowed under grace.
+    // Protected-branch commit: still BLOCKED despite policy_armed=false.
+    std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+    git(dir.path(), &["add", "a.txt"]);
     let out = run_with_stdin(
         codeflow()
             .args(["git-hook", "pre-commit"])
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(out.status.code(), Some(0), "grace suspends branch rules");
+    assert_eq!(out.status.code(), Some(1), "disarm flag is inert once committed");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"));
+}
 
-    // Staged secret: still blocked under grace.
-    std::fs::write(dir.path().join("leak.txt"), "AKIAIOSFODNN7EXAMPLF\n").unwrap();
+#[test]
+fn bootstrap_grace_applies_before_first_commit() {
+    // Grace still serves its real purpose: in the genuine pre-scaffold-commit
+    // window (an unborn HEAD, no commit yet), policy_armed=false suspends the
+    // branch rules so the first commit is not walled — but secrets are never
+    // graced.
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-b", "main"]);
+    git(dir.path(), &["config", "user.email", "t@example.com"]);
+    git(dir.path(), &["config", "user.name", "t"]);
+    let cf = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&cf).unwrap();
+    std::fs::write(cf.join("project.toml"), "policy_armed = false\n").unwrap();
+
+    // Protected-branch commit (no prior commit): allowed under grace.
+    std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
+    git(dir.path(), &["add", "f.txt"]);
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(0), "grace suspends branch rules pre-commit");
+
+    // Staged secret: still blocked under grace. The fixture is assembled at
+    // runtime so this source file itself carries no contiguous key literal.
+    let fake_key = format!("{}IOSFODNN7EXAMPLF\n", "AKIA");
+    std::fs::write(dir.path().join("leak.txt"), fake_key).unwrap();
     git(dir.path(), &["add", "leak.txt"]);
     let out = run_with_stdin(
         codeflow()
