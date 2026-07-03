@@ -8,6 +8,12 @@
       "sha256": "108e7e66a6f9a6a51018408561cc894b0a61c956676acd42f77a88f25e7fdd0c",
       "exec": false
     },
+    ".claude/commands/cf-consult.md": {
+      "src": "claude/commands/cf-consult.md",
+      "ownership": "managed",
+      "sha256": "fcffc12ec652af3f43f67166c45bce17530f048acdad8423a1e89aa2272b4604",
+      "exec": false
+    },
     ".claude/commands/cf-develop.md": {
       "src": "claude/commands/cf-develop.md",
       "ownership": "managed",
@@ -26,10 +32,22 @@
       "sha256": "7a30c9942fec2a93d896fc298c632786fc03be21ca7fa5d8869225a6f87f8a77",
       "exec": false
     },
+    ".claude/commands/cf-stack.md": {
+      "src": "claude/commands/cf-stack.md",
+      "ownership": "managed",
+      "sha256": "675c0a70738df9be9914403d40f948d1bf39c6568986fb45680c57895a32c876",
+      "exec": false
+    },
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
       "sha256": "d39e04495452bad289ed7d525d04f2e21e0d4e008fc18489ee313e73a2b14256",
+      "exec": false
+    },
+    ".claude/skills/cf-delegate/SKILL.md": {
+      "src": "claude/skills/cf-delegate/SKILL.md",
+      "ownership": "managed",
+      "sha256": "17c0e23967430a6cc25fb8ce001c728ba2a08c2eafcf0bf8cebbb5d0e87586b2",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
@@ -72,6 +90,18 @@
       "src": "policy.json",
       "ownership": "user-owned",
       "sha256": "f720dbd0937f8e8d49a6663f01c65686f0781c6b8d0958ea2b1e693192f2dec9",
+      "exec": false
+    },
+    ".codex/config.toml": {
+      "src": "codex/config.toml",
+      "ownership": "managed",
+      "sha256": "4d2f52eb8bdfdd10e3cf1100b4242f06defcee061027802ed03b15f01b282ff6",
+      "exec": false
+    },
+    ".codex/hooks.json": {
+      "src": "codex/hooks.json",
+      "ownership": "managed",
+      "sha256": "601f8f879515f58902a717f2dc6d4d483d3afc42d48fb33f7ac4b2da9f302ee7",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
