@@ -349,6 +349,13 @@ The repo **builds the product** (binary with embedded assets) and is merely its 
 - **D — Scaffold engine (new):** init/update, manifest, ownership classes, 3-way merge, rust-embed wiring, `--yes` flow incl. the 3 product questions + permission-preset choice; the critical path (~1.5–2 agent-days).
 - **E — Corpus authoring (new):** AGENTS.md template, CLAUDE.md shim, 3 agents, `cf-method` skill, develop/ship workflows, 4 commands, settings presets (incl. deny-read secret patterns, statusline, sandbox), policy.json defaults (§6.1), git-hook shims, CI template, docs templates (product/architecture/capabilities/ADR + ADR-0001 example), epic/task/spec templates.
 
+> Editorial note (2026-07-04, appended — text above preserved per this document's
+> HISTORICAL status): wave E's rough count ("3 agents … develop/ship workflows,
+> 4 commands") is a first-draft enumeration; the authoritative scaffold caps are
+> §4.4 and D20 — **1 agent** (`cf-reviewer`), **1 core skill** (`cf-method`),
+> **3 commands**, **1 workflow** (`develop`). Those "commands" later shipped as
+> SKILL.md **skills** (Claude Code merged custom commands into skills in v2.1.101).
+
 **Day 2 — new small builds + integration:**
 - `git-guard`, `integrate` (with gate-context token), `recall` + `orient` + `session-summary`, `remote protect` (GitHub), `status`.
 - Wire init end-to-end; integrate workstreams; full suite green; `doctor` clean.

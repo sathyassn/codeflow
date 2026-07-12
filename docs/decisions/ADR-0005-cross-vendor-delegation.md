@@ -78,3 +78,12 @@ enumerate a new name in `docs/architecture.md`'s doctor table, which ADR-0007
 treats as an architecture impact (6→7). Recording `none` here was the narrower
 reading (the check reuses the existing registry and injection seams; no boundary
 moves) — noted so the ADR→architecture spine stays legible.
+
+## Note — 2026-07-04 (appended)
+
+Terminology: the Decision above calls the delegation entry point the `cf-consult`
+*command*. It ships as a **skill** — `.claude/skills/cf-consult/SKILL.md`, mirrored
+to `.agents/skills/` for Codex. Claude Code merged custom commands into skills in
+v2.1.101 (2026-04-11), so `/cf-consult` is now a skill invocation rather than a
+`.claude/commands/*` command. The decision is unchanged; only the artifact kind
+was renamed. Current terminology lives in `docs/capabilities.md` (CAP-009).
