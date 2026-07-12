@@ -72,8 +72,8 @@ Top 10:2025, OWASP LLM Top 10:2025, CWE Top 25 (2025)).
    bypass via a user-controlled key, missing auth on a critical function.
    [A01/A07, CWE-862/863/284/306/639]
 5. **Vulnerable / malicious dependencies** — every new or bumped dep gets extra
-   scrutiny (typosquat, unmaintained, yanked); reconcile against the Part-1 SCA
-   output. [A03 NEW, LLM03]
+   scrutiny (typosquat, unmaintained, yanked); reconcile against the
+   deterministic SCA output (Inputs above). [A03 NEW, LLM03]
 6. **General vuln classes** — deserialization (CWE-502), SSRF (CWE-918, now under
    A01), crypto misuse (A04), security misconfiguration (A02), unbounded resource
    consumption (CWE-770 / LLM10), fail-open / mishandled exceptions (A10 NEW).
@@ -148,10 +148,17 @@ Split by determinism, because a flaky hard gate creates pressure to bypass:
   (location, class); annotate a matched scanner hit, do not re-report it.
 - Cross-vendor divergence escalates to the human at merge; never auto-dismiss a
   finding one vendor raised and the other cleared.
-- Degrade legibly: the deterministic floor is always mandatory. If codex is
-  unavailable the review runs single-vendor with a recorded caveat — but for a
-  duo flow whose premise is two vendors, losing the second vendor blocks (a loud
-  caveat at minimum), since it defeats the correlated-blindspot reduction that
-  justifies the red team.
+- Degrade legibly: the deterministic floor is always mandatory, and codex
+  unavailability maps to a finding and a verdict like everything else — never to
+  prose (ADR-0015/ADR-0016). Two cases:
+  - **codex absent at flow start** (never available this run — the whole flow
+    already degraded to single-vendor): run the defender lens alone and record
+    the degradation in the `attack_log` and as an info finding; the verdict
+    still follows the block rule.
+  - **codex lost mid-duo, or missing for a *requested* duo security stage**:
+    record a finding naming the lost second vendor at severity high /
+    confidence confirmed — under the block rule that yields
+    `changes_requested`, since losing the second vendor defeats the
+    correlated-blindspot reduction that justifies the red team.
 - Read-only on code: never fix, never amend a commit, never re-run to make a gate
   pass. Report and stop.
