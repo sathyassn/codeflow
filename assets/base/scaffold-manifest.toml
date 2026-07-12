@@ -258,17 +258,9 @@ dest = ".claude/skills/cf-consult/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
-# cf-model-orchestrator ships its SKILL.md plus a resources/ file (the app-server
-# driver) — the first skill with a resource, so each resource needs its own entry.
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".claude/skills/cf-model-orchestrator/SKILL.md"
-ownership = "managed"
-tiers = ["standard", "full"]
-
-[[entry]]
-src = "agents/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
-dest = ".claude/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -330,12 +322,6 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".agents/skills/cf-model-orchestrator/SKILL.md"
-ownership = "managed"
-tiers = ["standard", "full"]
-
-[[entry]]
-src = "agents/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
-dest = ".agents/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Decide solo vs duo for planned dev work, then run it. Duo adds codex as a second, independently-trained reviewer alongside the cf-reviewer subagent in the build → review → verify loop, reserved for real blast radius in a codeflow repo — a Tier-3-grade decision (new dependency, schema/API change, module boundary change), anything touching auth, secrets, payments, or a data migration, or a change to a shipped capability's public contract. Use when about to build a feature, change, or fix that already has acceptance criteria and whose stakes go beyond a small, easily self-reviewed edit — not for a trivial fix, a conversational answer, or a docs-only change. Silently degrades to solo /cf-develop when codex is missing or unauthenticated — never blocks or prompts for auth.
+description: Decide solo vs duo for planned dev work, then run it. Duo adds codex as a second, independently-trained reviewer alongside the cf-reviewer subagent in the build → review → verify loop, reserved for real blast radius in a codeflow repo — a Tier-3-grade decision (new dependency, schema/API change, module boundary change), anything touching auth, secrets, payments, or a data migration, or a change to a shipped capability's public contract. Use when about to build a feature, change, or fix that already has acceptance criteria and whose stakes go beyond a small, easily self-reviewed edit — not for a trivial fix, a conversational answer, or a docs-only change. Duo is driven from Claude Code through the official codex-plugin-cc plugin (ADR-0018); it silently degrades to solo /cf-develop when either half is missing — this session is not Claude Code, the plugin surface is absent, or codex is missing/unauthenticated — never blocks or prompts for auth.
 ---
 
 # cf-model-orchestrator — solo or duo, then drive it
@@ -16,18 +16,28 @@ solo **is** `/cf-develop`.
 1. The work must already have acceptance criteria (from an epic, task, spec, or
    the prompt). None stated → run the clarity gate in `cf-plan` first; never
    build against a guess.
-2. **Preflight codex** (the same check as `cf-delegate` and `codeflow doctor`
-   delegates):
+2. **Seat gate.** This duo is driven **from Claude Code** — the drive lane is
+   a Claude Code plugin (ADR-0018). If this session is not Claude Code, duo is
+   unavailable from this seat → **silently run solo `/cf-develop`** with the
+   harness-native independent review (a separate read-only review pass;
+   self-review is not review), and note it once in your report.
+3. **Preflight both halves** (the codex check is the same signal as
+   `cf-delegate` and `codeflow doctor` delegates):
 
-   ```sh
-   codex login status   # exit 0 + "Logged in using ChatGPT" → duo is available
-   ```
+   - **The plugin surface:** the `/codex:*` commands exist — `/codex:setup`
+     verifies the wiring.
+   - **codex auth:**
 
-   `codex` missing from PATH, or non-zero exit → **duo is unavailable. Silently
-   run solo `/cf-develop`** with `cf-reviewer` as the independent pass, and note
-   it once in your report. Never prompt for `codex login`, never nag — duo was
-   never promised.
-3. Available **and** the stakes clear the bar → **duo**. The bar (the skill
+     ```sh
+     codex login status   # exit 0 + "Logged in using ChatGPT" → codex half ready
+     ```
+
+   Either half missing (no plugin surface; `codex` missing from PATH or
+   non-zero exit) → **duo is unavailable. Silently run solo `/cf-develop`**
+   with `cf-reviewer` as the independent pass, and note it once in your
+   report. Never prompt for `codex login` or a plugin install, never nag — duo
+   was never promised.
+4. Available **and** the stakes clear the bar → **duo**. The bar (the skill
    description is the canonical list): a Tier-3-grade change (new dependency,
    schema/API change, module-boundary change), anything touching auth, secrets,
    payments, or a data migration, or a change to a shipped capability's public
@@ -75,11 +85,13 @@ silently):
 
 ## Driving codex
 
-Drive codex through the official **`codex-plugin-cc`** (PRIMARY) — the
-OpenAI-maintained Claude Code plugin that wraps the codex app-server, so it gives
-codex's full tool set (including the Playwright MCP for UI e2e), resumable
-sessions, and code-answered approvals — without a hand-rolled driver to keep in
-step with the experimental app-server API (OpenAI owns that churn). Install once:
+Drive codex through the official **`codex-plugin-cc`** — the OpenAI-maintained
+Claude Code plugin that wraps the codex app-server, so it gives codex's full
+tool set (including the Playwright MCP for UI e2e), resumable sessions, and
+code-answered approvals — without a hand-rolled driver to keep in step with the
+experimental app-server API (OpenAI owns that churn). It is the **only lane**:
+ADR-0018 prohibits headless `codex exec`, direct app-server driving, and
+tmux-driving codex, in the duo as everywhere else. Install once:
 `/plugin marketplace add openai/codex-plugin-cc` → `/plugin install
 codex@openai-codex` → `/reload-plugins` → `/codex:setup` (needs `codex login`).
 Use its commands for the duo:
@@ -96,16 +108,11 @@ task reports codex's **full MCP tool set** — the `playwright` MCP present with
 alongside codex's other MCP servers — in a resumable multi-turn thread, **not a
 headless one-shot**; the sandbox is read-only for a diagnostic and opens to
 workspace-write for a fix. Re-confirm on a new codex/plugin version, or if your
-own `~/.codex` MCP config differs, by delegating one browser e2e. Only if a
-delegated task genuinely can't reach the browser MCP, fall back to the app-server
-driver for the e2e step.
-
-**Advanced fallback — drive the app-server directly.** For fully-programmatic
-driving without slash commands, or where the plugin cannot be installed, the raw
-app-server JSON-RPC protocol, the robustness rules, and a reference driver script
-live in
-[`resources/codex-app-server-driver.md`](resources/codex-app-server-driver.md).
-Degrade to **tmux**-driving only where the app-server itself is unavailable.
+own `~/.codex` MCP config differs, by delegating one browser e2e. If a delegated
+task genuinely can't reach the browser MCP, fix the MCP wiring (`codex mcp
+list`; cf-customize Part A carries the Playwright config block) and re-delegate
+— there is no alternate transport (ADR-0018), so a duo that cannot reach its
+tools is a mid-flow failure, not a cue to improvise a driver.
 
 ## Security — mandatory, cross-vendor
 
@@ -120,11 +127,15 @@ pass and defer to it.
 
 ## Degradation — never give up, but never lie
 
-Two failures, two responses:
+Two failures, two responses — and the absent case is symmetric, either half:
 
-- **Absent at the start** (codex not on PATH, or `codex login status` non-zero):
-  duo was never promised → **silently degrade to solo `/cf-develop`**, note it
-  once, carry on.
+- **Absent at the start** (this session is not Claude Code; the plugin surface
+  is missing; codex not on PATH; or `codex login status` non-zero): duo was
+  never promised → **silently degrade to solo `/cf-develop`**, note it once,
+  carry on. In Claude Code the independent pass is the `cf-reviewer` subagent;
+  in any other harness it is a separate read-only review pass — self-review is
+  not review, and a duo you cannot drive from this seat is not simulated by
+  consulting your own vendor.
 - **Mid-flow failure** (a wedged turn, a failed MCP precheck, a crashed session,
   a 401 mid-run): **diagnose, retry within bounds, and escalate to the human** —
   never silently abandon the run, and never quietly finish solo as if the duo
