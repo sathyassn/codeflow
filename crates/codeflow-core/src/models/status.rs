@@ -1,7 +1,7 @@
 //! Status enums for epics and tasks.
 //!
 //! Small local enums replacing the v1 `types/` module (which is not
-//! imported into v2). Transition rules live in `workgraph::transitions`.
+//! imported into v2).
 
 use std::fmt;
 use std::str::FromStr;

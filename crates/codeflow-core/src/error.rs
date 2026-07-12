@@ -74,29 +74,6 @@ pub enum ConfigError {
     Serialization(#[from] serde_json::Error),
 }
 
-/// Workgraph operation errors.
-#[derive(Debug, Error)]
-pub enum WorkgraphError {
-    #[error("not found: {0}")]
-    NotFound(String),
-
-    #[error("invalid transition: {entity} from {from} to {to}")]
-    InvalidTransition {
-        entity: String,
-        from: String,
-        to: String,
-    },
-
-    #[error("validation error: {0}")]
-    Validation(String),
-
-    #[error("format ID generation error: {0}")]
-    FormatIdGeneration(String),
-
-    #[error("ledger error: {0}")]
-    Ledger(#[from] LedgerError),
-}
-
 /// Infrastructure diagnostics errors.
 #[derive(Debug, Error)]
 pub enum DoctorError {
@@ -289,47 +266,6 @@ mod tests {
             err.to_string(),
             "config validation error: missing required field 'git'"
         );
-    }
-
-    // -- WorkgraphError --
-
-    #[test]
-    fn test_workgraph_error_not_found() {
-        let err = WorkgraphError::NotFound("epic:foo".into());
-        assert_eq!(err.to_string(), "not found: epic:foo");
-    }
-
-    #[test]
-    fn test_workgraph_error_invalid_transition() {
-        let err = WorkgraphError::InvalidTransition {
-            entity: "task".into(),
-            from: "todo".into(),
-            to: "complete".into(),
-        };
-        assert_eq!(
-            err.to_string(),
-            "invalid transition: task from todo to complete"
-        );
-    }
-
-    #[test]
-    fn test_workgraph_error_validation() {
-        let err = WorkgraphError::Validation("title is required".into());
-        assert_eq!(err.to_string(), "validation error: title is required");
-    }
-
-    #[test]
-    fn test_workgraph_error_format_id_generation() {
-        let err = WorkgraphError::FormatIdGeneration("bad sequence".into());
-        assert_eq!(err.to_string(), "format ID generation error: bad sequence");
-    }
-
-    #[test]
-    fn test_workgraph_error_from_ledger_error() {
-        let ledger_err = LedgerError::Validation("bad event".into());
-        let wg_err: WorkgraphError = ledger_err.into();
-        assert!(matches!(wg_err, WorkgraphError::Ledger(_)));
-        assert!(wg_err.to_string().contains("ledger error"));
     }
 
     // -- DoctorError --
