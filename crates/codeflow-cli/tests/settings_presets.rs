@@ -8,6 +8,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+/// The expected preset set, pinned so an addition or removal is a conscious
+/// choice — `preset_files_match_the_shipped_directory` keeps it honest.
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
@@ -21,6 +23,36 @@ const TOP_LEVEL_KEYS: [&str; 5] = ["$schema", "hooks", "permissions", "sandbox",
 
 fn settings_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings")
+}
+
+/// The preset files actually shipped, derived from the directory listing —
+/// every invariant test iterates this, so a newly dropped-in preset is
+/// covered the moment it lands, not only once someone remembers a constant.
+fn preset_files() -> Vec<String> {
+    let dir = settings_dir();
+    let entries =
+        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
+    let mut names: Vec<String> = entries
+        .map(|entry| {
+            entry
+                .expect("dir entry")
+                .file_name()
+                .into_string()
+                .expect("utf-8 file name")
+        })
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|e| e == "json")
+        })
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "no preset files found under {}",
+        dir.display()
+    );
+    names.sort();
+    names
 }
 
 fn load(name: &str) -> serde_json::Value {
@@ -56,17 +88,31 @@ fn collect_hook_commands(value: &serde_json::Value, out: &mut Vec<String>) {
 }
 
 #[test]
+fn preset_files_match_the_shipped_directory() {
+    let shipped = preset_files();
+    let shipped: Vec<&str> = shipped.iter().map(String::as_str).collect();
+    let mut pinned: Vec<&str> = PRESET_FILES.to_vec();
+    pinned.sort_unstable();
+    assert_eq!(
+        shipped, pinned,
+        "assets/base/settings/*.json diverged from PRESET_FILES — a new or \
+         removed preset must update the pinned set (and its manifest entry \
+         plus the init prompt whitelist) in the same change"
+    );
+}
+
+#[test]
 fn presets_parse_as_json() {
-    for name in PRESET_FILES {
-        let value = load(name);
+    for name in preset_files() {
+        let value = load(&name);
         assert!(value.is_object(), "{name}: top level must be an object");
     }
 }
 
 #[test]
 fn every_hook_command_is_a_known_codeflow_hook() {
-    for name in PRESET_FILES {
-        let value = load(name);
+    for name in preset_files() {
+        let value = load(&name);
         let hooks = value.get("hooks").unwrap_or_else(|| panic!("{name}: hooks key missing"));
         let mut commands = Vec::new();
         collect_hook_commands(hooks, &mut commands);
@@ -94,8 +140,8 @@ fn every_hook_command_is_a_known_codeflow_hook() {
 
 #[test]
 fn deny_rules_cover_secret_files() {
-    for name in PRESET_FILES {
-        let value = load(name);
+    for name in preset_files() {
+        let value = load(&name);
         let deny = value["permissions"]["deny"]
             .as_array()
             .unwrap_or_else(|| panic!("{name}: permissions.deny missing"));
@@ -130,8 +176,8 @@ fn perm_array(value: &serde_json::Value, key: &str) -> Vec<String> {
 #[test]
 fn exec_guard_wired_in_every_preset() {
     // The security stage rides the same PreToolUse (Bash) matcher as git-guard.
-    for name in PRESET_FILES {
-        let value = load(name);
+    for name in preset_files() {
+        let value = load(&name);
         let mut commands = Vec::new();
         collect_hook_commands(&value["hooks"], &mut commands);
         assert!(
@@ -157,8 +203,8 @@ fn allow_arrays_grant_project_autonomy() {
         "WebSearch",
         "WebFetch(domain:docs.rs)",
     ];
-    for name in PRESET_FILES {
-        let allow = perm_array(&load(name), "allow");
+    for name in preset_files() {
+        let allow = perm_array(&load(&name), "allow");
         for entry in expected {
             assert!(
                 allow.iter().any(|a| a == entry),
@@ -182,8 +228,8 @@ fn ask_arrays_gate_escalation_and_publish() {
         "Bash(gh release *)",
         "Bash(gh repo delete *)",
     ];
-    for name in PRESET_FILES {
-        let ask = perm_array(&load(name), "ask");
+    for name in preset_files() {
+        let ask = perm_array(&load(&name), "ask");
         for entry in expected {
             assert!(ask.iter().any(|a| a == entry), "{name}: ask missing {entry:?}");
         }
@@ -212,8 +258,8 @@ fn deny_extends_to_home_credential_stores() {
         "Read(~/.docker/config.json)",
         "Read(~/.claude/**)",
     ];
-    for name in PRESET_FILES {
-        let deny = perm_array(&load(name), "deny");
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
         for entry in home_stores {
             assert!(deny.iter().any(|d| d == entry), "{name}: deny missing {entry:?}");
         }
@@ -253,8 +299,8 @@ fn bypass_sandbox_uses_schema_keys() {
 fn top_level_keys_stay_within_the_pinned_union() {
     let allowed: BTreeSet<&str> = TOP_LEVEL_KEYS.into_iter().collect();
     let mut union: BTreeSet<String> = BTreeSet::new();
-    for name in PRESET_FILES {
-        let value = load(name);
+    for name in preset_files() {
+        let value = load(&name);
         let keys = value.as_object().unwrap().keys();
         for key in keys {
             assert!(

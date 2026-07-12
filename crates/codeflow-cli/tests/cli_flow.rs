@@ -5,10 +5,20 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Shared isolated `CODEFLOW_HOME` so no invocation's registry touch can
+/// reach the developer's real `~/.codeflow` (per the `recall_remote_cli.rs`
+/// pattern).
+fn isolated_home() -> &'static Path {
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
+        .path()
+}
+
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(dir)
+        .env("CODEFLOW_HOME", isolated_home())
         .output()
         .expect("codeflow binary runs")
 }

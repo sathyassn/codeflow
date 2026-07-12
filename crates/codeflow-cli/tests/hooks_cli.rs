@@ -9,10 +9,21 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+/// Shared isolated `CODEFLOW_HOME`: these tests initialize tempdir repos
+/// (policy.json / project.toml), so without the override every invocation's
+/// registry touch would write them into the developer's real
+/// `~/.codeflow/registry.json` (per the `recall_remote_cli.rs` pattern).
+fn isolated_home() -> &'static Path {
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
+        .path()
+}
+
 fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
     // Isolate from the developer's environment.
-    cmd.env_remove("CODEFLOW_INTEGRATE_TOKEN")
+    cmd.env("CODEFLOW_HOME", isolated_home())
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
