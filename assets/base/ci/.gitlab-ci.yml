@@ -3,7 +3,8 @@
 # hooks or the Claude git-guard):
 #   codeflow ci             — verify the MR commit range + branch name against
 #                             .codeflow/policy.json (format, no AI attribution,
-#                             no emoji, breaking-footer, branch naming)
+#                             no emoji, breaking-footer, branch naming, and the
+#                             MR-body section structure when a body is provided)
 #   codeflow test           — the test gate
 #   codeflow validate --docs — the doc-graph integrity lint
 #

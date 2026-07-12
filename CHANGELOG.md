@@ -57,6 +57,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A lazy PR body now fails CI mechanically.** When `codeflow ci` is given a
+  PR/MR body, it checks the body's structure against three new `git` policy
+  keys: `pr_sections` (level, default `block`) governs the check;
+  `pr_required_sections` (default `["Summary", "Changes"]`) are headings every
+  PR body must carry with real content — a section holding only template
+  comments and bare `-` bullets counts as missing; `pr_code_sections` (default
+  `["Testing"]`) are required only when the commit range touches non-docs
+  files (docs-only = every changed path is `*.md`, `*.txt`, `LICENSE*`,
+  `docs/**`, or a `.github` template — anything else, or a range whose files
+  cannot be listed, counts as code). Leftover template placeholders — the
+  paste-your-output stub, table rows of empty cells, bare `- CAP-`/`- EPC-`
+  bullets — draw a warning naming their line, never a block. A run without a
+  PR body skips the check, so local `codeflow ci` is unchanged; an existing
+  `policy.json` gains the three keys with their defaults on the next
+  `codeflow update`.
 - **`codeflow policy explain` / `policy show` — the policy file is fully
   discoverable from the binary.** `explain` renders the complete
   `.codeflow/policy.json` key schema — every key's type, default (rendered live

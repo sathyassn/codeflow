@@ -3,7 +3,8 @@
 The verification checks live in the **`codeflow` binary**, not in the CI files.
 `codeflow ci` verifies a commit range and branch name against
 `.codeflow/policy.json` — commit format, no-AI-attribution, no-emoji,
-breaking-change footer, and branch naming — reusing the exact same functions the
+breaking-change footer, branch naming, and (when a PR/MR body is provided)
+the PR-body structure — reusing the exact same functions the
 git-client hooks and the Claude git-guard use. That makes the binary the
 **single source of truth**: the CI plane can no longer drift from the hooks the
 way inline shell regex did (ADR-0017).

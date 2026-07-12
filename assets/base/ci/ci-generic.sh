@@ -16,7 +16,8 @@
 # otherwise the fallback tries the policy's protected branches
 # (origin/main, main, origin/master, master by default) ..HEAD.
 #
-# PR/MR body: export CODEFLOW_PR_BODY to also scan it for AI attribution + emoji.
+# PR/MR body: export CODEFLOW_PR_BODY to also scan it — AI attribution, emoji,
+# and the required-section structure (git.pr_sections).
 #
 # Usage:
 #   ci-generic.sh <base> <head>        # explicit range

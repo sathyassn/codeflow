@@ -153,7 +153,9 @@ jobs:
       # One source of truth: `codeflow ci` runs the SAME commit-format,
       # no-AI-attribution, no-emoji, breaking-footer, and branch-naming checks as
       # the git-client hooks and the Claude git-guard, reading .codeflow/policy.json
-      # for the level of each (block/warn/off). No inline regex to drift (ADR-0017).
+      # for the level of each (block/warn/off), plus the PR-body structure check
+      # (git.pr_sections: required sections present and non-empty, test evidence
+      # when the range touches code). No inline regex to drift (ADR-0017).
       # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated into
       # the script), so an untrusted body cannot inject shell.
       - name: codeflow ci (commit + branch + PR-body standards)

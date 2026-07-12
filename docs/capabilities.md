@@ -63,7 +63,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs"]
 epics: [EPC-001]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017]
 ```
@@ -79,7 +79,11 @@ authoritative perimeter — CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline
 drift, portable across CI hosts via thin GitHub/GitLab/Bitbucket/generic
 wrappers — ADR-0017), and remote branch protection (`codeflow remote protect`).
-Every rule is a policy value, user-flippable per repo. The policy file is
+Every rule is a policy value, user-flippable per repo. On a provided PR/MR
+body, CI additionally gates the body's STRUCTURE (`git.pr_sections`): the
+required sections must be present with real content, a code-touching range
+must carry the testing sections, and leftover template placeholders draw a
+warn naming their line. The policy file is
 discoverable and strict from the binary alone: `codeflow policy explain`
 renders every key's type, default, and valid values from a schema registry
 drift-guarded against the policy struct; `codeflow policy show` prints the

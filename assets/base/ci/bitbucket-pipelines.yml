@@ -12,7 +12,8 @@
 # commit in history so the range walk resolves.
 #
 # NOTE: Bitbucket does not expose the PR description as an environment variable,
-# so the PR-body attribution/emoji scan is skipped here (the commit + branch
+# so the PR-body scan — attribution, emoji, and the required-section
+# structure — is skipped here (the commit + branch
 # checks still run). To also scan the body, fetch it via the Bitbucket API and
 # pass `codeflow ci --pr-body-file <file>`.
 #
