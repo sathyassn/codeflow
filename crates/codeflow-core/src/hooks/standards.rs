@@ -80,7 +80,7 @@ pub fn check_commit_format(subject: &str, allowed_types: &[String]) -> Option<St
 
 /// A Conventional-Commits breaking-change footer must be exactly
 /// `BREAKING CHANGE:` or `BREAKING-CHANGE:` (uppercase) to be recognized by
-/// versioning tooling (release-plz, git-cliff, ...). A mis-cased footer
+/// versioning tooling (git-cliff, release-please, ...). A mis-cased footer
 /// (`breaking change:`) is silently treated as non-breaking — so a MAJOR change
 /// would ship as a MINOR bump. Flag it, so the only ways to signal a breaking
 /// change are both unambiguous: the subject `!` marker, or the exact footer.
@@ -98,7 +98,7 @@ pub fn check_breaking_footer(subject: &str, message: &str) -> Option<String> {
     }
     for line in message.lines() {
         // A footer sits at column 0 (no indentation) — matching what versioning
-        // tooling (release-plz, git-cliff) actually recognizes; an indented line
+        // tooling (git-cliff and similar) actually recognizes; an indented line
         // is not a footer, so it is neither a breaking signal nor a mis-case.
         let lower = line.to_ascii_lowercase();
         let token_len = if lower.starts_with("breaking change") {

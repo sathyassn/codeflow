@@ -34,6 +34,13 @@ in the `cf-method` skill under `.claude/skills/`.
 Open an issue using the templates. For security issues see
 [SECURITY.md](SECURITY.md) — please do not open a public issue.
 
+## Releasing
+
+Releases are conventional-commit driven (git-cliff for the version + changelog,
+cargo-dist for the binaries) and human-gated. See [docs/releasing.md](docs/releasing.md)
+for the runbook — and for how a project that *consumes* codeflow should handle
+its own versioning.
+
 ## License
 
 By contributing, you agree that your contributions will be dual-licensed under

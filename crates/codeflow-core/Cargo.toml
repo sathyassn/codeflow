@@ -5,9 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 # Internal library, consumed only by codeflow-cli within this workspace — never
-# published to a cargo registry. Marking it non-publishable makes release-plz
-# treat codeflow-cli as the single public package, so it cuts one lockstep
-# `v{version}` tag instead of a per-crate tag (see release-plz.toml, ADR-0010).
+# published to a cargo registry. `publish = false` guards against an accidental
+# `cargo publish` of an internal crate.
 publish = false
 
 [dependencies]

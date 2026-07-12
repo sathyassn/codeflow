@@ -2,8 +2,8 @@
 id: ADR-0010
 title: automated release — release-plz owns version/changelog/tag, cargo-dist owns artifacts
 date: 2026-07-04
-status: accepted
-superseded_by: null
+status: superseded
+superseded_by: ADR-0012
 architecture_impact: none
 ---
 
