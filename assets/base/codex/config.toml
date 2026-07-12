@@ -1,14 +1,20 @@
 # Codex config for a CodeFlow-managed repo (harness parity — ADR-0008).
 #
 # The same `codeflow hook git-guard` / `codeflow hook exec-guard` binaries that
-# bind a Claude session bind Codex here, via `.codex/hooks.json`. Their payload
-# contract is byte-compatible, so protection is identical across harnesses.
+# bind a Claude session bind an INTERACTIVE Codex session here, via
+# `.codex/hooks.json`; their payload contract is byte-compatible, so the
+# in-session PreToolUse protection matches Claude's — for interactive Codex.
+# Headless `codex exec` (0.142.5) does NOT fire project PreToolUse hooks at all,
+# so these in-session guards are inactive there. Codex-driven work is instead
+# bound unconditionally by the git-client hook plane plus CI (the authoritative
+# perimeter), exactly as any other harness — that is the real boundary headless.
 #
-# ONE-TIME TRUST: Codex requires you to trust a hook source before it runs.
-# Run `/hooks` inside an interactive `codex` session once and approve the
-# CodeFlow hooks. For CI / headless `codex exec`, pass
-# `--dangerously-bypass-hook-trust` (only in an environment that already vets
-# the hook source — here, this repo's own committed config).
+# ONE-TIME TRUST: an interactive Codex session must trust a hook source before it
+# runs — run `/hooks` inside `codex` once and approve the CodeFlow hooks. The
+# `--dangerously-bypass-hook-trust` flag only skips that trust prompt for an
+# interactive session (in an environment that already vets the source — here,
+# this repo's own committed config); it does NOT make headless `codex exec` run
+# the hooks (nothing does), so headless CI relies on the git-hook plane + CI.
 
 # Workspace autonomy (owner posture): project-scoped work runs promptless.
 # `workspace-write` lets Codex edit the repo without approval; `on-request`
