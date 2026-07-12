@@ -17,8 +17,8 @@ struct IstanbulFileSummary {
 struct IstanbulMetric {
     total: u64,
     covered: u64,
-    #[allow(dead_code)]
-    pct: f64,
+    // istanbul also emits a `pct` field; serde ignores it (we recompute percent
+    // from total/covered), so it is intentionally not modeled here.
 }
 
 /// Parse an istanbul coverage-summary.json file.
