@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scaffold_version": "2.0.0-dev",
+  "scaffold_version": "2.0.0",
   "files": {
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
