@@ -347,6 +347,66 @@ fn integrate_lands_branch_and_prints_report() {
     assert!(dir.path().join("feature.txt").exists(), "merge landed");
 }
 
+// ---------------------------------------------------------------------------
+// codeflow epic new / task new — collision-free id allocation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn epic_new_allocates_and_scaffolds_from_template() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    // Empty project starts at EPC-001.
+    let first = codeflow(dir.path(), &["epic", "new", "Ship the thing"]);
+    assert_eq!(first.status.code(), Some(0), "stderr: {}", stderr(&first));
+    let out = stdout(&first);
+    assert!(out.contains("EPC-001"), "prints allocated id: {out}");
+    let epic_path = dir.path().join("project-management/epics/EPC-001.md");
+    assert!(epic_path.exists(), "scaffolds the epic file");
+    let body = std::fs::read_to_string(&epic_path).unwrap();
+    assert!(body.contains("format_id: EPC-001"), "rendered id: {body}");
+    assert!(body.contains("Ship the thing"), "rendered title: {body}");
+    assert!(!body.contains("{{"), "no placeholder survives: {body}");
+
+    // Next allocation sees the file just written → EPC-002.
+    let second = codeflow(dir.path(), &["epic", "new", "Second"]);
+    assert_eq!(second.status.code(), Some(0));
+    assert!(stdout(&second).contains("EPC-002"), "max+1: {}", stdout(&second));
+}
+
+#[test]
+fn task_new_scopes_numbering_to_its_epic() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Epic one"]); // EPC-001
+    codeflow(dir.path(), &["epic", "new", "Epic two"]); // EPC-002
+
+    let t1 = codeflow(dir.path(), &["task", "new", "--epic", "EPC-001", "First"]);
+    assert_eq!(t1.status.code(), Some(0), "stderr: {}", stderr(&t1));
+    assert!(stdout(&t1).contains("TSK-001-001"), "{}", stdout(&t1));
+    let t2 = codeflow(dir.path(), &["task", "new", "--epic", "EPC-001", "Second"]);
+    assert!(stdout(&t2).contains("TSK-001-002"), "{}", stdout(&t2));
+
+    // A different epic restarts task numbering at 001.
+    let other = codeflow(dir.path(), &["task", "new", "--epic", "EPC-002", "Other"]);
+    assert!(stdout(&other).contains("TSK-002-001"), "{}", stdout(&other));
+
+    let task_path = dir.path().join("project-management/tasks/TSK-001-001.md");
+    let body = std::fs::read_to_string(&task_path).unwrap();
+    assert!(body.contains("epic_id: EPC-001"), "links parent epic: {body}");
+    assert!(!body.contains("{{"), "no placeholder survives: {body}");
+}
+
+#[test]
+fn task_new_rejects_unknown_epic() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let output = codeflow(dir.path(), &["task", "new", "--epic", "EPC-404", "x"]);
+    assert_eq!(output.status.code(), Some(1), "unknown epic must fail");
+    assert!(stderr(&output).contains("not found"), "{}", stderr(&output));
+}
+
 #[test]
 fn integrate_refuses_dirty_tree_via_binary() {
     let dir = tempfile::tempdir().unwrap();

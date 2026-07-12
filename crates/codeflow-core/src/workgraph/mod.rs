@@ -7,9 +7,11 @@
 //! [`is_valid_task_format_id`]) is the single source of truth reused by
 //! `validate` for frontmatter checks.
 
+pub mod allocate;
 mod format_id;
 pub mod store;
 
+pub use allocate::{create_epic, create_task, next_epic_id, next_task_id, NewRecord};
 pub use format_id::{is_valid_epic_format_id, is_valid_task_format_id};
 pub use store::{MarkdownStore, RecordStore, StoreError};
 

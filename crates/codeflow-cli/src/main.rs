@@ -68,6 +68,10 @@ enum Command {
     Recall(cmd::recall::RecallArgs),
     /// Remote provider operations (branch protection).
     Remote(cmd::remote::RemoteArgs),
+    /// Create an epic: allocate the next EPC-NNN and scaffold it from the template.
+    Epic(cmd::new::EpicArgs),
+    /// Create a task under an epic: allocate the next TSK-NNN-MMM and scaffold it.
+    Task(cmd::new::TaskArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -139,6 +143,8 @@ fn main() -> anyhow::Result<()> {
         Command::Doctor(args) => std::process::exit(cmd::doctor::run(&args)),
         Command::Recall(args) => cmd::recall::run(&args)?,
         Command::Remote(args) => cmd::remote::run(&args)?,
+        Command::Epic(args) => std::process::exit(cmd::new::run_epic(&args)),
+        Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
     }
     Ok(())
 }

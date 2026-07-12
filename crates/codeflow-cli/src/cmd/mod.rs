@@ -5,6 +5,7 @@ pub mod doctor;
 pub mod git_hook;
 pub mod hook;
 pub mod integrate;
+pub mod new;
 pub mod orient;
 pub mod recall;
 pub mod remote;
