@@ -4,7 +4,7 @@ title: restore the original commit standard — 50/72 subject, bullet-only body,
 date: 2026-07-12
 status: accepted
 superseded_by: null
-architecture_impact: The four enforcement planes are unchanged in shape; this adds two subject-length checks, a body-shape check, and a warn-only contract-surface tripwire to the existing commit-msg / `codeflow ci` standards module, plus six default-armed policy keys. docs/architecture.md's enumeration of the CI checks is updated to name them. No engine module, ownership class, or boundary moves.
+architecture_impact: The four enforcement planes are unchanged in shape; this adds two subject-length checks, a body-shape check, and a warn-only contract-surface tripwire to the existing commit-msg / `codeflow ci` standards module, plus six default-armed policy keys. A later amendment (same decision) keeps the strict default body shape but adds per-project opt-in escape hatches — allowed footer trailers, required footers, and an allow-vs-require ticket reference — for five more empty/off-by-default policy keys (`commit_footer_tokens`, `commit_required_footers`, `commit_ticket_keys`, `commit_ticket_required`, `commit_ticket_pattern`). docs/architecture.md's enumeration of the CI checks is updated to name them. No engine module, ownership class, or boundary moves.
 ---
 
 <!-- ADRs are append-only: written at the moment of decision, never edited
@@ -129,3 +129,68 @@ tripwire inside the existing `standards` module that the commit-msg hook and
 `docs/architecture.md`'s enumeration of the CI checks is updated to name the
 subject-length budget and body-shape rule. No engine module, ownership class, or
 boundary moves.
+
+## Amendment — opt-in footer trailers, ticket references, and required footers
+
+The first cut of the body-shape rule accepted only `- ` bullets and a
+`BREAKING CHANGE:` footer. That is the right *default*, but it left no escape
+hatch: a project with a genuine need — a ticket reference on every commit, a DCO
+`Signed-off-by` — had no sanctioned way to express it, and a stray trailer just
+blocked. This amendment (one decision with the restore above, appended before the
+ADR merged) adds that escape hatch **without loosening the default**. The
+tempting move — ship a populated whitelist of "common" trailers — was rejected:
+in an agent-driven, no-attribution project every default-allowed trailer is a
+noise slot an agent will fill, so the baseline must stay bullets +
+`BREAKING CHANGE:` only, and every relaxation is a deliberate per-project opt-in.
+
+**The strict default is unchanged.** The body is `- ` bullets (≤3, ≤72 each) then
+an optional footer that, out of the box, is only the always-allowed
+`BREAKING CHANGE:` / `BREAKING-CHANGE:` footer (which keeps its wrapping
+multi-line description). Any other trailer-shaped line blocks. The no-stories
+guarantee is preserved by two constraints that hold regardless of opt-ins: a
+`<Token>` is a single word (letters/digits/hyphens), so a prose line like
+`This change: …` is not a trailer and still blocks; and a trailer value is a
+single line that cannot span into prose.
+
+**Allowed and required are independent, configurable dimensions.** Five
+serde-defaulted `git` keys, all empty/off by default:
+
+- `commit_footer_tokens: []` — extra trailer tokens *allowed* (optional) in the
+  footer beyond `BREAKING CHANGE:` (e.g. a project adds `Signed-off-by`). Matched
+  exactly, case-sensitively. A trailer whose token is not allowed (`Note: …`)
+  blocks, naming the line.
+- `commit_required_footers: []` — trailer tokens that *must* appear on every
+  non-exempt commit (e.g. `["Signed-off-by"]` for DCO). A required token is
+  implicitly allowed; a commit missing one blocks under `commit_body`.
+- `commit_ticket_keys: []` — ticket tokens the project recognizes (e.g. `["Refs",
+  "Closes"]`). Non-empty *allows* those ticket trailers; empty (default) means a
+  `Refs:` line is not auto-allowed and blocks on shape.
+- `commit_ticket_required: off` — whether a *matching* ticket trailer is
+  required. `off` = allowed-but-optional (present passes, absent is fine);
+  `warn`/`block` = at least one required, at that level. Only meaningful when
+  `commit_ticket_keys` is non-empty.
+- `commit_ticket_pattern: ""` — a regex a ticket value must match (e.g.
+  `^PROJ-\d+$`). A present ticket whose value fails it is a malformed reference
+  and blocks even when optional; a required ticket must match. An unparseable
+  pattern degrades to no format check (fail-open).
+
+Merge/revert/fixup/squash commits are exempt from the ticket and required-footer
+checks, as with the rest of the standard.
+
+**AI-attribution interaction is preserved.** Even when a project opts
+`Co-authored-by` into `commit_footer_tokens`, the separate `ai_attribution` check
+still runs over the whole message and still blocks an AI co-author (`Claude`,
+`GPT`, `noreply@anthropic`, …). A *human* co-author passes only when the project
+opted the token in; an *AI* one passes the shape check but fails attribution. The
+two checks are orthogonal by design: shape validates structure, attribution
+validates identity — and by default `Co-authored-by` is not allowed at all, so it
+blocks on shape before attribution even matters.
+
+All five keys are serde-defaulted, so an older `policy.json` gains them (empty/off
+— no behavior change) on the next `codeflow update`; the checks live in the same
+shared `standards` module, so the git hook and `codeflow ci` inherit them
+identically (ADR-0017), and they ride the enforcement floor (ADR-0019) — the
+strict body shape is block-level from `--minimal` up, and every relaxation is a
+per-project opt-in on top. **This repo keeps all five at their strict defaults**
+— it references CAPs and ADRs inside bullets, not as trailers, and forbids AI
+attribution outright.

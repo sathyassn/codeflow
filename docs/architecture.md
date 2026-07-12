@@ -46,9 +46,10 @@ Core modules grouped by responsibility:
 Enforcement is spread across four planes: git client hooks, the in-session
 PreToolUse (Bash) guards, and remote branch protection read one config
 (`.codeflow/policy.json`); the scaffolded CI runs the same git standards through
-the `codeflow ci` binary (commit format, the 50/72 subject-length budget,
-bullet-only body shape, and the warn-only contract-surface tripwire — ADR-0020,
-attribution, emoji, breaking-footer, branch naming) — one source of truth, no
+the `codeflow ci` binary (commit format, the 50/72 subject-length budget, the
+bullet-only body shape with opt-in footer trailers and ticket references, and the
+warn-only contract-surface tripwire — ADR-0020, attribution, emoji,
+breaking-footer, branch naming) — one source of truth, no
 inline drift, and portable across CI
 hosts via thin per-platform wrappers (ADR-0017). This four-plane floor is the
 **minimal** tier: it installs from `--minimal` up, before any of the method or
