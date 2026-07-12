@@ -48,3 +48,9 @@ consumed-native or deferred, never the design center.
 - **Not a GUI or TUI.** Command-line and harness-native surfaces only.
 - **No bespoke memory infrastructure.** No embeddings, vector DBs, GraphRAG, or
   database-as-authority; markdown + JSONL truth with an FTS5 cache (D17).
+- **Not a Windows platform.** codeflow targets macOS and Linux (unix); no
+  Windows artifact is built (`dist-workspace.toml`'s `[dist] targets` covers
+  only `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+  `x86_64-unknown-linux-gnu`), and Windows is unsupported and untested — the
+  git-hook shims and the scaffold's exec-bit handling are unix-first code
+  paths.

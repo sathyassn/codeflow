@@ -6,6 +6,25 @@ Code (or any harness) does the developing. Policy lives in one config
 (`.codeflow/policy.json`) and is enforced across four planes, so the same rules
 bind any agent or human.
 
+## Why codeflow
+
+- **Vs. a bare coding harness** (Claude Code or Codex alone) — discipline lasts
+  only as long as you remember to apply it, and none of it survives the
+  session: no durable decision record, no cross-session traceability, no
+  enforcement once the conversation ends. codeflow adds a capability → epic →
+  ADR spine (linted by `codeflow validate --docs`), four enforcement planes
+  reading one `.codeflow/policy.json`, and an automatically captured recall
+  corpus (ledger + session summaries).
+- **Vs. spec-driven frameworks** (Spec Kit, OpenSpec, BMAD) — those prescribe a
+  per-change authoring ceremony: a spec, plan, and task breakdown for each unit
+  of work. codeflow is a discipline layer instead, with a graduation ladder
+  (trivial or conversational work needs no artifact at all) and a **living**
+  `docs/capabilities.md` registry of what the system does, not a disposable
+  per-change spec.
+- **When not to use it** — a scratch or throwaway repo (`--minimal`, or skip
+  it), or a team that wants a full workflow framework rather than guardrails;
+  codeflow is deliberately not a harness, agent framework, or orchestrator.
+
 ## Install
 
 Prebuilt binary (macOS arm64/x64, Linux x64) — the shell installer from the
@@ -21,6 +40,10 @@ Or from a checkout, with a Rust toolchain:
 ```sh
 cargo install --path crates/codeflow-cli
 ```
+
+codeflow targets macOS and Linux (unix); no Windows artifact is built, and
+Windows is unsupported and untested — the git-hook shims and the scaffold's
+exec-bit handling are unix code paths.
 
 See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
 

@@ -230,6 +230,11 @@ The one-line version: **codeflow *enforces* the same rules on every harness (git
 hooks + CI); it *guides* Claude and Codex.** Any tool that touches the repo is
 disciplined; the richer in-session help is where the integrations are.
 
+**Verified against:** codex-cli 0.142.5 (ADR-0008, ADR-0013, ADR-0014) and
+Claude Code as of 2026-07. These surfaces (hook payload contracts, config
+schemas) move fast on both sides; the release checklist
+([docs/releasing.md](releasing.md)) re-verifies them before each codeflow tag.
+
 ## Delegation quickstart (optional)
 
 Cross-vendor consult and delegation is opt-in (ADR-0005). One-time setup: run

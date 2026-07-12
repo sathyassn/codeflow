@@ -46,6 +46,22 @@ git push -u origin chore/release   # then open the PR
 
 - A **human merges** the release PR on green CI (ADR-0006/0007) — agents never
   merge to `main`.
+- **Before tagging, re-verify the harness-parity claims** against the
+  currently installed harness versions — these surfaces move fast, and
+  ADR-0008/ADR-0013/ADR-0014 and docs/adoption.md's cross-harness section pin
+  a version that decays:
+  - The PreToolUse payload contract (`git-guard`/`exec-guard`) still matches
+    what Claude Code and an interactive Codex session send.
+  - The Codex `hooks.json` events still fire as documented, and the `cf-guard`
+    permission-profile keys in `.codex/config.toml` still validate — run
+    `codex --strict-config doctor` from a checkout with the shipped
+    `.codex/config.toml` in place; `--strict-config` errors out on any field
+    the installed Codex no longer recognizes.
+  - The Claude settings/hook schema (`.claude/settings.json`) still matches
+    what the installed Claude Code expects.
+
+  Update the harness versions recorded in ADR-0008/ADR-0013/ADR-0014 and
+  docs/adoption.md's cross-harness section if anything drifted.
 - After merge, tag the release; the tag drives cargo-dist:
 
   ```sh
