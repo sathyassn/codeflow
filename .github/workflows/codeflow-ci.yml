@@ -83,15 +83,24 @@ jobs:
       # Dependency / supply-chain audit — the deterministic floor the
       # cf-security-reviewer red-team layers on (ADR-0016; OWASP A03:2025). Pinned
       # osv-scanner reads every lockfile ecosystem (here Cargo.lock), so it is the
-      # stack-agnostic floor; enforcement reads .codeflow/policy.json
-      # `git.dep_audit` (block = fail on an advisory; warn = report, the default;
-      # off = skip). Record justified suppressions in an .osv-scanner.toml
+      # stack-agnostic floor. Enforcement reads two .codeflow/policy.json keys:
+      # `git.security_review` (umbrella gate for the whole security-review job) and
+      # `git.dep_audit` (SCA-specific sub-gate). The advisory blocks when EITHER is
+      # `block`, reports when either is `warn` (the default), and is skipped only
+      # when BOTH are `off`. Record justified suppressions in an .osv-scanner.toml
       # allowlist so a transitive advisory in unchanged code cannot block a PR.
       - name: dependency audit (osv-scanner)
         run: |
           set -u
-          level=$(jq -r '.git.dep_audit // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
-          if [ "$level" = "off" ]; then echo "dep_audit=off — skipping."; exit 0; fi
+          sr=$(jq -r '.git.security_review // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
+          da=$(jq -r '.git.dep_audit // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
+          if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
+            level=block
+          elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then
+            echo "security_review=off and dep_audit=off — skipping."; exit 0
+          else
+            level=warn
+          fi
 
           OSV_VERSION=2.4.0
           curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o osv-scanner
@@ -107,10 +116,10 @@ jobs:
           elif printf '%s' "$out" | grep -qiE 'no package sources found|no packages found|no lockfiles'; then
             echo "No scannable manifests found — nothing to audit."
           elif [ "$level" = "block" ]; then
-            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.dep_audit=block — failing. Triage, or record a justified suppression in .osv-scanner.toml."
+            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in .osv-scanner.toml."
             exit 1
           else
-            echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.dep_audit=${level} → reporting only. Harden to block once triaged."
+            echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
           fi
 
   commit-lint:
@@ -122,56 +131,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Lint PR commits (format, no AI attribution, no emoji)
+      # Dogfood: this repo IS codeflow, so it runs the SAME `codeflow ci` binary
+      # the shipped template runs — one source of truth with the git-client hooks
+      # and the Claude git-guard, no inline regex to drift (ADR-0017). It builds
+      # from source (as the gates job does) rather than the release installer a
+      # consumer project would use.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build codeflow from source
+        run: |
+          cargo build --release -p codeflow-cli
+          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+
+      # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated
+      # into the script), so an untrusted body cannot inject shell.
+      - name: codeflow ci (commit + branch + PR-body standards)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -u
-          fail=0
-          types='feat|fix|docs|refactor|test|chore|ci|perf|build|revert'
-
-          while IFS= read -r subject; do
-            if ! printf '%s\n' "$subject" | grep -qE "^(${types})(\([a-zA-Z0-9._/-]+\))?!?: .+[^.]$"; then
-              echo "::error::malformed commit subject: ${subject}"
-              fail=1
-            fi
-          done < <(git log --no-merges --format=%s "${BASE_SHA}..${HEAD_SHA}")
-
-          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
-            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
-            echo "::error::AI attribution found in commit message(s)"
-            fail=1
-          fi
-
-          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
-            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
-            echo "::error::emoji found in commit message(s)"
-            fail=1
-          fi
-
-          exit "$fail"
-
-      - name: Lint PR body (no AI attribution, no emoji)
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          set -u
-          fail=0
-
-          if printf '%s\n' "${PR_BODY}" \
-            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
-            echo "::error::AI attribution found in PR body"
-            fail=1
-          fi
-
-          if printf '%s\n' "${PR_BODY}" \
-            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
-            echo "::error::emoji found in PR body"
-            fail=1
-          fi
-
-          exit "$fail"
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF"
 
   # Line-coverage floor: fails the build when workspace line coverage drops
   # below 90% (current ~95% — headroom to avoid flakiness while still catching

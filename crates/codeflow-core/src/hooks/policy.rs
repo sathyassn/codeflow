@@ -1,10 +1,17 @@
 //! Typed view of the `policy.json` `git` section (charter §6.1).
 //!
-//! Single source of truth for all four enforcement planes (D7): git client
-//! hooks, the Claude `git-guard` hook, remote protection, and CI all read
-//! these values. Every field is a default the user may flip per repo;
-//! missing or malformed files fall back to the strict charter defaults so
-//! enforcement never silently disables itself.
+//! One config read by several enforcement planes (D7) — but not every plane
+//! reads every field; this struct is the shared schema, not a promise that all
+//! of it is live everywhere. The git client hooks read the protected-branch set
+//! and its protection levels, the commit-format / attribution / emoji /
+//! branch-naming rules, `secret_scan` (pre-commit), and `test_gate_on_push`
+//! (pre-push); the Claude `git-guard` reads the same plus `pr_merge_to_protected`
+//! and `hook_integrity`; remote protection reads the protected-branch set and its
+//! force-push / delete / push intents; and CI reads `dep_audit` and
+//! `security_review` (the umbrella gate for the `security-review` job) and,
+//! through `codeflow ci`, the commit and branch rules. Every field is a default
+//! the user may flip per repo; missing or malformed files fall back to the strict
+//! charter defaults so enforcement never silently disables itself.
 
 use std::fmt;
 use std::path::Path;

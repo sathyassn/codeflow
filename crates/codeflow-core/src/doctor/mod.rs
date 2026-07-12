@@ -379,6 +379,18 @@ fn check_permissions(opts: &Options) -> CheckResult {
 
 fn check_network(opts: &Options) -> CheckResult {
     let start = Instant::now();
+    let warn = |message: String| CheckResult {
+        name: "network".into(),
+        status: Status::Warn,
+        message,
+        duration: start.elapsed(),
+    };
+
+    // The probe is `host`. If it isn't installed we cannot infer offline from its
+    // absence — say so and skip, rather than implying the network is down.
+    if opts.do_look_path("host").is_err() {
+        return warn("`host` not found — skipping connectivity probe".into());
+    }
 
     match opts.do_exec("host", &["-W", "2", "github.com"]) {
         Ok(_) => CheckResult {
@@ -387,12 +399,7 @@ fn check_network(opts: &Options) -> CheckResult {
             message: "network connectivity OK".into(),
             duration: start.elapsed(),
         },
-        Err(_) => CheckResult {
-            name: "network".into(),
-            status: Status::Warn,
-            message: "network connectivity check failed (offline?)".into(),
-            duration: start.elapsed(),
-        },
+        Err(_) => warn("network connectivity check failed (offline?)".into()),
     }
 }
 
@@ -857,17 +864,44 @@ mod tests {
     #[test]
     fn test_check_network_pass() {
         let mut opts = test_opts();
+        opts.look_path = Some(|name| {
+            if name == "host" {
+                Ok("/usr/bin/host".into())
+            } else {
+                Err("not found".into())
+            }
+        });
         opts.exec_command = Some(|_cmd, _args| Ok("github.com has address".into()));
         let result = check_network(&opts);
         assert_eq!(result.status, Status::Pass);
     }
 
     #[test]
-    fn test_check_network_fail_warns() {
-        let opts = test_opts(); // exec_command returns Err
+    fn test_check_network_probe_fails_warns_offline() {
+        // `host` present but the probe errs → offline (or unreachable) warning.
+        let mut opts = test_opts(); // exec_command returns Err
+        opts.look_path = Some(|name| {
+            if name == "host" {
+                Ok("/usr/bin/host".into())
+            } else {
+                Err("not found".into())
+            }
+        });
         let result = check_network(&opts);
         assert_eq!(result.status, Status::Warn);
-        assert!(result.message.contains("failed"));
+        assert!(result.message.contains("offline"));
+    }
+
+    #[test]
+    fn test_check_network_host_absent_skips_not_offline() {
+        // `host` not installed must NOT be reported as offline — it is a skipped
+        // probe. test_opts()'s look_path errs for every name, including `host`.
+        let opts = test_opts();
+        let result = check_network(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(result.message.contains("not found"));
+        assert!(result.message.contains("skipping"));
+        assert!(!result.message.contains("offline"));
     }
 
     #[test]

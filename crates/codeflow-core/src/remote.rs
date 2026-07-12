@@ -288,6 +288,13 @@ impl RemoteProvider for ManualChecklistProvider {
 // GitHub adapter (gh CLI)
 // ---------------------------------------------------------------------------
 
+/// The CI job contexts a codeflow-scaffolded repo exposes — the job `name:`
+/// values in the shipped `codeflow-ci.yml`. Pinned as required status checks so
+/// a PR cannot merge until these jobs actually run and pass; an empty `contexts`
+/// array would require *nothing*, leaving "require status checks" toothless.
+const REQUIRED_CI_CONTEXTS: &[&str] =
+    &["codeflow gates", "secret scan", "security review", "commit standards"];
+
 /// GitHub adapter, shelling out to the `gh` CLI for auth and transport.
 pub struct GithubProvider {
     gh: PathBuf,
@@ -377,7 +384,7 @@ impl GithubProvider {
     fn branch_protection_body(rule: &BranchRule) -> String {
         serde_json::json!({
             "required_status_checks": if rule.require_status_checks {
-                serde_json::json!({ "strict": true, "contexts": [] })
+                serde_json::json!({ "strict": true, "contexts": REQUIRED_CI_CONTEXTS })
             } else {
                 serde_json::Value::Null
             },
@@ -506,9 +513,10 @@ impl RemoteProvider for GithubProvider {
                     ));
                     if rule.require_status_checks {
                         lines.push(format!(
-                            "  note: {} requires status checks but no contexts are pinned — \
-                             checks become required as CI reports them",
-                            rule.pattern
+                            "  note: {} requires these CI status checks to pass before merge: {} \
+                             (the shipped codeflow-ci.yml job names; adjust if yours differ)",
+                            rule.pattern,
+                            REQUIRED_CI_CONTEXTS.join(", ")
                         ));
                     }
                 }
@@ -714,5 +722,30 @@ mod tests {
         let msg = GithubProvider::limitation_for("main", "HTTP 502: oops", false);
         assert!(msg.contains("main: not applied"));
         assert!(msg.contains("HTTP 502"));
+    }
+
+    #[test]
+    fn test_branch_protection_body_pins_real_ci_contexts() {
+        // An empty `contexts` array requires no named check — "require status
+        // checks" would be toothless. Pin the shipped codeflow-ci.yml job names.
+        let rule = BranchRule {
+            pattern: "main".into(),
+            require_pr: true,
+            require_status_checks: true,
+            block_force_push: true,
+            block_deletion: true,
+        };
+        let body: serde_json::Value =
+            serde_json::from_str(&GithubProvider::branch_protection_body(&rule)).unwrap();
+        let contexts = body["required_status_checks"]["contexts"]
+            .as_array()
+            .expect("contexts is an array");
+        assert!(!contexts.is_empty(), "contexts must not be empty");
+        for expected in ["codeflow gates", "secret scan", "security review", "commit standards"] {
+            assert!(
+                contexts.iter().any(|c| c.as_str() == Some(expected)),
+                "missing required context {expected}"
+            );
+        }
     }
 }
