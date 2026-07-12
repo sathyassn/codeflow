@@ -75,13 +75,18 @@ at the two points self-review is weakest — the plan and the final verify.
 
 Principle: **each side runs its vendor's latest frontier model at high reasoning
 effort** — the cross-vendor, cross-training independence is the whole point, so
-never quietly drop either to a cheaper tier. Current pins (as of 2026-07-10;
+never quietly drop either to a cheaper tier. Current pins (as of 2026-07-12;
 re-verify at each codex upgrade via the harness-parity canary so they cannot rot
 silently):
 
 - **Claude** = Fable 5, `high` (or `xhigh`) effort.
 - **Codex** = `gpt-5.6-sol` at `xhigh` — set the pin in `.codex/config.toml`:
-  `model = "gpt-5.6-sol"`, `model_reasoning_effort = "xhigh"`.
+  `model = "gpt-5.6-sol"`, `model_reasoning_effort = "xhigh"`. `xhigh` is
+  the top tier the OpenAI API honors on a ChatGPT-OAuth account (verified
+  2026-07-12: the API rejects anything above it, and codex's own `max` /
+  `ultra` enum values give no measurable reasoning beyond `xhigh` there).
+  Don't raise the pin past `xhigh` expecting deeper reasoning without
+  first confirming the endpoint honors it.
 
 ## Driving codex
 
