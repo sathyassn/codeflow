@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **PR bodies now demand test evidence and digestible bullets.** The shipped
+  PR template's `Verification` section becomes `## Testing` — required for any
+  code change, carrying pasted test-summary output, the coverage number, the
+  new tests added, manual/e2e evidence, and a plain "not tested" statement
+  ("tests pass" as prose is a claim, not evidence). Every section is short
+  one-line bullets — no paragraph-walls. The rule ships in the template, the
+  AGENTS contracts (full and minimal), and `cf-ship`.
 - **The Claude+codex duo is the default for all dev work** (operator policy;
   reverses the stakes-gated design). `cf-model-orchestrator` now runs for any
   feature, change, fix, or doc change with acceptance criteria — codex

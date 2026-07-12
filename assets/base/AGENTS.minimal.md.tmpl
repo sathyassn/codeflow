@@ -77,6 +77,9 @@ softening the commit rules quietly breaks it.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies.
 - **No emoji** in commit subjects or PR bodies.
+- **PR bodies:** short one-line bullets per section, never paragraph-walls.
+  A code PR must show real test evidence — pasted test output, coverage,
+  what was NOT tested; a docs-only PR says so in one line.
 - **Secrets:** never stage credentials, API keys, tokens, or `.env` files. The
   pre-commit secret scan (and the CI secret-scan job) block them.
 - **Protected branches** (`main`/`master`): never commit, merge, push,

@@ -27,9 +27,13 @@ description: Land finished work — docs and capability updates, then a PR throu
    `-` bullets (at most 3, each a single line ≤ 72 chars) with an optional
    trailing `BREAKING CHANGE:` footer, one logical change each; reword or squash
    any that drifted before pushing. PR body: follow the PR template — summary,
-   changes, verification (name the surface, paste evidence), linked epic and
-   capability IDs. Bullets for the enumerable sections, prose only where a
-   sentence earns its place. No AI attribution, no emoji.
+   changes, testing, linked epic and capability IDs — every section in short
+   one-line bullets, never paragraph-walls. `## Testing` is non-negotiable for
+   a code change and carries evidence, not claims: paste the real test-summary
+   output (fenced block), the coverage number (CI's coverage job computes it),
+   the new tests added and what each pins, manual/e2e commands with the
+   observed result, and what was NOT tested. A docs-only PR replaces that with
+   one line saying so plus the doc checks run. No AI attribution, no emoji.
 6. Land via a PR **merged by a human** on green CI, or `codeflow integrate
    <branch> --into <target>` when there is no remote. An agent never merges into
    a protected branch — no `gh pr merge` into a protected base, no by-hand
