@@ -247,6 +247,10 @@ fn recent_adrs(root: &Path, n: usize) -> Vec<String> {
 }
 
 /// One-line enforcement status: which hooks are wired (charter §3.4).
+///
+/// The codex segment is presence-only — hook trust lives in codex's own
+/// state and cannot be read from here, so ✓ means "shipped", not "live"
+/// (interactive codex fires these only after a one-time `/hooks` trust).
 fn gates_line(root: &Path) -> String {
     let mark = |on: bool| if on { "✓" } else { "✗" };
 
@@ -259,20 +263,25 @@ fn gates_line(root: &Path) -> String {
 
     let settings = std::fs::read_to_string(root.join(".claude").join("settings.json"))
         .unwrap_or_default();
+    let codex = root.join(".codex");
 
     format!(
-        "gates: git-hooks[pre-commit{} commit-msg{} pre-push{}] claude[git-guard{} orient{} summary{}]",
+        "gates: git-hooks[pre-commit{} commit-msg{} pre-push{}] claude[git-guard{} orient{} summary{}] codex[hooks.json{} config.toml{}]",
         mark(hook_wired("pre-commit")),
         mark(hook_wired("commit-msg")),
         mark(hook_wired("pre-push")),
         mark(settings.contains("git-guard")),
         mark(settings.contains("session-orient")),
         mark(settings.contains("session-summary")),
+        mark(codex.join("hooks.json").exists()),
+        mark(codex.join("config.toml").exists()),
     )
 }
 
 /// Resolve the active hooks directory (`core.hooksPath` or `<git>/hooks`).
-fn git_hooks_dir(root: &Path) -> Option<std::path::PathBuf> {
+/// Shared with `doctor`'s hooks check so both surfaces resolve wiring the
+/// same way.
+pub(crate) fn git_hooks_dir(root: &Path) -> Option<std::path::PathBuf> {
     let repo = super::repo::open(root)?;
     if let Ok(config) = repo.config() {
         if let Ok(path) = config.get_string("core.hookspath") {
@@ -347,6 +356,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("AGENTS.md"), "# contract\n").unwrap();
+        std::fs::create_dir_all(root.join(".codex")).unwrap();
+        std::fs::write(root.join(".codex/hooks.json"), "{\"hooks\":{}}\n").unwrap();
+        std::fs::write(root.join(".codex/config.toml"), "approval_policy = \"on-request\"\n")
+            .unwrap();
     }
 
     #[test]
@@ -368,6 +381,7 @@ mod tests {
         assert!(digest.contains("ADR-0002 — bundle sqlite"));
         assert!(!digest.contains("ADR-0001"));
         assert!(digest.contains("claude[git-guard✓ orient✓ summary✓]"));
+        assert!(digest.contains("codex[hooks.json✓ config.toml✓]"));
         assert!(digest.contains("read: docs/product.md"));
         assert!(digest.contains("AGENTS.md"));
     }
@@ -503,6 +517,20 @@ mod tests {
         let line = gates_line(dir.path());
         assert!(line.contains("pre-commit✗"));
         assert!(line.contains("git-guard✗"));
+        assert!(line.contains("codex[hooks.json✗ config.toml✗]"), "{line}");
+    }
+
+    /// Presence-only, per segment: hooks.json without config.toml (or vice
+    /// versa) reports exactly what is on disk — never a summary judgment,
+    /// since hook trust is codex-internal and unreadable from here.
+    #[test]
+    fn test_gates_line_reports_codex_files_individually() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(dir.path().join(".codex/hooks.json"), "{}").unwrap();
+        let line = gates_line(dir.path());
+        assert!(line.contains("codex[hooks.json✓ config.toml✗]"), "{line}");
     }
 
     #[test]
