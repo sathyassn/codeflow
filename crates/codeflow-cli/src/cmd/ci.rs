@@ -7,13 +7,18 @@
 //! wrappers that install codeflow and shell out to this command.
 //!
 //! Exit 1 when any block-level violation is found; 0 when clean or only
-//! warnings (which are printed, then the gate proceeds).
+//! warnings (which are printed, then the gate proceeds). Exit 2 when the
+//! verification could not run in full — the commit checks were skipped (no
+//! base ref resolved, or the range could not be enumerated) or an explicit
+//! `--pr-body-file` was unreadable: an unverified range is not a pass. The
+//! scaffolded wrappers avoid the skip state entirely (full-depth checkout
+//! plus explicit `--base`/`--head`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Args;
-use codeflow_core::hooks::policy::Policy;
+use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
     any_blocking, git_hook, repo, standards, GitPolicy, PolicyLevel, Violation,
 };
@@ -79,7 +84,10 @@ pub fn run(args: &CiArgs) -> i32 {
     let git = &policy.git;
 
     // --- resolve the range ------------------------------------------------
-    let detected = detect_range(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    let detected = detect_range(
+        |k| std::env::var(k).ok().filter(|v| !v.is_empty()),
+        &git.protected_branches,
+    );
     let base_spec = args
         .base
         .clone()
@@ -101,14 +109,39 @@ pub fn run(args: &CiArgs) -> i32 {
         .or_else(|| repo::open(&root).map(|r| repo::current_branch(&r)))
         .unwrap_or_default();
 
-    let pr_body = resolve_pr_body(args);
+    let pr_body = match resolve_pr_body(args) {
+        Ok(body) => body,
+        Err(e) => {
+            // The flag explicitly requested the check — failing open would
+            // silently skip what the caller asked to verify.
+            eprintln!("codeflow ci: error: {e}");
+            return 2;
+        }
+    };
 
-    println!("codeflow ci: verifying against .codeflow/policy.json");
+    // Report the ruleset actually enforced: the loader falls back to the
+    // built-in charter defaults silently (fail-safe), so the banner must say
+    // which source is in effect rather than assert the project file blindly.
+    match Policy::source(&root) {
+        PolicySource::ProjectFile => {
+            println!("codeflow ci: verifying against .codeflow/policy.json");
+        }
+        PolicySource::MalformedFile => println!(
+            "codeflow ci: .codeflow/policy.json is malformed — verifying against built-in charter defaults"
+        ),
+        PolicySource::Absent => println!(
+            "codeflow ci: no .codeflow/policy.json — verifying against built-in charter defaults"
+        ),
+    }
+
+    // Track what actually executed — the summary must not claim more.
+    let mut ran: Vec<&str> = Vec::new();
+    let mut skipped: Vec<&str> = Vec::new();
 
     // --- commit-range checks ---------------------------------------------
     let mut tagged: Vec<TaggedViolation> = Vec::new();
-    match resolve_base(&root, &base_candidates) {
-        Some(base_sha) => match enumerate_commits(&root, &base_sha, &head) {
+    if let Some(base_sha) = resolve_base(&root, &base_candidates) {
+        match enumerate_commits(&root, &base_sha, &head) {
             Ok(commits) => {
                 println!(
                     "codeflow ci: range {}..{} ({}) — {} non-merge commit(s)",
@@ -118,27 +151,31 @@ pub fn run(args: &CiArgs) -> i32 {
                     commits.len()
                 );
                 tagged.extend(evaluate_commits(git, &commits));
+                ran.push("commit");
             }
             Err(e) => {
                 eprintln!("codeflow ci: warning: could not enumerate commits ({e}) — commit checks skipped");
+                skipped.push("commit");
             }
-        },
-        None => {
-            eprintln!(
-                "codeflow ci: warning: could not resolve a base ref (tried: {}) — commit checks skipped. Pass --base/--head explicitly.",
-                base_candidates.join(", ")
-            );
         }
+    } else {
+        eprintln!(
+            "codeflow ci: warning: could not resolve a base ref (tried: {}) — commit checks skipped. Pass --base/--head explicitly.",
+            base_candidates.join(", ")
+        );
+        skipped.push("commit");
     }
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
         println!("codeflow ci: no branch name resolved — branch-naming check skipped");
+        skipped.push("branch-naming");
     } else {
         println!("codeflow ci: branch '{branch}'");
         if let Some(v) = evaluate_branch(git, &branch) {
             tagged.push(v);
         }
+        ran.push("branch-naming");
     }
 
     // --- PR-body check ----------------------------------------------------
@@ -148,14 +185,18 @@ pub fn run(args: &CiArgs) -> i32 {
                 .into_iter()
                 .map(|violation| TaggedViolation { sha: None, violation }),
         );
+        ran.push("PR-body");
     }
 
-    report(&tagged)
+    report(&tagged, &ran, &skipped)
 }
 
-/// Print every violation and a summary; return the process exit code
-/// (1 when any violation blocks, else 0).
-fn report(tagged: &[TaggedViolation]) -> i32 {
+/// Print every violation and an honest summary naming what ran vs what was
+/// skipped; return the process exit code: 1 when any violation blocks, 2 when
+/// the commit checks were skipped (nothing in the range was verified — not a
+/// pass), else 0. A skipped branch-naming check is reported but not fatal: a
+/// detached-head run without a CI branch variable is a legitimate state.
+fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     for t in tagged {
         let plane = match &t.sha {
             Some(sha) => format!("ci commit {}", short(sha)),
@@ -176,14 +217,33 @@ fn report(tagged: &[TaggedViolation]) -> i32 {
         .count();
 
     if violations.is_empty() {
-        println!("codeflow ci: clean — commit, branch, and PR-body checks passed");
+        if skipped.is_empty() {
+            println!("codeflow ci: clean — {} check(s) passed", ran.join(", "));
+        } else {
+            let ran_desc = if ran.is_empty() { "none".to_string() } else { ran.join(", ") };
+            eprintln!(
+                "codeflow ci: no violations in the checks that ran ({ran_desc}) — skipped: {}",
+                skipped.join(", ")
+            );
+        }
     } else if blocking {
         eprintln!("codeflow ci: FAILED — {blocks} blocking, {warnings} warning(s)");
-    } else {
+    } else if skipped.is_empty() {
         eprintln!("codeflow ci: {warnings} warning(s) only — proceeding");
+    } else {
+        eprintln!(
+            "codeflow ci: {warnings} warning(s); skipped: {}",
+            skipped.join(", ")
+        );
     }
 
-    i32::from(blocking)
+    if blocking {
+        1
+    } else if skipped.contains(&"commit") {
+        2
+    } else {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,8 +329,11 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
 /// `env` accessor returns non-empty values only. Verified variable names:
 /// GitHub `GITHUB_BASE_REF`/`GITHUB_HEAD_REF`; GitLab
 /// `CI_MERGE_REQUEST_DIFF_BASE_SHA`/`CI_COMMIT_SHA`; Bitbucket
-/// `BITBUCKET_PR_DESTINATION_COMMIT`/`BITBUCKET_COMMIT`.
-fn detect_range<F: Fn(&str) -> Option<String>>(env: F) -> DetectedRange {
+/// `BITBUCKET_PR_DESTINATION_COMMIT`/`BITBUCKET_COMMIT`. Outside those,
+/// `CODEFLOW_DEFAULT_BRANCH` names the base branch explicitly (documented in
+/// `assets/base/ci/ci-generic.sh`); the terminal fallback tries the policy's
+/// protected branches (`git.protected_branches`, e.g. `main` then `master`).
+fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> DetectedRange {
     // GitLab merge-request pipeline: an exact base sha is provided.
     if let Some(base) = env("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
         return DetectedRange {
@@ -297,19 +360,35 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F) -> DetectedRange {
             source: "GitHub GITHUB_BASE_REF".to_string(),
         };
     }
-    // Fallback: diff against the default protected branch. `origin/<b>` first
-    // (the usual CI checkout), then the bare local name.
+    // Explicit escape hatch for hosts with none of the variables above:
+    // CODEFLOW_DEFAULT_BRANCH names the base branch. `origin/<b>` first (the
+    // usual CI checkout), then the bare local name.
     if let Some(base) = env("CODEFLOW_DEFAULT_BRANCH") {
         return DetectedRange {
             base_candidates: vec![format!("origin/{base}"), base.clone()],
             head: "HEAD".to_string(),
-            source: format!("default branch '{base}' (fallback)"),
+            source: format!("CODEFLOW_DEFAULT_BRANCH '{base}' (fallback)"),
         };
     }
+    // Terminal fallback: the policy's protected branches — the default branch
+    // is virtually always among them, so a master-default repo resolves too.
+    // Globs cannot name a ref and are skipped; per branch, `origin/<b>` then
+    // the bare local name (the first candidate that resolves wins).
+    let mut base_candidates: Vec<String> = Vec::new();
+    for b in protected {
+        if b.contains(['*', '?', '[']) {
+            continue;
+        }
+        base_candidates.push(format!("origin/{b}"));
+        base_candidates.push(b.clone());
+    }
+    if base_candidates.is_empty() {
+        base_candidates = vec!["origin/main".to_string(), "main".to_string()];
+    }
     DetectedRange {
-        base_candidates: vec!["origin/main".to_string(), "main".to_string()],
+        base_candidates,
         head: "HEAD".to_string(),
-        source: "default branch 'main' (fallback)".to_string(),
+        source: "policy protected branches (fallback)".to_string(),
     }
 }
 
@@ -328,21 +407,24 @@ fn detect_branch<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Read the PR body from `--pr-body`, then `--pr-body-file`, then the
-/// `CODEFLOW_PR_BODY` env var. Returns `None` (skip the check) when none is set.
-fn resolve_pr_body(args: &CiArgs) -> Option<String> {
+/// `CODEFLOW_PR_BODY` env var. Returns `Ok(None)` (check not requested) when
+/// none is set. An unreadable `--pr-body-file` is a hard error — the flag
+/// explicitly requested the check, and falling through to the env var would
+/// scan a different body than the one named (or silently skip the check).
+fn resolve_pr_body(args: &CiArgs) -> Result<Option<String>, String> {
     if let Some(body) = &args.pr_body {
-        return Some(body.clone());
+        return Ok(Some(body.clone()));
     }
     if let Some(path) = &args.pr_body_file {
-        match std::fs::read_to_string(path) {
-            Ok(body) => return Some(body),
-            Err(e) => eprintln!(
-                "codeflow ci: warning: could not read --pr-body-file {}: {e} — PR-body check skipped",
+        return match std::fs::read_to_string(path) {
+            Ok(body) => Ok(Some(body)),
+            Err(e) => Err(format!(
+                "could not read --pr-body-file {}: {e}",
                 path.display()
-            ),
-        }
+            )),
+        };
     }
-    std::env::var(PR_BODY_ENV).ok().filter(|v| !v.is_empty())
+    Ok(std::env::var(PR_BODY_ENV).ok().filter(|v| !v.is_empty()))
 }
 
 /// Resolve the first base candidate that names a real commit, returning its sha.
@@ -536,12 +618,20 @@ mod tests {
         }
     }
 
+    /// The default policy's protected branches, as `run()` passes them.
+    fn protected() -> Vec<String> {
+        GitPolicy::default().protected_branches
+    }
+
     #[test]
     fn detect_range_gitlab() {
-        let r = detect_range(env_from(&[
-            ("CI_MERGE_REQUEST_DIFF_BASE_SHA", "abc123"),
-            ("CI_COMMIT_SHA", "def456"),
-        ]));
+        let r = detect_range(
+            env_from(&[
+                ("CI_MERGE_REQUEST_DIFF_BASE_SHA", "abc123"),
+                ("CI_COMMIT_SHA", "def456"),
+            ]),
+            &protected(),
+        );
         assert_eq!(r.base_candidates, vec!["abc123"]);
         assert_eq!(r.head, "def456");
         assert!(r.source.contains("GitLab"));
@@ -549,10 +639,13 @@ mod tests {
 
     #[test]
     fn detect_range_bitbucket() {
-        let r = detect_range(env_from(&[
-            ("BITBUCKET_PR_DESTINATION_COMMIT", "dest99"),
-            ("BITBUCKET_COMMIT", "head99"),
-        ]));
+        let r = detect_range(
+            env_from(&[
+                ("BITBUCKET_PR_DESTINATION_COMMIT", "dest99"),
+                ("BITBUCKET_COMMIT", "head99"),
+            ]),
+            &protected(),
+        );
         assert_eq!(r.base_candidates, vec!["dest99"]);
         assert_eq!(r.head, "head99");
         assert!(r.source.contains("Bitbucket"));
@@ -560,28 +653,54 @@ mod tests {
 
     #[test]
     fn detect_range_github() {
-        let r = detect_range(env_from(&[("GITHUB_BASE_REF", "main")]));
+        let r = detect_range(env_from(&[("GITHUB_BASE_REF", "main")]), &protected());
         assert_eq!(r.base_candidates, vec!["origin/main", "main"]);
         assert_eq!(r.head, "HEAD");
         assert!(r.source.contains("GitHub"));
     }
 
     #[test]
-    fn detect_range_fallback_default() {
-        let r = detect_range(env_from(&[]));
-        assert_eq!(r.base_candidates, vec!["origin/main", "main"]);
+    fn detect_range_env_default_branch() {
+        // CODEFLOW_DEFAULT_BRANCH is the explicit escape hatch for hosts with
+        // no recognized CI variables (documented in ci-generic.sh).
+        let r = detect_range(env_from(&[("CODEFLOW_DEFAULT_BRANCH", "trunk")]), &protected());
+        assert_eq!(r.base_candidates, vec!["origin/trunk", "trunk"]);
+        assert_eq!(r.head, "HEAD");
+        assert!(r.source.contains("CODEFLOW_DEFAULT_BRANCH"));
+    }
+
+    #[test]
+    fn detect_range_fallback_tries_policy_protected_branches() {
+        // The terminal fallback covers a master-default repo too: every
+        // literal protected branch is a candidate, not just main.
+        let r = detect_range(env_from(&[]), &protected());
+        assert_eq!(
+            r.base_candidates,
+            vec!["origin/main", "main", "origin/master", "master"]
+        );
         assert_eq!(r.head, "HEAD");
         assert!(r.source.contains("fallback"));
+    }
+
+    #[test]
+    fn detect_range_fallback_skips_protected_globs() {
+        // A glob cannot name a ref; only literal branches become candidates.
+        let prot = vec!["main".to_string(), "release/*".to_string()];
+        let r = detect_range(env_from(&[]), &prot);
+        assert_eq!(r.base_candidates, vec!["origin/main", "main"]);
     }
 
     #[test]
     fn detect_range_precedence_gitlab_over_github() {
         // A GitLab MR pipeline can also carry GITHUB_* if mirrored; the exact
         // base sha wins over the branch-name heuristic.
-        let r = detect_range(env_from(&[
-            ("CI_MERGE_REQUEST_DIFF_BASE_SHA", "gl-base"),
-            ("GITHUB_BASE_REF", "main"),
-        ]));
+        let r = detect_range(
+            env_from(&[
+                ("CI_MERGE_REQUEST_DIFF_BASE_SHA", "gl-base"),
+                ("GITHUB_BASE_REF", "main"),
+            ]),
+            &protected(),
+        );
         assert_eq!(r.base_candidates, vec!["gl-base"]);
     }
 
@@ -631,5 +750,43 @@ mod tests {
     fn short_sha_truncates() {
         assert_eq!(short("0123456789abcdef"), "01234567");
         assert_eq!(short("abc"), "abc");
+    }
+
+    // -- report: honest summary + exit codes -------------------------------
+
+    fn block_violation() -> TaggedViolation {
+        TaggedViolation {
+            sha: Some("aaaa1111".to_string()),
+            violation: Violation::new(
+                "git.commit_format",
+                PolicyLevel::Block,
+                "bad subject".to_string(),
+                "fix it".to_string(),
+            ),
+        }
+    }
+
+    #[test]
+    fn report_clean_all_ran_exits_zero() {
+        assert_eq!(report(&[], &["commit", "branch-naming"], &[]), 0);
+    }
+
+    #[test]
+    fn report_skipped_commit_checks_exits_two() {
+        // A skipped commit check verified nothing — never a clean exit 0.
+        assert_eq!(report(&[], &["branch-naming"], &["commit"]), 2);
+    }
+
+    #[test]
+    fn report_skipped_branch_naming_alone_exits_zero() {
+        // A detached-head run without a CI branch variable is legitimate; the
+        // skip is named in the summary but is not fatal.
+        assert_eq!(report(&[], &["commit"], &["branch-naming"]), 0);
+    }
+
+    #[test]
+    fn report_blocking_violation_exits_one_even_when_skipped() {
+        // A found violation outranks the incomplete-run signal.
+        assert_eq!(report(&[block_violation()], &["branch-naming"], &["commit"]), 1);
     }
 }

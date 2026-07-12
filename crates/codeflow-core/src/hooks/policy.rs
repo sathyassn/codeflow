@@ -276,6 +276,19 @@ pub struct Policy {
     pub human_authorization: HumanAuthorization,
 }
 
+/// Where [`Policy::load`] sources the effective policy from — for callers that
+/// report which ruleset is actually enforced (e.g. `codeflow ci`). The loader
+/// itself stays silently fail-safe; this only makes the fallback legible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicySource {
+    /// `.codeflow/policy.json` exists and parses — the project's own rules.
+    ProjectFile,
+    /// The file exists but does not parse — built-in charter defaults apply.
+    MalformedFile,
+    /// No policy file — built-in charter defaults apply.
+    Absent,
+}
+
 impl Policy {
     /// Load policy from `<root>/.codeflow/policy.json`.
     ///
@@ -284,6 +297,24 @@ impl Policy {
     #[must_use]
     pub fn load(root: &Path) -> Self {
         Self::load_file(&root.join(".codeflow").join("policy.json"))
+    }
+
+    /// Report where [`Policy::load`] sources the policy for `root`, so callers
+    /// can state honestly whether the project file or the built-in defaults
+    /// are being enforced. Mirrors [`Policy::load_file`]'s fallback rules
+    /// without changing them.
+    #[must_use]
+    pub fn source(root: &Path) -> PolicySource {
+        match std::fs::read_to_string(root.join(".codeflow").join("policy.json")) {
+            Ok(data) => {
+                if serde_json::from_str::<Self>(&data).is_ok() {
+                    PolicySource::ProjectFile
+                } else {
+                    PolicySource::MalformedFile
+                }
+            }
+            Err(_) => PolicySource::Absent,
+        }
     }
 
     /// Load policy from an explicit file path with the same fallback rules.
@@ -531,6 +562,20 @@ mod tests {
         std::fs::write(cf.join("policy.json"), "{ nope").unwrap();
         let p = Policy::load(dir.path());
         assert_eq!(p.git.push_to_protected, PolicyLevel::Block);
+    }
+
+    #[test]
+    fn test_source_reports_file_malformed_and_absent() {
+        // Mirrors the load_file fallback rules so callers can report honestly
+        // which ruleset (project file vs charter defaults) is enforced.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(Policy::source(dir.path()), PolicySource::Absent);
+        let cf = dir.path().join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(cf.join("policy.json"), "{ nope").unwrap();
+        assert_eq!(Policy::source(dir.path()), PolicySource::MalformedFile);
+        std::fs::write(cf.join("policy.json"), r#"{"schema_version":1}"#).unwrap();
+        assert_eq!(Policy::source(dir.path()), PolicySource::ProjectFile);
     }
 
     #[test]

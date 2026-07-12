@@ -25,6 +25,13 @@ it reads from that platform's CI variables (`codeflow ci` auto-detects them):
 | `bitbucket-pipelines.yml` | Bitbucket Pipelines | `BITBUCKET_PR_DESTINATION_COMMIT`, `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (no PR-body variable — body scan skipped) |
 | `ci-generic.sh` | anything (pre-receive hook, Makefile, other CI) | `$1 $2` args, or `BASE`/`HEAD` env, or auto-detect; body via `CODEFLOW_PR_BODY` |
 
+On a host `codeflow ci` does not recognize, the range fallback (when no
+explicit base/head is given) is: `CODEFLOW_DEFAULT_BRANCH` (export it to name
+the base branch), then the policy's `git.protected_branches` tried in order
+(`origin/main`, `main`, `origin/master`, `master` by default). When no base
+resolves, the commit checks are skipped with a warning and `codeflow ci` exits
+non-zero — pass `--base`/`--head` explicitly to fix the setup.
+
 ## What `codeflow init` scaffolds
 
 `codeflow init` scaffolds the **GitHub** workflow (`codeflow-ci.yml`) today. The

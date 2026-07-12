@@ -11,7 +11,10 @@
 #
 # Range: pass base + head as $1 $2, or set BASE/HEAD in the env. When both are
 # empty, `codeflow ci` auto-detects from the CI platform's variables
-# (GitHub/GitLab/Bitbucket), falling back to origin/main..HEAD.
+# (GitHub/GitLab/Bitbucket). On hosts with none of those, export
+# CODEFLOW_DEFAULT_BRANCH=<branch> to name the base branch explicitly;
+# otherwise the fallback tries the policy's protected branches
+# (origin/main, main, origin/master, master by default) ..HEAD.
 #
 # PR/MR body: export CODEFLOW_PR_BODY to also scan it for AI attribution + emoji.
 #
