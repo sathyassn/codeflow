@@ -596,6 +596,50 @@ fn init_is_idempotent() {
 }
 
 #[test]
+fn init_notes_codex_posture_when_codex_layer_present() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+    // The codex layer on disk, as the real standard/full manifest installs it.
+    std::fs::create_dir_all(root.join(".codex")).unwrap();
+    std::fs::write(root.join(".codex/hooks.json"), "{}").unwrap();
+    std::fs::write(
+        root.join(".codex/config.toml"),
+        "approval_policy = \"on-request\"\n",
+    )
+    .unwrap();
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+
+    // One note: the permission preset configured Claude Code only; codex
+    // posture lives in .codex/config.toml, and its in-session guards need the
+    // one-time /hooks trust inside codex.
+    let note = report
+        .notes
+        .iter()
+        .find(|n| n.contains(".codex/config.toml"))
+        .expect("codex posture note in the init report");
+    assert!(
+        note.contains("permission preset"),
+        "scopes the Claude Code preset: {note}"
+    );
+    assert!(note.contains("`/hooks`"), "points at the one-time trust step: {note}");
+}
+
+#[test]
+fn init_without_codex_layer_has_no_codex_note() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    assert!(
+        !report.notes.iter().any(|n| n.contains("codex")),
+        "no codex note when no .codex/ layer exists: {:?}",
+        report.notes
+    );
+}
+
+#[test]
 fn init_force_overwrites_unmanaged_file() {
     isolate_git();
     let (_a, assets) = fixture_assets(false);

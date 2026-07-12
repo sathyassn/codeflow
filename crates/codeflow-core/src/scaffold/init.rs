@@ -243,6 +243,19 @@ pub fn init(
         }
     }
 
+    // Harness honesty (ADR-0008): the permission preset above configured
+    // Claude Code only. When the codex layer is present, say what binds it —
+    // a fixed posture in .codex/config.toml — and the one manual step its
+    // in-session guards need. Trust state is codex-internal and not
+    // inspectable from here, so this is a pointer, never a claim.
+    let codex_dir = root.join(".codex");
+    if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
+        report.notes.push(
+            "codex harness present (.codex/): autonomy posture lives in .codex/config.toml — the Claude Code permission preset does not apply to codex; in-session guards are wired structurally and activate after a one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
+                .to_string(),
+        );
+    }
+
     // Phase 5: for an existing repo the armed state is still uncommitted —
     // surface the arming and the branch guidance. Fresh repos already committed
     // the armed state above, so their tree is clean and needs no such note.

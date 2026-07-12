@@ -6,6 +6,13 @@ use std::path::Path;
 
 use codeflow_core::scaffold::InitAnswers;
 
+/// The permission-preset question is Claude Code-scoped: the answer selects
+/// which preset lands in `.claude/settings.json` and configures nothing else.
+/// Codex autonomy is a fixed per-repo posture in `.codex/config.toml`
+/// (ADR-0008) — the label says so, so a codex-primary user is not left
+/// believing this answer configured their harness.
+const PRESET_QUESTION: &str = "Claude Code permission preset (default | acceptEdits | bypassPermissions) — codex autonomy is configured in .codex/config.toml";
+
 fn ask(input: &mut impl BufRead, question: &str, default: &str) -> std::io::Result<String> {
     print!("{question} [{default}]: ");
     std::io::stdout().flush()?;
@@ -38,11 +45,7 @@ fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result
         // promptless project-scoped work the out-of-the-box experience. The
         // choice stays the user's — the deny/ask tiers and the guard hooks are
         // the protections, not the permission mode.
-        let answer = ask(
-            input,
-            "Permission preset (default | acceptEdits | bypassPermissions)",
-            "acceptEdits",
-        )?;
+        let answer = ask(input, PRESET_QUESTION, "acceptEdits")?;
         match answer.as_str() {
             "default" | "acceptEdits" | "bypassPermissions" => break answer,
             other => println!("unknown preset {other:?} — choose one of the three"),
@@ -108,6 +111,14 @@ mod tests {
     fn unknown_preset_is_reasked_until_valid() {
         let answers = gather("p\ncore\nyolo\nbypassPermissions\n");
         assert_eq!(answers.permission_preset.as_deref(), Some("bypassPermissions"));
+    }
+
+    #[test]
+    fn preset_question_is_claude_code_scoped() {
+        // The preset writes .claude/settings.json only; the label must name
+        // the harness it binds and point codex users at their real knob.
+        assert!(PRESET_QUESTION.starts_with("Claude Code permission preset"));
+        assert!(PRESET_QUESTION.contains(".codex/config.toml"));
     }
 
     #[test]
