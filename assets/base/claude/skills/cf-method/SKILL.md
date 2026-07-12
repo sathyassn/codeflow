@@ -34,9 +34,8 @@ it). Make both calls in `cf-plan`, not mid-build.
   and/or parallel tasks lands task-by-task on a shared `integration/<epic>`
   branch, not on `main`, and the human reviews one final PR. See "Managing a
   body of work" below.
-- **Stage and model composition lives in config-args** (`args.stages`,
-  `args.models`, `[workflows]` in `.codeflow/project.toml`) — never
-  hardcoded into the workflow file.
+- **Stage and model composition lives in the invocation args** (`args.stages`,
+  `args.models`) — never hardcoded into the workflow file.
 
 ## Planning an epic
 

@@ -110,12 +110,13 @@ Degrade to **tmux**-driving only where the app-server itself is unavailable.
 ## Security — mandatory, cross-vendor
 
 A duo run **must** include a cross-vendor security / red-team pass before any push
-or PR (the pipeline `security` stage, driven by the `cf-security-reviewer` agent —
-being added in this same batch; reference it by name as the mechanism). Both
+or PR: the pipeline `security` stage, driven by the `cf-security-reviewer` agent
+(`.claude/agents/cf-security-reviewer.md`, ADR-0016). Both
 models review for the vuln classes; the **joint verdict gates push/PR**, while the
 deterministic `codeflow test` / `codeflow validate` gate stays authoritative — a
-model verdict never turns a red deterministic gate green. Do not design the
-security stage here; just require it and stop.
+model verdict never turns a red deterministic gate green. The agent owns the
+checklist, schema, and blocking rule — do not redesign them here; require the
+pass and defer to it.
 
 ## Degradation — never give up, but never lie
 

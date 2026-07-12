@@ -135,13 +135,22 @@ human lands it.
 
 ## Interactive tier — the official plugin
 
-For human-in-the-loop use (not automation), OpenAI ships and maintains a Claude
-Code plugin, `openai/codex-plugin-cc`, under the same subscription auth.
-Document it; **do not bundle it**:
+OpenAI ships and maintains a Claude Code plugin, `openai/codex-plugin-cc`, under
+the same subscription auth. In-session it is the **primary driver of codex** —
+including the duo loop in `cf-model-orchestrator` — because it wraps the codex
+app-server: codex's full MCP tool set, resumable sessions, and code-answered
+approvals, with OpenAI owning the app-server API churn. Driving the app-server
+directly is the advanced fallback (the orchestrator's "Driving codex" section
+carries the driver). Document it; **do not bundle it**:
 
-- Install per the plugin's README; the user runs `codex login` once.
-- Commands: `/codex:review`, and `/codex:rescue` with `--write` / `--resume` /
-  `--background`.
+- Install per the plugin's README; the user runs `codex login` once, then
+  `/codex:setup` verifies the wiring.
+- Commands for the duo: `/codex:review` and `/codex:adversarial-review` (both
+  read-only — the plan cross-verify and the cross-vendor security red-team),
+  `/codex:rescue` (delegated execution and first-round testing; flags:
+  `--background`/`--wait`, `--resume`/`--fresh`, `--model`, `--effort`), and
+  `/codex:transfer` (a persistent codex thread for the multi-round
+  back-and-forth).
 
 ## Degraded tier — Antigravity `agy` (opt-in, read-only)
 

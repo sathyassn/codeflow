@@ -123,11 +123,12 @@ green before reporting done.
 ## Reminder, not auto-run
 
 cf-customize needs an interactive thinking session, so it is **never auto-run**
-(`codeflow init` may be non-interactive or run in CI). Instead it is *reminded*:
-`codeflow init` should close with a hint to run `/cf-customize`, and the
-orient/doctor digest can nudge while `docs/product.md` or the AGENTS.md/CLAUDE.md
-project sections are still at template defaults — the nudge clears once they are
-filled. Do **not** propose auto-running it.
+(`codeflow init` may be non-interactive or run in CI). The intended surface is a
+*reminder*: a `codeflow init` closing hint to run `/cf-customize`, plus an
+orient/doctor nudge while `docs/product.md` or the AGENTS.md/CLAUDE.md project
+sections are still at template defaults, clearing once they are filled. None of
+that is wired into the engine yet — today the user (or an agent reading this
+skill) invokes `/cf-customize` by hand. Do **not** propose auto-running it.
 
 Report completion with the prioritized findings, the tool fixes applied or
 declined (and what each declined fix costs), the artifacts filled, and the gate
