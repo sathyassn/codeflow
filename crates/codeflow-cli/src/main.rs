@@ -65,7 +65,7 @@ enum Command {
     Status(cmd::status::StatusArgs),
     /// Land a branch into a target: flock(rebase -> test -> ff-merge).
     Integrate(cmd::integrate::IntegrateArgs),
-    /// Health checks: hooks, claude wiring, config, permissions, network, delegates, repo integrity, CI perimeter, managed-region drift, test config — `doctor --list` names them all.
+    /// Health checks: hooks, claude wiring, codex wiring, config, permissions, network, delegates, repo integrity, CI perimeter, managed-region drift, test config — `doctor --list` names them all.
     Doctor(cmd::doctor::DoctorArgs),
     /// Search project memory: ledger, session summaries, ADRs, epics, capabilities.
     Recall(cmd::recall::RecallArgs),

@@ -127,6 +127,7 @@ const CI_PLACEHOLDER_MARK: &str = "install step is an unwired PLACEHOLDER";
 const CHECK_NAMES: &[&str] = &[
     "hooks",
     "claude",
+    "codex",
     "config",
     "permissions",
     "network",
@@ -151,6 +152,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     let mut m: HashMap<&'static str, CheckFn> = HashMap::new();
     m.insert("hooks", check_hooks);
     m.insert("claude", check_claude);
+    m.insert("codex", check_codex);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -243,12 +245,62 @@ fn check_hooks(opts: &Options) -> CheckResult {
         };
     }
 
+    // Responding subcommands prove the binary answers — not that git will
+    // call it. A fresh clone keeps the committed shims but loses the local
+    // `core.hooksPath` wiring, leaving zero local git gates behind a green
+    // doctor. Resolve the ACTIVE hooks dir the same way orient's gates line
+    // does and warn when the shims are not what git runs.
+    if let Some(warning) = hooks_wiring_warning(Path::new(&opts.project_dir)) {
+        return CheckResult {
+            name: "hooks".into(),
+            status: Status::Warn,
+            message: warning,
+            duration: start.elapsed(),
+        };
+    }
+
     CheckResult {
         name: "hooks".into(),
         status: Status::Pass,
         message: format!("all {} hook subcommands functional", HOOK_SUBCOMMANDS.len()),
         duration: start.elapsed(),
     }
+}
+
+/// `Some(warning)` when the repo ships the codeflow git-hook shims but git's
+/// active hooks dir (resolved like `orient`: `core.hooksPath`, else the
+/// common dir's `hooks/`) is not the shims dir. `None` when there is nothing
+/// to verify — no shims on disk, or not a git repo: this flags, it never
+/// guesses. A recorded `git_hooks = "unwired"` (another hook manager owned
+/// the hooks at init, deliberately not clobbered) gets its own remedy text.
+fn hooks_wiring_warning(root: &Path) -> Option<String> {
+    use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
+    use crate::scaffold::state::{ProjectState, GIT_HOOKS_UNWIRED};
+
+    let shims = root.join(CODEFLOW_HOOKS_PATH);
+    if !shims.join("pre-commit").exists() {
+        return None; // no scaffolded shims — nothing to wire
+    }
+    let active = crate::hooks::orient::git_hooks_dir(root)?;
+    let wired = match (active.canonicalize(), shims.canonicalize()) {
+        (Ok(a), Ok(s)) => a == s,
+        _ => active == shims,
+    };
+    if wired {
+        return None;
+    }
+
+    let recorded_unwired = ProjectState::exists(root)
+        && ProjectState::load(root).is_ok_and(|s| s.git_hooks == GIT_HOOKS_UNWIRED);
+    Some(if recorded_unwired {
+        format!(
+            "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns them) — call the {CODEFLOW_HOOKS_PATH}/ shims from that manager's stages"
+        )
+    } else {
+        format!(
+            "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?) — run `git config core.hooksPath {CODEFLOW_HOOKS_PATH}`"
+        )
+    })
 }
 
 fn check_claude(opts: &Options) -> CheckResult {
@@ -269,6 +321,43 @@ fn check_claude(opts: &Options) -> CheckResult {
             message: "claude CLI not found in PATH (Claude-layer hooks inactive)".into(),
             duration: start.elapsed(),
         },
+    }
+}
+
+/// Codex harness wiring (ADR-0008). `.codex/hooks.json` binds the same
+/// `codeflow hook` guards to an interactive codex session that
+/// `.claude/settings.json` binds to Claude Code — but only after a one-time
+/// trust step (`/hooks` inside codex). Trust state lives in codex's own
+/// state and is not inspectable from outside codex, so this check never
+/// claims the guards are live: it reports "wired structurally" at Warn with
+/// the one-time step. Warn, not fail: git hooks + CI bind a codex session
+/// regardless (charter section 9) — the in-session layer is fast feedback,
+/// not the boundary.
+fn check_codex(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let hooks_json = Path::new(&opts.project_dir).join(".codex").join("hooks.json");
+
+    if !hooks_json.exists() {
+        return CheckResult {
+            name: "codex".into(),
+            status: Status::Pass,
+            message: "no .codex/hooks.json (codex in-session hook plane not scaffolded)".into(),
+            duration: start.elapsed(),
+        };
+    }
+
+    let presence = if opts.do_look_path("codex").is_ok() {
+        "codex CLI found"
+    } else {
+        "codex CLI not found in PATH"
+    };
+    CheckResult {
+        name: "codex".into(),
+        status: Status::Warn,
+        message: format!(
+            ".codex/hooks.json present, {presence} — in-session guards are wired structurally; trust is a one-time in-codex step: run `/hooks` inside interactive codex and approve the CodeFlow hooks (trust state is not inspectable from here; git hooks + CI enforce regardless)"
+        ),
+        duration: start.elapsed(),
     }
 }
 
@@ -721,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 10);
+        assert_eq!(check_names().len(), 11);
     }
 
     #[test]
@@ -759,6 +848,56 @@ mod tests {
         });
         let result = check_claude(&opts);
         assert_eq!(result.status, Status::Pass);
+    }
+
+    #[test]
+    fn test_check_codex_not_scaffolded_passes_quietly() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_codex(&opts);
+        assert_eq!(r.status, Status::Pass);
+        assert!(r.message.contains("no .codex/hooks.json"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_codex_wired_warns_with_trust_step() {
+        // Trust state is codex-internal — the check must name the one-time
+        // /hooks step and never claim the guards are live.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(dir.path().join(".codex/hooks.json"), "{}").unwrap();
+        let mut opts = test_opts(); // look_path errs → codex CLI absent
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_codex(&opts);
+        assert_eq!(r.status, Status::Warn);
+        assert!(r.message.contains("wired structurally"), "got: {}", r.message);
+        assert!(r.message.contains("/hooks"), "names the one-time step: {}", r.message);
+        assert!(
+            r.message.contains("not inspectable"),
+            "must not pretend to read trust state: {}",
+            r.message
+        );
+        assert!(r.message.contains("codex CLI not found"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_codex_reports_cli_presence() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(dir.path().join(".codex/hooks.json"), "{}").unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        opts.look_path = Some(|name| {
+            if name == "codex" {
+                Ok("/usr/local/bin/codex".into())
+            } else {
+                Err("not found".into())
+            }
+        });
+        let r = check_codex(&opts);
+        assert_eq!(r.status, Status::Warn, "presence never upgrades to pass: {}", r.message);
+        assert!(r.message.contains("codex CLI found"), "got: {}", r.message);
     }
 
     #[test]
@@ -812,6 +951,48 @@ mod tests {
         assert_eq!(result.status, Status::Fail);
     }
 
+    /// git in a tempdir, isolated from the host config (mirrors orient's
+    /// test helper — both surfaces resolve hook wiring the same way).
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success());
+    }
+
+    /// Options where the codeflow binary is found and every hook subcommand
+    /// probe succeeds — isolating the wiring probe under test.
+    fn hooks_opts(dir: &Path) -> Options {
+        let mut opts = test_opts();
+        opts.project_dir = dir.to_string_lossy().into_owned();
+        opts.look_path = Some(|name| {
+            if name == "codeflow" {
+                Ok("/usr/local/bin/codeflow".into())
+            } else {
+                Err("not found".into())
+            }
+        });
+        opts.exec_command = Some(|_cmd, _args| Ok("help output".to_string()));
+        opts
+    }
+
+    fn write_shims(root: &Path) {
+        let shims = root.join(".codeflow/git-hooks");
+        std::fs::create_dir_all(&shims).unwrap();
+        std::fs::write(
+            shims.join("pre-commit"),
+            "#!/bin/sh\nexec codeflow git-hook pre-commit\n",
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_check_hooks_no_binary() {
         let opts = test_opts();
@@ -822,19 +1003,79 @@ mod tests {
 
     #[test]
     fn test_check_hooks_all_pass() {
-        let mut opts = test_opts();
-        opts.look_path = Some(|name| {
-            if name == "codeflow" {
-                Ok("/usr/local/bin/codeflow".into())
-            } else {
-                Err("not found".into())
-            }
-        });
-        opts.exec_command = Some(|_cmd, _args| Ok("help output".to_string()));
-        let result = check_hooks(&opts);
+        let dir = tempfile::tempdir().unwrap();
+        let result = check_hooks(&hooks_opts(dir.path()));
         assert_eq!(result.status, Status::Pass);
         assert!(result.message.contains("functional"));
         assert!(result.message.contains('8'));
+    }
+
+    #[test]
+    fn test_check_hooks_warns_when_shims_not_active() {
+        // The fresh-clone signature: shims committed in the tree, but the
+        // local core.hooksPath wiring is gone — subcommands respond, git
+        // calls nothing.
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(
+            r.message.contains("git config core.hooksPath .codeflow/git-hooks"),
+            "remedy: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_check_hooks_passes_when_hookspath_wired() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        git(dir.path(), &["config", "core.hooksPath", ".codeflow/git-hooks"]);
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_hooks_recorded_unwired_warns_with_manager_remedy() {
+        // Another hook manager owned the hooks at init (recorded, deliberate:
+        // init never clobbers) — the remedy is calling the shims from that
+        // manager, not flipping core.hooksPath under it.
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        crate::scaffold::state::ProjectState {
+            schema_version: 1,
+            tier: crate::scaffold::manifest::Tier::Standard,
+            scaffold_version: "2.0.0".into(),
+            stack: "rust".into(),
+            areas: vec!["core".into()],
+            policy_armed: true,
+            git_hooks: crate::scaffold::state::GIT_HOOKS_UNWIRED.into(),
+            permission_preset: "acceptEdits".into(),
+            product_one_liner: "x".into(),
+        }
+        .store(dir.path())
+        .unwrap();
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.message.contains("hook manager"), "got: {}", r.message);
+        assert!(
+            !r.message.contains("git config core.hooksPath"),
+            "must not tell the user to clobber their manager: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_check_hooks_no_shims_skips_wiring_probe() {
+        // A repo without scaffolded shims has nothing to wire — flag, never
+        // guess.
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
     }
 
     #[test]
