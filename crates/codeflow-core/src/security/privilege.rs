@@ -19,7 +19,9 @@ fn bash_c_re() -> &'static Regex {
 
 fn sh_c_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"sh\s+-c\s+["']"#).expect("valid"))
+    // Anchor to start-of-string or whitespace so the "sh" tail of "zsh -c"
+    // is not misclassified as "sh -c" (which would shadow zsh_c_re below).
+    RE.get_or_init(|| Regex::new(r#"(?:^|\s)sh\s+-c\s+["']"#).expect("valid"))
 }
 
 fn zsh_c_re() -> &'static Regex {
@@ -261,6 +263,16 @@ mod tests {
     }
 
     #[test]
+    fn test_or_chained_sudo() {
+        // The `|| {priv}` OR-chaining branch (distinct from `&&`).
+        assert!(
+            PrivilegeModule
+                .check(&ctx("false || sudo rm f"))
+                .is_some()
+        );
+    }
+
+    #[test]
     fn test_semicolon_sudo() {
         assert!(
             PrivilegeModule
@@ -281,6 +293,26 @@ mod tests {
     #[test]
     fn test_bash_c() {
         assert!(PrivilegeModule.check(&ctx("bash -c 'echo test'")).is_some());
+    }
+
+    #[test]
+    fn test_sh_c() {
+        let v = PrivilegeModule.check(&ctx("sh -c 'x'")).unwrap();
+        assert!(!v.allow);
+        assert_eq!(v.category, "Script Bypass");
+        assert_eq!(v.reason, "sh -c execution");
+        assert_eq!(v.pattern, "sh -c");
+    }
+
+    #[test]
+    fn test_zsh_c() {
+        // Regression: the "sh" tail of "zsh -c" must not be mislabeled as
+        // "sh -c" — zsh_c_re owns this input and reports the zsh label.
+        let v = PrivilegeModule.check(&ctx("zsh -c 'x'")).unwrap();
+        assert!(!v.allow);
+        assert_eq!(v.category, "Script Bypass");
+        assert_eq!(v.reason, "zsh -c execution");
+        assert_eq!(v.pattern, "zsh -c");
     }
 
     #[test]
