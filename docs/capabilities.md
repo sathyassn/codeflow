@@ -57,7 +57,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs"]
 epics: [EPC-001]
-adrs: [ADR-0002, ADR-0006, ADR-0007]
+adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
@@ -67,9 +67,11 @@ format/attribution/emoji, pre-merge-commit and reference-transaction
 protected-branch merge/ref rules, pre-push branch naming and protected-branch
 rules) and the Claude `git-guard` PreToolUse hook (in-session immediacy, plus
 the `gh pr merge` and PR-body checks no client hook can see). Two are the
-authoritative perimeter — CI re-running the same checks and remote branch
-protection (`codeflow remote protect`). Every rule is a policy value,
-user-flippable per repo.
+authoritative perimeter — CI, which re-runs the same checks through the
+`codeflow ci` binary (the same Rust functions the hooks call, so no inline
+drift, portable across CI hosts via thin GitHub/GitLab/Bitbucket/generic
+wrappers — ADR-0017), and remote branch protection (`codeflow remote protect`).
+Every rule is a policy value, user-flippable per repo.
 
 ## CAP-004 — test-gate
 
@@ -208,8 +210,9 @@ adrs: [ADR-0015]
 ```
 
 `/cf-model-orchestrator` drives higher-stakes planned work as a Claude+codex
-duo: Claude plans with explicit acceptance criteria, codex (through the codex
-app-server JSON-RPC driver, tmux fallback) reviews the plan then executes and
+duo: Claude plans with explicit acceptance criteria, codex (through the official
+`codex-plugin-cc` plugin, with the app-server JSON-RPC driver and tmux as
+fallbacks) reviews the plan then executes and
 first-tests it including UI-driven e2e, Claude does the final verification
 grading every criterion, and the two iterate a bounded fix loop. Ships as the
 `cf-model-orchestrator` skill (mirrored across `.claude/skills`, `.agents/skills`,
@@ -242,6 +245,33 @@ dual-vendor adversarial red-team (Claude defender lens + codex assume-breach
 attacker, ADR-0005) across seven axes mapped to OWASP Top 10:2025 / OWASP LLM
 Top 10:2025 / CWE Top 25 (2025), emitting structured `SecurityFinding` /
 `SecurityVerdict` output; the pipeline `security` stage sets its verdict from the
-severity+confidence block rule. Deterministic High+ hard-blocks CI;
-model-reasoned findings warn locally and force bounded rework, with the human
-merger as the backstop for judgment a machine cannot adjudicate (ADR-0007).
+severity+confidence block rule. The deterministic floor hard-blocks CI only
+when `security_review` or `dep_audit` is hardened to `block` (the shipped
+default is warn); secrets via gitleaks always block, and a High+ severity
+filter is future work alongside the per-stack scanners. Model-reasoned findings
+warn locally and force bounded rework, with the human merger as the backstop
+for judgment a machine cannot adjudicate (ADR-0007).
+
+## CAP-012 — scaffold-customize
+
+```yaml
+id: CAP-012
+name: scaffold-customize
+area: scaffold
+status: shipped
+verified_by: ["codeflow-core tests/manifest_consistency.rs"]
+epics: []
+adrs: []
+```
+
+`/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
+(or a `codeflow update` that ships new defaults to decide), it runs a
+flow-aware tool preflight — verifying the tools needed by each flow the
+project actually uses (git and the harness for every flow; the codex driver,
+its MCP servers, and tmux for the duo flow; the stack's test toolchain) —
+then fills the project-owned artifacts still sitting at template defaults
+(`docs/product.md`, the AGENTS.md/CLAUDE.md project sections, policy.json gate
+levels, model pins). Analysis-then-propose: one prioritized report first, then
+fixes applied interactively on a working branch through a PR; it never
+auto-installs a tool. Ships as the `cf-customize` skill, mirrored across
+`.claude/skills`, `.agents/skills`, and the `assets/base` scaffold source.
