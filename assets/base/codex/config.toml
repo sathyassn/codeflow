@@ -4,6 +4,10 @@
 # bind a Claude session bind an INTERACTIVE Codex session here, via
 # `.codex/hooks.json`; their payload contract is byte-compatible, so the
 # in-session PreToolUse protection matches Claude's — for interactive Codex.
+# `codeflow hook session-orient` is also wired on SessionStart (all sources), so
+# an interactive Codex session opens with the same orientation digest Claude gets
+# and re-orients after a compaction (`source=compact`) — the handler prints
+# plain-text stdout, which Codex injects as session context.
 # Headless `codex exec` (0.142.5) does NOT fire project PreToolUse hooks at all,
 # so these in-session guards are inactive there. Codex-driven work is instead
 # bound unconditionally by the git-client hook plane plus CI (the authoritative

@@ -132,7 +132,7 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "codeflow-cli tests/hooks_cli.rs"]
+verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs"]
 epics: [EPC-001]
 adrs: []
 ```
@@ -141,7 +141,11 @@ adrs: []
 pointers not content): product one-liner, branch/worktree state, work and
 capability counts, recent ADR titles, gate status, paths to read more. The
 `session-summary` SessionEnd hook appends a session record to the ledger —
-recall's zero-ceremony corpus. Both are wired through `.claude/settings.json`.
+recall's zero-ceremony corpus. Both are wired through `.claude/settings.json`;
+the orient digest is also wired for Codex via `.codex/hooks.json` (SessionStart,
+all sources), so a Codex session opens with the same digest and re-orients after
+a compaction (`source=compact`). One handler serves both harnesses — plain-text
+stdout each injects as session context — so there is no per-harness duplication.
 
 ## CAP-008 — remote-protect-doctor
 
