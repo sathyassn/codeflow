@@ -5,10 +5,6 @@ epic_id: EPC-{{NNN}}
 title: {{TITLE}}
 status: todo             # todo | blocked | in_progress | complete | cancelled
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
-priority: normal         # low | normal | high | critical
-estimate: M              # XS | S | M | L | XL
-acceptance: []           # testable statements, mirrored in the body checklist
-tests: []                # test files or paths that prove this task
 created: {{DATE}}
 ---
 
@@ -20,7 +16,9 @@ created: {{DATE}}
 
 ## Acceptance Criteria
 
-<!-- Testable, like the epic's — a subset scoped to this task. The reviewer
-     verifies these with evidence; unverifiable claims are defects. -->
+<!-- The single home for this task's acceptance — testable statements, a
+     subset scoped from the epic's. Each criterion names its verification (a
+     command, a test, or observable behavior); the reviewer checks them with
+     evidence, and unverifiable claims are defects. -->
 
 - [ ]

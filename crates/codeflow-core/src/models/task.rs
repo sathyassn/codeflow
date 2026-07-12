@@ -23,11 +23,17 @@ pub struct Task {
     pub status: TaskStatus,
     /// Work intent label from the v2 branch-prefix set (e.g., `fix`).
     pub work_type: String,
+    /// Trimmed from the scaffold template; defaults keep records that omit it
+    /// parseable (else the store silently skips them and `status` undercounts).
+    #[serde(default)]
     pub priority: String,
     pub estimate: Option<String>,
-    /// Acceptance criteria — the input-clarity contract (charter §2.1).
+    /// Acceptance criteria — the input-clarity contract (charter §2.1). Lives
+    /// in the body checklist now, not the frontmatter, so default when absent.
+    #[serde(default)]
     pub acceptance: Vec<String>,
     /// Test references that verify this task.
+    #[serde(default)]
     pub tests: Vec<String>,
     pub branch: Option<String>,
     pub pr_number: Option<i64>,
@@ -126,5 +132,28 @@ mod tests {
         assert_eq!(task.id, clone.id);
         assert_eq!(task.format_id, clone.format_id);
         assert_eq!(task.status, clone.status);
+    }
+
+    /// A task authored from the trimmed template omits `priority`, `estimate`,
+    /// `acceptance`, and `tests`; it must still parse (via serde defaults) so
+    /// the store does not silently skip it and `status` undercount.
+    #[test]
+    fn test_task_parses_without_trimmed_fields() {
+        let yaml = r"
+id: task-01abc123
+format_id: TSK-001-002
+epic_id: epic-01xyz
+title: Trimmed task
+status: todo
+work_type: feat
+created_at: 2026-07-05T00:00:00Z
+updated_at: 2026-07-05T00:00:00Z
+";
+        let task: Task = serde_yaml::from_str(yaml).expect("trimmed task must parse");
+        assert_eq!(task.format_id, "TSK-001-002");
+        assert_eq!(task.priority, "");
+        assert_eq!(task.estimate, None);
+        assert!(task.acceptance.is_empty());
+        assert!(task.tests.is_empty());
     }
 }

@@ -402,6 +402,44 @@ mod tests {
     }
 
     #[test]
+    fn trimmed_records_without_priority_are_counted() {
+        // Records authored from the trimmed templates omit priority (and, for
+        // tasks, estimate/acceptance/tests). They must still parse and be
+        // counted by status — not silently skipped by the store as unreadable,
+        // which would undercount in-flight work.
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path().join("project-management");
+        std::fs::create_dir_all(pm.join("epics")).unwrap();
+        std::fs::create_dir_all(pm.join("tasks")).unwrap();
+
+        std::fs::write(
+            pm.join("epics/EPC-060.md"),
+            "---\nid: epic-060\nformat_id: EPC-060\ntitle: Trimmed epic\nstatus: in_progress\nwork_type: feat\ncreated_at: 2026-07-05T00:00:00Z\nupdated_at: 2026-07-05T00:00:00Z\n---\n## Summary\nTrimmed.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pm.join("tasks/TSK-060-001.md"),
+            "---\nid: task-060-001\nformat_id: TSK-060-001\nepic_id: epic-060\ntitle: Trimmed task\nstatus: todo\nwork_type: feat\ncreated_at: 2026-07-05T00:00:00Z\nupdated_at: 2026-07-05T00:00:00Z\n---\n## Description\nTrimmed.\n\n## Acceptance Criteria\n\n- [ ]\n",
+        )
+        .unwrap();
+
+        let view = collect_status(dir.path());
+        let work = view.work.as_ref().expect("work tier present");
+        assert_eq!(
+            work.epics_by_status.get("in_progress"),
+            Some(&1),
+            "trimmed epic must be counted, not skipped: {:?}",
+            view.notes
+        );
+        assert_eq!(
+            work.tasks_by_status.get("todo"),
+            Some(&1),
+            "trimmed task must be counted, not skipped: {:?}",
+            view.notes
+        );
+    }
+
+    #[test]
     fn worktrees_are_listed() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());

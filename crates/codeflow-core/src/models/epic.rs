@@ -42,6 +42,9 @@ impl<'de> Deserialize<'de> for Epic {
             summary: Option<String>,
             status: EpicStatus,
             work_type: String,
+            // Trimmed from the scaffold template; default keeps epics that omit
+            // it parseable (else the store skips them and `status` undercounts).
+            #[serde(default)]
             priority: String,
             #[serde(default)]
             pr_number: Option<i64>,
@@ -206,5 +209,23 @@ updated_at: 2026-07-02T00:00:00Z
         let out = serde_yaml::to_string(&epic).unwrap();
         assert!(out.contains("created_at:"), "serialization stays canonical");
         assert!(out.contains("updated_at:"));
+    }
+
+    /// An epic authored from the trimmed template omits `priority`; it must
+    /// still parse (via serde default) so the store does not silently skip it
+    /// and `status` undercount.
+    #[test]
+    fn test_epic_parses_without_priority() {
+        let yaml = r"
+id: EPC-003
+format_id: EPC-003
+title: trimmed
+status: draft
+work_type: feat
+created: 2026-07-05
+";
+        let epic: Epic = serde_yaml::from_str(yaml).expect("trimmed epic must parse");
+        assert_eq!(epic.format_id, "EPC-003");
+        assert_eq!(epic.priority, "");
     }
 }

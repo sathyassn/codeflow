@@ -4,7 +4,6 @@ format_id: SPC-{{NNN}}   # SPC-NNN — must match the filename
 epic_id: EPC-{{NNN}}
 title: {{TITLE}}
 status: draft            # draft | implemented — set implemented (frozen) when the epic ships
-work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 created: {{DATE}}
 ---
 

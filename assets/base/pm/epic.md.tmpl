@@ -4,7 +4,6 @@ format_id: EPC-{{NNN}}   # EPC-NNN — must match the filename
 title: {{TITLE}}
 status: draft            # draft | planning | in_progress | blocked | complete | archived
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
-priority: normal         # low | normal | high | critical
 capabilities: []         # CAP-### ids this epic creates or changes
 adrs: []                 # ADR ids consumed or produced
 specs: []                # SPC-### inputs, if any
