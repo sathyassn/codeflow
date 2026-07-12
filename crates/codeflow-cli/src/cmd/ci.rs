@@ -38,7 +38,8 @@ pub struct CiArgs {
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,
 
-    /// PR/MR body text to scan for AI attribution and emoji.
+    /// PR/MR body text to scan for AI attribution, emoji, and the required
+    /// section structure.
     #[arg(long, value_name = "TEXT")]
     pub pr_body: Option<String>,
 
@@ -134,20 +135,7 @@ pub fn run(args: &CiArgs) -> i32 {
         }
     };
 
-    // Report the ruleset actually enforced: the loader falls back to the
-    // built-in charter defaults silently (fail-safe), so the banner must say
-    // which source is in effect rather than assert the project file blindly.
-    match Policy::source(&root) {
-        PolicySource::ProjectFile => {
-            println!("codeflow ci: verifying against .codeflow/policy.json");
-        }
-        PolicySource::MalformedFile => println!(
-            "codeflow ci: .codeflow/policy.json is malformed — verifying against built-in charter defaults"
-        ),
-        PolicySource::Absent => println!(
-            "codeflow ci: no .codeflow/policy.json — verifying against built-in charter defaults"
-        ),
-    }
+    print_source_banner(&root);
 
     // Track what actually executed — the summary must not claim more.
     let mut ran: Vec<&str> = Vec::new();
@@ -155,6 +143,9 @@ pub fn run(args: &CiArgs) -> i32 {
 
     // --- commit-range checks ---------------------------------------------
     let mut tagged: Vec<TaggedViolation> = Vec::new();
+    // Every path the range touches, for the PR-structure docs-only test.
+    // `None` = the range could not be resolved (unknown = code, conservative).
+    let mut range_files: Option<Vec<String>> = None;
     if let Some(base_sha) = resolve_base(&root, &base_candidates) {
         match enumerate_commits(&root, &base_sha, &head) {
             Ok(commits) => {
@@ -165,6 +156,7 @@ pub fn run(args: &CiArgs) -> i32 {
                     range_source,
                     commits.len()
                 );
+                range_files = Some(commits.iter().flat_map(|c| c.files.clone()).collect());
                 tagged.extend(evaluate_commits(git, &commits));
                 ran.push("commit");
             }
@@ -198,12 +190,30 @@ pub fn run(args: &CiArgs) -> i32 {
         tagged.extend(
             evaluate_pr_body(git, body)
                 .into_iter()
+                .chain(evaluate_pr_structure(git, body, range_files.as_deref()))
                 .map(|violation| TaggedViolation { sha: None, violation }),
         );
         ran.push("PR-body");
     }
 
     report(&tagged, &ran, &skipped)
+}
+
+/// Report the ruleset actually enforced: the loader falls back to the
+/// built-in charter defaults silently (fail-safe), so the banner must say
+/// which source is in effect rather than assert the project file blindly.
+fn print_source_banner(root: &Path) {
+    match Policy::source(root) {
+        PolicySource::ProjectFile => {
+            println!("codeflow ci: verifying against .codeflow/policy.json");
+        }
+        PolicySource::MalformedFile => println!(
+            "codeflow ci: .codeflow/policy.json is malformed — verifying against built-in charter defaults"
+        ),
+        PolicySource::Absent => println!(
+            "codeflow ci: no .codeflow/policy.json — verifying against built-in charter defaults"
+        ),
+    }
 }
 
 /// Print every violation and an honest summary naming what ran vs what was
@@ -334,6 +344,224 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
         }
     }
     out
+}
+
+/// How a required PR-body section was (or was not) found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionState {
+    /// A matching heading exists with real content under it.
+    Present,
+    /// A matching heading exists but carries no content — only HTML comments,
+    /// blank lines, and bare `-` bullets before the next heading.
+    Empty,
+    /// No matching heading at all.
+    Missing,
+}
+
+/// Enforce the PR-body structure policy (`git.pr_sections`): the
+/// `pr_required_sections` headings must be present and non-empty in every PR
+/// body, the `pr_code_sections` headings additionally when the commit range
+/// touches non-docs files, and template remnants (leftover placeholders from
+/// the shipped PR template) draw a WARN — always warn-only, never a block,
+/// whatever the level says. `range_files` is every path the range touches;
+/// `None` means the range could not be resolved — treated as a code change
+/// (conservative: unknown = code).
+fn evaluate_pr_structure(
+    git: &GitPolicy,
+    body: &str,
+    range_files: Option<&[String]>,
+) -> Vec<Violation> {
+    if !git.pr_sections.is_active() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+
+    // (section, why it is required) — code sections carry the reason so the
+    // finding explains itself; dedupe so a heading in both lists reports once.
+    let mut required: Vec<(&str, &str)> = git
+        .pr_required_sections
+        .iter()
+        .map(|s| (s.as_str(), ""))
+        .collect();
+    if !docs_only(range_files) {
+        for s in &git.pr_code_sections {
+            if !required
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(s))
+            {
+                required.push((s.as_str(), " (the range touches code)"));
+            }
+        }
+    }
+
+    for (section, why) in required {
+        let (found, detail) = match find_section(body, section) {
+            SectionState::Present => continue,
+            SectionState::Empty => (
+                format!("PR body section '## {section}' is present but empty{why}"),
+                "fill the section in — HTML comments and bare '-' bullets do not count as content",
+            ),
+            SectionState::Missing => (
+                format!("PR body is missing required section '## {section}'{why}"),
+                "add the section with real content — the shipped PR template carries the required structure",
+            ),
+        };
+        out.push(Violation::new(
+            "git.pr_sections",
+            git.pr_sections,
+            found,
+            detail.to_string(),
+        ));
+    }
+
+    // Template remnants: always warn-only — a nudge to finish the body, never
+    // a block (mirrors the breaking_watch_paths tripwire convention).
+    for (line_no, line, what) in find_placeholders(body) {
+        out.push(Violation::new(
+            "git.pr_sections",
+            PolicyLevel::Warn,
+            format!("PR body line {line_no} is a template remnant ({what}): '{line}'"),
+            "replace the placeholder with real content, or delete the line".to_string(),
+        ));
+    }
+    out
+}
+
+/// `true` when the range is known and every touched path is documentation:
+/// `*.md`, `*.txt`, a `LICENSE*` file, anything under `docs/`, or a `.github`
+/// template. `None` (unresolved range) and an empty file list are both treated
+/// as code — the conservative direction, so a range whose files could not be
+/// listed still requires the code sections.
+fn docs_only(range_files: Option<&[String]>) -> bool {
+    range_files.is_some_and(|files| !files.is_empty() && files.iter().all(|f| is_docs_path(f)))
+}
+
+/// Whether one changed path counts as documentation for [`docs_only`].
+/// Everything unrecognized — code, config, CI yml, `Cargo.*`, `src/` — is a
+/// code change; in particular `.github/workflows/**` is CI config, not docs.
+fn is_docs_path(path: &str) -> bool {
+    let p = path.trim();
+    if p.starts_with("docs/") || p.starts_with(".github/ISSUE_TEMPLATE/") {
+        return true;
+    }
+    let name = p.rsplit('/').next().unwrap_or(p);
+    if name.to_ascii_uppercase().starts_with("LICENSE") {
+        return true;
+    }
+    if p.starts_with(".github/")
+        && !p.starts_with(".github/workflows/")
+        && name.to_ascii_lowercase().contains("template")
+    {
+        return true;
+    }
+    Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("txt"))
+}
+
+/// Find a required section `name` in the body: a `##`/`###` heading whose
+/// trimmed text equals `name` case-insensitively. Content runs to the next
+/// heading of any depth; when every matching heading is content-free the
+/// section is [`SectionState::Empty`].
+fn find_section(body: &str, name: &str) -> SectionState {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut state = SectionState::Missing;
+    let mut i = 0;
+    while i < lines.len() {
+        let matched = heading(lines[i])
+            .is_some_and(|(depth, text)| (2..=3).contains(&depth) && text.eq_ignore_ascii_case(name));
+        if !matched {
+            i += 1;
+            continue;
+        }
+        let mut content = String::new();
+        i += 1;
+        while i < lines.len() && heading(lines[i]).is_none() {
+            content.push_str(lines[i]);
+            content.push('\n');
+            i += 1;
+        }
+        if section_has_content(&content) {
+            return SectionState::Present;
+        }
+        state = SectionState::Empty;
+    }
+    state
+}
+
+/// Parse a markdown ATX heading line into (depth, text). Leading whitespace is
+/// tolerated; a closing `##` sequence is stripped (`## Summary ##` → `Summary`).
+fn heading(line: &str) -> Option<(usize, &str)> {
+    let t = line.trim();
+    let depth = t.bytes().take_while(|b| *b == b'#').count();
+    if depth == 0 || depth > 6 {
+        return None;
+    }
+    let rest = &t[depth..];
+    if !rest.is_empty() && !rest.starts_with(' ') && !rest.starts_with('\t') {
+        return None;
+    }
+    Some((depth, rest.trim().trim_end_matches('#').trim_end()))
+}
+
+/// `true` when section text carries real content: anything beyond blank
+/// lines, HTML comments, and bare `-` bullets (the template's empty stubs).
+fn section_has_content(text: &str) -> bool {
+    strip_html_comments(text).lines().any(|l| {
+        let t = l.trim();
+        !t.is_empty() && t != "-"
+    })
+}
+
+/// Remove every `<!-- … -->` span (multi-line included). An unclosed comment
+/// swallows the rest of the text — exactly how a markdown renderer treats it.
+fn strip_html_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("-->") {
+            Some(end) => rest = &rest[start + end + 3..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Scan the body for leftovers of the shipped PR template, each reported as
+/// (1-based line number, the trimmed line, what it is): the paste-your-output
+/// placeholder, a table row of empty cells (`|  |  |`), and a bare `- CAP-` /
+/// `- EPC-` linked-work bullet with nothing after the dash-prefix.
+fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
+    let mut out = Vec::new();
+    for (idx, line) in body.lines().enumerate() {
+        let t = line.trim();
+        let what = if t.contains("(paste the real test summary output here)") {
+            "the template's paste-your-output placeholder"
+        } else if is_empty_table_row(t) {
+            "a table row of empty cells"
+        } else if t == "- CAP-" || t == "- EPC-" {
+            "a bare linked-work bullet"
+        } else {
+            continue;
+        };
+        out.push((idx + 1, t.to_string(), what));
+    }
+    out
+}
+
+/// A table row whose every cell is whitespace, e.g. `|  |  |` — at least two
+/// cells, so a lone `|` or `| |` spacer is not flagged.
+fn is_empty_table_row(t: &str) -> bool {
+    let Some(inner) = t
+        .strip_prefix('|')
+        .and_then(|rest| rest.strip_suffix('|'))
+    else {
+        return false;
+    };
+    let cells: Vec<&str> = inner.split('|').collect();
+    cells.len() >= 2 && cells.iter().all(|c| c.trim().is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +965,139 @@ mod tests {
     #[test]
     fn pr_body_clean_passes() {
         assert!(evaluate_pr_body(&git(), "Summary of a clean PR body.").is_empty());
+    }
+
+    // -- PR-body structure --------------------------------------------------
+
+    /// A body carrying every default-required section with real content.
+    const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Changes\n\n- one change\n\n\
+                             ## Testing\n\n- cargo test: 12 passed\n";
+
+    fn code_files() -> Vec<String> {
+        vec!["src/main.rs".to_string()]
+    }
+
+    #[test]
+    fn pr_structure_full_body_passes() {
+        let v = evaluate_pr_structure(&git(), FULL_BODY, Some(&code_files()));
+        assert!(v.is_empty(), "a complete body is clean: {v:?}");
+    }
+
+    #[test]
+    fn pr_structure_missing_summary_blocks() {
+        let body = "## Changes\n\n- one change\n\n## Testing\n\n- ran the tests\n";
+        let v = evaluate_pr_structure(&git(), body, Some(&code_files()));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].rule, "git.pr_sections");
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(v[0].message.contains("'## Summary'"), "{}", v[0].message);
+        assert!(v[0].message.contains("missing"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn pr_structure_warn_level_warns_not_blocks() {
+        let g = GitPolicy {
+            pr_sections: PolicyLevel::Warn,
+            ..GitPolicy::default()
+        };
+        let v = evaluate_pr_structure(&g, "## Changes\n\n- x\n\n## Testing\n\n- y\n", Some(&code_files()));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v), "warn-level structure must not block");
+    }
+
+    #[test]
+    fn pr_structure_off_skips_everything() {
+        let g = GitPolicy {
+            pr_sections: PolicyLevel::Off,
+            ..GitPolicy::default()
+        };
+        let bare = "no sections at all\n\n|  |  |\n";
+        assert!(evaluate_pr_structure(&g, bare, Some(&code_files())).is_empty());
+    }
+
+    #[test]
+    fn pr_structure_testing_required_only_for_code_ranges() {
+        let body = "## Summary\n\n- docs fix\n\n## Changes\n\n- reword a guide\n";
+        // Code in the range → Testing is required, and the finding says why.
+        let v = evaluate_pr_structure(&git(), body, Some(&code_files()));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("'## Testing'"), "{}", v[0].message);
+        assert!(v[0].message.contains("touches code"), "{}", v[0].message);
+        // Docs-only range → Testing is not required.
+        let docs = vec!["docs/guide.md".to_string(), "README.md".to_string()];
+        assert!(evaluate_pr_structure(&git(), body, Some(&docs)).is_empty());
+        // Unknown range (unresolved) is conservatively code.
+        let v = evaluate_pr_structure(&git(), body, None);
+        assert_eq!(v.len(), 1, "unknown range must require the code sections");
+    }
+
+    #[test]
+    fn pr_structure_empty_section_counts_as_missing() {
+        // Summary exists but holds only the template's comment and bare bullet.
+        let body = "## Summary\n\n<!-- 2-4 bullets, plain words -->\n\n-\n\n\
+                    ## Changes\n\n- one change\n\n## Testing\n\n- ran it\n";
+        let v = evaluate_pr_structure(&git(), body, Some(&code_files()));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("present but empty"), "{}", v[0].message);
+        assert!(v[0].message.contains("'## Summary'"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn pr_structure_headings_match_case_insensitive_at_depth_2_or_3() {
+        let body = "### summary\n\n- x\n\n## CHANGES\n\n- y\n\n## Testing\n\n- z\n";
+        assert!(evaluate_pr_structure(&git(), body, Some(&code_files())).is_empty());
+        // Depth 4 is not a section heading; depth 1 is a title, not a section.
+        let body = "#### Summary\n\n- x\n\n# Changes\n\n- y\n\n## Testing\n\n- z\n";
+        let v = evaluate_pr_structure(&git(), body, Some(&code_files()));
+        assert_eq!(v.len(), 2, "{v:?}");
+    }
+
+    #[test]
+    fn pr_structure_placeholders_warn_never_block() {
+        let body = format!(
+            "{FULL_BODY}\n```text\n(paste the real test summary output here)\n```\n\n\
+             | Metric | This PR |\n|---|---|\n|  |  |\n\n- CAP-\n- EPC-\n"
+        );
+        let v = evaluate_pr_structure(&git(), &body, Some(&code_files()));
+        assert_eq!(v.len(), 4, "{v:?}");
+        assert!(v.iter().all(|x| x.level == PolicyLevel::Warn));
+        assert!(!any_blocking(&v), "placeholders must never block");
+        assert!(v.iter().all(|x| x.rule == "git.pr_sections"));
+        // Each finding names its line and what the remnant is.
+        assert!(v.iter().any(|x| x.message.contains("paste-your-output")), "{v:?}");
+        assert!(v.iter().any(|x| x.message.contains("empty cells")), "{v:?}");
+        assert!(
+            v.iter().filter(|x| x.message.contains("linked-work")).count() == 2,
+            "{v:?}"
+        );
+        assert!(v.iter().all(|x| x.message.contains("line ")), "{v:?}");
+    }
+
+    #[test]
+    fn pr_structure_table_separator_and_filled_rows_are_not_remnants() {
+        let body = format!("{FULL_BODY}\n| Test | What it pins |\n|---|---|\n| a | b |\n");
+        assert!(evaluate_pr_structure(&git(), &body, Some(&code_files())).is_empty());
+    }
+
+    #[test]
+    fn docs_only_path_classification() {
+        let docs = |p: &str| is_docs_path(p);
+        assert!(docs("README.md"));
+        assert!(docs("notes.txt"));
+        assert!(docs("LICENSE-MIT"));
+        assert!(docs("docs/img/arch.png"), "anything under docs/ is docs");
+        assert!(docs(".github/ISSUE_TEMPLATE/bug.yml"));
+        assert!(docs(".github/pull_request_template.md"));
+        // Code, config, CI yml, Cargo.*, src — all code.
+        assert!(!docs("src/lib.rs"));
+        assert!(!docs("Cargo.toml"));
+        assert!(!docs(".github/workflows/ci.yml"));
+        assert!(!docs(".github/dependabot.yml"));
+        // Unknown or empty ranges are conservatively code.
+        assert!(!docs_only(None));
+        assert!(!docs_only(Some(&[])));
+        assert!(docs_only(Some(&["docs/a.md".to_string()])));
     }
 
     // -- range detection --------------------------------------------------
