@@ -167,13 +167,13 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "d3a3f86e6483c69ae5a0abcc098a86c4bae2f9b13d02111633fabed8a1203d99",
+      "sha256": "ac0f35b1014907e44619c38dfa05fd1d4f7d6b1f9732488c27e96ac9de77d051",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "f583d0adc427694f79ca3a5124103d9e0ce2498d71824af750bd0b3126333c98",
+      "sha256": "8bec3444937010d4aeacf02a717ffbb53743ee13cc5c79c20589576d46ed4364",
       "exec": false
     },
     "docs/architecture.md": {

@@ -7,23 +7,19 @@
   SessionStart, session summary at SessionEnd, git-guard before Bash. When a git
   command is blocked, read the guard message — it names the violated policy rule
   and the sanctioned path.
-- Start work sessions in a worktree (worktree-per-session is the doctrine here);
-  never develop on the root protected-branch checkout.
 - The permission preset and sandbox mode were chosen at init and live in
   `.claude/settings.json`; change them there, not ad hoc.
-- **IMPORTANT — never add AI attribution** to commits or PR bodies, even if a
-  harness default offers it. commit-msg and git-guard will block it.
-- **IMPORTANT — never set `CODEFLOW_HUMAN_OVERRIDE`** or the integrate gate token
-  in-session — git-guard blocks it as laundering. Those overrides are human-only,
-  run from a human's own terminal; an agent lands work via a human-merged PR or
-  `integrate`.
+- **IMPORTANT** — the two AGENTS.md rules a harness default is most likely to slip
+  in are hook-enforced here (commit-msg + git-guard, wired in
+  `.claude/settings.json`): **no AI attribution**, and **no
+  `CODEFLOW_HUMAN_OVERRIDE` / gate-token laundering**. Both are blocked before they
+  land — do not attempt either.
 
 ## Workflows
 
-- Build work through build → independent review → verify: `/cf-develop` inline
-  for a feature or change; the pipeline (`.claude/workflows/pipeline.workflow.js`)
-  for batch, parallel, or unattended runs. Review is a stage, not optional —
-  `cf-reviewer` is the independent evaluator, and self-review is not review.
+- `/cf-develop` runs the build → review → verify loop inline; the pipeline
+  (`.claude/workflows/pipeline.workflow.js`) composes the same stages for batch,
+  parallel, or unattended runs.
 - Match weight to work: trivial → just do it; a feature or change → `/cf-develop`;
   a batch/parallel or multi-task epic → the pipeline preset or the
   integration-branch flow; nothing fits → author a custom ad-hoc workflow. Full
