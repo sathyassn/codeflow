@@ -1,9 +1,16 @@
-# Driving codex — the app-server protocol (primary) and tmux (fallback)
+# Driving codex directly — the app-server protocol (advanced fallback) and tmux
 
-The concrete, code-based protocol for `cf-model-orchestrator` to drive codex as
-the duo's reviewer/executor. **app-server is PRIMARY; tmux is the fallback.**
-Verified against **codex-cli 0.144.1** (the v2 `thread/*` + `turn/*` API, which
-is `[experimental]` — see "Version pinning").
+> **Prefer the official `codex-plugin-cc`** (see the skill's "Driving codex"
+> section). It wraps this same app-server, is maintained by OpenAI, and is the
+> recommended path — it spares you keeping a hand-rolled driver in step with the
+> experimental API. This resource is the **advanced fallback**: the raw protocol
+> plus a reference driver, for fully-programmatic driving without slash commands,
+> or environments where the plugin cannot be installed.
+
+The concrete, code-based protocol for `cf-model-orchestrator` to drive codex
+directly as the duo's reviewer/executor. **Within this direct path, app-server is
+PRIMARY; tmux is the fallback.** Verified against **codex-cli 0.144.1** (the v2
+`thread/*` + `turn/*` API, which is `[experimental]` — see "Version pinning").
 
 ## Why app-server (not `codex exec`, not tmux screen-scraping)
 

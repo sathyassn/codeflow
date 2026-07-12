@@ -46,6 +46,10 @@ Then verify and **offer** remediation — never install silently.
   `claude` check is harness presence, its `delegates` check is codex presence +
   authentication. Lean on that output.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
+  - **codex driver** — the recommended path is the official **`codex-plugin-cc`**
+    plugin (it wraps the app-server, is OpenAI-maintained, and spares a hand-rolled
+    driver). Check whether it is installed; if not, offer to install it. Direct
+    app-server driving is the advanced fallback, tmux the last resort.
   - **Installed + authenticated** — `codex login status` (exit 0 +
     "Logged in using ChatGPT"; the same signal doctor's `delegates` reports).
   - **Healthy** — `codex doctor` (it diagnoses installation, config, auth, and
@@ -59,8 +63,8 @@ Then verify and **offer** remediation — never install silently.
     the deterministic "present and exposes tools" check — a server that failed to
     start reports 0 tools. `computer-use` is optional and desktop-only; it is not
     needed — Playwright covers web e2e.
-  - **tmux** — present for the fallback driver (app-server is primary; tmux is the
-    degraded path).
+  - **tmux** — only needed for the tmux fallback driver (the plugin/app-server is
+    the primary path); the last-resort degraded route.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
@@ -71,6 +75,8 @@ installing or updating a system tool is privileged and reaches outside the repo,
 so it gets the same offer-and-confirm posture codeflow takes for any irreversible
 or outward action. The fixes:
 
+- codex-plugin-cc not installed → `/plugin marketplace add openai/codex-plugin-cc`
+  → `/plugin install codex@openai-codex` → `/reload-plugins` → `/codex:setup`
 - codex present but unauthenticated → `codex login`
 - codex behind the pinned version → `codex update`
 - tmux absent → `brew install tmux` (or the platform's package manager)

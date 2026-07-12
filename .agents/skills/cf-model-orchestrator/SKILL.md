@@ -75,15 +75,32 @@ silently):
 
 ## Driving codex
 
-Drive codex through the **app-server** JSON-RPC protocol (PRIMARY) — the same
-core engine as the TUI, so it has the full tool set including the Playwright MCP,
-with deterministic turn-completion, a deterministic MCP-readiness precheck, and
-code-answered approvals that never wedge. It gives **proper resumable sessions**
-(`thread/resume` loads full context from disk, CLI-equivalent) for the
-multi-round back-and-forth. Degrade to **tmux**-driving only where app-server is
-genuinely unavailable. The concrete protocol, the robustness rules, and a
-reference driver script live in
+Drive codex through the official **`codex-plugin-cc`** (PRIMARY) — the
+OpenAI-maintained Claude Code plugin that wraps the codex app-server, so it gives
+codex's full tool set (including the Playwright MCP for UI e2e), resumable
+sessions, and code-answered approvals — without a hand-rolled driver to keep in
+step with the experimental app-server API (OpenAI owns that churn). Install once:
+`/plugin marketplace add openai/codex-plugin-cc` → `/plugin install
+codex@openai-codex` → `/reload-plugins` → `/codex:setup` (needs `codex login`).
+Use its commands for the duo:
+
+- `/codex:review` + `/codex:adversarial-review` — the plan cross-verify and the
+  cross-vendor security red-team (both read-only).
+- `/codex:rescue` — delegate execution and the first round of testing.
+- `/codex:transfer` — a persistent codex thread (`codex resume <id>`) for the
+  multi-round back-and-forth.
+
+**Verify-on-install:** the plugin markets review/edit but wraps the full
+app-server, so a delegated task should reach the configured MCP servers — confirm
+once by delegating a browser-driven e2e (Playwright). If it cannot, use the
+app-server directly for the e2e execution only.
+
+**Advanced fallback — drive the app-server directly.** For fully-programmatic
+driving without slash commands, or where the plugin cannot be installed, the raw
+app-server JSON-RPC protocol, the robustness rules, and a reference driver script
+live in
 [`resources/codex-app-server-driver.md`](resources/codex-app-server-driver.md).
+Degrade to **tmux**-driving only where the app-server itself is unavailable.
 
 ## Security — mandatory, cross-vendor
 

@@ -119,3 +119,18 @@ at the process boundary). The only `architecture.md` text in this batch is
 ADR-0016's security-review plane. If a maintainer later wants the interactive
 driver recorded there, its one-line home is the engine area's harness-composition
 note as a second, interactive codex-driver mode beside the headless boundary.
+
+## Update (2026-07-11) — prefer the official codex-plugin-cc as the driver
+
+The **Driver** decision above stands on the app-server as the mechanism, but the
+recommended way to reach it is refined: prefer OpenAI's official
+[`codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) Claude Code plugin,
+which wraps this same app-server and is vendor-maintained — sparing a hand-rolled
+driver that must be kept in step with the experimental v2 API. The plugin gives
+the duo its review (`/codex:review`, `/codex:adversarial-review`), delegation
+(`/codex:rescue`), and resumable-session (`/codex:transfer`) surfaces. Direct
+app-server driving (the `codex-app-server-driver` resource) is retained as the
+advanced fallback for fully-programmatic driving or where the plugin cannot be
+installed; tmux stays the last resort. Verify-on-install that a delegated task
+reaches the configured MCP servers (Playwright, for UI e2e). The skill carries
+the install steps and the command mapping.
