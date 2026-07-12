@@ -17,10 +17,13 @@ You are planning work, not building it.
    questions until you can. Never assume.
 4. Check the request against `product.md` non-goals; surface conflicts instead
    of planning around them.
-5. Draft on a `plan/` branch: an epic in `project-management/epics/` from the
-   template; a spec only where interfaces, formats, or behavior need pinning
-   down; an ADR draft if a Tier-3 decision is involved (new dependency, schema
-   change, boundary change). For a multi-task epic, propose the
+5. Draft on a `plan/` branch, matching artifact to work weight. An **epic** (in
+   `project-management/epics/`) is warranted only for a body of work that is >1
+   PR, >1 session, or spans multiple capabilities; anything smaller is a single
+   task with acceptance criteria and no epic — an epic never gates a single
+   task. Add a spec only where interfaces, formats, or behavior need pinning
+   down, and an ADR draft if a Tier-3 decision is involved (new dependency,
+   schema change, boundary change). For a multi-task epic, propose the
    integration-branch flow, `integration/<epic-id>-<slug>` (see cf-method,
    "Managing a body of work").
 6. Run `codeflow validate`, then present the plan for approval. Do not start

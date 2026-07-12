@@ -38,24 +38,33 @@ stage, not a courtesy, and self-review is not review.
 An epic exists to make one question answerable before any code is written:
 *what does done look like, verifiably?*
 
+**An epic is optional — reach for one only when the work needs it.** Warrant an
+epic for a body of work that is **more than one PR**, **more than one session**,
+or **spans multiple capabilities**. Anything smaller is a single task with
+acceptance criteria and no epic; an epic never gates a single task. The clarity
+checklist below applies either way — to the epic when there is one, otherwise to
+the task.
+
 Input clarity checklist — do not draft until you can state all four:
 
 1. **Problem and audience.** What hurts, for whom, in one or two sentences.
 2. **Scope boundary.** What is in, and — more important — what is explicitly
    out. Check `docs/product.md` non-goals; an epic that violates a non-goal is
    a conversation with the human, not a workaround.
-3. **Acceptance criteria.** Testable statements. Each one must be verifiable by
-   a command, a test tag, or observable behavior.
+3. **Acceptance criteria.** Testable statements, preferably in **EARS** ("When
+   <trigger>, the system shall <response>") or **Given/When/Then** form. Each
+   one must name a concrete, machine-verifiable check — a command, a test path
+   or tag, or an observable with a threshold.
 4. **Touched surface.** Which areas and which existing capabilities
    (`docs/capabilities.md`) this creates or changes.
 
 If the user's request leaves any of these open, ask. Questions before drafting
 are cheap; assumptions discovered at review are expensive.
 
-Good criterion: "`codeflow validate --docs` fails CI when a capability entry
-references a nonexistent epic ID."
-Bad criterion: "validation works correctly" (not testable), or a 14-item list
-restating the implementation plan (that is design, not acceptance).
+Good criterion (EARS): "When a capability entry references a nonexistent epic
+ID, `codeflow validate --docs` shall exit non-zero in CI."
+Bad criterion: "validation works correctly" (not testable, no check named), or a
+14-item list restating the implementation plan (that is design, not acceptance).
 
 Right-size the epic: it should ship in days, not weeks. If the criteria list
 will not fit on one screen, split the epic.

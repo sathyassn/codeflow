@@ -19,9 +19,11 @@ created: {{DATE}}
 
 ## Acceptance Criteria
 
-<!-- Testable statements — each verifiable by a command, a test, or
-     observable behavior. "Works correctly" is not a criterion. If the list
-     will not fit on one screen, split the epic. -->
+<!-- Testable statements, preferably in EARS ("When <trigger>, the system shall
+     <response>") or Given/When/Then form. Each criterion names a concrete,
+     machine-verifiable check — a command, a test path, or an observable with a
+     threshold. "Works correctly" is not a criterion. If the list will not fit
+     on one screen, split the epic. -->
 
 - [ ]
 

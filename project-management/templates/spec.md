@@ -19,6 +19,19 @@ created: {{DATE}}
 
 <!-- What is being pinned down, and for which epic. -->
 
+## Delta against current capability
+
+<!-- Optional, for a brownfield change: express the spec as a delta against the
+     named capability (docs/capabilities.md), so the change is traceable at the
+     spec level. Drop any heading that does not apply; skip the whole section
+     for greenfield work. -->
+
+<!-- ADDED — new behavior or surface this introduces. -->
+
+<!-- MODIFIED — existing behavior whose meaning changes (old -> new). -->
+
+<!-- REMOVED — behavior or surface this retires. -->
+
 ## Behavior
 
 <!-- What the thing does, observable from outside. -->

@@ -16,9 +16,11 @@ created: {{DATE}}
 
 ## Acceptance Criteria
 
-<!-- The single home for this task's acceptance — testable statements, a
-     subset scoped from the epic's. Each criterion names its verification (a
-     command, a test, or observable behavior); the reviewer checks them with
+<!-- The single home for this task's acceptance — testable statements,
+     preferably in EARS ("When <trigger>, the system shall <response>") or
+     Given/When/Then form; a subset scoped from the epic's when there is one.
+     Each criterion names a concrete, machine-verifiable check — a command, a
+     test path, or an observable with a threshold; the reviewer checks them with
      evidence, and unverifiable claims are defects. -->
 
 - [ ]
