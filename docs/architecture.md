@@ -99,4 +99,5 @@ contract.
 ### docs — `docs/`
 
 The six-layer knowledge model this file belongs to, plus `docs/plan/v2/` (the
-charter, split, and the rebaseline ADRs).
+charter, the execution-status tracker, and the Day-0 probe artifacts; the
+rebaseline ADRs live in `docs/decisions/`).

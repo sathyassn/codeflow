@@ -44,7 +44,7 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   verified; full-tier additive upgrade (`project-management/`) on the closure
   branch
 - [x] Doctor wired and clean (6 checks at Day 3; `repo-integrity` added later via
-  ADR-0007 → now 7)
+  ADR-0007; 10 checks as of 2026-07-11 — architecture.md carries the live count)
 - [x] `codeflow integrate` used for all landings (4 integrations)
 - [x] Live AC demos: #1, #3, #5, #6, #13 — including the `policy_armed` bug
   found during #1, fixed with a regression test (612ec23d)
