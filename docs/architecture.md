@@ -42,10 +42,11 @@ Core modules grouped by responsibility:
   generated status views, the test-gate engine, path flock, and pruned error
   types.
 
-Enforcement is spread across four planes, all reading one config
-(`.codeflow/policy.json`): git client hooks, the in-session PreToolUse (Bash)
-guards, remote branch protection, and CI. Local planes are fast feedback; CI +
-remote protection are the authoritative perimeter (charter §6.5). The
+Enforcement is spread across four planes: git client hooks, the in-session
+PreToolUse (Bash) guards, and remote branch protection read one config
+(`.codeflow/policy.json`); the scaffolded CI re-implements the git standards
+(commit format, attribution, emoji) inline rather than reading it. Local planes are
+fast feedback; CI + remote protection are the authoritative perimeter (charter §6.5). The
 git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),
 `reference-transaction` (the harness-agnostic backstop: fast-forward merges,

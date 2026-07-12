@@ -27,9 +27,11 @@ repo. The block between the codeflow markers below is maintained by
 | WORK — planned and active work | `project-management/` (epics, tasks, specs) | daily |
 | TRACE — what happened and why | ledger + `codeflow recall` | automatic |
 
-The traceability spine links by ID, downward: capability → epics → ADRs/specs →
-PRs → ledger. Answer "why is X this way" by following frontmatter links or
-`codeflow recall "X"` — never by reading all the code.
+The traceability spine runs downward: capability → epics → ADRs → specs → PRs →
+ledger. Only the capability ↔ epic ↔ ADR links are enforced by ID (`validate
+--docs`); the spec, PR, and ledger links are by convention, found via `codeflow
+recall`. Answer "why is X this way" by following frontmatter links or `codeflow
+recall "X"` — never by reading all the code.
 
 Before building anything: check `docs/capabilities.md` (does it already exist?
 what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
@@ -58,9 +60,12 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Git rules
 
-Four planes read `.codeflow/policy.json`, as defense in depth. Local git hooks and
-the `git-guard` PreToolUse hook are **fast feedback** — they catch the normal ways
-work goes wrong, in-session, before a push. CI and remote branch protection are the
+Four planes enforce the git standards, as defense in depth — three read
+`.codeflow/policy.json` directly (git hooks, the `git-guard` PreToolUse hook, remote
+branch protection); the scaffolded CI re-implements the same commit-format,
+attribution, and emoji checks inline, so keep it in step with policy.json. Local git
+hooks and the `git-guard` PreToolUse hook are **fast feedback** — they catch the
+normal ways work goes wrong, in-session, before a push. CI and remote branch protection are the
 **authoritative perimeter**: server-enforced, so an agent on the local host cannot
 bypass them (arm it with `codeflow remote protect`). The local layer is convenience;
 the remote layer is the real boundary. The rules, compressed:
