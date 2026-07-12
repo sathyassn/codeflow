@@ -78,6 +78,50 @@ pub fn check_commit_format(subject: &str, allowed_types: &[String]) -> Option<St
     None
 }
 
+/// A Conventional-Commits breaking-change footer must be exactly
+/// `BREAKING CHANGE:` or `BREAKING-CHANGE:` (uppercase) to be recognized by
+/// versioning tooling (release-plz, git-cliff, ...). A mis-cased footer
+/// (`breaking change:`) is silently treated as non-breaking — so a MAJOR change
+/// would ship as a MINOR bump. Flag it, so the only ways to signal a breaking
+/// change are both unambiguous: the subject `!` marker, or the exact footer.
+///
+/// Skipped when the subject already carries `!` (breaking is already signaled;
+/// a "breaking change" line in the body is then just prose). Returns `None` when
+/// clean, otherwise the reason.
+#[must_use]
+pub fn check_breaking_footer(subject: &str, message: &str) -> Option<String> {
+    if conventional_re()
+        .captures(subject)
+        .is_some_and(|c| c.name("bang").is_some())
+    {
+        return None;
+    }
+    for raw in message.lines() {
+        let line = raw.trim_start();
+        let lower = line.to_ascii_lowercase();
+        let token_len = if lower.starts_with("breaking change") {
+            "breaking change".len()
+        } else if lower.starts_with("breaking-change") {
+            "breaking-change".len()
+        } else {
+            continue;
+        };
+        // A footer is `token:` — require the colon (after optional spaces).
+        if !line[token_len..].trim_start().starts_with(':') {
+            continue;
+        }
+        let token = &line[..token_len];
+        if token != "BREAKING CHANGE" && token != "BREAKING-CHANGE" {
+            return Some(format!(
+                "breaking-change footer {token:?} must be exactly `BREAKING CHANGE:` or \
+                 `BREAKING-CHANGE:` (uppercase) to register as a breaking change — \
+                 otherwise it is silently treated as non-breaking"
+            ));
+        }
+    }
+    None
+}
+
 /// Scan text (commit message or PR body) for AI attribution.
 ///
 /// Returns the human-readable name of the matched pattern, or `None` when
@@ -170,6 +214,43 @@ mod tests {
         let narrow = vec!["feat".to_string()];
         assert!(check_commit_format("fix: now rejected", &narrow).is_some());
         assert_eq!(check_commit_format("feat: still fine", &narrow), None);
+    }
+
+    // -- breaking-change footer --
+
+    #[test]
+    fn test_breaking_footer_exact_forms_pass() {
+        for msg in [
+            "feat: add x\n\nBREAKING CHANGE: removes y",
+            "feat: add x\n\nBREAKING-CHANGE: removes y",
+        ] {
+            assert_eq!(check_breaking_footer("feat: add x", msg), None, "{msg}");
+        }
+    }
+
+    #[test]
+    fn test_breaking_footer_miscased_flagged() {
+        for msg in [
+            "feat: add x\n\nbreaking change: removes y",
+            "feat: add x\n\nBreaking Change: removes y",
+            "feat: add x\n\nbreaking-change: removes y",
+        ] {
+            assert!(check_breaking_footer("feat: add x", msg).is_some(), "{msg}");
+        }
+    }
+
+    #[test]
+    fn test_breaking_footer_bang_subject_exempt() {
+        // subject already signals breaking with `!`; a body mention is just prose
+        let msg = "feat!: add x\n\nbreaking change: mentioned in prose";
+        assert_eq!(check_breaking_footer("feat!: add x", msg), None);
+    }
+
+    #[test]
+    fn test_breaking_footer_prose_not_flagged() {
+        // "breaking change" not at footer position (line start + colon) is prose
+        let msg = "fix: thing\n\nThis is not a breaking change: really";
+        assert_eq!(check_breaking_footer("fix: thing", msg), None);
     }
 
     // -- attribution --

@@ -157,6 +157,16 @@ pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
                 ),
             ));
         }
+        if let Some(reason) = standards::check_breaking_footer(subject, &cleaned) {
+            report.violations.push(Violation::new(
+                "git.commit_format",
+                policy.commit_format,
+                reason,
+                "signal a breaking change with `type!: description` or the exact footer \
+                 `BREAKING CHANGE:` (uppercase)"
+                    .to_string(),
+            ));
+        }
     }
 
     if policy.ai_attribution.is_active() {
@@ -754,6 +764,30 @@ mod tests {
     fn test_commit_msg_valid() {
         let report = commit_msg(&GitPolicy::default(), "feat(hooks): add the guard\n");
         assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_commit_msg_exact_breaking_footer_ok() {
+        let report = commit_msg(
+            &GitPolicy::default(),
+            "feat: new api\n\nBREAKING CHANGE: removes the old one\n",
+        );
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_commit_msg_miscased_breaking_footer_blocked() {
+        // a lowercase breaking footer would ship a major change as a minor bump
+        let report = commit_msg(
+            &GitPolicy::default(),
+            "feat: new api\n\nbreaking change: removes the old one\n",
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.commit_format")
+        );
     }
 
     #[test]
