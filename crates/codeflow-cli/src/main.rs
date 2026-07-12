@@ -58,6 +58,9 @@ enum Command {
     Test(cmd::test::TestArgs),
     /// Validate record frontmatter; --docs adds the doc-graph integrity lint.
     Validate(cmd::validate::ValidateArgs),
+    /// Verify a commit range + branch name against policy — the portable,
+    /// binary-sourced CI check (auto-detects the CI platform's range).
+    Ci(cmd::ci::CiArgs),
     /// Generated status view: branch, worktrees, in-flight work, capabilities.
     Status(cmd::status::StatusArgs),
     /// Land a branch into a target: flock(rebase -> test -> ff-merge).
@@ -138,6 +141,7 @@ fn main() -> anyhow::Result<()> {
         Command::Orient => std::process::exit(cmd::orient::run()),
         Command::Test(args) => std::process::exit(cmd::test::run(&args)),
         Command::Validate(args) => std::process::exit(cmd::validate::run(&args)),
+        Command::Ci(args) => std::process::exit(cmd::ci::run(&args)),
         Command::Status(args) => std::process::exit(cmd::status::run(&args)),
         Command::Integrate(args) => std::process::exit(cmd::integrate::run(&args)),
         Command::Doctor(args) => std::process::exit(cmd::doctor::run(&args)),

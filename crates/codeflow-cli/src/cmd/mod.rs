@@ -1,6 +1,7 @@
 //! CLI subcommand handlers. Each module owns its arg types and run function
 //! so `main.rs` stays a thin dispatcher (charter §3.1).
 
+pub mod ci;
 pub mod doctor;
 pub mod git_hook;
 pub mod hook;
