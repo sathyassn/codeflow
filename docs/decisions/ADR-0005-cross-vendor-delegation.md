@@ -87,3 +87,19 @@ to `.agents/skills/` for Codex. Claude Code merged custom commands into skills i
 v2.1.101 (2026-04-11), so `/cf-consult` is now a skill invocation rather than a
 `.claude/commands/*` command. The decision is unchanged; only the artifact kind
 was renamed. Current terminology lives in `docs/capabilities.md` (CAP-009).
+
+## Update (2026-07-11) — headless composition superseded for cross-model work
+
+ADR-0018 makes cross-model transport interactive-only, one lane per direction:
+Claude Code drives codex only through the official `codex-plugin-cc` plugin,
+and codex drives claude only via the tmux-driven interactive `claude` CLI. The
+headless `codex exec` shape this ADR verified (and its `resume` follow-up) is
+**no longer a sanctioned worker shape** for consult or delegate — a headless
+session fires no in-session guards (ADR-0008), carries no full MCP toolset,
+and resumes nothing a follow-up can audit in place. The `agy` degraded tier is
+retired with it: its only documented drive shape is headless one-shot. What
+survives unchanged: process-boundary composition, own-subscription auth and
+never-automate-auth, and the edit-access doctrine (delegate edits only inside
+a worktree on a feature branch; the gates judge the output, never the author).
+Because the boundary and gate doctrine stand, this ADR is not fully superseded
+— `superseded_by` stays null; ADR-0018 governs the transport.

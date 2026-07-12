@@ -134,3 +134,22 @@ advanced fallback for fully-programmatic driving or where the plugin cannot be
 installed; tmux stays the last resort. Verify-on-install that a delegated task
 reaches the configured MCP servers (Playwright, for UI e2e). The skill carries
 the install steps and the command mapping.
+
+## Update (2026-07-11) — driver ladder collapses to plugin-only (ADR-0018)
+
+ADR-0018 makes cross-model transport interactive-only with one lane per
+direction, which retires two of this ADR's three rungs. For Claude Code →
+codex the lane is the `codex-plugin-cc` plugin **alone**: the direct
+app-server driver (the `codex-app-server-driver` skill resource) and the tmux
+fallback for driving codex are withdrawn, and the resource is deleted from the
+scaffold — hand-rolling the app-server protocol is now prohibited, not merely
+dispreferred, because it chases an experimental API the vendor already wraps.
+The reverse lane (codex → claude) is the interactive `claude` CLI driven via
+tmux; no rung anywhere is headless. The Driver decision's substance survives —
+the plugin wraps the same app-server this ADR chose, with the same MCP reach
+(re-verified 2026-07-11 on codex-cli 0.144.1) — only the sanctioned way to
+reach it narrowed. The duo also gains a symmetric seat gate: the skill's
+preflight now checks the orchestrating harness and the plugin surface, not
+just codex auth, and degrades to solo from either missing half. This ADR is
+not fully superseded (the flow, roles, gate, and degradation doctrine stand);
+`superseded_by` stays null.
