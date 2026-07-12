@@ -99,6 +99,25 @@ pub struct GitPolicy {
     pub hook_integrity: PolicyLevel,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
+    /// Max length of the commit *description* — the text after `type(scope): `
+    /// (the restored v1 50-char subject budget, ADR-0020). Enforced under
+    /// `commit_format`.
+    pub commit_desc_max_len: u32,
+    /// Max length of the whole subject line, git's 72-column wrap (ADR-0020).
+    /// Enforced under `commit_format`.
+    pub commit_subject_max_len: u32,
+    /// Shape of the commit body (ADR-0020): only `- ` bullets (at most
+    /// `commit_body_max_bullets`, each a single line ≤ `commit_body_bullet_max_len`
+    /// chars), blank lines, and an optional trailing `BREAKING CHANGE:` /
+    /// `BREAKING-CHANGE:` footer block. A prose paragraph, a numbered list, or a
+    /// story is a violation. Auto-generated subjects (merge/revert/fixup/squash)
+    /// are exempt as a class. Default `block`.
+    pub commit_body: PolicyLevel,
+    /// Max number of `- ` bullets allowed in a commit body (ADR-0020).
+    pub commit_body_max_bullets: u32,
+    /// Max length of a single commit-body bullet line, including the `- `
+    /// marker (ADR-0020).
+    pub commit_body_bullet_max_len: u32,
     pub ai_attribution: PolicyLevel,
     pub commit_emoji: PolicyLevel,
     pub branch_naming: PolicyLevel,
@@ -131,6 +150,11 @@ impl Default for GitPolicy {
             .iter()
             .map(ToString::to_string)
             .collect(),
+            commit_desc_max_len: 50,
+            commit_subject_max_len: 72,
+            commit_body: PolicyLevel::Block,
+            commit_body_max_bullets: 3,
+            commit_body_bullet_max_len: 72,
             ai_attribution: PolicyLevel::Block,
             commit_emoji: PolicyLevel::Block,
             branch_naming: PolicyLevel::Block,
@@ -392,6 +416,7 @@ impl GitPolicy {
         self.local_ref_protection = PolicyLevel::Off;
         self.hook_integrity = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
+        self.commit_body = PolicyLevel::Off;
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
@@ -443,6 +468,13 @@ mod tests {
         assert_eq!(g.local_ref_protection, PolicyLevel::Block);
         assert_eq!(g.commit_format, PolicyLevel::Block);
         assert_eq!(g.commit_types.len(), 10);
+        // Restored v1 commit standard (ADR-0020): 50-char description, 72-char
+        // subject line, and a block-level body-shape rule (≤3 bullets, ≤72 each).
+        assert_eq!(g.commit_desc_max_len, 50);
+        assert_eq!(g.commit_subject_max_len, 72);
+        assert_eq!(g.commit_body, PolicyLevel::Block);
+        assert_eq!(g.commit_body_max_bullets, 3);
+        assert_eq!(g.commit_body_bullet_max_len, 72);
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
@@ -467,6 +499,23 @@ mod tests {
             defaults.protected_branches
         );
         assert_eq!(from_asset.git.commit_types, defaults.commit_types);
+        assert_eq!(
+            from_asset.git.commit_desc_max_len,
+            defaults.commit_desc_max_len
+        );
+        assert_eq!(
+            from_asset.git.commit_subject_max_len,
+            defaults.commit_subject_max_len
+        );
+        assert_eq!(from_asset.git.commit_body, defaults.commit_body);
+        assert_eq!(
+            from_asset.git.commit_body_max_bullets,
+            defaults.commit_body_max_bullets
+        );
+        assert_eq!(
+            from_asset.git.commit_body_bullet_max_len,
+            defaults.commit_body_bullet_max_len
+        );
         assert_eq!(from_asset.git.branch_prefixes, defaults.branch_prefixes);
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);
         assert_eq!(from_asset.git.security_review, defaults.security_review);
@@ -662,6 +711,7 @@ mod tests {
         assert_eq!(policy.git.pr_merge_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.local_ref_protection, PolicyLevel::Off);
         assert_eq!(policy.git.commit_format, PolicyLevel::Off);
+        assert_eq!(policy.git.commit_body, PolicyLevel::Off);
         // The security / red-team gates are advisory (warn) defaults, so — like
         // test_gate_on_push — bootstrap grace suspends them (ADR-0016).
         assert_eq!(policy.git.security_review, PolicyLevel::Off);

@@ -142,7 +142,8 @@ fn scan_staged(repo: &Repository, policy: &GitPolicy, report: &mut StageReport) 
 // commit-msg
 // ---------------------------------------------------------------------------
 
-/// The commit-msg stage: conventional format (whitelisted types), the
+/// The commit-msg stage: conventional format (whitelisted types), the restored
+/// v1 subject-length budget and body-shape rule (ADR-0020), the
 /// no-AI-attribution rule, and the no-emoji rule (charter §6.4, AC #13).
 #[must_use]
 pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
@@ -164,6 +165,21 @@ pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
                 ),
             ));
         }
+        if let Some(reason) = standards::check_subject_length(
+            subject,
+            policy.commit_desc_max_len,
+            policy.commit_subject_max_len,
+        ) {
+            report.violations.push(Violation::new(
+                "git.commit_format",
+                policy.commit_format,
+                reason,
+                format!(
+                    "keep the description ≤ {} chars and the whole subject line ≤ {} chars",
+                    policy.commit_desc_max_len, policy.commit_subject_max_len
+                ),
+            ));
+        }
         if let Some(reason) = standards::check_breaking_footer(subject, &cleaned) {
             report.violations.push(Violation::new(
                 "git.commit_format",
@@ -172,6 +188,26 @@ pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
                 "signal a breaking change with `type!: description` or the exact footer \
                  `BREAKING CHANGE:` (uppercase)"
                     .to_string(),
+            ));
+        }
+    }
+
+    if policy.commit_body.is_active() {
+        if let Some(reason) = standards::check_commit_body(
+            subject,
+            &cleaned,
+            policy.commit_body_max_bullets,
+            policy.commit_body_bullet_max_len,
+        ) {
+            report.violations.push(Violation::new(
+                "git.commit_body",
+                policy.commit_body,
+                reason,
+                format!(
+                    "the body is only `- ` bullets (max {}, each ≤ {} chars), blank lines, and an \
+                     optional trailing `BREAKING CHANGE:` footer",
+                    policy.commit_body_max_bullets, policy.commit_body_bullet_max_len
+                ),
             ));
         }
     }
@@ -866,12 +902,48 @@ mod tests {
 
         let off_policy = GitPolicy {
             commit_format: PolicyLevel::Off,
+            commit_body: PolicyLevel::Off,
             ai_attribution: PolicyLevel::Off,
             commit_emoji: PolicyLevel::Off,
             ..GitPolicy::default()
         };
         let msg = "Bad subject \u{1F680}\n\nGenerated with a robot\n";
         assert!(commit_msg(&off_policy, msg).violations.is_empty());
+    }
+
+    #[test]
+    fn test_commit_msg_long_description_blocked() {
+        // ADR-0020: a description over the 50-char budget blocks at commit_format.
+        let subject = format!("feat: {}", "x".repeat(60));
+        let report = commit_msg(&GitPolicy::default(), &format!("{subject}\n"));
+        let v = report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.commit_format")
+            .expect("a commit_format violation");
+        assert!(v.message.contains("description"), "{}", v.message);
+    }
+
+    #[test]
+    fn test_commit_msg_story_body_blocked() {
+        // ADR-0020: a prose body blocks at commit_body, naming the offending line.
+        let msg = "feat: add a thing\n\nThis is a story about why the thing was added.\n";
+        let report = commit_msg(&GitPolicy::default(), msg);
+        let v = report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.commit_body")
+            .expect("a commit_body violation");
+        assert_eq!(v.level, PolicyLevel::Block);
+        assert!(v.message.contains("not a `- ` bullet"), "{}", v.message);
+    }
+
+    #[test]
+    fn test_commit_msg_bullet_body_passes() {
+        // A conforming bullet body with a BREAKING CHANGE footer is clean.
+        let msg = "feat: add a thing\n\n- wire the new path\n- cover it with a test\n\nBREAKING CHANGE: the old path is gone\n";
+        let report = commit_msg(&GitPolicy::default(), msg);
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
     #[test]

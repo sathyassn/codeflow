@@ -507,7 +507,7 @@ mod tests {
     fn clean_range_passes() {
         let commits = vec![
             commit("aaaa1111", "feat(ci): add codeflow ci command"),
-            commit("bbbb2222", "fix: handle unborn head\n\nA clean body."),
+            commit("bbbb2222", "fix: handle unborn head\n\n- guard the unborn head case"),
         ];
         let v = evaluate_commits(&git(), &commits);
         assert!(v.is_empty(), "clean commits produce no violations: {v:?}", v = v.len());
@@ -537,6 +537,24 @@ mod tests {
     fn emoji_in_subject_blocks() {
         let v = evaluate_commits(&git(), &[commit("dddd4444", "feat: ship it \u{1F680}")]);
         assert!(v.iter().any(|t| t.violation.rule == "git.commit_emoji"));
+    }
+
+    #[test]
+    fn story_body_and_long_description_block() {
+        // ADR-0020: the CI commit-range path inherits the restored standard
+        // because it reuses git_hook::commit_msg — a story body blocks at
+        // commit_body, an over-long description at commit_format.
+        let story = "feat: add a thing\n\nA prose paragraph explaining the whole story here.";
+        let v = evaluate_commits(&git(), &[commit("eeee7777", story)]);
+        assert!(v.iter().any(|t| t.violation.rule == "git.commit_body"));
+
+        let long = format!("fix: {}", "y".repeat(60));
+        let v = evaluate_commits(&git(), &[commit("ffff8888", &long)]);
+        assert!(
+            v.iter()
+                .any(|t| t.violation.rule == "git.commit_format"
+                    && t.violation.message.contains("description"))
+        );
     }
 
     #[test]

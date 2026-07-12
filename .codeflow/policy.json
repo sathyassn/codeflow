@@ -28,6 +28,11 @@
       "build",
       "revert"
     ],
+    "commit_desc_max_len": 50,
+    "commit_subject_max_len": 72,
+    "commit_body": "block",
+    "commit_body_max_bullets": 3,
+    "commit_body_bullet_max_len": 72,
     "ai_attribution": "block",
     "commit_emoji": "block",
     "branch_naming": "block",

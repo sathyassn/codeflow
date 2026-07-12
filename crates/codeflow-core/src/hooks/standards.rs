@@ -1,5 +1,6 @@
-//! Branch and commit standards (charter §6.4): conventional commit format,
-//! the no-AI-attribution rule, and the no-emoji rule.
+//! Branch and commit standards (charter §6.4): conventional commit format, the
+//! restored v1 subject-length budget and body-shape rule (ADR-0020), the
+//! no-AI-attribution rule, and the no-emoji rule.
 //!
 //! Shared by the commit-msg git hook and the git-guard PR-body scan so both
 //! planes flag identical content (AC #13). What counts as a violation lives
@@ -130,6 +131,133 @@ pub fn check_breaking_footer(subject: &str, message: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Check the subject-line length budget (ADR-0020, the restored v1 standard):
+/// the description — the text after `type(scope): ` — must be ≤ `desc_max`, and
+/// the whole subject line ≤ `subject_max`. Both are measured in Unicode scalar
+/// values (`chars`).
+///
+/// Auto-generated subjects (merge/revert/fixup/squash) are exempt as a class.
+/// A subject that does not parse as conventional returns `None` here —
+/// [`check_commit_format`] already reports the malformed shape, so length is not
+/// double-reported. Returns `None` when both lengths are within budget,
+/// otherwise the reason.
+#[must_use]
+pub fn check_subject_length(subject: &str, desc_max: u32, subject_max: u32) -> Option<String> {
+    if FORMAT_EXEMPT_PREFIXES
+        .iter()
+        .any(|p| subject.starts_with(p))
+    {
+        return None;
+    }
+    let Some(caps) = conventional_re().captures(subject) else {
+        return None; // malformed subject is check_commit_format's to report
+    };
+    let desc_len = caps["desc"].chars().count();
+    if desc_len > desc_max as usize {
+        return Some(format!(
+            "commit description is {desc_len} chars, over the {desc_max}-char limit \
+             (measured after `type(scope): `)"
+        ));
+    }
+    let subject_len = subject.chars().count();
+    if subject_len > subject_max as usize {
+        return Some(format!(
+            "commit subject line is {subject_len} chars, over the {subject_max}-char limit"
+        ));
+    }
+    None
+}
+
+/// `true` when `line` starts the sanctioned Conventional-Commits breaking-change
+/// footer block — `BREAKING CHANGE:` or `BREAKING-CHANGE:` at column 0, in any
+/// case. Case-insensitive on purpose: a mis-cased footer is recognized here as a
+/// footer (so the body-shape check does not double-report it) while
+/// [`check_breaking_footer`] separately flags the mis-case under `commit_format`.
+fn is_breaking_footer_start(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    let token_len = if lower.starts_with("breaking change") {
+        "breaking change".len()
+    } else if lower.starts_with("breaking-change") {
+        "breaking-change".len()
+    } else {
+        return false;
+    };
+    line[token_len..].trim_start().starts_with(':')
+}
+
+/// Check the commit *body* shape (ADR-0020, the restored v1 standard): after the
+/// subject, the only sanctioned content is blank lines, `- ` bullets (at most
+/// `max_bullets`, each a single line ≤ `bullet_max` chars including the marker),
+/// and an optional trailing `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer block.
+/// A prose paragraph, a numbered list, a story-body — anything that is not a
+/// bullet, a blank line, or the footer — is a violation naming the offending
+/// line.
+///
+/// Auto-generated subjects (merge/revert/fixup/squash) are exempt as a class,
+/// mirroring [`check_commit_format`]: their bodies are tool-authored. Merge
+/// commits (>1 parent) are additionally excluded upstream by the `--no-merges`
+/// CI enumeration and by the `Merge ` subject prefix here.
+///
+/// `message` is the comment-stripped commit message (subject + body); the
+/// subject is its first non-blank line. Returns `None` when the body conforms,
+/// otherwise the reason.
+#[must_use]
+pub fn check_commit_body(
+    subject: &str,
+    message: &str,
+    max_bullets: u32,
+    bullet_max: u32,
+) -> Option<String> {
+    if FORMAT_EXEMPT_PREFIXES
+        .iter()
+        .any(|p| subject.starts_with(p))
+    {
+        return None;
+    }
+    let mut seen_subject = false;
+    let mut bullets: u32 = 0;
+    for line in message.lines() {
+        if !seen_subject {
+            // Skip everything up to and including the subject (first non-blank).
+            if !line.trim().is_empty() {
+                seen_subject = true;
+            }
+            continue;
+        }
+        let content = line.trim_end(); // tolerate CRLF and trailing spaces
+        if content.is_empty() {
+            continue; // blank lines are always allowed
+        }
+        if is_breaking_footer_start(content) {
+            // The footer block runs to the end of the message; everything from
+            // here on is the sanctioned footer, so stop scanning body lines.
+            return over_bullet_budget(bullets, max_bullets);
+        }
+        if content.starts_with("- ") {
+            bullets += 1;
+            let len = content.chars().count();
+            if len > bullet_max as usize {
+                return Some(format!(
+                    "commit body bullet is {len} chars, over the {bullet_max}-char limit: \
+                     {content:?}"
+                ));
+            }
+            continue;
+        }
+        return Some(format!(
+            "commit body line is not a `- ` bullet or a BREAKING CHANGE footer: {content:?}"
+        ));
+    }
+    over_bullet_budget(bullets, max_bullets)
+}
+
+/// `Some(reason)` when the running bullet count exceeds the budget, else `None`.
+fn over_bullet_budget(bullets: u32, max_bullets: u32) -> Option<String> {
+    (bullets > max_bullets).then(|| {
+        format!("commit body has {bullets} bullets, over the {max_bullets}-bullet limit")
+    })
 }
 
 /// Scan text (commit message or PR body) for AI attribution.
@@ -286,6 +414,109 @@ mod tests {
         assert!(
             check_breaking_footer("feat: x", "feat: x\r\n\r\nbreaking change: y\r\n").is_some()
         );
+    }
+
+    // -- subject length (ADR-0020) --
+
+    #[test]
+    fn test_subject_length_within_budget_passes() {
+        assert_eq!(
+            check_subject_length("feat(hooks): restore the commit standard", 50, 72),
+            None
+        );
+    }
+
+    #[test]
+    fn test_subject_length_desc_over_50_blocked() {
+        // Description (after `type: `) is 51 chars — one over the 50 budget,
+        // while the whole subject line is still under 72.
+        let desc = "a".repeat(51);
+        let subject = format!("fix: {desc}");
+        let reason = check_subject_length(&subject, 50, 72).unwrap();
+        assert!(reason.contains("description"), "{reason}");
+        assert!(reason.contains("51"), "{reason}");
+        assert!(reason.contains("50"), "{reason}");
+    }
+
+    #[test]
+    fn test_subject_length_whole_line_over_72_blocked() {
+        // Keep the description within 50 but push the whole line past 72 with a
+        // long scope, so the subject-line check (not the description check) fires.
+        let scope = "s".repeat(30);
+        let subject = format!("refactor({scope}): {}", "d".repeat(40));
+        assert!(subject.chars().count() > 72);
+        assert!("d".repeat(40).chars().count() <= 50);
+        let reason = check_subject_length(&subject, 50, 72).unwrap();
+        assert!(reason.contains("subject line"), "{reason}");
+        assert!(reason.contains("72"), "{reason}");
+    }
+
+    #[test]
+    fn test_subject_length_exempt_and_malformed_pass() {
+        // Merge/revert subjects are exempt as a class; a malformed subject is
+        // check_commit_format's to report, not double-reported here.
+        let long = "x".repeat(100);
+        assert_eq!(check_subject_length(&format!("Merge {long}"), 50, 72), None);
+        assert_eq!(check_subject_length(&format!("not conventional {long}"), 50, 72), None);
+    }
+
+    // -- commit body shape (ADR-0020) --
+
+    #[test]
+    fn test_body_none_and_bullets_pass() {
+        // No body at all, and a conforming bullet body, both pass.
+        assert_eq!(check_commit_body("feat: x", "feat: x", 3, 72), None);
+        let msg = "feat: x\n\n- first note\n- second note\n- third note";
+        assert_eq!(check_commit_body("feat: x", msg, 3, 72), None);
+    }
+
+    #[test]
+    fn test_body_blank_lines_allowed() {
+        let msg = "feat: x\n\n- one\n\n- two\n";
+        assert_eq!(check_commit_body("feat: x", msg, 3, 72), None);
+    }
+
+    #[test]
+    fn test_body_paragraph_prose_blocked() {
+        let msg = "feat: x\n\nThis is a prose paragraph explaining why.";
+        let reason = check_commit_body("feat: x", msg, 3, 72).unwrap();
+        assert!(reason.contains("not a `- ` bullet"), "{reason}");
+        assert!(reason.contains("prose paragraph"), "{reason}");
+    }
+
+    #[test]
+    fn test_body_four_bullets_blocked() {
+        let msg = "feat: x\n\n- one\n- two\n- three\n- four";
+        let reason = check_commit_body("feat: x", msg, 3, 72).unwrap();
+        assert!(reason.contains('4'), "{reason}");
+        assert!(reason.contains("bullet"), "{reason}");
+    }
+
+    #[test]
+    fn test_body_bullet_over_limit_blocked() {
+        let long = format!("- {}", "w".repeat(80));
+        let msg = format!("feat: x\n\n{long}");
+        let reason = check_commit_body("feat: x", &msg, 3, 72).unwrap();
+        assert!(reason.contains("over the 72-char limit"), "{reason}");
+    }
+
+    #[test]
+    fn test_body_breaking_footer_block_allowed() {
+        // Bullets then a (possibly multi-line) BREAKING CHANGE footer block.
+        let msg = "feat: x\n\n- one\n\nBREAKING CHANGE: the old api is gone\nsee the migration guide";
+        assert_eq!(check_commit_body("feat: x", msg, 3, 72), None);
+        // The dashed spelling is equally sanctioned.
+        let msg2 = "feat: x\n\n- one\n\nBREAKING-CHANGE: gone";
+        assert_eq!(check_commit_body("feat: x", msg2, 3, 72), None);
+    }
+
+    #[test]
+    fn test_body_merge_and_revert_exempt() {
+        // Auto-generated subjects carry tool-authored bodies — exempt as a class.
+        let merge = "Merge branch 'main'\n\nA paragraph git wrote, not a bullet.";
+        assert_eq!(check_commit_body("Merge branch 'main'", merge, 3, 72), None);
+        let revert = "Revert \"feat: x\"\n\nThis reverts commit abc123.";
+        assert_eq!(check_commit_body("Revert \"feat: x\"", revert, 3, 72), None);
     }
 
     // -- attribution --
