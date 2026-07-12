@@ -228,6 +228,55 @@ dest = ".claude/commands/cf-consult.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# Cross-harness skills (.agents/skills/): the Agent Skills location read by Codex
+# and other compatible harnesses. The two method skills mirror the .claude/skills
+# sources byte-for-byte; the five command-skills are harness-neutral SKILL.md
+# renderings of the .claude slash commands. Claude Code reads .claude/skills and
+# .claude/commands; other harnesses read .agents/skills. (agy uses a plugin model
+# and is bound at the git-hook plane, not here.)
+
+[[entry]]
+src = "claude/skills/cf-method/SKILL.md"
+dest = ".agents/skills/cf-method/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/SKILL.md"
+dest = ".agents/skills/cf-delegate/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-plan/SKILL.md"
+dest = ".agents/skills/cf-plan/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-develop/SKILL.md"
+dest = ".agents/skills/cf-develop/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-ship/SKILL.md"
+dest = ".agents/skills/cf-ship/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-stack/SKILL.md"
+dest = ".agents/skills/cf-stack/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-consult/SKILL.md"
+dest = ".agents/skills/cf-consult/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # The pipeline workflow is user-owned by design (ADR-0004): seeded once,
 # never update-managed — consumers own and adapt their copy.
 [[entry]]
