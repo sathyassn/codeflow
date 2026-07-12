@@ -11,9 +11,12 @@
 // Args contract (the invoking command passes this object; runtime global `args`):
 //   task       string     what to build (required)
 //   criteria   string[]   testable acceptance criteria (required)
-//   stages     string[]?  ordered preset drawn from: analyze, plan, build,
-//                         security, review, consult, qa, verify.
-//                         Default: ['build', 'review', 'verify'].
+//   stages     string[]?  ordered preset drawn from: plan-align, analyze, plan,
+//                         build, security, review, consult, qa, verify.
+//                         Default: PRESETS.default = ['build', 'review', 'verify']
+//                         (solo). PRESETS.duo = ['plan-align','build','security',
+//                         'review','verify'] is the opt-in cross-vendor batch path
+//                         (ADR-0016); pass it via args.stages.
 //                         'consult' is an optional cross-vendor second opinion
 //                         (codex, read-only); off unless named (ADR-0005).
 //   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
@@ -48,7 +51,18 @@ const TASK = A.task;
 const CRITERIA = A.criteria.map((c) => `- ${c}`).join('\n');
 const WHERE = A.dir ? `Working directory: ${A.dir}.` : '';
 const MAX_REWORK = A.maxRework ?? 3;
-const PRESET = A.stages ?? ['build', 'review', 'verify'];
+// Named presets (opt-in via args.stages). The DEFAULT is unchanged — the solo
+// build -> review -> verify path. 'duo' is the batch/unattended counterpart to
+// the /cf-model-orchestrator lead-session skill: it prepends the cross-vendor
+// plan-align convergence gate and inserts the cf-security-reviewer red-team
+// (ADR-0016), and silently degrades to solo when codex is unavailable at flow
+// start (each cross-vendor stage preflights `codex login status` and notes the
+// skip). Pass it explicitly, e.g. args.stages = PRESETS.duo.
+const PRESETS = {
+  default: ['build', 'review', 'verify'],
+  duo: ['plan-align', 'build', 'security', 'review', 'verify'],
+};
+const PRESET = A.stages ?? PRESETS.default;
 
 // Schema verdict for every gate stage — branch on the enum, never on prose.
 const VERDICT = {
@@ -106,6 +120,39 @@ const STAGES = {
     ].filter(Boolean).join('\n\n'),
     apply: (out) => { ctx.spec = out.spec; },
   },
+  // Cross-vendor plan convergence gate (duo flow, ADR-0016 sibling to the
+  // /cf-model-orchestrator skill): the two independently-trained models agree on
+  // the plan + acceptance criteria before any build, producing the contract later
+  // stages grade against. Bounded rounds to agreement; no agreement stops for the
+  // human. kind 'gate' so it shares the rework budget, but it sits BEFORE build,
+  // so a changes_requested has no build to rework into and the loop throws loudly
+  // with the disagreements attached — that throw IS the "stop for the human"
+  // (never launder a disagreement into a default). Degrades to solo when codex is
+  // absent. It writes the agreed contract into ctx.spec for the later stages.
+  'plan-align': {
+    kind: 'gate',
+    model: A.models?.['plan-align'] ?? 'inherit',
+    schema: {
+      type: 'object',
+      required: ['verdict', 'findings'],
+      properties: {
+        verdict: { type: 'string', enum: ['approved', 'changes_requested'] },
+        findings: { type: 'array', items: { type: 'string' } },
+        contract: { type: 'string' },
+      },
+    },
+    prompt: () => [
+      `Cross-vendor plan-align for: ${TASK}`, WHERE,
+      `Acceptance criteria to ratify:\n${CRITERIA}`,
+      ctx.analysis && `Analysis findings:\n${ctx.analysis}`,
+      ctx.spec && `Draft spec:\n${ctx.spec}`,
+      'Two independently-trained models must converge on the plan and the acceptance criteria before any build. Draft or hold the plan and ACs as Claude, then hand them to codex for an independent critique via the cf-delegate skill\'s read-only ADR-0005 invocation (run `codex login status` first; if codex is missing or unauthenticated, degrade to solo silently and note it in a finding — duo was never promised).',
+      'Reconcile to agreement, bounded to <=2 rounds. Never launder a disagreement into a default.',
+      'On agreement: return verdict approved and put the agreed, pinned, testable plan + acceptance-criteria contract in `contract` — later stages grade against it; findings may note residual assumptions.',
+      'On no agreement after the bounded rounds: return verdict changes_requested with one finding per unresolved disagreement, and the pipeline halts for the human.',
+    ].filter(Boolean).join('\n\n'),
+    apply: (out) => { if (out.contract) ctx.spec = out.contract; },
+  },
   build: {
     model: A.models?.build ?? 'inherit',
     prompt: () => [
@@ -121,7 +168,7 @@ const STAGES = {
     apply: (out) => { ctx.buildSummary = typeof out === 'string' ? out : JSON.stringify(out); },
   },
   security: gate('security',
-    'Security lens: hunt secret exposure, injection (command/SQL/path/template), and authorization gaps in the changed code; any concrete instance is a blocker finding.'),
+    'Load the cf-security-reviewer agent (.claude/agents/cf-security-reviewer.md) as the reviewer for this stage — it owns the deep seven-axis checklist. Run its dual-vendor adversarial red-team: Claude as the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and codex as the read-only assume-breach attacker (ADR-0005 handoff) — an attacker and a defender on the same model share blind spots, so the two vendors must differ. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. The gate DERIVES the block from those enums, never from verdict prose: return changes_requested when any finding has severity in {critical,high} AND confidence in {confirmed,likely}. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes; if codex is unavailable run single-vendor with a loud caveat, since losing the second vendor defeats the red team.'),
   review: gate('review',
     'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',
