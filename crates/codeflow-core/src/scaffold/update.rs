@@ -179,13 +179,13 @@ fn update_entry(
     root: &Path,
     entry: &ManifestEntry,
     ctx: &super::template::TemplateContext,
-    state: &ProjectState,
+    _state: &ProjectState,
     opts: &UpdateOptions,
     installed: &mut InstalledManifest,
     report: &mut Report,
     diffs: &mut String,
 ) -> Result<(), ScaffoldError> {
-    let Some(rendered) = render_entry(source, entry, ctx, state.tier, report)? else {
+    let Some(rendered) = render_entry(source, entry, ctx, report)? else {
         return Ok(());
     };
     let dest_path = root.join(&entry.dest);

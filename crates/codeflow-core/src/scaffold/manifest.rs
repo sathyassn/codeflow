@@ -193,14 +193,24 @@ mod tests {
         let manifest = ScaffoldManifest::load(&source).expect("shipped manifest loads");
         assert_eq!(manifest.schema_version, 1);
         assert!(manifest.entries.len() >= 20, "expected a populated manifest");
-        // AGENTS.md is present at every tier.
-        let agents = manifest
+        // AGENTS.md is present at every tier: exactly one entry applies per tier
+        // (two entries, one dest, selected by tier — the tier-honest split), and
+        // the minimal tier gets the trimmed template.
+        for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
+            let applicable: Vec<&ManifestEntry> = manifest
+                .entries
+                .iter()
+                .filter(|e| e.dest == "AGENTS.md" && e.applies(tier, "default"))
+                .collect();
+            assert_eq!(applicable.len(), 1, "one AGENTS.md entry applies at {tier}");
+            assert_eq!(applicable[0].ownership, Ownership::ManagedRegion);
+        }
+        let minimal_agents = manifest
             .entries
             .iter()
-            .find(|e| e.dest == "AGENTS.md")
-            .expect("AGENTS.md entry");
-        assert_eq!(agents.ownership, Ownership::ManagedRegion);
-        assert!(agents.applies(Tier::Minimal, "default"));
+            .find(|e| e.dest == "AGENTS.md" && e.applies(Tier::Minimal, "default"))
+            .expect("a minimal-tier AGENTS.md entry");
+        assert_eq!(minimal_agents.src, "AGENTS.minimal.md.tmpl");
         // Exactly one settings entry applies per preset.
         for preset in ["default", "acceptEdits", "bypassPermissions"] {
             let count = manifest

@@ -2357,8 +2357,9 @@ mod tests {
     }
 
     #[test]
-    fn test_hook_integrity_warn_softens() {
-        // --minimal softens hook_integrity to warn like its siblings.
+    fn test_hook_integrity_warn_does_not_block() {
+        // A project that relaxes hook_integrity to warn in policy.json gets warn,
+        // not block, behavior.
         let p = GitPolicy {
             hook_integrity: PolicyLevel::Warn,
             ..default_policy()

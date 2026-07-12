@@ -294,13 +294,15 @@ pub(crate) fn build_context(
 }
 
 /// Renders an entry's asset: read, UTF-8 check, optional template
-/// substitution, minimal-tier policy softening. `None` (with a report line)
-/// when the asset is missing — parallel asset authoring must not break init.
+/// substitution. `None` (with a report line) when the asset is missing —
+/// parallel asset authoring must not break init.
+// Result kept for symmetry with the render/install pipeline (callers use `?`);
+// the body is infallible now that minimal-policy softening is gone.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn render_entry(
     source: &dyn super::AssetSource,
     entry: &ManifestEntry,
     ctx: &TemplateContext,
-    tier: Tier,
     report: &mut Report,
 ) -> Result<Option<String>, ScaffoldError> {
     let asset_path = format!("base/{}", entry.src);
@@ -316,39 +318,12 @@ pub(crate) fn render_entry(
         ));
         return Ok(None);
     };
-    let mut rendered = if entry.template {
+    let rendered = if entry.template {
         ctx.substitute(&text)
     } else {
         text
     };
-    if tier == Tier::Minimal && entry.dest.ends_with("policy.json") {
-        rendered = soften_policy_for_minimal(&rendered)?;
-    }
     Ok(Some(rendered))
-}
-
-/// `--minimal` flips every blocking git policy to warn except `secret_scan`,
-/// and the push test gate to off (charter §4.2: blocking policy on a scratch
-/// repo trains bypassing).
-fn soften_policy_for_minimal(policy: &str) -> Result<String, ScaffoldError> {
-    let mut value: serde_json::Value = serde_json::from_str(policy)?;
-    if let Some(git) = value.get_mut("git").and_then(serde_json::Value::as_object_mut) {
-        for (key, val) in git.iter_mut() {
-            if key == "secret_scan" {
-                continue;
-            }
-            if key == "test_gate_on_push" {
-                *val = serde_json::Value::String("off".to_string());
-                continue;
-            }
-            if val.as_str() == Some("block") {
-                *val = serde_json::Value::String("warn".to_string());
-            }
-        }
-    }
-    let mut text = serde_json::to_string_pretty(&value)?;
-    text.push('\n');
-    Ok(text)
 }
 
 fn record(
@@ -386,13 +361,13 @@ fn install_entry(
     root: &Path,
     entry: &ManifestEntry,
     ctx: &TemplateContext,
-    tier: Tier,
+    _tier: Tier,
     force: bool,
     installed: &mut InstalledManifest,
     report: &mut Report,
     written: &mut Vec<String>,
 ) -> Result<(), ScaffoldError> {
-    let Some(rendered) = render_entry(source, entry, ctx, tier, report)? else {
+    let Some(rendered) = render_entry(source, entry, ctx, report)? else {
         return Ok(());
     };
     let dest_path = root.join(&entry.dest);
@@ -598,47 +573,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn minimal_policy_softening() {
-        let policy = r#"{
-            "schema_version": 1,
-            "git": {
-                "commit_to_protected": "block",
-                "secret_scan": "block",
-                "force_push_unprotected": "allow",
-                "test_gate_on_push": "warn",
-                "protected_branches": ["main"]
-            }
-        }"#;
-        let softened = soften_policy_for_minimal(policy).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&softened).unwrap();
-        assert_eq!(v["git"]["commit_to_protected"], "warn");
-        assert_eq!(v["git"]["secret_scan"], "block");
-        assert_eq!(v["git"]["force_push_unprotected"], "allow");
-        assert_eq!(v["git"]["test_gate_on_push"], "off");
-        assert_eq!(v["git"]["protected_branches"][0], "main");
+    /// Renders the AGENTS.md entry the shipped manifest selects at `tier`.
+    fn render_shipped_agents(tier: Tier) -> String {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let source = crate::scaffold::DirSource::new(root);
+        let manifest = ScaffoldManifest::load(&source).expect("shipped manifest loads");
+        let entry = manifest
+            .entries
+            .iter()
+            .find(|e| e.dest == "AGENTS.md" && e.applies(tier, "default"))
+            .expect("an AGENTS.md entry for this tier");
+        let ctx = build_context("demo", "one liner", &["core".to_string()], "rust", tier, "9.9.9");
+        let mut report = Report::new("test".to_string());
+        render_entry(&source, entry, &ctx, &mut report)
+            .expect("render succeeds")
+            .expect("AGENTS.md asset is present")
     }
 
     #[test]
-    fn minimal_softens_new_merge_keys_from_shipped_asset() {
-        // The transform enumerates keys generically, so the shipped asset's
-        // new merge keys must soften to `warn` with no per-key wiring.
-        let asset = include_str!("../../../../assets/base/policy.json");
-        let softened = soften_policy_for_minimal(asset).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&softened).unwrap();
-        assert_eq!(v["git"]["merge_to_protected"], "warn");
-        assert_eq!(v["git"]["pr_merge_to_protected"], "warn");
-        assert_eq!(v["git"]["local_ref_protection"], "warn");
-    }
+    fn minimal_agents_is_tier_honest() {
+        // A minimal repo installs no project-management/ and no /cf-* skills, so
+        // its rendered AGENTS.md must not advertise machinery its tier never
+        // installed. The full tier still does — the split is honest both ways.
+        let minimal = render_shipped_agents(Tier::Minimal);
+        assert!(
+            !minimal.contains("project-management/"),
+            "minimal AGENTS.md must not reference project-management/:\n{minimal}"
+        );
+        assert!(
+            !minimal.contains("/cf-plan"),
+            "minimal AGENTS.md must not reference /cf-plan:\n{minimal}"
+        );
 
-    #[test]
-    fn minimal_leaves_security_section_untouched() {
-        // The transform only softens `git` (ADR-0008): on a scratch repo a
-        // destructive `rm -rf /` stays blocked, exactly as `secret_scan` does.
-        let asset = include_str!("../../../../assets/base/policy.json");
-        let softened = soften_policy_for_minimal(asset).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&softened).unwrap();
-        assert_eq!(v["security"]["dangerous_commands"], "block");
-        assert_eq!(v["security"]["privilege_escalation"], "warn");
+        let full = render_shipped_agents(Tier::Full);
+        assert!(
+            full.contains("project-management/") && full.contains("/cf-plan"),
+            "full AGENTS.md still advertises the full method"
+        );
     }
 }

@@ -345,7 +345,7 @@ fn fresh_init_leaves_clean_committable_tree() {
 }
 
 #[test]
-fn init_minimal_tier_subset_and_softened_policy() {
+fn init_minimal_tier_subset_enforces_full_policy() {
     isolate_git();
     let (_a, assets) = fixture_assets(false);
     let (_p, root) = project_dir();
@@ -359,11 +359,18 @@ fn init_minimal_tier_subset_and_softened_policy() {
     assert!(!root.join("docs/product.md").exists(), "standard-only");
     assert!(!root.join("project-management").exists(), "full-only");
 
+    // Minimal ships the SAME enforced policy.json as every other tier: git
+    // discipline is armed from the first commit, never auto-softened. A project
+    // may relax specific rules in policy.json deliberately, but the shipped
+    // default enforces them because conventional commits drive the git-cliff
+    // version/changelog automation.
     let policy: serde_json::Value =
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-    assert_eq!(policy["git"]["commit_to_protected"], "warn", "softened");
+    // The fixture policy ships commit_format + secret_scan as block; the old
+    // softening would have flipped commit_format to warn. Both stay block, so
+    // minimal now enforces git discipline exactly like the other tiers.
+    assert_eq!(policy["git"]["commit_format"], "block", "enforced, not softened to warn");
     assert_eq!(policy["git"]["secret_scan"], "block", "never softened");
-    assert_eq!(policy["git"]["test_gate_on_push"], "off");
     assert!(read(&root, ".codeflow/project.toml").contains("tier = \"minimal\""));
 }
 

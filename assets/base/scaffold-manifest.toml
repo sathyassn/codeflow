@@ -51,23 +51,39 @@
 #   .codeflow/manifest.json  — installed-file record: dest → {src, ownership, sha256}
 #   .codeflow/.baseline/     — pristine rendered copies (3-way merge bases)
 #
-# ## Tier policy transform
+# ## Tier policy (no transform)
 #
-#   At --minimal the engine rewrites the rendered policy.json before writing:
-#   every "block" value under `git` flips to "warn" except `secret_scan`;
-#   `test_gate_on_push` flips to "off" (charter §4.2: blocking policy on a
-#   scratch repo trains bypassing).
+#   ALL tiers ship the SAME enforced policy.json — including --minimal. Git
+#   discipline is armed from the first commit at every tier; the engine performs
+#   no tier-based softening. A project may deliberately relax specific rules in
+#   its own .codeflow/policy.json, but that is not recommended: conventional-commit
+#   discipline is load-bearing for the git-cliff version/changelog automation
+#   (the version bump and CHANGELOG are derived from the commit history).
 
 schema_version = 1
 
 # --- root contracts ---------------------------------------------------------
 
+# AGENTS.md is tier-honest: two entries, one dest, selected by tier (the same
+# same-dest / disjoint-selector shape the settings presets use). The full
+# contract advertises the whole method — the six-layer model, the /cf-* skills,
+# project-management/, the session digest. A --minimal repo installs none of that
+# machinery (only AGENTS.md + .gitignore + policy.json + the pre-commit hook), so
+# it gets a trimmed contract that advertises only what its tier installs.
 [[entry]]
 src = "AGENTS.md.tmpl"
 dest = "AGENTS.md"
 ownership = "managed-region"
 region = "markdown"
-tiers = ["minimal", "standard", "full"]
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "AGENTS.minimal.md.tmpl"
+dest = "AGENTS.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["minimal"]
 template = true
 
 [[entry]]

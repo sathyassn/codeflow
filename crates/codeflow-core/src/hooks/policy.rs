@@ -86,8 +86,8 @@ pub struct GitPolicy {
     /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
     /// (`.codeflow/policy.json`, `.codeflow/project.toml`). A floor-raise for
     /// honest agents, not a boundary: the Write tool bypasses it and remote+CI
-    /// stay the hard line (charter D19). Softened by `--minimal` with the
-    /// siblings; suspended only in the pre-first-commit bootstrap window.
+    /// stay the hard line (charter D19). Suspended only in the
+    /// pre-first-commit bootstrap window.
     pub hook_integrity: PolicyLevel,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
@@ -190,9 +190,8 @@ impl GitPolicy {
 
 /// The `security` section of `.codeflow/policy.json` — the two levels the
 /// `exec-guard` hook enforces against a Bash command (ADR-0008). Separate from
-/// the `git` section so the `--minimal` tier transform (which only softens
-/// `git`) never touches it: `dangerous_commands` stays `block` on a scratch
-/// repo, exactly as `secret_scan` does.
+/// the `git` section: `dangerous_commands` stays `block` regardless, exactly as
+/// `secret_scan` does.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecuritySection {

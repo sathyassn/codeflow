@@ -1,0 +1,83 @@
+# {{PROJECT_NAME}} — agent operating contract
+
+{{PROJECT_ONE_LINER}}
+
+- **Stack:** {{STACK}}
+- **Areas:** {{AREAS}}
+- **Tier:** {{TIER}}
+
+This file is the canonical instruction set for any agent or human working in this
+repo. The block between the codeflow markers below is maintained by
+`codeflow update`; everything outside it is project-owned — extend freely.
+
+<!-- codeflow:managed:begin scaffold={{SCAFFOLD_VERSION}} -->
+<!-- Owned by `codeflow update`. Edits inside this block are replaced on update;
+     put project-specific instructions outside the markers. -->
+
+## What this tier installs
+
+This is codeflow's **minimal** tier: git hygiene plus working principles, and
+nothing else. The knowledge model, the planning and delivery skills, durable work
+tracking, and the session hooks are **not** installed here — so this contract does
+not point at them. `codeflow init --standard` is an additive upgrade that installs
+the full method and rewrites this block to match; do it when the project grows past
+a scratch repo.
+
+Installed and load-bearing at this tier: this file, `.gitignore`,
+`.codeflow/policy.json`, and the `.codeflow/git-hooks/pre-commit` shim.
+
+## Git rules
+
+Git discipline is **enforced from the first commit** at this tier — exactly as at
+every other tier. codeflow ships the same armed `.codeflow/policy.json`, so the
+rules below are gates the pre-commit hook blocks on, not advice. The **secret
+scan** (never stage credentials, API keys, tokens, or `.env` files) is the one
+gate never relaxed — not even during bootstrap grace.
+
+A team may relax specific rules by editing `.codeflow/policy.json` if it
+deliberately chooses to, but that is **not recommended**: conventional-commit
+discipline is load-bearing for codeflow's versioning and changelog automation —
+git-cliff derives the version bump and the CHANGELOG from the commit history, so
+softening the commit rules quietly breaks it.
+
+- **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
+  test/ chore/ ci/ hotfix/ plan/ spike/ experiment/`. Pick by work intent.
+- **Commits:** conventional format `type(scope): description` — imperative mood,
+  lower-case type, no trailing period; body explains *why* when non-obvious. One
+  logical change per commit.
+- **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
+  with …" lines, no robot emoji — in commit messages and PR bodies.
+- **No emoji** in commit subjects or PR bodies.
+- **Protected branches** (`main`/`master`): never commit, push, force-push,
+  delete, or hard-reset on them — land work through a branch and a reviewed PR.
+
+## Workflow discipline
+
+Principles to reason from with judgment, not a rote checklist.
+
+- **Work to the outcome.** Know the task's intent and what *done* means before
+  acting, then work in small, verifiable steps — a failed check is input to the
+  next step, not the end. Iterate until the outcome is verified, or stop and
+  surface a genuine blocker.
+- **Ground it in evidence — never assume.** Treat an unclear requirement, API, or
+  fact as a stop-and-verify, not a guess. Research non-trivial decisions in the
+  project's own code and docs first, then the best current external sources.
+- **Write it well.** Favor the simplest change that fully solves the problem: DRY,
+  idiomatic, coherent with the existing architecture — its conventions over your
+  taste. Leave it more consistent than you found it.
+- **Prove it where it runs.** Verify the work at the surface it affects — unit,
+  integration, end-to-end, user-facing — and check what it touches upstream and
+  downstream, not just the lines you changed. `codeflow test` is green before you
+  call it done.
+- **Unverifiable or fabricated claims are defects (zero tolerance).** Every claim
+  needs evidence — file:line, command output, or a reproducible check; never
+  invent a fact, number, result, or citation. Say explicitly what was *not*
+  verified.
+
+<!-- codeflow:managed:end -->
+
+## Project-specific instructions
+
+<!-- Everything below is yours. `codeflow update` never touches it. -->
+
+{{PROJECT_NOTES}}
