@@ -1,5 +1,7 @@
 <!-- PR bodies are linted by CI (`codeflow ci`): no AI attribution, no emoji.
-     Keep each section honest — evidence over claims.
+     Keep each section honest — evidence over claims. Prefer bullets for the
+     enumerable sections (Changes, Verification evidence, Linked work); prose
+     only where a sentence earns its place (Summary, Notes).
 
      Type and breaking-change are NOT re-declared here. They come from your
      conventional commits — `type(scope): …` and the `!` / `BREAKING CHANGE:`

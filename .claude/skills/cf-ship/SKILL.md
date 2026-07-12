@@ -16,8 +16,10 @@ description: Land finished work — docs and capability updates, then a PR throu
      updated when the ADR declares architecture impact;
    - a spec frozen (`status: implemented`); epic and task statuses updated.
 3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
-4. Push and open the PR. Body: summary, changes, test results, linked epic and
-   capability IDs. No AI attribution, no emoji.
+4. Push and open the PR. Body: follow the PR template — summary, changes,
+   verification (name the surface, paste evidence), linked epic and capability
+   IDs. Bullets for the enumerable sections, prose only where a sentence earns
+   its place. No AI attribution, no emoji.
 5. Land via a PR **merged by a human** on green CI, or `codeflow integrate
    <branch> --into <target>` when there is no remote. An agent never merges into
    a protected branch — no `gh pr merge` into a protected base, no by-hand

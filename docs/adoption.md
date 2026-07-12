@@ -146,7 +146,7 @@ the values you already set — so tightening ships without a manual migration.
    protected-branch rules, test gate). Keep `codeflow test` and `codeflow
    validate --docs` green before push.
 4. **Land by PR, merged by a human.** Push the branch, open a PR from the
-   template (summary, changes, test results, linked epic/capability IDs); a
+   template (summary, changes, verification, linked epic/capability IDs); a
    human merges it on green CI (an agent-performed `gh pr merge` into a
    protected base is blocked — that is the boundary). With no remote, `codeflow
    integrate <branch> --into <target>` is the sanctioned local path, and a human
