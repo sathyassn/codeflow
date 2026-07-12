@@ -34,16 +34,21 @@ policy, exactly as the git rules do.
 Replace the one-line charge with a two-part mandatory security / red-team stage,
 bound at three planes that copy the git-rules model.
 
-**Part 1 — deterministic floor (mechanical, reproducible, per stack).** A
-per-stack scanner table living in core beside `testing/setup/detect.rs`, so the
-pipeline stage and the CI job invoke the same commands: rust → `cargo audit`
-(optionally `cargo deny check advisories`); node → `osv-scanner --recursive`
-(or `pnpm/npm audit --audit-level=high`); python → `pip-audit`; go →
-`govulncheck ./...`; any/multi/unknown → `osv-scanner --recursive` as the
-universal lockfile fallback, plus `semgrep --config auto` for cross-language
-taint/SAST, plus the existing gitleaks + scan.rs for secrets and entropy. Each
-carries a severity floor and an allowlist (`.osv-scanner.toml`, semgrep ignores)
-so noise stays out of the dev's way — the scan.rs placeholder-filter philosophy.
+**Part 1 — deterministic floor (mechanical, reproducible).** The floor that
+ships is `osv-scanner` in CI — stack-agnostic SCA that reads every lockfile
+ecosystem (Cargo.lock, package-lock.json, requirements.txt, go.mod, …), so one
+job is the universal floor — plus the existing gitleaks + scan.rs for secrets and
+entropy. The decided *target* is to grow this into a per-stack scanner table
+living in core beside `testing/setup/detect.rs`, so the pipeline stage and the CI
+job invoke the same commands: rust → `cargo audit` (optionally `cargo deny check
+advisories`); node → `osv-scanner --recursive` (or `pnpm/npm audit
+--audit-level=high`); python → `pip-audit`; go → `govulncheck ./...`;
+any/multi/unknown → `osv-scanner --recursive` as the universal lockfile fallback,
+plus `semgrep --config auto` for cross-language taint/SAST. That per-stack core
+module is a future/optional extension — not yet built; only the universal
+osv-scanner floor is live today. Each scanner carries a severity floor and an
+allowlist (`.osv-scanner.toml`, semgrep ignores) so noise stays out of the dev's
+way — the scan.rs placeholder-filter philosophy.
 
 **Part 2 — dual-vendor adversarial review** (the `cf-security-reviewer` agent):
 Claude as the defender lens (full repo context — triages every Part-1 scanner hit
@@ -53,8 +58,10 @@ The split is deliberate: an attacker and a defender on the same model share blin
 spots, so assigning different vendors breaks the correlated blindspot. The agent
 carries a seven-axis checklist mapped to OWASP Top 10:2025, OWASP LLM Top 10:2025,
 and CWE Top 25 (2025); CVSS-4.0 severity bands; and the `SecurityFinding` /
-`SecurityVerdict` schema. The gate **derives** the block decision from the schema
-enums, never from the `verdict` prose (the pipeline rule: branch only on enums).
+`SecurityVerdict` schema. The reviewer **sets** its `verdict` from the schema
+enums (severity + confidence), never from prose, and the pipeline gate branches
+on that verdict — the structured reasoning informs the verdict; the pipeline's
+`{verdict, findings: string[]}` schema is a deliberate rework-compat choice.
 
 The three planes:
 
@@ -68,10 +75,13 @@ The three planes:
   and carries no unresolved High+ model findings. This is what a human must see
   green before merging.
 - **Policy (the shared threshold).** New `security_review` and `dep_audit` keys
-  in `.codeflow/policy.json` beside `secret_scan`, marked never-relaxed, so the
-  local hook and CI read one source of truth — the same pattern the git planes
-  use. (The keys ship coupled with their Rust struct fields, in the implementing
-  slice; policy values without fields are not added.)
+  in `.codeflow/policy.json` beside `secret_scan`, marked never-relaxed. The CI
+  `security-review` job reads its gate level from policy.json rather than a
+  hardcoded threshold — the same source-of-truth pattern the git planes use:
+  `security_review` is the whole-job umbrella and `dep_audit` the SCA sub-gate,
+  and the advisory blocks when *either* is `block`. (These keys are CI-read today;
+  no local scanner hook consumes them. They ship coupled with their Rust struct
+  fields, in the implementing slice; policy values without fields are not added.)
 
 Split by determinism, because a flaky hard gate creates pressure to bypass —
 which doctrine forbids. Deterministic High+ (SCA CVEs, detected secrets, Semgrep

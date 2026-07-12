@@ -37,8 +37,9 @@ Core modules grouped by responsibility:
   lint), the capability registry parser, FTS5 recall, and the cross-repo
   registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (7 checks — hooks, claude, config,
-  permissions, network, delegates, repo-integrity), structured settings merge,
+  `error.rs`): the doctor check table (10 checks — hooks, claude, config,
+  permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift,
+  test-config), structured settings merge,
   generated status views, the test-gate engine, path flock, and pruned error
   types.
 
@@ -47,7 +48,14 @@ PreToolUse (Bash) guards, and remote branch protection read one config
 (`.codeflow/policy.json`); the scaffolded CI runs the same git standards through
 the `codeflow ci` binary (commit format, attribution, emoji, breaking-footer,
 branch naming) — one source of truth, no inline drift, and portable across CI
-hosts via thin per-platform wrappers (ADR-0017). Local planes are
+hosts via thin per-platform wrappers (ADR-0017). CI also carries the
+**security-review** plane (ADR-0016): a `security-review` job whose deterministic
+floor is `osv-scanner` — stack-agnostic SCA across every lockfile ecosystem, the
+universal floor today (per-stack scanners such as `cargo audit` / `pip-audit` /
+`govulncheck` / `semgrep` are an optional future extension), with the
+`cf-security-reviewer` dual-vendor red-team layered on top. It is gated by the
+`security_review` (whole-job umbrella) and `dep_audit` (SCA sub-gate) policy keys
+beside `secret_scan`; the advisory blocks when either is `block`. Local planes are
 fast feedback; CI + remote protection are the authoritative perimeter (charter §6.5). The
 git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),

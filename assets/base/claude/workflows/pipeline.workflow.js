@@ -16,7 +16,7 @@
 //                         Default: PRESETS.default = ['build', 'review', 'verify']
 //                         (solo). PRESETS.duo = ['plan-align','build','security',
 //                         'review','verify'] is the opt-in cross-vendor batch path
-//                         (ADR-0016); pass it via args.stages.
+//                         (ADR-0015); pass it via args.stages.
 //                         'consult' is an optional cross-vendor second opinion
 //                         (codex, read-only); off unless named (ADR-0005).
 //   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
@@ -54,8 +54,8 @@ const MAX_REWORK = A.maxRework ?? 3;
 // Named presets (opt-in via args.stages). The DEFAULT is unchanged — the solo
 // build -> review -> verify path. 'duo' is the batch/unattended counterpart to
 // the /cf-model-orchestrator lead-session skill: it prepends the cross-vendor
-// plan-align convergence gate and inserts the cf-security-reviewer red-team
-// (ADR-0016), and silently degrades to solo when codex is unavailable at flow
+// plan-align convergence gate (ADR-0015) and inserts the cf-security-reviewer
+// red-team (ADR-0016), and silently degrades to solo when codex is unavailable at flow
 // start (each cross-vendor stage preflights `codex login status` and notes the
 // skip). Pass it explicitly, e.g. args.stages = PRESETS.duo.
 const PRESETS = {
@@ -120,7 +120,7 @@ const STAGES = {
     ].filter(Boolean).join('\n\n'),
     apply: (out) => { ctx.spec = out.spec; },
   },
-  // Cross-vendor plan convergence gate (duo flow, ADR-0016 sibling to the
+  // Cross-vendor plan convergence gate (duo flow, ADR-0015 sibling to the
   // /cf-model-orchestrator skill): the two independently-trained models agree on
   // the plan + acceptance criteria before any build, producing the contract later
   // stages grade against. Bounded rounds to agreement; no agreement stops for the
@@ -168,7 +168,7 @@ const STAGES = {
     apply: (out) => { ctx.buildSummary = typeof out === 'string' ? out : JSON.stringify(out); },
   },
   security: gate('security',
-    'Load the cf-security-reviewer agent (.claude/agents/cf-security-reviewer.md) as the reviewer for this stage — it owns the deep seven-axis checklist. Run its dual-vendor adversarial red-team: Claude as the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and codex as the read-only assume-breach attacker (ADR-0005 handoff) — an attacker and a defender on the same model share blind spots, so the two vendors must differ. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. The gate DERIVES the block from those enums, never from verdict prose: return changes_requested when any finding has severity in {critical,high} AND confidence in {confirmed,likely}. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes; if codex is unavailable run single-vendor with a loud caveat, since losing the second vendor defeats the red team.'),
+    'Load the cf-security-reviewer agent (.claude/agents/cf-security-reviewer.md) as the reviewer for this stage — it owns the deep seven-axis checklist. Run its dual-vendor adversarial red-team: Claude as the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and codex as the read-only assume-breach attacker (ADR-0005 handoff) — an attacker and a defender on the same model share blind spots, so the two vendors must differ. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. SET your `verdict` from those enums, never from prose — the gate branches on that verdict: return changes_requested when any finding has severity in {critical,high} AND confidence in {confirmed,likely}. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes; if codex is unavailable run single-vendor with a loud caveat, since losing the second vendor defeats the red team.'),
   review: gate('review',
     'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',

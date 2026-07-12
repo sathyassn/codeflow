@@ -70,7 +70,7 @@ re-verify at each codex upgrade via the harness-parity canary so they cannot rot
 silently):
 
 - **Claude** = Fable 5, `high` (or `xhigh`) effort.
-- **Codex** = `gpt-5.6-sol` at `xhigh` — pinned in `.codex/config.toml`:
+- **Codex** = `gpt-5.6-sol` at `xhigh` — set the pin in `.codex/config.toml`:
   `model = "gpt-5.6-sol"`, `model_reasoning_effort = "xhigh"`.
 
 ## Driving codex

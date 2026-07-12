@@ -168,9 +168,9 @@ adrs: [ADR-0002, ADR-0007]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs seven health checks — hooks, Claude wiring, config,
-permissions, network, delegates, and repo integrity — so degradation is
-always visible, never silent.
+`codeflow doctor` runs ten health checks — hooks, Claude wiring, config,
+permissions, network, delegates, repo integrity, CI perimeter, managed-region
+drift, and test config — so degradation is always visible, never silent.
 
 ## CAP-009 — cross-vendor-delegation
 
@@ -194,3 +194,54 @@ skills, and an optional `consult` pipeline stage — plus one
 deterministic `delegates` doctor check; delegates edit only inside a worktree on
 a feature branch, so pre-commit, commit-msg, the test gate, and `cf-reviewer`
 constrain them exactly as they do Claude. No engine orchestration code is added.
+
+## CAP-010 — duo-model-orchestration
+
+```yaml
+id: CAP-010
+name: duo-model-orchestration
+area: scaffold
+status: shipped
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_check_delegates"]
+epics: []
+adrs: [ADR-0015]
+```
+
+`/cf-model-orchestrator` drives higher-stakes planned work as a Claude+codex
+duo: Claude plans with explicit acceptance criteria, codex (through the codex
+app-server JSON-RPC driver, tmux fallback) reviews the plan then executes and
+first-tests it including UI-driven e2e, Claude does the final verification
+grading every criterion, and the two iterate a bounded fix loop. Ships as the
+`cf-model-orchestrator` skill (mirrored across `.claude/skills`, `.agents/skills`,
+and the `assets/base` source) and an opt-in `duo` pipeline preset with a
+`plan-align` convergence gate — never the default, so trivial work pays no duo
+tax. Silently degrades to solo `/cf-develop` when codex is unavailable at flow
+start; no engine orchestration code is added, and the authoritative gate stays
+server-side CI plus a human-merged PR (ADR-0006).
+
+## CAP-011 — security-redteam-review
+
+```yaml
+id: CAP-011
+name: security-redteam-review
+area: engine
+status: shipped
+verified_by: ["cargo test hooks::policy", "codeflow-core tests/manifest_consistency.rs"]
+epics: []
+adrs: [ADR-0016]
+```
+
+The duo develop flow's mandatory security / red-team stage, bound at three
+planes that copy the git-rules model. Deterministic floor: the CI
+`security-review` job runs `osv-scanner` (stack-agnostic SCA over every lockfile
+ecosystem — the universal floor today; per-stack scanners are a future
+extension), gated by the `security_review` (whole-job umbrella) and `dep_audit`
+(SCA sub-gate) policy keys beside `secret_scan`, with the advisory blocking when
+either is `block`. Model layer: the `cf-security-reviewer` agent runs a
+dual-vendor adversarial red-team (Claude defender lens + codex assume-breach
+attacker, ADR-0005) across seven axes mapped to OWASP Top 10:2025 / OWASP LLM
+Top 10:2025 / CWE Top 25 (2025), emitting structured `SecurityFinding` /
+`SecurityVerdict` output; the pipeline `security` stage sets its verdict from the
+severity+confidence block rule. Deterministic High+ hard-blocks CI;
+model-reasoned findings warn locally and force bounded rework, with the human
+merger as the backstop for judgment a machine cannot adjudicate (ADR-0007).
