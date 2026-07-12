@@ -252,6 +252,20 @@ dest = ".claude/skills/cf-consult/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# cf-model-orchestrator ships its SKILL.md plus a resources/ file (the app-server
+# driver) — the first skill with a resource, so each resource needs its own entry.
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/SKILL.md"
+dest = ".claude/skills/cf-model-orchestrator/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Cross-harness mirror (.agents/skills/): the Agent Skills location read by Codex
 # and other compatible harnesses. Every cf-* skill above also installs here so a
 # non-Claude harness gets the same method. (agy uses a plugin model and is bound
@@ -296,6 +310,18 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-consult/SKILL.md"
 dest = ".agents/skills/cf-consult/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/SKILL.md"
+dest = ".agents/skills/cf-model-orchestrator/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/codex-app-server-driver.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
