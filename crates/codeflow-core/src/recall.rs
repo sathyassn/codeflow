@@ -267,7 +267,10 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
     }
 
     for sub in ["epics", "tasks"] {
-        for abs in md_files_in(&root.join("project-management").join(sub)) {
+        // Recursive: the canonical layout nests
+        // (`epics/EPC-001/EPC-001.md`, `epics/EPC-001/tasks/TSK-*.md`), so a
+        // flat read misses dogfooded epics/tasks entirely.
+        for abs in md_files_under(&root.join("project-management").join(sub)) {
             sources.push(SourceFile {
                 rel: rel_to(root, &abs),
                 abs,
@@ -762,6 +765,59 @@ mod tests {
             .find(|r| r.kind == "product")
             .expect("docs/product.md must surface");
         assert_eq!(product.path, "docs/product.md");
+    }
+
+    /// Dogfood layout: `epics/EPC-NNN/EPC-NNN.md` and
+    /// `epics/EPC-NNN/tasks/TSK-*.md` nest one level deeper than the flat
+    /// `epics/EPC-NNN.md` / `tasks/TSK-*.md` layout — a flat directory read
+    /// would miss both entirely (this repo's own epics live there).
+    #[test]
+    fn test_recall_indexes_nested_epics_and_tasks() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        make_repo(repo.path());
+
+        let epic_dir = repo.path().join("project-management/epics/EPC-009");
+        fs::create_dir_all(&epic_dir).unwrap();
+        fs::write(
+            epic_dir.join("EPC-009.md"),
+            "---\ntitle: Quokka rollout\nstatus: in_progress\n---\n\n\
+             # Quokka rollout\n\nBrings quokka support to the platform.\n",
+        )
+        .unwrap();
+
+        let task_dir = epic_dir.join("tasks");
+        fs::create_dir_all(&task_dir).unwrap();
+        fs::write(
+            task_dir.join("TSK-009-001.md"),
+            "---\ntitle: Quokka wiring task\nstatus: todo\n---\n\n\
+             # Quokka wiring task\n\nWire the quokka adapter.\n",
+        )
+        .unwrap();
+
+        let db = home.path().join("recall.db");
+        let report = recall(
+            &db,
+            &[target("r1", repo.path())],
+            "quokka",
+            &RecallOptions::default(),
+        )
+        .unwrap();
+
+        let paths: HashSet<&str> = report.results.iter().map(|r| r.path.as_str()).collect();
+        assert!(
+            paths.contains("project-management/epics/EPC-009/EPC-009.md"),
+            "nested epic must surface: {paths:?}"
+        );
+        assert!(
+            paths.contains("project-management/epics/EPC-009/tasks/TSK-009-001.md"),
+            "nested task must surface: {paths:?}"
+        );
+        assert!(
+            report.results.iter().all(|r| r.kind == "pm"),
+            "nested epic/task files must be indexed as pm: {:?}",
+            report.results
+        );
     }
 
     #[test]
