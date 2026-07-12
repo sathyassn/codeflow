@@ -112,8 +112,9 @@ impl ProjectState {
 /// One record in `.codeflow/manifest.json`.
 ///
 /// `sha256` semantics by ownership class:
-/// - `managed`: hash of the installed file content at install/update time —
-///   "file hash == recorded hash" means unmodified;
+/// - `managed`: hash of the pristine shipped version (== the `.baseline/`
+///   copy), NOT of the on-disk file when it carries user edits from a 3-way
+///   merge — "file hash == recorded hash" means the user has not modified it;
 /// - `managed-region` (markdown/hash): hash of the codeflow block only;
 /// - `managed-region` (json): hash of the rendered shipped preset;
 /// - `user-owned`: hash of the rendered shipped default (the user file is

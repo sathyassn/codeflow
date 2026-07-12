@@ -14,6 +14,12 @@
 //!   NEW default keys (absent from both the user file and the old shipped
 //!   default), added with defaults and reported.
 //!
+//! Manifest invariant: a managed file's recorded `sha256` is the hash of the
+//! pristine shipped version (== the `.baseline/` copy), NEVER the hash of a
+//! merged file. That is what makes "current hash == recorded hash" mean
+//! "unmodified"; recording a merged hash would misclassify a customized file as
+//! pristine and overwrite it on the next update.
+//!
 //! The update always ends with a printed report
 //! (changed / merged / conflicted / skipped / added).
 
