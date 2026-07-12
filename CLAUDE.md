@@ -4,9 +4,9 @@
 ## Claude-specific notes
 
 - Session hooks are wired in `.claude/settings.json`: orient digest at
-  SessionStart, session summary at SessionEnd, git-guard before Bash. When a git
-  command is blocked, read the guard message — it names the violated policy rule
-  and the sanctioned path.
+  SessionStart, session summary at SessionEnd, git-guard and exec-guard before
+  Bash. When a command is blocked, read the guard message — it names the
+  violated policy rule and the sanctioned path.
 - The permission preset and sandbox mode were chosen at init and live in
   `.claude/settings.json`; change them there, not ad hoc.
 - The AGENTS.md git rules are **hook-enforced** here — the commit-msg hook and
@@ -22,9 +22,9 @@
   a feature or change → `/cf-develop`; a batch/parallel or multi-task epic → the
   pipeline preset or the integration-branch flow; nothing fits → author a custom
   ad-hoc workflow. Full ladder in the `cf-method` skill.
-- Compose stages and models in config (`args.stages`, `args.models`, or a
-  `[workflows]` table in `.codeflow/project.toml`) — never hardcode them; the
-  pipeline file is user-owned and `codeflow update` never touches it.
+- Compose stages and models in config (`args.stages`, `args.models`) — never
+  hardcode them; the pipeline file is user-owned and `codeflow update` never
+  touches it.
 - **Stay lean by delegating** — the Claude mechanism for AGENTS.md's "Guard your
   context." Wide search → the `Explore` subagent; independent review → the
   `cf-reviewer` subagent; batch/parallel or novel orchestration → a workflow.
