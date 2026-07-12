@@ -181,7 +181,7 @@ id: CAP-009
 name: cross-vendor-delegation
 area: scaffold
 status: shipped
-verified_by: ["cargo test doctor::tests::test_check_delegates", "live: codex exec --json consult + resume on registry.rs, thread 019f23e5-7bd7-7842-8a26-009e5a652759 (docs/plan/v2/01-execution-status.md)"]
+verified_by: ["cargo test doctor::tests::test_check_delegates", "live: codex-plugin-cc MCP + resumable thread verified 2026-07-11, codex-cli 0.144.1 (ADR-0018)"]
 epics: []
 adrs: [ADR-0005, ADR-0018]
 ```
