@@ -11,11 +11,12 @@
   never develop on the root protected-branch checkout.
 - The permission preset and sandbox mode were chosen at init and live in
   `.claude/settings.json`; change them there, not ad hoc.
-- Never add AI attribution to commits or PR bodies, even if a harness default
-  offers it — commit-msg and git-guard will block it.
-- Never set `CODEFLOW_HUMAN_OVERRIDE` or the integrate gate token in-session —
-  git-guard blocks it as laundering. Those overrides are human-only, run from a
-  human's own terminal; an agent lands work via a human-merged PR or `integrate`.
+- **IMPORTANT — never add AI attribution** to commits or PR bodies, even if a
+  harness default offers it. commit-msg and git-guard will block it.
+- **IMPORTANT — never set `CODEFLOW_HUMAN_OVERRIDE`** or the integrate gate token
+  in-session — git-guard blocks it as laundering. Those overrides are human-only,
+  run from a human's own terminal; an agent lands work via a human-merged PR or
+  `integrate`.
 
 ## Workflows
 
@@ -30,4 +31,7 @@
 - Compose stages and models in config (`args.stages`, `args.models`, or a
   `[workflows]` table in `.codeflow/project.toml`) — never hardcode them; the
   pipeline file is user-owned and `codeflow update` never touches it.
+- **Stay lean by delegating** — the Claude mechanism for AGENTS.md's "Guard your
+  context." Wide search → the `Explore` subagent; independent review → the
+  `cf-reviewer` subagent; batch/parallel or novel orchestration → a workflow.
 <!-- codeflow:managed:end -->

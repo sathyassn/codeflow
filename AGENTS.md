@@ -108,8 +108,17 @@ edits the root checkout directly.
 
 ## Workflow discipline
 
+- **Work to the outcome.** Know the task's intent and what tangible result means
+  *done* before acting. Then work in small, verifiable steps — a failed gate or
+  review is input to the next step, not the end. Iterate until the outcome is
+  verified, or stop and surface a genuine blocker.
 - **No assumptions.** Unclear requirement, API, or behavior → verify first: read
   the code, run it, or ask. State any assumption you could not eliminate.
+- **Guard your context.** Long context degrades quality. Keep the thinking,
+  planning, and synthesis in your own session, but delegate breadth (wide
+  searches, reading many files), long or mechanical passes, and independent
+  checks to a subagent or workflow — each works in its own context and returns a
+  condensed result, so yours stays sharp for the decisions.
 - **Unverifiable claims are defects.** "Tests pass" requires test output; "X
   works" requires evidence — file:line, command output, or a reproducible check.
   Say explicitly what was *not* verified.

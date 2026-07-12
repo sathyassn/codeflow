@@ -27,7 +27,9 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 | Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
 | Build planned work | `/cf-develop` — build → independent review → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
-| Mechanics | `codeflow` CLI: `test`, `validate [--docs]`, `status`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>` |
+| Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
+| Get an outside opinion | `/cf-consult` — an independent second opinion (or handoff) from another vendor's CLI |
+| Mechanics | `codeflow` CLI: `test`, `validate [--docs]`, `status`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote` |
 
 ## Planning and tracking
 
@@ -42,8 +44,12 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Git rules
 
-Enforced by git hooks, the git-guard hook, remote protection, and CI — all reading
-`.codeflow/policy.json`. The rules, compressed:
+Four planes read `.codeflow/policy.json`, as defense in depth. Local git hooks and
+the `git-guard` PreToolUse hook are **fast feedback** — they catch the normal ways
+work goes wrong, in-session, before a push. CI and remote branch protection are the
+**authoritative perimeter**: server-enforced, so an agent on the local host cannot
+bypass them (arm it with `codeflow remote protect`). The local layer is convenience;
+the remote layer is the real boundary. The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ spike/ experiment/`. Pick by work intent.
@@ -54,9 +60,17 @@ Enforced by git hooks, the git-guard hook, remote protection, and CI — all rea
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
 - **No emoji** in commit subjects or PR bodies.
-- **Protected branches** (`main`/`master` + policy globs): never commit, push,
-  force-push, delete, or hard-reset on them. Work lands by exactly two paths:
-  PR → green CI → merge, or `codeflow integrate <branch> --into <target>`.
+- **Protected branches** (`main`/`master` + policy globs): never commit, merge,
+  push, force-push, delete, or hard-reset on them. Work lands by exactly two
+  paths: PR → green CI → merged by a human, or `codeflow integrate <branch>
+  --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
+  tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
+  can corrupt the root repo). The override is a human-terminal convenience, not
+  authentication; it is contained because the boundary is remote.
+- **Bodies of work:** a multi-task epic lands task-by-task on a non-protected
+  `integration/<epic>` branch (agents merge there); only the finished body
+  reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
+  work."
 - **PR bodies:** summary, changes, test results, linked epic/capability IDs.
 - When a gate blocks you, fix the cause — never bypass (`--no-verify`, editing
   hooks, exporting gate tokens). Gates exist only where mistakes are
@@ -80,8 +94,17 @@ edits the root checkout directly.
 
 ## Workflow discipline
 
+- **Work to the outcome.** Know the task's intent and what tangible result means
+  *done* before acting. Then work in small, verifiable steps — a failed gate or
+  review is input to the next step, not the end. Iterate until the outcome is
+  verified, or stop and surface a genuine blocker.
 - **No assumptions.** Unclear requirement, API, or behavior → verify first: read
   the code, run it, or ask. State any assumption you could not eliminate.
+- **Guard your context.** Long context degrades quality. Keep the thinking,
+  planning, and synthesis in your own session, but delegate breadth (wide
+  searches, reading many files), long or mechanical passes, and independent
+  checks to a subagent or workflow — each works in its own context and returns a
+  condensed result, so yours stays sharp for the decisions.
 - **Unverifiable claims are defects.** "Tests pass" requires test output; "X
   works" requires evidence — file:line, command output, or a reproducible check.
   Say explicitly what was *not* verified.
