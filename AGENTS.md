@@ -50,7 +50,7 @@ conversational answer needs no skill.
 |---|---|
 | Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
 | Build planned work | `/cf-develop` — build → independent review → verify, bounded rework |
-| Build higher-stakes planned work with a second model | `/cf-model-orchestrator` — duo Claude+codex build → review → verify with a joint gate; silently degrades to solo `/cf-develop` when codex is unavailable |
+| Build higher-stakes planned work with a second model | `/cf-model-orchestrator` — duo Claude+codex build → review → verify with a joint gate; the duo needs Claude Code as the orchestrating seat plus an authenticated codex, and silently degrades to solo `/cf-develop` when either half is unavailable |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
@@ -74,10 +74,13 @@ Four planes enforce the git standards, defense in depth: git hooks, the `git-gua
 PreToolUse hook, and remote branch protection each read `.codeflow/policy.json`, and
 the scaffolded CI runs the same commit-format, attribution, emoji, and branch
 checks through the `codeflow ci` binary — one source of truth with the hooks, no
-inline drift (ADR-0017). The local planes are fast in-session
-feedback; CI and remote branch protection are the authoritative, server-enforced
-perimeter — the real boundary (why the split matters: cf-method, "Why the git
-boundary is remote"). The rules, compressed:
+inline drift (ADR-0017). The PreToolUse plane is per-harness: Claude Code
+always; interactive codex after the one-time `/hooks` trust; a harness with no
+hooks engine not at all — and since headless task execution is prohibited
+outright (ADR-0018), that last case is the whole gap. The local planes are fast
+in-session feedback; CI and remote branch protection are the authoritative,
+server-enforced perimeter — the real boundary (why the split matters:
+cf-method, "Why the git boundary is remote"). The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ spike/ experiment/ integration/`. Pick by work intent.
@@ -122,10 +125,13 @@ structural protection for free.
 
 1. Orient: the SessionStart digest (~30 lines) gives branch and worktree state,
    work counts, recent ADRs, gate status, and pointers. Read the pointed docs
-   before deep work; the digest is pointers, not content.
+   before deep work; the digest is pointers, not content. No digest (hook
+   unwired, or not yet trusted on your harness)? Run `codeflow orient` yourself.
 2. Work on a correctly prefixed branch in a worktree; commit small and often.
-3. End: the session summary is captured automatically — no ceremony. Decisions
-   of record belong in ADRs, not in chat history.
+3. End: on a harness with a SessionEnd hook (Claude Code), the session summary
+   is captured automatically; elsewhere nothing is captured for you —
+   externalize per "Externalize state as you go" below. Decisions of record
+   belong in ADRs, not in chat history.
 
 ## Workflow discipline
 
@@ -157,8 +163,9 @@ to reason from, not a rote checklist.
 - **Guard your context.** Long context degrades quality. Keep the thinking,
   planning, and synthesis in your own session, but delegate breadth (wide
   searches, reading many files), long or mechanical passes, and independent
-  checks to a subagent or workflow — each works in its own context and returns a
-  condensed result, so yours stays sharp for the decisions.
+  checks to a subagent or workflow (where your harness has them) — each works in
+  its own context and returns a condensed result, so yours stays sharp for the
+  decisions.
 - **Write it well.** Favor the simplest change that fully solves the problem: DRY,
   idiomatic, coherent with the existing architecture — its conventions over your
   taste. Leave it more consistent than you found it.
@@ -188,7 +195,9 @@ to reason from, not a rote checklist.
   change, boundary change).
 - **Append-only records:** ADRs and the ledger are never edited — supersede with
   a new entry instead.
-- Review verdicts come from the independent reviewer (`cf-reviewer`) against the
+- Review verdicts come from an independent pass — the `cf-reviewer` subagent in
+  Claude Code; a separate read-only interactive review pass on any other harness
+  (never headless — a headless pass fires no in-session guards) — against the
   stated acceptance criteria, with evidence. Self-review is not review.
 
 <!-- codeflow:managed:end -->
