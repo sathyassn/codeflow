@@ -97,6 +97,8 @@ pub struct GitPolicy {
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
     pub test_gate_on_push: PolicyLevel,
+    pub security_review: PolicyLevel,
+    pub dep_audit: PolicyLevel,
 }
 
 impl Default for GitPolicy {
@@ -143,6 +145,8 @@ impl Default for GitPolicy {
             .collect(),
             secret_scan: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Warn,
+            security_review: PolicyLevel::Warn,
+            dep_audit: PolicyLevel::Warn,
         }
     }
 }
@@ -353,6 +357,8 @@ impl GitPolicy {
         self.commit_emoji = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
+        self.security_review = PolicyLevel::Off;
+        self.dep_audit = PolicyLevel::Off;
     }
 }
 
@@ -404,6 +410,11 @@ mod tests {
         assert_eq!(g.branch_prefixes.len(), 12);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
         assert_eq!(g.test_gate_on_push, PolicyLevel::Warn);
+        // Security / red-team gates bootstrap at `warn` (ADR-0016); they
+        // harden to `block` in a later slice, matching the test_gate_on_push
+        // precedent above.
+        assert_eq!(g.security_review, PolicyLevel::Warn);
+        assert_eq!(g.dep_audit, PolicyLevel::Warn);
     }
 
     #[test]
@@ -419,6 +430,8 @@ mod tests {
         assert_eq!(from_asset.git.commit_types, defaults.commit_types);
         assert_eq!(from_asset.git.branch_prefixes, defaults.branch_prefixes);
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);
+        assert_eq!(from_asset.git.security_review, defaults.security_review);
+        assert_eq!(from_asset.git.dep_audit, defaults.dep_audit);
         assert_eq!(from_asset.git.merge_to_protected, defaults.merge_to_protected);
         assert_eq!(
             from_asset.git.pr_merge_to_protected,
@@ -596,6 +609,10 @@ mod tests {
         assert_eq!(policy.git.pr_merge_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.local_ref_protection, PolicyLevel::Off);
         assert_eq!(policy.git.commit_format, PolicyLevel::Off);
+        // The security / red-team gates are advisory (warn) defaults, so — like
+        // test_gate_on_push — bootstrap grace suspends them (ADR-0016).
+        assert_eq!(policy.git.security_review, PolicyLevel::Off);
+        assert_eq!(policy.git.dep_audit, PolicyLevel::Off);
         // Secrets are never graced (charter §6.3).
         assert_eq!(policy.git.secret_scan, PolicyLevel::Block);
     }

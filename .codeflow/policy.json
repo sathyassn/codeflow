@@ -46,7 +46,9 @@
       "integration/"
     ],
     "secret_scan": "block",
-    "test_gate_on_push": "warn"
+    "test_gate_on_push": "warn",
+    "security_review": "warn",
+    "dep_audit": "warn"
   },
   "human_authorization": "none"
 }
