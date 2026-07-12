@@ -79,8 +79,11 @@ let attempts = 0; // build executions — the shared rework budget counts these
 const ctx = { analysis: '', spec: '', findings: [], buildSummary: '' };
 
 // Independent gate stage: evidence-required reviewer prompt mirroring the
-// validated run's reviewer shape; role text per .claude/agents/cf-reviewer.md.
-const gate = (name, charge) => ({
+// validated run's reviewer shape. Defaults to the cf-reviewer role and its
+// blocker/major approval rule; a stage owned by a different agent (security)
+// passes its own `role` and `rule` so the prompt carries exactly one role and
+// one verdict rule — never two contradicting ones.
+const gate = (name, charge, { role, rule } = {}) => ({
   kind: 'gate',
   model: A.models?.[name] ?? 'inherit',
   schema: VERDICT,
@@ -89,9 +92,9 @@ const gate = (name, charge) => ({
     `Acceptance criteria:\n${CRITERIA}`,
     `Builder summary:\n${ctx.buildSummary || '(not captured)'}`,
     charge,
-    'Role (.claude/agents/cf-reviewer.md): independent evaluator, read-only on code — never fix anything; every claim in the verdict needs evidence.',
+    role ?? 'Role (.claude/agents/cf-reviewer.md): independent evaluator, read-only on code — never fix anything; every claim in the verdict needs evidence.',
     'Judge ONLY on what you observe: run the gates and the code yourself; cite file:line or command output per finding.',
-    "Return verdict 'approved' only if every criterion is verified and no blocker or major finding remains; otherwise 'changes_requested' with one finding string per issue.",
+    rule ?? "Return verdict 'approved' only if every criterion is verified and no blocker or major finding remains; otherwise 'changes_requested' with one finding string per issue.",
   ].filter(Boolean).join('\n\n'),
 });
 
@@ -168,7 +171,11 @@ const STAGES = {
     apply: (out) => { ctx.buildSummary = typeof out === 'string' ? out : JSON.stringify(out); },
   },
   security: gate('security',
-    'Load the cf-security-reviewer agent (.claude/agents/cf-security-reviewer.md) as the reviewer for this stage — it owns the deep seven-axis checklist. Run its dual-vendor adversarial red-team: Claude as the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and codex as the read-only assume-breach attacker (ADR-0005 handoff) — an attacker and a defender on the same model share blind spots, so the two vendors must differ. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. SET your `verdict` from those enums, never from prose — the gate branches on that verdict: return changes_requested when any finding has severity in {critical,high} AND confidence in {confirmed,likely}. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes; if codex is unavailable run single-vendor with a loud caveat, since losing the second vendor defeats the red team.'),
+    'Run the dual-vendor adversarial red-team: Claude as the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and codex as the read-only assume-breach attacker (ADR-0005 handoff) — an attacker and a defender on the same model share blind spots, so the two vendors must differ. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes. Preflight `codex login status`, then degrade per ADR-0015/ADR-0016, mapped to findings: codex absent at flow start (never available this run — the flow already degraded to single-vendor) → run the defender lens alone and record the degradation as a finding; codex lost mid-duo, or missing for a requested duo security stage → return changes_requested with a finding naming the lost second vendor, since losing it defeats the red team.',
+    {
+      role: 'Role (.claude/agents/cf-security-reviewer.md): load the cf-security-reviewer agent as the reviewer for this stage — it owns the deep seven-axis checklist. Independent evaluator, read-only on code — never fix anything; every claim in the verdict needs evidence.',
+      rule: "SET your `verdict` from the SecurityFinding enums, never from prose — the gate branches on that verdict: return 'changes_requested' when any finding has severity in {critical,high} AND confidence in {confirmed,likely}; otherwise 'approved'. One finding string per issue.",
+    }),
   review: gate('review',
     'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',
