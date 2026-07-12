@@ -13,9 +13,11 @@
 | WORK — planned and active work | `project-management/` (epics, tasks, specs) | daily |
 | TRACE — what happened and why | ledger + `codeflow recall` | automatic |
 
-The traceability spine links by ID, downward: capability → epics → ADRs/specs →
-PRs → ledger. Answer "why is X this way" by following frontmatter links or
-`codeflow recall "X"` — never by reading all the code.
+The traceability spine runs downward: capability → epics → ADRs → specs → PRs →
+ledger. Only the capability ↔ epic ↔ ADR links are enforced by ID (`validate
+--docs`); the spec, PR, and ledger links are by convention, found via `codeflow
+recall`. Answer "why is X this way" by following frontmatter links or `codeflow
+recall "X"` — never by reading all the code.
 
 Before building anything: check `docs/capabilities.md` (does it already exist?
 what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
@@ -44,12 +46,13 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Git rules
 
-Four planes read `.codeflow/policy.json`, as defense in depth. Local git hooks and
-the `git-guard` PreToolUse hook are **fast feedback** — they catch the normal ways
-work goes wrong, in-session, before a push. CI and remote branch protection are the
-**authoritative perimeter**: server-enforced, so an agent on the local host cannot
-bypass them (arm it with `codeflow remote protect`). The local layer is convenience;
-the remote layer is the real boundary. The rules, compressed:
+Four planes enforce the git standards, defense in depth: git hooks, the `git-guard`
+PreToolUse hook, and remote branch protection each read `.codeflow/policy.json`, and
+the scaffolded CI re-implements the commit-format, attribution, and emoji checks
+inline (keep it in step with policy.json). The local planes are fast in-session
+feedback; CI and remote branch protection are the authoritative, server-enforced
+perimeter — the real boundary (why the split matters: cf-method, "Why the git
+boundary is remote"). The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ spike/ experiment/`. Pick by work intent.
@@ -68,8 +71,7 @@ the remote layer is the real boundary. The rules, compressed:
   paths: PR → green CI → merged by a human, or `codeflow integrate <branch>
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
-  can corrupt the root repo). The override is a human-terminal convenience, not
-  authentication; it is contained because the boundary is remote.
+  can corrupt the root repo).
 - **Bodies of work:** a multi-task epic lands task-by-task on a non-protected
   `integration/<epic>` branch (agents merge there); only the finished body
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
@@ -121,11 +123,22 @@ Principles to reason from with judgment, not a rote checklist.
   integration, end-to-end, and user-facing behavior (drive a real UI with a
   browser/computer-use tool when that is the surface) — and check what it affects
   upstream and downstream, not just the lines you changed. Tests ship in the same
-  change; `codeflow test` is green before you call it done.
+  change; run `codeflow test` before calling it done — the local gate warns, not
+  blocks, so clear what it flags.
 - **Unverifiable or fabricated claims are defects (zero tolerance).** Every claim
   needs evidence — file:line, command output, or a reproducible check; never
   invent a fact, number, result, or citation. Say explicitly what was *not*
   verified.
+- **Externalize state as you go — context is volatile.** A session can be
+  compacted or end at any point, and not every harness fires a hook to save state
+  for you; what lives only in the conversation is lost. Record it *yourself*, in
+  its durable home, as the work happens: decisions → an ADR, progress and next
+  steps → `project-management/` status, cross-session notes → your harness's own
+  memory where it has one. (codeflow's recall corpus — the ledger, ADRs,
+  capabilities — is captured automatically; your part is the reasoning it can't
+  infer.) To resume after a compaction or a fresh session, rebuild from that
+  durable record — `codeflow orient`, then `codeflow recall "<thread>"` — not from
+  a hazy memory of the chat.
 - **Docs mutate only inside the ship flow, in the same PR as the code:**
   capability entry on epic completion; `architecture.md` when an ADR declares
   architecture impact; ADR at Tier-3 decision points (new dependency, schema

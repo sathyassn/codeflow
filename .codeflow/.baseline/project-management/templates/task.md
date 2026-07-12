@@ -1,24 +1,26 @@
 ---
-id: TSK-{{NNN}}
-epic: EPC-{{NNN}}
+id: TSK-{{NNN}}-{{MMM}}
+format_id: TSK-{{NNN}}-{{MMM}}   # TSK-NNN-NNN: epic number, task number — must match the filename
+epic_id: EPC-{{NNN}}
 title: {{TITLE}}
-status: planned       # planned | active | done | cancelled
+status: todo             # todo | blocked | in_progress | complete | cancelled
+work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 created: {{DATE}}
 ---
 
-# TSK-{{NNN}} — {{TITLE}}
+# TSK-{{NNN}}-{{MMM}} — {{TITLE}}
 
-## Goal
+## Description
 
 <!-- One paragraph: the change and why it is needed. -->
 
-## Acceptance criteria
+## Acceptance Criteria
 
-<!-- Testable, like the epic's — a subset scoped to this task. -->
+<!-- The single home for this task's acceptance — testable statements,
+     preferably in EARS ("When <trigger>, the system shall <response>") or
+     Given/When/Then form; a subset scoped from the epic's when there is one.
+     Each criterion names a concrete, machine-verifiable check — a command, a
+     test path, or an observable with a threshold; the reviewer checks them with
+     evidence, and unverifiable claims are defects. -->
 
 - [ ]
-
-## Evidence
-
-<!-- Filled at completion: test output, reviewer verdict, PR link.
-     Unverifiable claims are defects — leave empty rather than assert. -->

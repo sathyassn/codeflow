@@ -1,8 +1,9 @@
 ---
 id: SPC-{{NNN}}
-epic: EPC-{{NNN}}
+format_id: SPC-{{NNN}}   # SPC-NNN — must match the filename
+epic_id: EPC-{{NNN}}
 title: {{TITLE}}
-status: draft         # draft | implemented — set implemented (frozen) when the epic ships
+status: draft            # draft | implemented — set implemented (frozen) when the epic ships
 created: {{DATE}}
 ---
 
@@ -11,8 +12,25 @@ created: {{DATE}}
 <!-- Specs are inputs to work, not living documents. Write one only when
      interfaces, formats, or behavior need pinning down before building —
      many epics need no spec. Frozen at ship: after that, truth lives in
-     architecture + capabilities + tests, and this file is historical.
-     Never update a frozen spec to match later reality. -->
+     architecture + capabilities + tests. Never update a frozen spec to
+     match later reality. -->
+
+## Summary
+
+<!-- What is being pinned down, and for which epic. -->
+
+## Delta against current capability
+
+<!-- Optional, for a brownfield change: express the spec as a delta against the
+     named capability (docs/capabilities.md), so the change is traceable at the
+     spec level. Drop any heading that does not apply; skip the whole section
+     for greenfield work. -->
+
+<!-- ADDED — new behavior or surface this introduces. -->
+
+<!-- MODIFIED — existing behavior whose meaning changes (old -> new). -->
+
+<!-- REMOVED — behavior or surface this retires. -->
 
 ## Behavior
 

@@ -8,6 +8,14 @@
           { "type": "command", "command": "codeflow hook exec-guard", "timeout": 10 }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
+        ]
+      }
     ]
   }
 }
