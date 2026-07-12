@@ -1,6 +1,6 @@
 # CodeFlow v2 — Charter
 
-**Status:** Final draft, pending go-ahead. On approval this document (split into sections) becomes `docs/plan/v2/` in the repo and is the executable plan of record.
+**Status:** HISTORICAL — the v2 plan of record as authored on the date below. It was approved and executed, and v2.0.0 has since shipped; where a later ADR (`docs/decisions/`) supersedes it, the ADR wins. For current state see `docs/plan/v2/01-execution-status.md`. This body is preserved as the original plan, not current instruction — e.g. §10's `curl | sh` install and any "Not in v2.0.0" scoping reflect the plan as written, not today's reality. (Original status: final draft, pending go-ahead; on approval this document, split into sections, became `docs/plan/v2/`.)
 **Date:** 2026-06-11
 **Provenance:** Distills and supersedes the strategic review (`codeflow-strategic-review-2026-06-11.md`) and landing proposal (`codeflow-landing-proposal-2026-06-11.md`), plus all subsequent design discussion. Where this charter conflicts with those documents, this charter wins. Supersedes INF-EPC-051 and cancels INF-EPC-025/026/027 (Epic C/D/E as designed); truncates INF-EPC-024.
 

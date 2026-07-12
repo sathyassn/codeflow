@@ -150,3 +150,12 @@ re-threading the call sites.
 
 None — the enforcement stays on the existing four planes; this ADR adds policy
 keys (config, not architecture) and hardens the guard logic within them.
+
+## Note — 2026-07-03 (appended)
+
+Repo-specific caveat: on this repo (private + GitHub Free) remote branch
+protection is unavailable (403; see ADR-0006), so the server-side backstop that
+contains the residuals here is CI plus human-merged PRs, not armed remote branch
+protection. The "remote is the authoritative boundary" argument above is the
+general product design (charter D19); this repo cannot fully arm it while
+private, so the residuals are accepted only alongside the human-merge discipline.

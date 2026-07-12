@@ -107,6 +107,11 @@ once, because hooks call `codeflow` from `PATH` — then run `codeflow update` p
 repo to refresh scaffold files. Until you do, every command prints a
 version-skew warning.
 
+There is no self-updater (`install-updater = false`) and, while the repo is
+private, no `curl | sh` upgrade — so "upgrade the binary" means re-running an
+install path: `git pull` then `cargo install --path crates/codeflow-cli`, or
+re-download the newer tarball via `gh release download vX.Y.Z …` (see Install).
+
 `codeflow update` refreshes managed files by the classes above: unmodified
 managed files are replaced, files you changed get a 3-way merge from the
 baseline, and anything that cannot merge cleanly is written beside your file as

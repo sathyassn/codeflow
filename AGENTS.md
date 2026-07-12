@@ -145,6 +145,12 @@ edits the root checkout directly.
   = deny, pedantic = warn) must be green before push. Edition 2021,
   workspace-managed dependency versions in the root `Cargo.toml`.
 - **This repo lands via PRs only (ADR-0006):** push a feature branch, open a PR
-  from the template, merge on green CI. `codeflow integrate` remains a shipped
-  product capability (the offline/no-remote sanctioned path) but is retired for
-  this repo's day-to-day landings.
+  from the template; a **human** merges on green CI — agents never merge to a
+  protected branch. `codeflow integrate` remains a shipped product capability
+  (the offline/no-remote sanctioned path) but is retired for this repo's
+  day-to-day landings.
+- **Remote branch protection is unavailable here and not pursued** (private +
+  GitHub Free → `codeflow remote protect` returns 403). The operative boundary on
+  this repo is server-side CI plus the local git-hook / git-guard plane plus
+  human-merged PRs — not armed remote protection. Do not treat remote protection
+  as active here (ADR-0002, superseded by ADR-0006).

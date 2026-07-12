@@ -16,10 +16,11 @@ Install one of two authenticated ways:
 # from a checkout (needs a Rust toolchain):
 cargo install --path crates/codeflow-cli
 
-# prebuilt binary, another machine (gh authenticates via the GitHub API):
+# prebuilt binary, another machine (needs `gh auth login` with read access):
 A=codeflow-cli-aarch64-apple-darwin   # or x86_64-apple-darwin / x86_64-unknown-linux-gnu
 gh release download v2.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
-tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf && install "/tmp/cf/$A/codeflow" ~/.cargo/bin/
+tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
+mkdir -p ~/.cargo/bin && install "/tmp/cf/$A/codeflow" ~/.cargo/bin/   # or any dir on PATH
 ```
 
 If the repo is later made **public**, the standard installer works anonymously:

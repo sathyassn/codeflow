@@ -121,3 +121,14 @@ protection are the authoritative, server-enforced perimeter. `CODEFLOW_HUMAN_OVE
 is a local convenience for a human at their own terminal, not authentication —
 any agent sharing the host can set an env var — and is contained only because
 that authoritative boundary is remote.
+
+## Note — 2026-07-03 (appended)
+
+Root cause of the `core.bare` corruption identified — this supersedes the
+"mechanism unconfirmed" / worktree-interruption correlation in the Context
+above. Git exports `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_INDEX_FILE` to hook
+subprocesses; the pre-push `test_gate_on_push` ran `cargo test` with those
+inherited, so the workspace's git-spawning tests mutated the real repo instead
+of their own tempdirs. Fixed by clearing the three vars in the test-gate runner
+and the test git helpers. The symptom-based `repo-integrity` doctor check stands
+regardless of trigger. Detail: `docs/plan/v2/01-execution-status.md`.

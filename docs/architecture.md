@@ -44,7 +44,7 @@ Core modules grouped by responsibility:
 Enforcement is spread across four planes, all reading one config
 (`.codeflow/policy.json`): git client hooks, the in-session PreToolUse (Bash)
 guards, remote branch protection, and CI. Local planes are fast feedback; CI +
-remote protection are the authoritative perimeter (ADR-0002; charter §6.5). The
+remote protection are the authoritative perimeter (charter §6.5; ADR-0006). The
 git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),
 `reference-transaction` (the harness-agnostic backstop: fast-forward merges,

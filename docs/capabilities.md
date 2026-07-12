@@ -57,7 +57,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs"]
 epics: [EPC-001]
-adrs: [ADR-0002]
+adrs: [ADR-0002, ADR-0006, ADR-0007]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
@@ -152,7 +152,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001]
-adrs: [ADR-0002]
+adrs: [ADR-0002, ADR-0007]
 ```
 
 `codeflow remote protect` applies the policy's `protected_branches` to the

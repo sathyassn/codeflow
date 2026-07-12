@@ -70,3 +70,11 @@ check; no engine orchestration code is added.
 None — the capability is Claude scaffold artifacts plus one deterministic
 doctor check reusing the existing check registry and injection seams; no shipped
 module boundary moves and no orchestration organ is added.
+
+## Note — 2026-07-03 (appended)
+
+Erratum for consistency with ADR-0007: adding the `delegates` doctor check did
+enumerate a new name in `docs/architecture.md`'s doctor table, which ADR-0007
+treats as an architecture impact (6→7). Recording `none` here was the narrower
+reading (the check reuses the existing registry and injection seams; no boundary
+moves) — noted so the ADR→architecture spine stays legible.

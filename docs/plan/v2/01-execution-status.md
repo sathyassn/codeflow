@@ -42,7 +42,8 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] `codeflow init` dogfood on this repo (consumer #1), idempotent rerun
   verified; full-tier additive upgrade (`project-management/`) on the closure
   branch
-- [x] Doctor wired and clean (7 checks)
+- [x] Doctor wired and clean (6 checks at Day 3; `repo-integrity` added later via
+  ADR-0007 → now 7)
 - [x] `codeflow integrate` used for all landings (4 integrations)
 - [x] Live AC demos: #1, #3, #5, #6, #13 — including the `policy_armed` bug
   found during #1, fixed with a regression test (612ec23d)
@@ -51,8 +52,16 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   force-push allowed on feature branches) and AC #10 (recall answers a "why"
   from summaries + ADRs across ≥2 registered repos) demonstrated live in the
   parallel enforcement/recall wave
-- [ ] `codeflow init` on first real user project
-- [ ] v2.0.0 tag + cargo-dist release staging (PAUSED for user go)
+- [ ] `codeflow init` on first real user project (charter AC #12) — deferred past
+  the v2.0.0 release; not a release blocker
+- [x] v2.0.0 tagged (2026-07-03) and cargo-dist GitHub Release published: shell
+  installer + 3 platform tarballs (aarch64/x86_64-apple-darwin,
+  x86_64-unknown-linux-gnu). Repo stays **private** — the anonymous `curl | sh`
+  installer does not work (GitHub 404s private release assets via the browser
+  download URL even with a token); working installs are `cargo install --path
+  crates/codeflow-cli` from a checkout, or `gh release download v2.0.0 -R
+  sathyassn/codeflow -p '<platform>.tar.xz'` then extract onto PATH (see README /
+  docs/adoption.md)
 
 ## Notes / deviations
 
