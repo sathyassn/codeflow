@@ -198,7 +198,7 @@ growth is mechanical, never re-architecture.
 | Work outlives sessions; planning spans days | tier standard → full (`codeflow init --full`, additive) |
 | ~15 capability entries | `capabilities.md` → `docs/capabilities/CAP-*.md` + index |
 | architecture.md section outgrows a screen | → `docs/architecture/<area>.md`, one-line pointer left behind |
-| Throwaway becomes real | `--minimal` → `--standard` re-init (idempotent, additive) |
+| A doc-set or small tool grows into a code project needing the method | `--minimal` → `--standard` re-init (idempotent, additive) |
 
 Downgrade is never destructive: stop managing, do not delete.
 
