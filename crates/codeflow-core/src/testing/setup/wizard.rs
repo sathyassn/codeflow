@@ -1,4 +1,4 @@
-//! Interactive wizard for `codeflow test setup`.
+//! Interactive wizard for building `.codeflow/test-config.json`.
 //!
 //! Uses the injectable [`PromptProvider`] trait so tests can drive the entire
 //! wizard flow without a live terminal.

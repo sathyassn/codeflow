@@ -1,6 +1,6 @@
-//! Setup wizard orchestrator for `codeflow test setup`.
+//! Setup wizard orchestrator for generating `.codeflow/test-config.json`.
 //!
-//! Provides the top-level setup functions that the CLI subcommand calls.
+//! Provides the top-level setup functions.
 //! All writes to `.codeflow/test-config.json` go through the config-writer
 //! so output stays deterministic and byte-stable on round-trips.
 

@@ -1,4 +1,4 @@
-//! Stack-detection heuristics for `codeflow test setup --auto`.
+//! Stack-detection heuristics for the setup wizard.
 //!
 //! Scans the repository root for sentinel files and infers test targets
 //! with best-guess commands per the design doc §15.3.

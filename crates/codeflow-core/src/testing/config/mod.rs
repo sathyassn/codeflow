@@ -2,7 +2,7 @@
 //!
 //! Reads `.codeflow/test-config.json` into `TestConfig`, validates against
 //! the JSON schema, and provides deterministic serialization for config
-//! mutation subcommands.
+//! mutation.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -110,7 +110,7 @@ pub struct TargetConfig {
     pub ci_skip_reason: Option<String>,
 
     /// Optional structural integrity configuration. When present, the
-    /// `codeflow test structural-check` subcommand validates bidirectional
+    /// structural integrity check validates bidirectional
     /// source↔test mapping for this target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structural: Option<StructuralConfig>,
