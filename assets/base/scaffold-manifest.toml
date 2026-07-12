@@ -191,7 +191,7 @@ dest = ".codex/config.toml"
 ownership = "managed"
 tiers = ["standard", "full"]
 
-# --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 1 agent, 7 skills, 1 workflow;
+# --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 9 skills, 1 workflow;
 #     cf-stack is the agent-led stack setup (ADR-0003); cf-delegate + cf-consult
 #     are the cross-vendor delegation capability (ADR-0005), added when the
 #     process-boundary consult pattern proved out — not speculatively)
@@ -389,7 +389,8 @@ dest = "docs/decisions/template.md"
 ownership = "user-owned"
 tiers = ["standard", "full"]
 
-# --- CI (written only if absent — charter §4.1) ------------------------------
+# --- CI (fully-managed — charter §4.3: unmodified → replaced on update; ------
+#     user-modified → 3-way merged, never clobbered) --------------------------
 
 [[entry]]
 src = "ci/codeflow-ci.yml"

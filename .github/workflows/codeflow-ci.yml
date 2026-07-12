@@ -1,6 +1,7 @@
 # codeflow CI — the perimeter. Re-runs every gate that matters so nothing
-# depends on local state. Written by `codeflow init` only if absent; after
-# that it is yours.
+# depends on local state. Written by `codeflow init` and managed by `codeflow
+# update` (charter §4.3): an unmodified copy is replaced on update; your edits
+# are preserved via 3-way merge, never clobbered.
 name: codeflow-ci
 
 on:
