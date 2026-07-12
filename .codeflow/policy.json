@@ -33,6 +33,12 @@
     "commit_body": "block",
     "commit_body_max_bullets": 3,
     "commit_body_bullet_max_len": 72,
+    "breaking_watch_paths": [
+      "crates/codeflow-core/src/hooks/policy.rs",
+      "assets/base/scaffold-manifest.toml",
+      "assets/base/policy.json",
+      "crates/codeflow-cli/src/main.rs"
+    ],
     "ai_attribution": "block",
     "commit_emoji": "block",
     "branch_naming": "block",
