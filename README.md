@@ -8,23 +8,23 @@ bind any agent or human.
 
 ## Install
 
-**Once v2.0.0 is published**, install the prebuilt binary (macOS arm64/x64,
-Linux x64) onto your `PATH` with the release's shell installer:
+This repo is **private**, so the cargo-dist `curl | sh` shell installer does
+**not** work (GitHub returns 404 for private release assets even with a token).
+Install one of two authenticated ways:
 
 ```sh
-curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+# from a checkout (needs a Rust toolchain):
+cargo install --path crates/codeflow-cli
+
+# prebuilt binary, another machine (gh authenticates via the GitHub API):
+A=codeflow-cli-aarch64-apple-darwin   # or x86_64-apple-darwin / x86_64-unknown-linux-gnu
+gh release download v2.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
+tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf && install "/tmp/cf/$A/codeflow" ~/.cargo/bin/
 ```
 
-The installer (built by cargo-dist) downloads the right prebuilt binary for your
-platform and places `codeflow` in your Cargo bin dir. The exact asset name is
-listed on the [releases page](https://github.com/sathyassn/codeflow/releases) —
-it is generated from the `codeflow-cli` package.
-
-**Works today**, from source (needs a Rust toolchain):
-
-```sh
-cargo install --path crates/codeflow-cli    # from a checkout of this repo
-```
+If the repo is later made **public**, the standard installer works anonymously:
+`curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh`.
+See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
 
 ## Quickstart
 
