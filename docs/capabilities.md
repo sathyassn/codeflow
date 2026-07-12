@@ -183,19 +183,23 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "live: codex exec --json consult + resume on registry.rs, thread 019f23e5-7bd7-7842-8a26-009e5a652759 (docs/plan/v2/01-execution-status.md)"]
 epics: []
-adrs: [ADR-0005]
+adrs: [ADR-0005, ADR-0018]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth, with CodeFlow's gates
-judging the output author-agnostically (ADR-0005). `codex` is the primary tier
-(`codex exec --json` + `resume`, plus the official `codex-plugin-cc` documented
-as the interactive tier); Antigravity `agy` is a degraded, opt-in, read-only
-consult tier. It ships as Claude artifacts — the `cf-delegate` and `cf-consult`
-skills, and an optional `consult` pipeline stage — plus one
-deterministic `delegates` doctor check; delegates edit only inside a worktree on
-a feature branch, so pre-commit, commit-msg, the test gate, and `cf-reviewer`
-constrain them exactly as they do Claude. No engine orchestration code is added.
+judging the output author-agnostically (ADR-0005). Transport is
+interactive-only per ADR-0018, one lane per direction: from Claude Code the
+official `codex-plugin-cc` plugin (wrapping the codex app-server); from codex
+the interactive `claude` CLI driven via tmux. Headless task execution
+(`codex exec`, `claude -p`) is prohibited; the earlier headless tier and the
+Antigravity `agy` delegate tier (headless-only) are retired. It ships as the
+`cf-delegate` and `cf-consult` skills (mirrored to `.agents/skills`), and an
+optional `consult` pipeline stage — plus one deterministic `delegates` doctor
+check; delegates edit only inside a worktree on a feature branch, so
+pre-commit, commit-msg, the test gate, and the independent review pass
+constrain them exactly as they do the orchestrating harness. No engine
+orchestration code is added.
 
 ## CAP-010 — duo-model-orchestration
 
@@ -206,20 +210,22 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015]
+adrs: [ADR-0015, ADR-0018]
 ```
 
 `/cf-model-orchestrator` drives higher-stakes planned work as a Claude+codex
-duo: Claude plans with explicit acceptance criteria, codex (through the official
-`codex-plugin-cc` plugin, with the app-server JSON-RPC driver and tmux as
-fallbacks) reviews the plan then executes and
+duo: Claude plans with explicit acceptance criteria, codex (through the
+official `codex-plugin-cc` plugin — the only sanctioned lane, ADR-0018)
+reviews the plan then executes and
 first-tests it including UI-driven e2e, Claude does the final verification
 grading every criterion, and the two iterate a bounded fix loop. Ships as the
 `cf-model-orchestrator` skill (mirrored across `.claude/skills`, `.agents/skills`,
 and the `assets/base` source) and an opt-in `duo` pipeline preset with a
 `plan-align` convergence gate — never the default, so trivial work pays no duo
-tax. Silently degrades to solo `/cf-develop` when codex is unavailable at flow
-start; no engine orchestration code is added, and the authoritative gate stays
+tax. Driven from a Claude Code seat only; silently degrades to solo
+`/cf-develop` when either half of the duo is unavailable at flow start (the
+symmetric seat gate, ADR-0018); no engine orchestration code is added, and the
+authoritative gate stays
 server-side CI plus a human-merged PR (ADR-0006).
 
 ## CAP-011 — security-redteam-review
