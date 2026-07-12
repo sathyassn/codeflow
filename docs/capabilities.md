@@ -170,7 +170,7 @@ adrs: [ADR-0002, ADR-0007]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs ten health checks — hooks, Claude wiring, config,
+`codeflow doctor` runs eleven health checks — hooks, Claude wiring, codex wiring, config,
 permissions, network, delegates, repo integrity, CI perimeter, managed-region
 drift, and test config — so degradation is always visible, never silent.
 

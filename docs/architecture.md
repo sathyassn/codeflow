@@ -37,7 +37,7 @@ Core modules grouped by responsibility:
   lint), the capability registry parser, FTS5 recall, and the cross-repo
   registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (10 checks — hooks, claude, config,
+  `error.rs`): the doctor check table (11 checks — hooks, claude, codex, config,
   permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift,
   test-config), structured settings merge,
   generated status views, the test-gate engine, path flock, and pruned error
