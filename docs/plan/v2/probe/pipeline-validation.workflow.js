@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Build' }, { title: 'Review' }, { title: 'Verify' }],
 }
 
-const DIR = '/Volumes/DATA/Local/software-workspace/projects/wf-scratch/toy'
+const DIR = './wf-scratch/toy'
 const TASK = `Write ${DIR}/fizzbuzz.py printing numbers 1..15, one per line, replacing multiples of 3 with Fizz, of 5 with Buzz, of both with FizzBuzz.`
 const CRITERIA = 'python3 fizzbuzz.py output: line 3 = Fizz, line 5 = Buzz, line 15 = FizzBuzz, line 7 = 7.'
 

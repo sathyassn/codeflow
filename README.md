@@ -8,23 +8,19 @@ bind any agent or human.
 
 ## Install
 
-This repo is **private**, so the cargo-dist `curl | sh` shell installer does
-**not** work (GitHub returns 404 for private release assets even with a token).
-Install one of two authenticated ways:
+Prebuilt binary (macOS arm64/x64, Linux x64) — the shell installer from the
+latest release:
 
 ```sh
-# from a checkout (needs a Rust toolchain):
-cargo install --path crates/codeflow-cli
-
-# prebuilt binary, another machine (needs `gh auth login` with read access):
-A=codeflow-cli-aarch64-apple-darwin   # or x86_64-apple-darwin / x86_64-unknown-linux-gnu
-gh release download v2.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
-tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
-mkdir -p ~/.cargo/bin && install "/tmp/cf/$A/codeflow" ~/.cargo/bin/   # or any dir on PATH
+curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-If the repo is later made **public**, the standard installer works anonymously:
-`curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh`.
+Or from a checkout, with a Rust toolchain:
+
+```sh
+cargo install --path crates/codeflow-cli
+```
+
 See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
 
 ## Quickstart
@@ -90,3 +86,23 @@ never honors and blocks agents from setting in-session.
 - [docs/architecture.md](docs/architecture.md) — how the binary and scaffold are built
 - [docs/product.md](docs/product.md) — what codeflow is for and its non-goals
 - [docs/decisions/](docs/decisions/) — ADRs (the record of why)
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
+`cargo test` and `cargo clippy` green, conventional commits, no AI attribution
+(codeflow's own hooks enforce it). Please read [SECURITY.md](SECURITY.md) before
+reporting a vulnerability, and be mindful of the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in the work by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional
+terms or conditions.

@@ -6,22 +6,21 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-`codeflow` is a single binary. **This repo is private**, so its Release assets
-are not anonymously downloadable, and the cargo-dist `curl | sh` installer does
-**not** work while private — it fetches from the `releases/download` browser URL,
-which returns 404 for private-repo assets even with a token (GitHub only honors a
-token on its API asset endpoint, which the installer does not use). Install one
-of two authenticated ways.
+`codeflow` is a single binary. Install the prebuilt build (macOS arm64/x64,
+Linux x64) with the shell installer from the latest release:
 
-**From a checkout** (simplest; needs a Rust toolchain):
+```sh
+curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+```
+
+Or build from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-**Prebuilt binary, another machine** — pull the platform tarball with `gh` (which
-authenticates through the GitHub API) and put the binary on your `PATH`. Needs a
-GitHub login with read access (`gh auth login`, or a `repo`-scoped token):
+To grab a specific platform tarball directly (e.g. to pin a version or script the
+install), use `gh`:
 
 ```sh
 # platform: aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
@@ -30,9 +29,6 @@ gh release download v2.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clo
 tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
 install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 ```
-
-If the repo is later made **public**, the standard installer works anonymously,
-no token: `curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh`.
 
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
@@ -107,10 +103,10 @@ once, because hooks call `codeflow` from `PATH` — then run `codeflow update` p
 repo to refresh scaffold files. Until you do, every command prints a
 version-skew warning.
 
-There is no self-updater (`install-updater = false`) and, while the repo is
-private, no `curl | sh` upgrade — so "upgrade the binary" means re-running an
-install path: `git pull` then `cargo install --path crates/codeflow-cli`, or
-re-download the newer tarball via `gh release download vX.Y.Z …` (see Install).
+There is no self-updater (`install-updater = false`), so "upgrade the binary"
+means re-running an install path: the `curl | sh` installer again, or `git pull`
+then `cargo install --path crates/codeflow-cli`, or re-download the newer tarball
+via `gh release download vX.Y.Z …` (see Install).
 
 `codeflow update` refreshes managed files by the classes above: unmodified
 managed files are replaced, files you changed get a 3-way merge from the
