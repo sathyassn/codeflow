@@ -32,6 +32,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`commit_desc_max_len`, `commit_subject_max_len`, `commit_body`,
   `commit_body_max_bullets`, `commit_body_bullet_max_len`), added to an existing
   `policy.json` with their defaults on the next `codeflow update`.
+- **A contract-surface tripwire nudges breaking-change discipline (ADR-0020).**
+  A new `git.breaking_watch_paths` key (path globs, default empty) makes the
+  commit-msg check — and `codeflow ci`, which reuses it — emit a WARN (never a
+  block) when a commit touches a declared contract surface without a `type!:`
+  subject marker or a `BREAKING CHANGE:` footer. Detection of a break stays a
+  judgment call; the glob only prompts a confirm.
 
 ### Added
 

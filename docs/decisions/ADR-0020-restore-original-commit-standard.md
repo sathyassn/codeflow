@@ -4,7 +4,7 @@ title: restore the original commit standard — 50/72 subject, bullet-only body,
 date: 2026-07-12
 status: accepted
 superseded_by: null
-architecture_impact: The four enforcement planes are unchanged in shape; this adds two subject-length checks and a body-shape check to the existing commit-msg / `codeflow ci` standards module and five default-armed policy keys. docs/architecture.md's enumeration of the CI checks is updated to name them. No engine module, ownership class, or boundary moves.
+architecture_impact: The four enforcement planes are unchanged in shape; this adds two subject-length checks, a body-shape check, and a warn-only contract-surface tripwire to the existing commit-msg / `codeflow ci` standards module, plus six default-armed policy keys. docs/architecture.md's enumeration of the CI checks is updated to name them. No engine module, ownership class, or boundary moves.
 ---
 
 <!-- ADRs are append-only: written at the moment of decision, never edited
@@ -72,6 +72,26 @@ auto-delete is off (`gh repo view`: `mergeCommitAllowed=false`,
 so each one passing the standard is meaningful — the gate is not papered over by
 a squash at merge time.
 
+**Breaking changes: judgment detects, a glob nudges, the footer validates and
+versions.** Whether a change breaks a consumer is *semantic* — it depends on what
+downstream code relies on, which no diff can know — so detection cannot be fully
+mechanical, and the primary control is a judgment call the contract asks for on
+every commit: does this change an API, a CLI flag, a config schema, a file
+format, a default, or managed-file semantics? If so, the author marks the subject
+`type!:` and writes a `BREAKING CHANGE:` footer with the migration path; that
+footer is the machine-readable signal git-cliff turns into a MAJOR bump (the
+mechanics that *validate* the marker's casing and *version* from it already
+exist — see [`check_breaking_footer`]). Because judgment can lapse, a sixth `git`
+policy key `breaking_watch_paths` (path globs, serde default empty) adds a
+mechanical *tripwire*: when a commit stages a file matching a declared contract
+surface with no breaking marker, the commit-msg check — and `codeflow ci`, which
+reuses it via `commit_msg_with_files` — emits a **WARN, never a block**. It must
+not block: a touched surface is not proof of a break (most edits to it stay
+backward-compatible), so the glob can only prompt a confirm, not veto. This repo
+declares its own surfaces (`policy.rs`, `scaffold-manifest.toml`, the shipped
+`policy.json`, `main.rs`); consumers declare theirs. The tooling supports the
+judgment; it does not replace it.
+
 ## Consequences
 
 - **This branch's history is rewritten to the restored standard
@@ -92,12 +112,20 @@ a squash at merge time.
   budget edits `.codeflow/policy.json`; softening the commit rules is
   discouraged, because git-cliff derives the version bump and CHANGELOG from the
   commit history.
+- **The breaking-change signal is mechanized where it can be, and left to
+  judgment where it cannot.** The footer drives versioning; the contract asks the
+  judgment on every commit; `breaking_watch_paths` warns when a declared surface
+  is touched unmarked. Because the tripwire is advisory, a genuinely
+  non-breaking edit to a watched file is confirmed and proceeds without friction —
+  the cost of a false nudge is one moment of thought, never a blocked commit.
 
 ## Architecture impact
 
 The four enforcement planes are unchanged in shape. The change adds two
-subject-length checks and a body-shape check inside the existing `standards`
-module that the commit-msg hook and `codeflow ci` share, plus five
-default-armed `git` policy keys. `docs/architecture.md`'s enumeration of the CI
-checks is updated to name the subject-length budget and body-shape rule. No
-engine module, ownership class, or boundary moves.
+subject-length checks, a body-shape check, and a warn-only contract-surface
+tripwire inside the existing `standards` module that the commit-msg hook and
+`codeflow ci` share (the latter now feeds per-commit changed files through
+`commit_msg_with_files`), plus six default-armed `git` policy keys.
+`docs/architecture.md`'s enumeration of the CI checks is updated to name the
+subject-length budget and body-shape rule. No engine module, ownership class, or
+boundary moves.
