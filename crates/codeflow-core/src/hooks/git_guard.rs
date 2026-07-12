@@ -815,13 +815,15 @@ fn check_git(
     let policy = ctx.policy;
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
-    // core.hooksPath=…`) disarms the client hooks (ADR-0009); `-C`/`--git-dir`
-    // retarget the op at another repository.
+    // core.hooksPath=…` or `git --config-env=core.hooksPath=<VAR>`) disarms
+    // the client hooks (ADR-0009); `-C`/`--git-dir` retarget the op at
+    // another repository.
     let (hooks_path_override, retarget_flag) = scan_git_globals(args);
     if hooks_path_override && policy.hook_integrity.is_active() {
         out.push(hook_integrity_violation(
             policy.hook_integrity,
-            "`git -c core.hooksPath=…` overrides the hook path for this command".to_string(),
+            "a git global flag (`-c`/`--config-env` core.hooksPath=…) overrides the hook path for this command"
+                .to_string(),
         ));
         return;
     }
@@ -960,9 +962,10 @@ fn check_git(
 }
 
 /// Scan the git global flags that precede the subcommand for a hook-path
-/// override (`-c core.hooksPath=…`) and a retarget (`-C <dir>` /
-/// `--git-dir <dir>` / `--git-dir=<dir>`). Returns `(hook_path_override,
-/// retarget_dir)`.
+/// override (`-c core.hooksPath=…`, or `--config-env core.hooksPath=<VAR>` /
+/// `--config-env=core.hooksPath=<VAR>` — the value comes from an env var, but
+/// the override is the same) and a retarget (`-C <dir>` / `--git-dir <dir>` /
+/// `--git-dir=<dir>`). Returns `(hook_path_override, retarget_dir)`.
 fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
     let mut hooks_path = false;
     let mut retarget: Option<String> = None;
@@ -970,7 +973,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
     while idx < args.len() {
         let t = args[idx].as_str();
         match t {
-            "-c" => {
+            "-c" | "--config-env" => {
                 if args.get(idx + 1).is_some_and(|v| mentions_hooks_path(v)) {
                     hooks_path = true;
                 }
@@ -983,7 +986,12 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
                 idx += 2;
             }
             _ => {
-                if let Some(v) = t.strip_prefix("--git-dir=") {
+                if let Some(v) = t.strip_prefix("--config-env=") {
+                    if mentions_hooks_path(v) {
+                        hooks_path = true;
+                    }
+                    idx += 1;
+                } else if let Some(v) = t.strip_prefix("--git-dir=") {
                     if retarget.is_none() {
                         retarget = Some(v.to_string());
                     }
@@ -2318,6 +2326,29 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    #[test]
+    fn test_config_env_hooks_path_blocked() {
+        // `--config-env` sets the same key as `-c`, only sourcing the value
+        // from an env var — the sibling bypass must block identically, in both
+        // the `=`-joined and the space-separated form (case-insensitive key).
+        let p = default_policy();
+        for cmd in [
+            "HOOKS=/dev/null git --config-env=core.hooksPath=HOOKS commit -m x",
+            "HOOKS=/dev/null git --config-env core.hookspath=HOOKS commit -m x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        // A non-hooksPath --config-env is not an integrity concern.
+        assert!(
+            evaluate(
+                "NAME=x git --config-env=user.name=NAME commit -m 'feat: x'",
+                &ctx(&p, "feat/x")
+            )
+            .is_empty()
+        );
     }
 
     #[test]

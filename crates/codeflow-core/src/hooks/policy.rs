@@ -88,7 +88,8 @@ pub struct GitPolicy {
     /// Integrity of the enforcement plane itself (git-guard only, ADR-0009):
     /// attempts to disarm or tamper with the hooks and their policy — hook-path
     /// manipulation (`git config core.hooksPath`, `git -c core.hooksPath=…`,
-    /// `--unset core.hooksPath`), hook-skip env prefixes (`GIT_SKIP_HOOKS=`,
+    /// `git --config-env=core.hooksPath=<VAR>`, `--unset core.hooksPath`,
+    /// `GIT_CONFIG_*` env injection), hook-skip env prefixes (`GIT_SKIP_HOOKS=`,
     /// `HUSKY=0`), and Bash writes/removes targeting the hook shims
     /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
     /// (`.codeflow/policy.json`, `.codeflow/project.toml`). A floor-raise for
