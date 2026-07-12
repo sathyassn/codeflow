@@ -33,6 +33,11 @@
     "commit_body": "block",
     "commit_body_max_bullets": 3,
     "commit_body_bullet_max_len": 72,
+    "commit_footer_tokens": [],
+    "commit_required_footers": [],
+    "commit_ticket_keys": [],
+    "commit_ticket_required": "off",
+    "commit_ticket_pattern": "",
     "breaking_watch_paths": [
       "crates/codeflow-core/src/hooks/policy.rs",
       "assets/base/scaffold-manifest.toml",
