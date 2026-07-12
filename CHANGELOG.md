@@ -27,11 +27,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **"Think independently — not a yes-man"** working principle in both the minimal
-  and full agent contracts: a request, opinion, claim, or proposed approach — the
-  operator's included — is owed analysis and evidence, not agreement; the operator
-  still makes the final call. Agreement without examination is a failure mode, not
-  deference.
+- **Two working principles in both the minimal and full agent contracts.**
+  *"Think independently — not a yes-man"*: a request, opinion, claim, or proposed
+  approach — the operator's included — is owed analysis and evidence, not
+  agreement; the operator still makes the final call, but agreement without
+  examination is a failure mode, not deference. *"Think in depth, not at the
+  surface"*: chase the implication chain ("and therefore? …") to the fundamental
+  that decides the matter, and trace how each order ripples across the related
+  domains, not just the immediate area.
 
 ## [2.1.0] - 2026-07-05
 

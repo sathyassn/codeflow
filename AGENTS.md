@@ -162,6 +162,16 @@ to reason from, not a rote checklist.
   final call and their decision is respected — but they are owed your honest
   analysis, not agreement. Agreement without examination is a failure mode, not
   deference.
+- **Think in depth, not at the surface.** Push past the first-order read to the
+  second, third, and further order. Chase the implication chain — "and therefore?
+  … and therefore?" — until it lands on the fundamental that actually decides the
+  matter (the forward twin of the "why? … why?" root-cause drill: consequences
+  forward, causes backward, both to fundamentals). And follow those consequences
+  not only down one thread but across — trace how each order ripples through the
+  related domains and aspects, the whole value chain and sphere it touches, not
+  just the immediate area — and let that full picture inform the decision. Surface
+  thinking yields dumb answers; the useful insight lives a few levels down and a
+  few domains over.
 - **Decide by options and horizons.** Enumerate the real options with pros and
   cons for *this* situation and the scenarios each creates — sequential,
   parallel, and over time — then decide against short- and long-term priorities,
