@@ -67,6 +67,9 @@ enum Command {
     Integrate(cmd::integrate::IntegrateArgs),
     /// Health checks: hooks, claude wiring, codex wiring, config, permissions, network, delegates, repo integrity, CI perimeter, managed-region drift, test config — `doctor --list` names them all.
     Doctor(cmd::doctor::DoctorArgs),
+    /// Inspect .codeflow/policy.json: `explain` the full key schema from the
+    /// binary; `show` the effective values, their source, and invalid keys.
+    Policy(cmd::policy::PolicyArgs),
     /// Search project memory: ledger, session summaries, ADRs, epics, capabilities.
     Recall(cmd::recall::RecallArgs),
     /// Remote provider operations (branch protection).
@@ -145,6 +148,7 @@ fn main() -> anyhow::Result<()> {
         Command::Status(args) => std::process::exit(cmd::status::run(&args)),
         Command::Integrate(args) => std::process::exit(cmd::integrate::run(&args)),
         Command::Doctor(args) => std::process::exit(cmd::doctor::run(&args)),
+        Command::Policy(args) => std::process::exit(cmd::policy::run(&args)),
         Command::Recall(args) => cmd::recall::run(&args)?,
         Command::Remote(args) => cmd::remote::run(&args)?,
         Command::Epic(args) => std::process::exit(cmd::new::run_epic(&args)),

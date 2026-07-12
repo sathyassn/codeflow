@@ -409,6 +409,14 @@ pub fn render_value(v: &Value) -> String {
     }
 }
 
+/// Leniently parse policy-file text to a JSON value — for display callers
+/// (`codeflow policy show`) that render what the file says even when it is
+/// invalid. `None` when the text is not JSON at all.
+#[must_use]
+pub fn parse_lenient(data: &str) -> Option<Value> {
+    serde_json::from_str(data).ok()
+}
+
 /// One invalid finding in a policy file: the offending key (dotted leaf path,
 /// or `policy.json` for file-level problems) and the full human-readable
 /// message naming the offending value and the valid set/format.
@@ -591,10 +599,19 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                 // silently disable the format check at enforcement time.
                 if path == "git.commit_ticket_pattern" && !s.is_empty() {
                     if let Err(e) = regex::Regex::new(s) {
+                        // regex's Display is a multi-line caret diagram; the
+                        // last line ("error: unclosed group") is the reason.
+                        let reason = e
+                            .to_string()
+                            .lines()
+                            .last()
+                            .unwrap_or_default()
+                            .trim_start_matches("error: ")
+                            .to_string();
                         errors.push(PolicyError {
                             key: path.to_string(),
                             message: format!(
-                                "invalid value '{s}' for {path}; not a valid regular expression: {e}"
+                                "invalid value '{s}' for {path}; not a valid regular expression ({reason})"
                             ),
                         });
                     }

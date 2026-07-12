@@ -8,6 +8,7 @@ pub mod hook;
 pub mod integrate;
 pub mod new;
 pub mod orient;
+pub mod policy;
 pub mod recall;
 pub mod remote;
 pub mod status;
