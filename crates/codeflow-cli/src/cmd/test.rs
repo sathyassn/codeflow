@@ -1,10 +1,15 @@
 //! `codeflow test` — the generic test gate (charter §3.1, AC #7).
 
-use clap::Args;
-use codeflow_core::testing::gate::{CoverageReport, GateOutcome, run_gate};
+use clap::{Args, Subcommand};
+use codeflow_core::testing::gate::{run_gate, CoverageReport, FailureReport, GateOutcome};
+use codeflow_core::testing::setup::{self, SetupError, SetupResult};
 
 #[derive(Args)]
 pub struct TestArgs {
+    /// Optional subcommand. When omitted, `codeflow test` runs the gate.
+    #[command(subcommand)]
+    pub command: Option<TestCommand>,
+
     /// Test mode: full (default), quick, or essential. `quick` is an alias
     /// for `essential` — the lighter mode shipped test-configs define.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
@@ -20,7 +25,18 @@ pub struct TestArgs {
     pub strict: bool,
 }
 
+#[derive(Subcommand)]
+pub enum TestCommand {
+    /// Detect the stack and write `.codeflow/test-config.json` (offline,
+    /// idempotent). Never overwrites a populated config.
+    Setup,
+}
+
 pub fn run(args: &TestArgs) -> i32 {
+    if matches!(args.command, Some(TestCommand::Setup)) {
+        return run_setup();
+    }
+
     let root = super::repo_root();
 
     match run_gate(&root, &args.mode) {
@@ -52,6 +68,13 @@ pub fn run(args: &TestArgs) -> i32 {
                     if let Some(err) = &r.error {
                         eprintln!("  error: {err}");
                     }
+                    // Parsed failure summary FIRST — failing test IDs + file:line
+                    // + counts — so the signal sits above the raw scrollback.
+                    // Absent when no report artifact exists (raw output is then
+                    // the only detail).
+                    if let Some(report) = &r.report {
+                        print_failure_report(report);
+                    }
                     let stdout = r.stdout.trim();
                     if !stdout.is_empty() {
                         eprintln!("  stdout:\n{stdout}");
@@ -73,6 +96,51 @@ pub fn run(args: &TestArgs) -> i32 {
         }
         Err(e) => {
             eprintln!("codeflow test: {e}");
+            1
+        }
+    }
+}
+
+/// Print the parsed failure summary (counts + failing test IDs + `file:line`)
+/// for a failed target, above its raw stdout/stderr.
+fn print_failure_report(report: &FailureReport) {
+    eprintln!(
+        "  {} passed, {} failed, {} skipped ({} total)",
+        report.passed, report.failed, report.skipped, report.total
+    );
+    for f in &report.failures {
+        match &f.location {
+            Some(loc) => eprintln!("  FAILED {} ({loc})", f.id),
+            None => eprintln!("  FAILED {}", f.id),
+        }
+        if let Some(msg) = &f.message {
+            eprintln!("         {msg}");
+        }
+    }
+}
+
+/// `codeflow test setup`: deterministic, offline stack detection that writes
+/// `.codeflow/test-config.json`. Idempotent — a populated config is left
+/// untouched (reported as success, not an error).
+fn run_setup() -> i32 {
+    let root = super::repo_root();
+    match setup::run_auto(&root) {
+        Ok(SetupResult::Written) => {
+            println!("Next: run `codeflow test --mode essential` to try it.");
+            0
+        }
+        // `run_auto` never aborts, but the match stays exhaustive.
+        Ok(SetupResult::Aborted) => 0,
+        Err(SetupError::ConfigExists(path)) => {
+            // Idempotent: a real, populated config is never overwritten.
+            println!(
+                "{} already has targets — leaving it unchanged.",
+                path.display()
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("codeflow test setup: {e}");
             1
         }
     }

@@ -164,6 +164,35 @@ fn test_command_quick_mode_honors_config() {
     );
 }
 
+#[test]
+fn test_setup_writes_config_offline_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    // A Cargo.toml makes stack detection fire, so setup writes a populated config.
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"x\"\n");
+
+    let first = codeflow(dir.path(), &["test", "setup"]);
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "setup must succeed: {}",
+        stderr(&first)
+    );
+    let cfg = dir.path().join(".codeflow/test-config.json");
+    assert!(cfg.exists(), "setup must write .codeflow/test-config.json");
+    let before = std::fs::read(&cfg).unwrap();
+
+    // Idempotent: a second run leaves the populated config byte-for-byte
+    // unchanged and still exits 0.
+    let second = codeflow(dir.path(), &["test", "setup"]);
+    assert_eq!(second.status.code(), Some(0), "second setup must exit 0");
+    let after = std::fs::read(&cfg).unwrap();
+    assert_eq!(
+        before, after,
+        "setup must not overwrite an already-populated config"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // codeflow validate --docs — AC #9
 // ---------------------------------------------------------------------------

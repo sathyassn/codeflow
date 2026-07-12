@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::testing::config::{load_test_config, TargetConfig};
 use crate::testing::coverage::FileCoverage;
 use crate::testing::error::TestingError;
+use crate::testing::report::{CanonicalTestReport, CtrfStatus};
 use crate::testing::runner::{run_all_targets, TargetRunResult};
 use crate::testing::setup::detect::detect_stacks;
 use crate::testing::validation;
@@ -31,6 +32,13 @@ pub struct GateTargetResult {
     /// Set when the target failed before producing an exit code
     /// (spawn failure, missing mode, panic).
     pub error: Option<String>,
+    /// Structured failure detail parsed from the target's JUnit/CTRF report
+    /// artifact, when one was configured and produced. `None` when the target
+    /// declares no report or the artifact is missing/unparseable — callers then
+    /// fall back to the raw stdout/stderr scrollback. Populated for passing
+    /// targets too (its `failures` list is then empty) so `integrate`/hook
+    /// consumers get counts regardless of verdict.
+    pub report: Option<FailureReport>,
 }
 
 impl GateTargetResult {
@@ -39,6 +47,31 @@ impl GateTargetResult {
     pub fn passed(&self) -> bool {
         self.exit_code == 0 && self.error.is_none()
     }
+}
+
+/// Pass/fail/skip counts plus the individual failing tests parsed from a
+/// target's report artifact. Surfaced above the raw scrollback so a failed run
+/// names *what* failed (and where) instead of only dumping tool output.
+#[derive(Debug, Clone)]
+pub struct FailureReport {
+    pub passed: u64,
+    pub failed: u64,
+    pub skipped: u64,
+    pub total: u64,
+    /// One entry per failing test, in report order.
+    pub failures: Vec<FailedTest>,
+}
+
+/// A single failing test extracted from the report.
+#[derive(Debug, Clone)]
+pub struct FailedTest {
+    /// Test identifier: `suite::name` when a suite is known, else `name`.
+    pub id: String,
+    /// Best-effort `file:line` pulled from the failure message or trace, when
+    /// the tool emitted a recognizable source location.
+    pub location: Option<String>,
+    /// First line of the failure message, when present.
+    pub message: Option<String>,
 }
 
 /// Report-only coverage summary for one target (charter §3.1 coverage audit).
@@ -157,14 +190,26 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
     let results: Vec<GateTargetResult> = raw
         .into_iter()
         .map(|r| match r {
-            Ok(run) => GateTargetResult {
-                name: run.target_name,
-                exit_code: run.exit_code,
-                duration_ms: run.duration_ms,
-                stdout: run.stdout,
-                stderr: run.stderr,
-                error: None,
-            },
+            Ok(run) => {
+                // Parse the target's report artifact (JUnit/CTRF) so a failed run
+                // surfaces failing test IDs + file:line above the raw scrollback.
+                // Best-effort: a missing config, missing artifact, or parse error
+                // yields None and the caller falls back to raw output.
+                let report = targets
+                    .iter()
+                    .find(|t| t.name == run.target_name)
+                    .and_then(|t| validation::parse_target_report(t, &run).ok().flatten())
+                    .map(|rep| summarize_report(&rep));
+                GateTargetResult {
+                    name: run.target_name,
+                    exit_code: run.exit_code,
+                    duration_ms: run.duration_ms,
+                    stdout: run.stdout,
+                    stderr: run.stderr,
+                    error: None,
+                    report,
+                }
+            }
             Err(e) => GateTargetResult {
                 name: "(unrunnable)".to_string(),
                 exit_code: -1,
@@ -172,6 +217,7 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
                 stdout: String::new(),
                 stderr: String::new(),
                 error: Some(e.to_string()),
+                report: None,
             },
         })
         .collect();
@@ -260,6 +306,57 @@ fn collect_coverage_reports(
     reports
 }
 
+/// Condense a parsed report into the counts + failing-test detail the gate
+/// surfaces. Only failing tests are listed; passing/skipped ones are counted.
+fn summarize_report(report: &CanonicalTestReport) -> FailureReport {
+    let summary = &report.results.summary;
+    let failures = report
+        .results
+        .tests
+        .iter()
+        .filter(|t| t.status == CtrfStatus::Failed)
+        .map(|t| {
+            let id = match &t.suite {
+                Some(suite) if !suite.is_empty() => format!("{suite}::{}", t.name),
+                _ => t.name.clone(),
+            };
+            let location = t
+                .message
+                .as_deref()
+                .and_then(extract_location)
+                .or_else(|| t.trace.as_deref().and_then(extract_location));
+            let message = t.message.as_deref().and_then(first_line);
+            FailedTest {
+                id,
+                location,
+                message,
+            }
+        })
+        .collect();
+    FailureReport {
+        passed: summary.passed,
+        failed: summary.failed,
+        skipped: summary.skipped,
+        total: summary.total,
+        failures,
+    }
+}
+
+/// Best-effort extraction of a `file:line` source location from a failure
+/// message or trace (e.g. `src/lib.rs:42`, `tests/test_api.py:10`). Returns the
+/// first `path.ext:line` token found, or `None` when the tool emitted none.
+fn extract_location(text: &str) -> Option<String> {
+    // A path segment (word chars, `.`, `/`, `\`, `-`), then `.ext`, then `:line`.
+    let re = regex::Regex::new(r"[\w./\\-]+\.[A-Za-z]\w*:\d+").ok()?;
+    re.find(text).map(|m| m.as_str().to_string())
+}
+
+/// First non-empty-trimmed line of a message, or `None` when it is blank.
+fn first_line(text: &str) -> Option<String> {
+    let line = text.lines().next().unwrap_or("").trim();
+    (!line.is_empty()).then(|| line.to_string())
+}
+
 /// Resolves the requested mode against the modes the targets actually define.
 ///
 /// `quick` is an alias for `essential`. Every shipped test-config template and
@@ -346,6 +443,66 @@ mod tests {
             GateOutcome::Completed { results, passed, .. } => {
                 assert!(!passed);
                 assert_eq!(results[0].exit_code, 3);
+            }
+            GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
+        }
+    }
+
+    #[test]
+    fn failed_target_surfaces_parsed_report_above_raw() {
+        // A failing target with a JUnit report artifact must surface parsed
+        // counts + failing test IDs + file:line through the gate result, so the
+        // CLI can print them above the raw scrollback (and integrate/hook
+        // consumers get structured failures).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("junit.xml"),
+            r#"<testsuites><testsuite name="mysuite" tests="2" failures="1">
+                <testcase name="test_ok" classname="mysuite" time="0.1"/>
+                <testcase name="test_bad" classname="mysuite" time="0.2">
+                    <failure message="assertion failed at src/lib.rs:42">trace</failure>
+                </testcase>
+               </testsuite></testsuites>"#,
+        )
+        .unwrap();
+        write_config(
+            dir.path(),
+            r#"[{"name": "t", "runner": "custom",
+                "report": {"format": "junit", "path": "junit.xml"},
+                "modes": {"full": {"command": "exit 1"}}}]"#,
+        );
+
+        let outcome = run_gate(dir.path(), "full").unwrap();
+        match outcome {
+            GateOutcome::Completed {
+                results, passed, ..
+            } => {
+                assert!(!passed);
+                let rep = results[0]
+                    .report
+                    .as_ref()
+                    .expect("failed target must carry a parsed report");
+                assert_eq!(rep.passed, 1);
+                assert_eq!(rep.failed, 1);
+                assert_eq!(rep.failures.len(), 1);
+                assert!(rep.failures[0].id.contains("test_bad"), "{:?}", rep.failures[0]);
+                assert_eq!(rep.failures[0].location.as_deref(), Some("src/lib.rs:42"));
+            }
+            GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
+        }
+    }
+
+    #[test]
+    fn failed_target_without_report_falls_back_to_raw() {
+        // No report block configured → report is None; the CLI falls back to
+        // raw stdout/stderr. Guards the fallback path.
+        let dir = tempfile::tempdir().unwrap();
+        write_config(dir.path(), &format!("[{}]", echo_target("bad", "exit 3")));
+
+        let outcome = run_gate(dir.path(), "full").unwrap();
+        match outcome {
+            GateOutcome::Completed { results, .. } => {
+                assert!(results[0].report.is_none(), "no report artifact → None");
             }
             GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
         }
