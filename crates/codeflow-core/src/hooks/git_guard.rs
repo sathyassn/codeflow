@@ -2294,11 +2294,23 @@ mod tests {
             "GIT_SKIP_HOOKS=1 git commit -m x",
             "HUSKY=0 git commit -m x",
             "SKIP_HOOKS=1 git commit -m x",
+            "PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit -m x",
+            "GIT_HOOKS_PATH=/tmp git commit -m x",
             "env GIT_SKIP_HOOKS=1 git commit -m x",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    #[test]
+    fn test_husky_nonzero_not_flagged() {
+        // HUSKY disarms only at `=0`; `HUSKY=1` (or any non-zero) is a normal env
+        // set that must NOT trip hook_integrity — guards the `val == "0"`
+        // discrimination against a false positive.
+        let p = default_policy();
+        let v = evaluate("HUSKY=1 npm test", &ctx(&p, "feat/x"));
+        assert!(!has_rule(&v, "git.hook_integrity"), "{v:?}");
     }
 
     #[test]
@@ -2442,6 +2454,28 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn test_retarget_resolver_none_falls_back_to_session_branch() {
+        // The resolver cannot read the target repo's branch (returns None); the
+        // guard falls back to the session branch (documented residual — the
+        // target repo's git-hook plane backstops). Session on a feature branch:
+        // allowed; session on a protected branch: still blocked.
+        let p = default_policy();
+        let resolver = |_dir: &str| None;
+        assert!(
+            evaluate(
+                "git -C /root commit -m x",
+                &ctx_with_dir_branch(&p, "feat/x", &resolver)
+            )
+            .is_empty()
+        );
+        let v = evaluate(
+            "git -C /root commit -m x",
+            &ctx_with_dir_branch(&p, "main", &resolver),
+        );
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
     }
 
     // -- unknown ref-writers (4c) --
@@ -2661,12 +2695,15 @@ mod tests {
     #[test]
     fn test_b6_env_prefixed_and_clustered_wrappers() {
         let p = default_policy();
-        // Each hides a commit on main; strip_launchers + clustered -c re-expose it.
+        // Each hides a commit on main; strip_launchers (env/command/builtin/exec)
+        // + clustered -c re-expose it.
         for cmd in [
             "bash -lc 'git commit -m x'",
             "env FOO=1 bash -c 'git commit -m x'",
             "env FOO=1 git commit -m x",
             "command git commit -m x",
+            "exec git commit -m x",
+            "builtin git commit -m x",
             "sh -ec 'git commit -m x'",
         ] {
             assert!(has_rule(&evaluate(cmd, &ctx(&p, "main")), "git.commit_to_protected"), "{cmd}");

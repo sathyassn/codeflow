@@ -1362,6 +1362,42 @@ mod tests {
         assert!(report.violations.is_empty());
     }
 
+    #[test]
+    fn test_pre_push_force_push_unprotected_blocked() {
+        // force_push_unprotected defaults to Allow (D8), so the unprotected
+        // force-push block path never runs under the default policy. Opt in with
+        // Block: the same c2/c2' rewrite pushed to a FEATURE branch is a
+        // non-fast-forward push and raises exactly one git.force_push_unprotected.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        let c1 = rev_parse(dir.path(), "HEAD");
+        std::fs::write(dir.path().join("f.txt"), "v1\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: v1"]);
+        let c2 = rev_parse(dir.path(), "HEAD");
+        // Rewrite: drop C2, add a different commit not descending from it.
+        git(dir.path(), &["reset", "--hard", &c1]);
+        std::fs::write(dir.path().join("g.txt"), "v2\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "feat: v2"]);
+        let c2_prime = rev_parse(dir.path(), "HEAD");
+
+        let policy = GitPolicy {
+            force_push_unprotected: PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        let refs = [pref("refs/heads/feat/x", &c2_prime, "refs/heads/feat/x", &c2)];
+        let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
+        let forced: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.rule == "git.force_push_unprotected")
+            .collect();
+        assert_eq!(forced.len(), 1, "{:?}", report.violations);
+        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
+        assert_eq!(forced[0].level, PolicyLevel::Block);
+    }
+
     fn rev_parse(dir: &Path, what: &str) -> String {
         let out = Command::new("git")
             .args(["rev-parse", what])
@@ -1448,5 +1484,66 @@ mod tests {
         let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
         let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
         assert!(report.violations.is_empty());
+    }
+
+    /// Write raw bytes to `.codeflow/test-config.json` (bypasses the enabled
+    /// happy-path config that `write_test_config` produces).
+    fn write_raw_test_config(dir: &Path, body: &str) {
+        let cf = dir.join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(cf.join("test-config.json"), body).unwrap();
+    }
+
+    #[test]
+    fn test_gate_no_targets_is_a_skip_note() {
+        // The config's only target is disabled, so no enabled target defines the
+        // requested mode → run_gate returns NoTargets. The gate must record a
+        // loud skip note, never a violation (charter principle 8: degradation
+        // stays legible).
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(
+            dir.path(),
+            r#"{
+  "schema_version": "1.0",
+  "targets": [
+    {
+      "name": "demo",
+      "runner": "custom",
+      "enabled": false,
+      "modes": { "quick": { "command": "true" } }
+    }
+  ]
+}"#,
+        );
+        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        assert!(
+            report.notes.iter().any(|n| n.contains("test gate skipped")),
+            "no-targets must be a loud skip: {:?}",
+            report.notes
+        );
+    }
+
+    #[test]
+    fn test_gate_unreadable_config_is_a_skip_note() {
+        // A malformed test-config.json makes run_gate return Err; the pre-push
+        // gate degrades to a loud skip note — never a false green, never a
+        // violation.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(dir.path(), "{ not json");
+        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("test gate skipped") && n.contains("unreadable")),
+            "unreadable config must be a loud skip: {:?}",
+            report.notes
+        );
     }
 }

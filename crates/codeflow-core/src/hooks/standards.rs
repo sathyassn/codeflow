@@ -314,8 +314,20 @@ mod tests {
 
     #[test]
     fn test_emoji_detected_in_subject() {
-        assert!(find_emoji("feat: ship it \u{1F680}").is_some());
-        assert!(find_emoji("fix: sparkle \u{2728}").is_some());
+        // One code point per range arm, so dropping any single arm fails a test.
+        assert!(find_emoji("feat: ship it \u{1F680}").is_some()); // 0x1F000..=0x1FAFF
+        assert!(find_emoji("fix: sparkle \u{2728}").is_some()); // 0x2600..=0x27BF
+        assert!(find_emoji("feat: star \u{2B50}").is_some()); // 0x2B00..=0x2BFF (star)
+        assert!(find_emoji("feat: legacy \u{1FB00}").is_some()); // 0x1FB00..=0x1FBFF
+
+        // 0xFE0F (emoji variation selector): the ❤️ sequence U+2764 U+FE0F is a
+        // real, blockable emoji.
+        assert!(find_emoji("fix: heart \u{2764}\u{FE0F}").is_some());
+        // U+2764 alone already matches the 0x2600 arm, so pin the 0xFE0F arm
+        // independently on a base that no other arm covers: U+25B6 (0x25B6) sits
+        // below every arm, so ▶️ (U+25B6 U+FE0F) is detected *only* via 0xFE0F —
+        // dropping that arm leaks this real emoji.
+        assert_eq!(find_emoji("fix: play \u{25B6}\u{FE0F}"), Some('\u{FE0F}'));
     }
 
     #[test]

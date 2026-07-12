@@ -321,6 +321,11 @@ mod tests {
     }
 
     #[test]
+    fn test_fork_bomb_dot_variant() {
+        assert!(DangerousModule.check(&ctx(".(){ .|.& };.")).is_some());
+    }
+
+    #[test]
     fn test_safe_rm() {
         assert!(DangerousModule.check(&ctx("rm -rf /tmp/test")).is_none());
     }

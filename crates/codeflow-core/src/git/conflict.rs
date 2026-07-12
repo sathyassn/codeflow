@@ -483,6 +483,22 @@ mod tests {
     }
 
     #[test]
+    fn test_unborn_head_cannot_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        // Repo is initialized but has NO commit — HEAD is unborn, so it cannot
+        // be peeled to a commit even though the repository itself opens fine.
+        let _repo = git2::Repository::init(dir.path()).unwrap();
+
+        let result = check_merge_conflicts(dir.path(), "main");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, GitError::RepoOpen(msg) if msg.contains("cannot resolve HEAD")),
+            "expected RepoOpen(cannot resolve HEAD), got: {err}"
+        );
+    }
+
+    #[test]
     fn test_conflict_result_fields() {
         let result = ConflictResult {
             has_conflicts: true,
@@ -549,6 +565,27 @@ mod tests {
 
         let reference = find_target_ref(&repo, "local-target");
         assert!(reference.is_ok());
+    }
+
+    #[test]
+    fn test_find_target_ref_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_file(dir.path(), "file.txt", "content\n");
+        let head_oid = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+        // Create a remote-tracking ref with no matching local branch, so a
+        // successful lookup can only come from the remote early-return path
+        // (`refs/remotes/origin/{target}`), tried before the local fallback.
+        repo.reference(
+            "refs/remotes/origin/remote-target",
+            head_oid,
+            false,
+            "create remote-tracking ref",
+        )
+        .unwrap();
+
+        let reference = find_target_ref(&repo, "remote-target").unwrap();
+        assert_eq!(reference.name(), Some("refs/remotes/origin/remote-target"));
     }
 
     #[test]

@@ -187,6 +187,52 @@ mod tests {
         );
     }
 
+    // The secret values below are BUILT at runtime, so the source lines carry no
+    // matching literal for the pre-commit secret scan (which scans staged source);
+    // `scan_line` still receives the full value and validates the detector.
+    #[test]
+    fn test_scan_line_github_fine_grained_token() {
+        // `github_pat_` + a 38-char body: must not be swallowed by the
+        // `gh[pousr]_` generic-token pattern that sits just above it.
+        let line = format!("token: github_pat_{}", "A".repeat(38));
+        assert_eq!(scan_line(&line), Some("GitHub fine-grained token"));
+    }
+
+    #[test]
+    fn test_scan_line_openai_keys() {
+        let sk = format!("key = sk-{}", "A".repeat(24));
+        assert_eq!(scan_line(&sk), Some("API secret key (sk-…)"));
+        let sk_ant = format!("key = sk-ant-{}", "A".repeat(24));
+        assert_eq!(scan_line(&sk_ant), Some("API secret key (sk-…)"));
+    }
+
+    #[test]
+    fn test_scan_line_google_api_key() {
+        // `AIza` + exactly 35 trailing chars.
+        let line = format!("AIza{}", "A".repeat(35));
+        assert_eq!(scan_line(&line), Some("Google API key"));
+    }
+
+    #[test]
+    fn test_scan_line_jwt() {
+        // Three base64url segments joined at runtime; no segment alone is a JWT.
+        let jwt = format!(
+            "{}.{}.{}",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dummyFakeSignature0123"
+        );
+        assert_eq!(scan_line(&jwt), Some("JSON Web Token"));
+    }
+
+    #[test]
+    fn test_scan_line_benign_no_false_positive() {
+        // Names the token families but carries no real credential; guards
+        // against a future over-broad edit to any detector.
+        assert_eq!(
+            scan_line("Docs mention sk- prefixes, AIza keys, and JWT eyJ headers."),
+            None
+        );
+    }
+
     #[test]
     fn test_scan_line_generic_assignment() {
         assert_eq!(
