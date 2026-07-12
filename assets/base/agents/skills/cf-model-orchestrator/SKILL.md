@@ -90,10 +90,15 @@ Use its commands for the duo:
 - `/codex:transfer` — a persistent codex thread (`codex resume <id>`) for the
   multi-round back-and-forth.
 
-**Verify-on-install:** the plugin markets review/edit but wraps the full
-app-server, so a delegated task should reach the configured MCP servers — confirm
-once by delegating a browser-driven e2e (Playwright). If it cannot, use the
-app-server directly for the e2e execution only.
+**Tool access — verified.** Against codex-cli 0.144.1, a delegated `/codex:rescue`
+task reports codex's **full MCP tool set** — the `playwright` MCP present with its
+24 browser tools (`browser_navigate`, `browser_click`, `browser_snapshot`, …),
+alongside codex's other MCP servers — in a resumable multi-turn thread, **not a
+headless one-shot**; the sandbox is read-only for a diagnostic and opens to
+workspace-write for a fix. Re-confirm on a new codex/plugin version, or if your
+own `~/.codex` MCP config differs, by delegating one browser e2e. Only if a
+delegated task genuinely can't reach the browser MCP, fall back to the app-server
+driver for the e2e step.
 
 **Advanced fallback — drive the app-server directly.** For fully-programmatic
 driving without slash commands, or where the plugin cannot be installed, the raw
