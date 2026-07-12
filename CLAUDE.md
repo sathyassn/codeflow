@@ -9,11 +9,9 @@
   and the sanctioned path.
 - The permission preset and sandbox mode were chosen at init and live in
   `.claude/settings.json`; change them there, not ad hoc.
-- **IMPORTANT** — the two AGENTS.md rules a harness default is most likely to slip
-  in are hook-enforced here (commit-msg + git-guard, wired in
-  `.claude/settings.json`): **no AI attribution**, and **no
-  `CODEFLOW_HUMAN_OVERRIDE` / gate-token laundering**. Both are blocked before they
-  land — do not attempt either.
+- The AGENTS.md git rules are **hook-enforced** here — the commit-msg hook and
+  `git-guard` (wired in `.claude/settings.json`) block violations before they land, so
+  fix the cause, never route around them. Full rules: AGENTS.md, "Git rules."
 
 ## Workflows
 
