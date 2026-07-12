@@ -6,24 +6,33 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-`codeflow` is a single binary. **This repo is private**, so its prebuilt GitHub
-Release assets are not anonymously downloadable — installation is authenticated.
+`codeflow` is a single binary. **This repo is private**, so its Release assets
+are not anonymously downloadable, and the cargo-dist `curl | sh` installer does
+**not** work while private — it fetches from the `releases/download` browser URL,
+which returns 404 for private-repo assets even with a token (GitHub only honors a
+token on its API asset endpoint, which the installer does not use). Install one
+of two authenticated ways.
 
-Primary path (needs a Rust toolchain), from a checkout:
+**From a checkout** (simplest; needs a Rust toolchain):
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-Prebuilt binaries (macOS arm64/x64, Linux x64) are published as private Release
-assets by cargo-dist on each `vX.Y.Z` tag. Installing them on another machine
-requires a GitHub token with read access to the repo — your own `gh auth token`,
-or a PAT with the `repo` (classic) or Contents: Read (fine-grained) scope. The
-token authenticates both the download of `codeflow-cli-installer.sh` and the
-installer's own fetch of the platform tarball from the private release; see the
-[releases page](https://github.com/sathyassn/codeflow/releases) for the assets.
-If the repo is later made public, the standard installer works with no token:
-`curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh`.
+**Prebuilt binary, another machine** — pull the platform tarball with `gh` (which
+authenticates through the GitHub API) and put the binary on your `PATH`. Needs a
+GitHub login with read access (`gh auth login`, or a `repo`-scoped token):
+
+```sh
+# platform: aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
+A=codeflow-cli-aarch64-apple-darwin
+gh release download v2.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
+tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
+install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
+```
+
+If the repo is later made **public**, the standard installer works anonymously,
+no token: `curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh`.
 
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
