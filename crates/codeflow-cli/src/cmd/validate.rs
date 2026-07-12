@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use codeflow_core::hooks::policy_schema;
 use codeflow_core::validate::docs::lint_docs;
 use codeflow_core::validate::{ValidateOptions, validate_epic, validate_task};
 
@@ -21,6 +22,7 @@ pub fn run(args: &ValidateArgs) -> i32 {
     let root = super::repo_root();
     let mut failed = false;
 
+    failed |= !validate_policy(&root);
     failed |= !validate_records(&root, args.path.as_deref());
 
     if args.docs {
@@ -28,6 +30,30 @@ pub fn run(args: &ValidateArgs) -> i32 {
     }
 
     i32::from(failed)
+}
+
+/// Strictly validate `.codeflow/policy.json` — an invalid value would
+/// otherwise silently default away a gate. Returns `true` when clean or absent.
+fn validate_policy(root: &Path) -> bool {
+    match policy_schema::validate_policy(root) {
+        Ok(()) => {
+            if root.join(".codeflow").join("policy.json").exists() {
+                println!("validate: .codeflow/policy.json clean");
+            } else {
+                println!("validate: no .codeflow/policy.json — built-in policy defaults apply");
+            }
+            true
+        }
+        Err(errors) => {
+            for e in &errors {
+                eprintln!("validate: error: policy: {e}");
+            }
+            eprintln!(
+                "validate: .codeflow/policy.json is invalid — see `codeflow policy explain` for every key's valid values"
+            );
+            false
+        }
+    }
 }
 
 /// Frontmatter validation over a file or tree. Returns `true` when clean.

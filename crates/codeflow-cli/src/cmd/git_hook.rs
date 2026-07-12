@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Args;
-use codeflow_core::hooks::{git_hook, policy::Policy};
+use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
 
 /// Which git client hook stage to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -44,6 +44,23 @@ pub fn run(args: &GitHookArgs) -> i32 {
     // performance note; ADR-0007).
     if let StageName::ReferenceTransaction = args.stage {
         return run_reference_transaction(&root, &args.args);
+    }
+
+    // A policy file that does not validate cannot express the project's intent
+    // — fail the commit loudly, naming each offending key, rather than silently
+    // enforce the built-in defaults (which could weaken a hardened gate). The
+    // commit-msg stage is the loud surface: every commit passes through it,
+    // and blocking here never strands a fetch or push mid-flight.
+    if matches!(args.stage, StageName::CommitMsg) {
+        if let Err(errors) = policy_schema::validate_policy(&root) {
+            for e in &errors {
+                eprintln!("codeflow commit-msg: policy error: {e}");
+            }
+            eprintln!(
+                "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
+            );
+            return 1;
+        }
     }
 
     let (policy, _armed) = Policy::load_effective(&root);

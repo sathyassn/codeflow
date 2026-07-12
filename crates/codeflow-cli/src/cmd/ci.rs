@@ -20,7 +20,7 @@ use std::process::Command;
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
-    any_blocking, git_hook, repo, standards, GitPolicy, PolicyLevel, Violation,
+    any_blocking, git_hook, policy_schema, repo, standards, GitPolicy, PolicyLevel, Violation,
 };
 
 #[derive(Debug, Args)]
@@ -79,6 +79,19 @@ struct DetectedRange {
 
 pub fn run(args: &CiArgs) -> i32 {
     let root = super::repo_root();
+    // An invalid policy cannot verify the consumer's intent — fail loudly,
+    // naming each offending key, rather than silently verify against the
+    // built-in defaults, which could pass a range the real (mistyped) policy
+    // meant to block. Exit 2, the existing could-not-verify-in-full code.
+    if let Err(errors) = policy_schema::validate_policy(&root) {
+        for e in &errors {
+            eprintln!("codeflow ci: policy error: {e}");
+        }
+        eprintln!(
+            "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
+        );
+        return 2;
+    }
     // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is
     // moot here: the pre-first-commit window cannot occur in CI, which always
     // has history — CI is the authoritative, always-armed perimeter.
