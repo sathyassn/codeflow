@@ -4,7 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-07-05
+
+### Added
+
+- Cross-harness skills: the `cf-*` skills install to `.agents/skills/` (read by
+  Codex) alongside `.claude/skills/`, so one skill set serves multiple coding
+  CLIs. Claude Code merged custom commands into skills (v2.1.101); codeflow now
+  ships skills only.
+- The commit-msg gate flags a mis-cased `BREAKING CHANGE:` / `BREAKING-CHANGE:`
+  footer, so a breaking change is never silently downgraded to a minor bump.
 
 ### Fixed
 
@@ -13,6 +22,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   records the pristine shipped hash (restoring the invariant `recorded ==
   hash(baseline)`), so a merged file stays classified user-modified and is
   re-merged rather than overwritten with the shipped version.
+- `codeflow update` reconciles orphaned managed files: an artifact removed or
+  renamed upstream (e.g. a command that became a skill), and its baseline and
+  manifest record, is pruned when unmodified instead of lingering and colliding
+  with its renamed replacement. User-modified and user-owned files are never
+  deleted (ADR-0011).
+
+### Changed
+
+- Shipped scaffold content and documentation corrected for the commands→skills
+  rename and for install/enforcement accuracy ahead of the public release.
 
 ## [2.0.0] - 2026-07-03
 
