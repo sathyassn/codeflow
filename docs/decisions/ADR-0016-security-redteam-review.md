@@ -130,3 +130,27 @@ per-stack SCA/SAST scanner floor as new Tier-3 tool dependencies, and
 `secret_scan`. Those edits land in the same PR as the implementing slice (the
 scanner module, CI job, and policy struct fields), where the plane becomes real;
 this ADR records the decision ahead of that slice.
+
+## Update (2026-07-11) — the implementing slice's shipped posture
+
+The slice that implemented this decision landed with softer semantics than the
+decision text in three places, recorded here so the ADR is not read as the
+shipped state:
+
+- **The policy keys are gated, not never-relaxed.** `security_review` and
+  `dep_audit` shipped defaulting to `warn`, user-settable to `off`, and
+  bootstrap grace (`suspend_for_bootstrap`) turns both off — only `secret_scan`
+  keeps the never-relaxed status. The CI job reads the keys from policy.json as
+  decided, but the hard block arms only when a repo hardens either key to
+  `block`.
+- **No High+ severity floor.** The shipped `security-review` job runs
+  `osv-scanner scan -r .` with no severity filter: any advisory (or scan error)
+  triggers the gated outcome. The `--exit-code 1` on High+ floor is future work
+  alongside the per-stack scanner table.
+- **No structured-findings artifact check.** The CI check that the committed
+  structured-findings artifact is present with no unresolved High+ model
+  findings was not built; the model layer's verdict is consumed by the pipeline
+  gate and the human merger only. Also future work.
+
+The secret layers are unchanged: gitleaks in CI and the pre-commit scan block
+unconditionally, exactly as decided.
