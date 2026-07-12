@@ -82,9 +82,12 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ spike/ experiment/ integration/`. Pick by work intent.
-- **Commits:** conventional format `type(scope): description` — imperative mood,
-  lower-case type from the policy whitelist, no trailing period; body explains
-  *why* when non-obvious. One logical change per commit.
+- **Commits:** conventional format `type(scope): description` (scope optional) —
+  imperative mood, lower-case type from the policy whitelist, no trailing period;
+  the description ≤ 50 chars and the whole subject line ≤ 72. A body, when
+  present, is **only** `-` bullets — at most 3, each a single line ≤ 72 chars —
+  optionally followed by a `BREAKING CHANGE:` footer; no prose paragraphs. One
+  logical change per commit.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
