@@ -109,6 +109,67 @@ impl ProjectState {
     }
 }
 
+/// The `[scaffold]` section of `project.toml` — user-owned knobs that steer
+/// `codeflow update`.
+///
+/// Deliberately NOT a field of [`ProjectState`]: update reads it read-only via
+/// [`ScaffoldConfig::load`], so `ProjectState::store` treats the whole
+/// `[scaffold]` table as an unmodeled foreign key and round-trips it (plus any
+/// future keys in it) verbatim — the same user-owned guarantee this module
+/// gives every other unknown section.
+#[derive(Debug, Clone, Default)]
+pub struct ScaffoldConfig {
+    /// Repo-relative globs of managed files `codeflow update` must leave
+    /// entirely alone: never rewrite, never resurrect if the user deleted them,
+    /// never prune as orphaned. The per-artifact opt-out for a team that does
+    /// not want a shipped artifact (a non-Codex team's `.codex/**`, a GitLab
+    /// team's `.github/**`). `*` and `?` match within one path segment; `**`
+    /// spans segments.
+    pub ignore: Vec<String>,
+}
+
+impl ScaffoldConfig {
+    /// Reads `[scaffold]` from `project.toml`. A missing file or absent section
+    /// yields an empty config (no opt-outs).
+    ///
+    /// # Errors
+    ///
+    /// IO failures other than not-found, or invalid TOML.
+    pub fn load(root: &Path) -> Result<Self, ScaffoldError> {
+        let path = ProjectState::path(root);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(ScaffoldError::io(&path, e)),
+        };
+        let table: toml::Table = toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+            what: PROJECT_TOML.to_string(),
+            detail: e.to_string(),
+        })?;
+        let ignore = table
+            .get("scaffold")
+            .and_then(toml::Value::as_table)
+            .and_then(|s| s.get("ignore"))
+            .and_then(toml::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Self { ignore })
+    }
+
+    /// Whether `dest` (a repo-relative managed-file path) matches any ignore
+    /// glob — i.e. `codeflow update` must skip it entirely.
+    #[must_use]
+    pub fn is_ignored(&self, dest: &str) -> bool {
+        self.ignore
+            .iter()
+            .any(|glob| crate::security::pattern::matches_extended_glob(dest, glob))
+    }
+}
+
 /// One record in `.codeflow/manifest.json`.
 ///
 /// `sha256` semantics by ownership class:
@@ -278,5 +339,49 @@ mod tests {
         let final_text = std::fs::read_to_string(&path).unwrap();
         assert!(final_text.contains("[orient]"), "foreign key survived");
         assert!(final_text.contains("policy_armed = false"));
+    }
+
+    #[test]
+    fn scaffold_config_ignore_glob_matching() {
+        let cfg = ScaffoldConfig {
+            ignore: vec![
+                ".codex/**".to_string(),
+                ".github/workflows/*.yml".to_string(),
+                ".claude/settings.json".to_string(),
+            ],
+        };
+        assert!(cfg.is_ignored(".codex/config.toml"));
+        assert!(cfg.is_ignored(".codex/agents/foo.md"), "** spans path segments");
+        assert!(cfg.is_ignored(".github/workflows/ci.yml"));
+        assert!(cfg.is_ignored(".claude/settings.json"), "exact path matches");
+        assert!(
+            !cfg.is_ignored(".github/workflows/nested/ci.yml"),
+            "* stays within a single path segment"
+        );
+        assert!(!cfg.is_ignored(".claude/workflows/develop.md"), "unrelated path kept");
+
+        assert!(
+            !ScaffoldConfig::default().is_ignored(".codex/config.toml"),
+            "no globs ignores nothing"
+        );
+    }
+
+    #[test]
+    fn scaffold_config_load_reads_ignore_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_file(
+            &ProjectState::path(root),
+            b"schema_version = 1\ntier = \"full\"\n\n[scaffold]\nignore = [\".codex/**\", \".github/**\"]\n",
+        )
+        .unwrap();
+        let cfg = ScaffoldConfig::load(root).unwrap();
+        assert_eq!(cfg.ignore, vec![".codex/**".to_string(), ".github/**".to_string()]);
+
+        // Missing file and absent section both yield an empty (no-op) config.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
+        write_file(&ProjectState::path(empty.path()), b"schema_version = 1\n").unwrap();
+        assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
     }
 }

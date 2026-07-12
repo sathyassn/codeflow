@@ -1011,6 +1011,97 @@ fn update_reinstalls_missing_managed_file() {
     assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V1);
 }
 
+/// Appends a `[scaffold] ignore = [...]` opt-out to an initialized project.toml.
+fn add_scaffold_ignore(root: &Path, globs: &[&str]) {
+    let list = globs
+        .iter()
+        .map(|g| format!("\"{g}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut toml = read(root, ".codeflow/project.toml");
+    toml.push_str("\n[scaffold]\nignore = [");
+    toml.push_str(&list);
+    toml.push_str("]\n");
+    std::fs::write(root.join(".codeflow/project.toml"), toml).unwrap();
+}
+
+#[test]
+fn update_ignore_glob_keeps_deleted_managed_file_deleted() {
+    // A managed file the user deleted, matched by `[scaffold] ignore`, must NOT
+    // be resurrected by update — and the opt-out survives update's rewrite of
+    // project.toml.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    add_scaffold_ignore(&root, &[".claude/**"]);
+
+    std::fs::remove_file(root.join(".claude/workflows/develop.md")).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Skipped,
+        "ignored file reported as skipped, not added"
+    );
+    assert!(
+        !root.join(".claude/workflows/develop.md").exists(),
+        "ignored managed file must stay deleted"
+    );
+    // The user-owned opt-out round-trips through update's project.toml rewrite.
+    let toml = read(&root, ".codeflow/project.toml");
+    assert!(toml.contains("[scaffold]") && toml.contains(".claude/**"), "opt-out preserved");
+}
+
+#[test]
+fn update_ignore_glob_leaves_non_matching_files_managed() {
+    // A managed file OUTSIDE the ignore globs still upgrades normally — the
+    // opt-out is scoped to matching paths only.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    add_scaffold_ignore(&root, &[".codex/**"]);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Changed,
+        "non-ignored managed file still regenerates"
+    );
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V2);
+}
+
+#[test]
+fn update_ignore_glob_does_not_prune_ignored_orphan() {
+    // A file upstream stopped shipping (an orphan) that also matches an ignore
+    // glob must NOT be pruned or reported as orphaned — the user opted out.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    add_scaffold_ignore(&root, &[".claude/**"]);
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(report.count(Action::Removed), 0, "ignored orphan not pruned");
+    assert!(
+        root.join(".claude/workflows/develop.md").exists(),
+        "ignored orphan file kept on disk"
+    );
+    assert!(
+        !report
+            .files
+            .iter()
+            .any(|f| f.dest == ".claude/workflows/develop.md" && f.action == Action::Removed),
+        "ignored orphan never reported as removed"
+    );
+}
+
 #[test]
 fn update_requires_initialized_project() {
     isolate_git();

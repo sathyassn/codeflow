@@ -29,6 +29,14 @@
 //! `user-owned`) is kept and merely unmanaged. Without this, a stale orphan
 //! lingers and can collide with its renamed replacement.
 //!
+//! A project may opt individual managed files out of all of the above via a
+//! `[scaffold] ignore = ["glob", ...]` list in `.codeflow/project.toml`: any
+//! managed file whose repo-relative dest matches an ignore glob is skipped
+//! entirely — never rewritten, never resurrected if the user deleted it, and
+//! never pruned/reported as an orphan (a non-Codex team drops `.codex/**`, a
+//! GitLab team `.github/**`). Its manifest record and baseline are left intact,
+//! so removing the glob restores normal management on the next update.
+//!
 //! The update always ends with a printed report
 //! (changed / merged / conflicted / skipped / added / removed).
 
@@ -39,7 +47,9 @@ use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
 use super::settings_merge::merge_settings;
-use super::state::{set_exec, write_file, Baseline, InstalledFile, InstalledManifest, ProjectState};
+use super::state::{
+    set_exec, write_file, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
+};
 use super::{hash, ScaffoldError};
 
 /// Options for [`update`].
@@ -69,6 +79,7 @@ pub fn update(
     opts: &UpdateOptions,
 ) -> Result<Report, ScaffoldError> {
     let mut state = ProjectState::load(root)?;
+    let ignore = ScaffoldConfig::load(root)?;
     let manifest = ScaffoldManifest::load(source)?;
     let mut installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
 
@@ -98,12 +109,24 @@ pub fn update(
         if !entry.applies(state.tier, &state.permission_preset) {
             continue;
         }
+        if ignore.is_ignored(&entry.dest) {
+            // Opted out via `[scaffold] ignore`: never rewrite it, and never
+            // resurrect it if the user deleted it. Its manifest record and
+            // baseline are left untouched so removing the glob later restores
+            // normal management.
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec!["ignored via [scaffold] ignore in project.toml".to_string()],
+            );
+            continue;
+        }
         update_entry(
             source, root, entry, &ctx, &state, opts, &mut installed, &mut report, &mut diffs,
         )?;
     }
 
-    prune_orphans(root, &manifest, &mut installed, &mut report)?;
+    prune_orphans(root, &manifest, &ignore, &mut installed, &mut report)?;
 
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
@@ -472,6 +495,7 @@ fn add_new_keys(
 fn prune_orphans(
     root: &Path,
     manifest: &ScaffoldManifest,
+    ignore: &ScaffoldConfig,
     installed: &mut InstalledManifest,
     report: &mut Report,
 ) -> Result<(), ScaffoldError> {
@@ -480,7 +504,10 @@ fn prune_orphans(
     let orphans: Vec<String> = installed
         .files
         .keys()
-        .filter(|dest| !shipped.contains(dest.as_str()))
+        // A path matched by `[scaffold] ignore` is the user's to manage: never
+        // prune it or report it as orphaned, even once upstream stops shipping
+        // it — its record simply lingers, inert, until the glob is removed.
+        .filter(|dest| !shipped.contains(dest.as_str()) && !ignore.is_ignored(dest))
         .cloned()
         .collect();
 
