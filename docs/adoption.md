@@ -7,7 +7,10 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 ## Install the binary
 
 `codeflow` is a single binary. Install the prebuilt build (macOS arm64/x64,
-Linux x64) with the shell installer from the latest release:
+Linux x64) with the shell installer from the latest release — this anonymous
+one-liner works once codeflow's releases are public; while the repo is private,
+use the checkout build or the `gh release download` path below (both authenticate
+as a collaborator):
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
@@ -41,7 +44,7 @@ is an idempotent additive upgrade (downgrade = stop managing, never delete).
 | Tier | Adds | For |
 |---|---|---|
 | `--minimal` | `AGENTS.md`, secret-scan pre-commit, `.gitignore`; branch/commit policy at warn | Throwaways — blocking policy on a scratch repo trains bypassing |
-| `--standard` (default) | + full git gates, `.claude/` settings/agents/skills/commands, the six-layer `docs/`, the test gate, recall capture, a CI template | Real projects |
+| `--standard` (default) | + full git gates, `.claude/` settings/agents/skills/workflows, the six-layer `docs/`, the test gate, recall capture, a CI template | Real projects |
 | `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Work that outlives sessions |
 
 ## Greenfield — an empty directory
@@ -91,7 +94,7 @@ earns the weight. Each step is additive and idempotent.
 
 | Class | Examples | What `update` does |
 |---|---|---|
-| Fully-managed | `.claude/` agents, skills, commands; git-hook shims; CI template | Replaced if you never touched them; 3-way merged from `.codeflow/.baseline/` if you did — conflicts land as `.new` + a report |
+| Fully-managed | `.claude/` agents, skills; git-hook shims; CI template | Replaced if you never touched them; 3-way merged from `.codeflow/.baseline/` if you did — conflicts land as `.new` + a report |
 | Managed-region | `AGENTS.md` / `CLAUDE.md` markers; `.gitignore` markers; `.claude/settings.json` codeflow keys | Only the marked region or codeflow-owned keys are rewritten; everything else is yours |
 | User-owned, schema-versioned | `.codeflow/policy.json`, `.codeflow/project.toml`, all of `docs/` | Only *new* keys are added with defaults and reported; your values are never mutated |
 | Engine-generated | `.codeflow/manifest.json`, `.codeflow/.baseline/`, `status` / `orient` views | Rewritten by the binary; never hand-edit |

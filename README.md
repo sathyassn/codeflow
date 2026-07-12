@@ -9,7 +9,8 @@ bind any agent or human.
 ## Install
 
 Prebuilt binary (macOS arm64/x64, Linux x64) — the shell installer from the
-latest release:
+latest release (works once codeflow's releases are public; for private/early
+access use the checkout build below or `gh release download`):
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
@@ -41,7 +42,7 @@ greenfield/brownfield paths, tiers, ownership model, and the daily flow.
 |---|---|
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
 | `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
-| `hook` | Claude-layer hooks (`git-guard`, `session-orient`, `session-summary`) |
+| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`) |
 | `git-hook` | Git client hook target the `.git/hooks` shims exec |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate (configured targets or runtime stack detection) |

@@ -1,5 +1,5 @@
-//! `codeflow hook <git-guard|session-orient|session-summary>` — the Claude
-//! layer hooks, wired by the settings presets (charter §3.3).
+//! `codeflow hook <git-guard|exec-guard|session-orient|session-summary>` — the
+//! Claude layer hooks, wired by the settings presets (charter §3.3).
 //!
 //! Exit-code contract:
 //! - `git-guard`: 0 allow, 2 block (`PreToolUse` deny) with the violated rule

@@ -179,8 +179,8 @@ process boundary, each under its own subscription auth, with CodeFlow's gates
 judging the output author-agnostically (ADR-0005). `codex` is the primary tier
 (`codex exec --json` + `resume`, plus the official `codex-plugin-cc` documented
 as the interactive tier); Antigravity `agy` is a degraded, opt-in, read-only
-consult tier. It ships as Claude artifacts — the `cf-delegate` skill, the
-`cf-consult` command, and an optional `consult` pipeline stage — plus one
+consult tier. It ships as Claude artifacts — the `cf-delegate` and `cf-consult`
+skills, and an optional `consult` pipeline stage — plus one
 deterministic `delegates` doctor check; delegates edit only inside a worktree on
 a feature branch, so pre-commit, commit-msg, the test gate, and `cf-reviewer`
 constrain them exactly as they do Claude. No engine orchestration code is added.
