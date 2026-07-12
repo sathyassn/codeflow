@@ -1,7 +1,6 @@
 ---
 name: cf-consult
 description: Get an independent second opinion from another vendor's CLI (read-only), then synthesize it against your own analysis. Use when you want an outside pass on a file, diff, design, or question.
-disable-model-invocation: true
 ---
 
 # cf-consult — an independent second opinion

@@ -1,7 +1,6 @@
 ---
 name: cf-plan
 description: Plan a piece of work — clarify intent, then draft an epic, spec, and ADR as warranted. Use when starting a feature or change, before writing code, to establish testable acceptance criteria and scope.
-disable-model-invocation: true
 ---
 
 # cf-plan — plan work, do not build it

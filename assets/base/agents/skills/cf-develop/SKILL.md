@@ -1,7 +1,6 @@
 ---
 name: cf-develop
 description: Build planned work through a build → review → verify loop with bounded rework. Use when implementing a feature or change that already has acceptance criteria.
-disable-model-invocation: true
 ---
 
 # cf-develop — build, review, verify
