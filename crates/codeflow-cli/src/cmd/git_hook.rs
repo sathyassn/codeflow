@@ -5,7 +5,8 @@
 //! proceed.
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use clap::Args;
 use codeflow_core::hooks::{git_hook, policy::Policy};
@@ -50,7 +51,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
 
     let (plane, result) = match args.stage {
         StageName::PreCommit => ("pre-commit", git_hook::pre_commit(&root, &policy.git, token)),
-        StageName::CommitMsg => ("commit-msg", commit_msg(&policy, &args.args)),
+        StageName::CommitMsg => ("commit-msg", commit_msg(&root, &policy, &args.args)),
         StageName::PreMergeCommit => (
             "pre-merge-commit",
             git_hook::pre_merge_commit(
@@ -121,6 +122,7 @@ fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
 }
 
 fn commit_msg(
+    root: &Path,
     policy: &Policy,
     args: &[String],
 ) -> Result<git_hook::StageReport, codeflow_core::error::HookError> {
@@ -132,5 +134,32 @@ fn commit_msg(
         )
     })?;
     let message = std::fs::read_to_string(&msg_file)?;
-    Ok(git_hook::commit_msg(&policy.git, &message))
+    // The contract-surface tripwire needs the files this commit stages
+    // (ADR-0020); empty on any error, so it simply does not fire.
+    Ok(git_hook::commit_msg_with_files(
+        &policy.git,
+        &message,
+        &staged_files(root),
+    ))
+}
+
+/// Files staged for the pending commit (`git diff --cached --name-only`), for
+/// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
+/// so an unavailable file list simply means no nudge.
+fn staged_files(root: &Path) -> Vec<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--cached", "--name-only"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }

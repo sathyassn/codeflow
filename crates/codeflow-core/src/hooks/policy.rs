@@ -118,6 +118,13 @@ pub struct GitPolicy {
     /// Max length of a single commit-body bullet line, including the `- `
     /// marker (ADR-0020).
     pub commit_body_bullet_max_len: u32,
+    /// Path globs (the `glob` crate's syntax) naming the repo's declared
+    /// contract surfaces (ADR-0020). When non-empty, a commit-msg WARN fires if a
+    /// staged file matches one of these globs and the message carries no breaking
+    /// marker (`type!:` or a `BREAKING CHANGE:` footer) — a nudge to confirm the
+    /// change is not breaking, never a block (breaking-ness is semantic and
+    /// unprovable). Shipped default empty: consumers declare their own surfaces.
+    pub breaking_watch_paths: Vec<String>,
     pub ai_attribution: PolicyLevel,
     pub commit_emoji: PolicyLevel,
     pub branch_naming: PolicyLevel,
@@ -155,6 +162,8 @@ impl Default for GitPolicy {
             commit_body: PolicyLevel::Block,
             commit_body_max_bullets: 3,
             commit_body_bullet_max_len: 72,
+            // Empty by default: consumers declare their own contract surfaces.
+            breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
             commit_emoji: PolicyLevel::Block,
             branch_naming: PolicyLevel::Block,
@@ -475,6 +484,8 @@ mod tests {
         assert_eq!(g.commit_body, PolicyLevel::Block);
         assert_eq!(g.commit_body_max_bullets, 3);
         assert_eq!(g.commit_body_bullet_max_len, 72);
+        // The contract-surface tripwire ships empty — consumers declare their own.
+        assert!(g.breaking_watch_paths.is_empty());
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
@@ -515,6 +526,10 @@ mod tests {
         assert_eq!(
             from_asset.git.commit_body_bullet_max_len,
             defaults.commit_body_bullet_max_len
+        );
+        assert_eq!(
+            from_asset.git.breaking_watch_paths,
+            defaults.breaking_watch_paths
         );
         assert_eq!(from_asset.git.branch_prefixes, defaults.branch_prefixes);
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);

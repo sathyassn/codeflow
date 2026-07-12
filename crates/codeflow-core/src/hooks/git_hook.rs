@@ -12,7 +12,7 @@ use git2::Repository;
 use crate::error::HookError;
 use crate::testing::gate::{run_gate, GateOutcome};
 
-use super::policy::GitPolicy;
+use super::policy::{GitPolicy, PolicyLevel};
 use super::repo::current_branch;
 use super::scan;
 use super::{standards, Violation};
@@ -235,6 +235,46 @@ pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
         }
     }
 
+    report
+}
+
+/// The commit-msg stage plus the file-aware contract-surface tripwire
+/// (ADR-0020). `changed_files` is the set of paths the commit touches — the
+/// staged files at the git hook, a commit's own diff in `codeflow ci`. When
+/// `git.breaking_watch_paths` is non-empty and one of those files matches a
+/// watched glob while the message carries no breaking marker (`type!:` or a
+/// `BREAKING CHANGE:` footer), a WARN is added — never a block, because
+/// breaking-ness is semantic and unprovable; the warn only nudges.
+///
+/// [`commit_msg`] remains the message-only entry (callers with no file context
+/// use it); this is the richer entry the enforcement planes call.
+#[must_use]
+pub fn commit_msg_with_files(
+    policy: &GitPolicy,
+    message: &str,
+    changed_files: &[String],
+) -> StageReport {
+    let mut report = commit_msg(policy, message);
+    if policy.breaking_watch_paths.is_empty() {
+        return report;
+    }
+    let cleaned = strip_commit_comments(message);
+    let Some(subject) = cleaned.lines().find(|l| !l.trim().is_empty()) else {
+        return report;
+    };
+    if standards::breaking_marker_present(subject, &cleaned) {
+        return report; // already marked breaking — no nudge needed
+    }
+    if let Some(path) = standards::first_watched_path(changed_files, &policy.breaking_watch_paths) {
+        report.violations.push(Violation::new(
+            "git.breaking_watch_paths",
+            PolicyLevel::Warn,
+            format!("commit touches a declared contract surface ({path})"),
+            "confirm it is not a breaking change, or mark it with `type!:` and a \
+             `BREAKING CHANGE:` footer with the migration path"
+                .to_string(),
+        ));
+    }
     report
 }
 
@@ -944,6 +984,58 @@ mod tests {
         let msg = "feat: add a thing\n\n- wire the new path\n- cover it with a test\n\nBREAKING CHANGE: the old path is gone\n";
         let report = commit_msg(&GitPolicy::default(), msg);
         assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    // -- contract-surface tripwire (ADR-0020) --
+
+    fn watch_policy() -> GitPolicy {
+        GitPolicy {
+            breaking_watch_paths: vec!["src/api/**".into(), "config/schema.json".into()],
+            ..GitPolicy::default()
+        }
+    }
+
+    #[test]
+    fn test_watch_paths_unmarked_touch_warns() {
+        let files = vec!["src/api/routes.rs".to_string()];
+        let report = commit_msg_with_files(&watch_policy(), "feat: tweak a route\n", &files);
+        let v = report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.breaking_watch_paths")
+            .expect("a tripwire warn");
+        assert_eq!(v.level, PolicyLevel::Warn);
+        assert!(v.message.contains("src/api/routes.rs"), "{}", v.message);
+    }
+
+    #[test]
+    fn test_watch_paths_marked_does_not_warn() {
+        let files = vec!["src/api/routes.rs".to_string()];
+        // A `!` subject marker suppresses the nudge...
+        let bang = commit_msg_with_files(&watch_policy(), "feat!: drop a route\n", &files);
+        assert!(!bang.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+        // ...and so does a BREAKING CHANGE footer.
+        let footer = commit_msg_with_files(
+            &watch_policy(),
+            "feat: drop a route\n\nBREAKING CHANGE: the /old route is gone\n",
+            &files,
+        );
+        assert!(!footer.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+    }
+
+    #[test]
+    fn test_watch_paths_untouched_does_not_warn() {
+        let files = vec!["README.md".to_string(), "src/util/log.rs".to_string()];
+        let report = commit_msg_with_files(&watch_policy(), "docs: tidy the readme\n", &files);
+        assert!(!report.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+    }
+
+    #[test]
+    fn test_watch_paths_empty_default_is_noop() {
+        // The shipped default (no watched globs) never warns, even on any file.
+        let files = vec!["src/api/routes.rs".to_string()];
+        let report = commit_msg_with_files(&GitPolicy::default(), "feat: tweak a route\n", &files);
+        assert!(!report.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
     #[test]

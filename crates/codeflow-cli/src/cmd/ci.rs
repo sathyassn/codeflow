@@ -59,10 +59,12 @@ struct TaggedViolation {
     violation: Violation,
 }
 
-/// One commit in the range: its full sha and full message (subject + body).
+/// One commit in the range: its full sha, full message (subject + body), and
+/// the files it touches (for the contract-surface tripwire, ADR-0020).
 struct CommitRecord {
     sha: String,
     message: String,
+    files: Vec<String>,
 }
 
 /// How the base..head range was resolved, for an honest one-line report.
@@ -257,7 +259,7 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
 fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViolation> {
     let mut out = Vec::new();
     for c in commits {
-        let stage = git_hook::commit_msg(git, &c.message);
+        let stage = git_hook::commit_msg_with_files(git, &c.message, &c.files);
         for violation in stage.violations {
             out.push(TaggedViolation {
                 sha: Some(c.sha.clone()),
@@ -463,7 +465,34 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(parse_log(&String::from_utf8_lossy(&out.stdout)))
+    let mut records = parse_log(&String::from_utf8_lossy(&out.stdout));
+    // Populate each commit's touched files for the contract-surface tripwire
+    // (ADR-0020); a per-commit call keeps the -z log parse unambiguous.
+    for rec in &mut records {
+        rec.files = commit_files(root, &rec.sha);
+    }
+    Ok(records)
+}
+
+/// Files a single commit touches (`git diff-tree --no-commit-id --name-only -r`).
+/// Empty on any error — the tripwire is advisory, so an unavailable list means
+/// no nudge.
+fn commit_files(root: &Path, sha: &str) -> Vec<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff-tree", "--no-commit-id", "--name-only", "-r", sha])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Parse the NUL-delimited `git log --format=%H%n%B` output into records.
@@ -476,6 +505,7 @@ fn parse_log(stdout: &str) -> Vec<CommitRecord> {
             Some(CommitRecord {
                 sha: sha.trim().to_string(),
                 message: message.to_string(),
+                files: Vec::new(),
             })
         })
         .collect()
@@ -498,6 +528,15 @@ mod tests {
         CommitRecord {
             sha: sha.to_string(),
             message: message.to_string(),
+            files: Vec::new(),
+        }
+    }
+
+    fn commit_with_files(sha: &str, message: &str, files: &[&str]) -> CommitRecord {
+        CommitRecord {
+            sha: sha.to_string(),
+            message: message.to_string(),
+            files: files.iter().map(|s| (*s).to_string()).collect(),
         }
     }
 
@@ -537,6 +576,39 @@ mod tests {
     fn emoji_in_subject_blocks() {
         let v = evaluate_commits(&git(), &[commit("dddd4444", "feat: ship it \u{1F680}")]);
         assert!(v.iter().any(|t| t.violation.rule == "git.commit_emoji"));
+    }
+
+    #[test]
+    fn contract_surface_tripwire_warns_in_ci() {
+        // ADR-0020: the CI commit-range path inherits the tripwire (it reuses
+        // commit_msg_with_files) — an unmarked commit touching a watched surface
+        // warns but never blocks.
+        let g = GitPolicy {
+            breaking_watch_paths: vec!["crates/**/policy.rs".to_string()],
+            ..GitPolicy::default()
+        };
+        let touch = commit_with_files(
+            "aaaa0001",
+            "feat: add a policy field",
+            &["crates/codeflow-core/src/hooks/policy.rs"],
+        );
+        let v = evaluate_commits(&g, &[touch]);
+        let warn = v
+            .iter()
+            .find(|t| t.violation.rule == "git.breaking_watch_paths")
+            .expect("a tripwire warn");
+        assert_eq!(warn.violation.level, PolicyLevel::Warn);
+        let flat: Vec<Violation> = v.into_iter().map(|t| t.violation).collect();
+        assert!(!any_blocking(&flat), "the tripwire must never block");
+
+        // A marked commit on the same surface does not warn.
+        let marked = commit_with_files(
+            "aaaa0002",
+            "feat!: change a policy field\n\nBREAKING CHANGE: renamed key",
+            &["crates/codeflow-core/src/hooks/policy.rs"],
+        );
+        let v = evaluate_commits(&g, &[marked]);
+        assert!(!v.iter().any(|t| t.violation.rule == "git.breaking_watch_paths"));
     }
 
     #[test]

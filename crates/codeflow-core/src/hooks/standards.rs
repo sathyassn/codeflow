@@ -260,6 +260,48 @@ fn over_bullet_budget(bullets: u32, max_bullets: u32) -> Option<String> {
     })
 }
 
+/// `true` when the commit already carries a breaking-change *marker* — a `!`
+/// after the type/scope in the subject, or a `BREAKING CHANGE:` /
+/// `BREAKING-CHANGE:` footer (recognized in any case for the marker test; the
+/// exact-case requirement is enforced separately by [`check_breaking_footer`]).
+///
+/// Used by the contract-surface tripwire (ADR-0020): a commit touching a
+/// declared surface without any marker earns a warn.
+#[must_use]
+pub fn breaking_marker_present(subject: &str, message: &str) -> bool {
+    if conventional_re()
+        .captures(subject)
+        .is_some_and(|c| c.name("bang").is_some())
+    {
+        return true;
+    }
+    message.lines().any(is_breaking_footer_start)
+}
+
+/// The first entry of `changed_files` that matches one of the `watch_globs`
+/// (the `glob` crate's path syntax, same as branch/ignore globs), or `None`
+/// when the glob list is empty or nothing matches. The tripwire's file test
+/// (ADR-0020): a declared contract surface was touched.
+#[must_use]
+pub fn first_watched_path<'a>(
+    changed_files: &'a [String],
+    watch_globs: &[String],
+) -> Option<&'a str> {
+    if watch_globs.is_empty() {
+        return None;
+    }
+    changed_files
+        .iter()
+        .find(|f| watch_globs.iter().any(|g| path_matches_glob(g, f)))
+        .map(String::as_str)
+}
+
+/// `true` when `path` matches the glob `pattern`. An unparseable pattern never
+/// matches (fail-open for a malformed user glob — the tripwire is advisory).
+fn path_matches_glob(pattern: &str, path: &str) -> bool {
+    glob::Pattern::new(pattern).is_ok_and(|p| p.matches(path))
+}
+
 /// Scan text (commit message or PR body) for AI attribution.
 ///
 /// Returns the human-readable name of the matched pattern, or `None` when
@@ -517,6 +559,52 @@ mod tests {
         assert_eq!(check_commit_body("Merge branch 'main'", merge, 3, 72), None);
         let revert = "Revert \"feat: x\"\n\nThis reverts commit abc123.";
         assert_eq!(check_commit_body("Revert \"feat: x\"", revert, 3, 72), None);
+    }
+
+    // -- breaking marker + contract-surface tripwire (ADR-0020) --
+
+    #[test]
+    fn test_breaking_marker_present() {
+        assert!(breaking_marker_present("feat!: x", "feat!: x"));
+        assert!(breaking_marker_present("feat(core)!: x", "feat(core)!: x"));
+        assert!(breaking_marker_present(
+            "feat: x",
+            "feat: x\n\nBREAKING CHANGE: gone"
+        ));
+        // The marker test is case-insensitive (exact case is check_breaking_footer's job).
+        assert!(breaking_marker_present(
+            "feat: x",
+            "feat: x\n\nbreaking-change: gone"
+        ));
+        // No marker.
+        assert!(!breaking_marker_present("feat: x", "feat: x\n\n- a note"));
+    }
+
+    #[test]
+    fn test_first_watched_path() {
+        let files = vec![
+            "src/lib.rs".to_string(),
+            "crates/codeflow-core/src/hooks/policy.rs".to_string(),
+        ];
+        // Empty globs → never matches (the shipped default is a no-op).
+        assert_eq!(first_watched_path(&files, &[]), None);
+        // Exact path glob matches.
+        let globs = vec!["crates/codeflow-core/src/hooks/policy.rs".to_string()];
+        assert_eq!(
+            first_watched_path(&files, &globs),
+            Some("crates/codeflow-core/src/hooks/policy.rs")
+        );
+        // A `**` directory glob matches a file beneath it.
+        let tree = vec!["assets/base/policy.json".to_string()];
+        assert_eq!(
+            first_watched_path(&tree, &["assets/base/**".to_string()]),
+            Some("assets/base/policy.json")
+        );
+        // No overlap → None.
+        assert_eq!(
+            first_watched_path(&["README.md".to_string()], &globs),
+            None
+        );
     }
 
     // -- attribution --
