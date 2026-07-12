@@ -13,3 +13,10 @@ paths = [
   # fixture "secrets" (github-pat + generic-api-key in tooluse.rs) and fails CI.
   '''^codeflow-rs/''',
 ]
+regexes = [
+  # The cf-security-reviewer / pipeline `security` stage charge enumerates the vuln
+  # classes to hunt ("... vulnerable/malicious deps ...") — security-review prose,
+  # not a credential; generic-api-key false-matches it. Same category as the scanner
+  # example patterns above.
+  '''vulnerable/malicious''',
+]
