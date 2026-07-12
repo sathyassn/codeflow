@@ -56,7 +56,13 @@ policy) and `exec-guard` (the `security` section: destructive commands block,
 privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
 through a byte-compatible PreToolUse payload, for an interactive Codex session in
 `.codex/hooks.json` (ADR-0008; headless `codex exec` 0.142.5 does not run project
-PreToolUse hooks, so headless Codex relies on the git-hook plane). Beyond the
+PreToolUse hooks, so headless Codex relies on the git-hook plane). Codex credential
+*reads* are guarded too — not only the Bash guards: a `cf-guard` permission profile
+in `.codex/config.toml` (selected via `default_permissions`, extending `:workspace`)
+denies the home-dir secret stores (`~/.ssh`, `~/.aws`, `.env`, …) at the OS-sandbox
+layer, so unlike the PreToolUse guards it holds even in headless `codex exec`
+(ADR-0014); the `gh`/`docker` tool-token stores are deliberately left readable so
+those tools can read their own tokens. Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
 the same orientation digest Claude gets. PR-content checks (attribution/emoji,
