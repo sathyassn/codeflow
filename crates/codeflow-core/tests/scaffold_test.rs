@@ -12,10 +12,19 @@ use codeflow_core::scaffold::{
 
 // --- fixtures ---------------------------------------------------------------
 
+/// Point git at empty global/system config for the whole test process. The
+/// engine under test spawns its own `git` subprocesses which inherit the
+/// process environment, so per-`Command` `.env()` cannot reach them. The
+/// process-global mutation is made race-free by doing it exactly once behind
+/// a `Once` that every test synchronizes on before its first spawn — POSIX
+/// `setenv` concurrent with `getenv`/spawn is a data race, so repeated
+/// `set_var` from parallel tests (even with identical values) is not benign.
 fn isolate_git() {
-    // Same values from every test; benign under parallelism.
-    std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-    std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
+    static ISOLATE: std::sync::Once = std::sync::Once::new();
+    ISOLATE.call_once(|| {
+        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
+        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
+    });
 }
 
 const MANIFEST: &str = r#"

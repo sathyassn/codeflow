@@ -33,13 +33,25 @@ pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 /// directory can be determined.
 #[must_use]
 pub fn codeflow_home() -> Option<PathBuf> {
-    if let Some(v) = std::env::var_os("CODEFLOW_HOME") {
+    resolve_home(
+        std::env::var_os("CODEFLOW_HOME"),
+        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")),
+    )
+}
+
+/// Pure resolution behind [`codeflow_home`], separated so the precedence is
+/// testable without mutating process-global environment (`setenv` concurrent
+/// with `getenv` in the parallel test harness is a data race on POSIX).
+fn resolve_home(
+    override_dir: Option<std::ffi::OsString>,
+    home_dir: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    if let Some(v) = override_dir {
         if !v.is_empty() {
             return Some(PathBuf::from(v));
         }
     }
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    home_dir
         .filter(|v| !v.is_empty())
         .map(|h| PathBuf::from(h).join(".codeflow"))
 }
@@ -345,15 +357,27 @@ mod tests {
     }
 
     #[test]
-    fn test_codeflow_home_env_override() {
-        // Serialized via distinct env var usage: set, read, restore.
-        let prev = std::env::var_os("CODEFLOW_HOME");
-        std::env::set_var("CODEFLOW_HOME", "/tmp/cf-test-home");
-        assert_eq!(codeflow_home(), Some(PathBuf::from("/tmp/cf-test-home")));
-        match prev {
-            Some(v) => std::env::set_var("CODEFLOW_HOME", v),
-            None => std::env::remove_var("CODEFLOW_HOME"),
-        }
+    fn test_codeflow_home_resolution_precedence() {
+        // Exercises the pure resolver — no process-global set_var/remove_var,
+        // which would race concurrently running tests' getenv/spawn calls.
+        let home = |s: &str| Some(std::ffi::OsString::from(s));
+        assert_eq!(
+            resolve_home(home("/tmp/cf-test-home"), home("/home/u")),
+            Some(PathBuf::from("/tmp/cf-test-home")),
+            "CODEFLOW_HOME override wins"
+        );
+        assert_eq!(
+            resolve_home(None, home("/home/u")),
+            Some(PathBuf::from("/home/u/.codeflow")),
+            "falls back to $HOME/.codeflow"
+        );
+        assert_eq!(
+            resolve_home(home(""), home("/home/u")),
+            Some(PathBuf::from("/home/u/.codeflow")),
+            "empty override is ignored"
+        );
+        assert_eq!(resolve_home(None, home("")), None, "empty home yields none");
+        assert_eq!(resolve_home(None, None), None);
     }
 
     #[test]
