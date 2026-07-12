@@ -142,12 +142,14 @@ Principles to reason from with judgment, not a rote checklist.
   verified.
 - **Externalize state as you go — context is volatile.** A session can be
   compacted or end at any point, and not every harness fires a hook to save state
-  for you; anything living only in the conversation is lost. Record it *yourself*,
-  in its durable home, as the work happens: decisions → an ADR, progress and next
-  steps → `project-management/` status, facts worth carrying across sessions →
-  your project memory. To resume after a compaction or on a fresh session, rebuild
-  from that record — `codeflow orient`, then `codeflow recall "<thread>"` — not
-  from a hazy memory of the chat.
+  for you; what lives only in the conversation is lost. Record it *yourself*, in
+  its durable home, as the work happens: decisions → an ADR, progress and next
+  steps → `project-management/` status, cross-session notes → your harness's own
+  memory where it has one. (codeflow's recall corpus — the ledger, ADRs,
+  capabilities — is captured automatically; your part is the reasoning it can't
+  infer.) To resume after a compaction or a fresh session, rebuild from that
+  durable record — `codeflow orient`, then `codeflow recall "<thread>"` — not from
+  a hazy memory of the chat.
 - **Docs mutate only inside the ship flow, in the same PR as the code:**
   capability entry on epic completion; `architecture.md` when an ADR declares
   architecture impact; ADR at Tier-3 decision points (new dependency, schema
