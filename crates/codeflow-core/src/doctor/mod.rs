@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::error::DoctorError;
+use crate::scaffold::manifest::{Ownership, RegionFormat};
+use crate::scaffold::region;
+use crate::scaffold::sha256_hex;
+use crate::scaffold::state::InstalledManifest;
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +111,18 @@ const HOOK_SUBCOMMANDS: &[(&str, &str)] = &[
     ("git-hook", "pre-push"),
 ];
 
+/// Shipped-asset path (`src` in the scaffold manifest) of the CI workflow;
+/// used to locate the installed workflow's dest in the installed-file record,
+/// so a relocated workflow is still found.
+const CI_ASSET_SRC: &str = "ci/codeflow-ci.yml";
+
+/// Canonical dest for the CI workflow when the installed manifest is silent.
+const CI_DEFAULT_DEST: &str = ".github/workflows/codeflow-ci.yml";
+
+/// Sentinel emitted by the scaffolded CI's placeholder install step (the loud
+/// `::error::` that fails the perimeter RED until the real installer is wired).
+const CI_PLACEHOLDER_MARK: &str = "install step is an unwired PLACEHOLDER";
+
 /// Ordered list of all check names.
 const CHECK_NAMES: &[&str] = &[
     "hooks",
@@ -116,6 +132,8 @@ const CHECK_NAMES: &[&str] = &[
     "network",
     "delegates",
     "repo-integrity",
+    "ci-perimeter",
+    "managed-drift",
 ];
 
 /// Return the ordered list of all available check names.
@@ -137,6 +155,8 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("network", check_network);
     m.insert("delegates", check_delegates);
     m.insert("repo-integrity", check_repo_integrity);
+    m.insert("ci-perimeter", check_ci_perimeter);
+    m.insert("managed-drift", check_managed_drift);
     m
 }
 
@@ -514,6 +534,122 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
     out
 }
 
+/// Perimeter honesty (charter §9): the scaffolded CI workflow is the
+/// authoritative, server-enforced perimeter — branch protection can require
+/// it. `codeflow init` writes `codeflow-ci.yml` with a PLACEHOLDER install
+/// step that fails RED by design (a missing binary is an unarmed perimeter,
+/// not a pass). This WARNS while that placeholder stands — the gate compiles
+/// and runs but enforces nothing real — and skips cleanly (Pass) when no CI
+/// workflow was scaffolded (e.g. a minimal-tier project). WARN only, never a
+/// block.
+fn check_ci_perimeter(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let dest = ci_workflow_dest(&root);
+
+    let Ok(content) = std::fs::read_to_string(root.join(&dest)) else {
+        return CheckResult {
+            name: "ci-perimeter".into(),
+            status: Status::Pass,
+            message: "no codeflow CI workflow found (nothing to arm)".into(),
+            duration: start.elapsed(),
+        };
+    };
+
+    if content.contains(CI_PLACEHOLDER_MARK) {
+        return CheckResult {
+            name: "ci-perimeter".into(),
+            status: Status::Warn,
+            message: format!(
+                "{dest} install step is still the PLACEHOLDER — the CI perimeter is not armed; wire the release installer so the test/validate gates enforce"
+            ),
+            duration: start.elapsed(),
+        };
+    }
+
+    CheckResult {
+        name: "ci-perimeter".into(),
+        status: Status::Pass,
+        message: format!("{dest} install step is wired (CI perimeter armed)"),
+        duration: start.elapsed(),
+    }
+}
+
+/// Where init placed the CI workflow: the installed-file record for the shipped
+/// CI asset (robust to a relocated workflow), else the canonical dest.
+fn ci_workflow_dest(root: &Path) -> String {
+    InstalledManifest::load_or_default(root, "0")
+        .ok()
+        .and_then(|m| {
+            m.files
+                .iter()
+                .find(|(_, f)| f.src == CI_ASSET_SRC)
+                .map(|(dest, _)| dest.clone())
+        })
+        .unwrap_or_else(|| CI_DEFAULT_DEST.to_string())
+}
+
+/// Managed-region drift (charter §4.3.2): WARN when a marker-delimited managed
+/// region has been hand-edited inside its `codeflow:managed` markers.
+/// `codeflow update` regenerates that block from the shipped asset, so an
+/// in-marker edit is silently lost on the next update — surfacing it here is
+/// the honest signal. Reuses the installed-file record: the manifest stores a
+/// sha256 of each managed region (the pristine shipped block); this recomputes
+/// the current block's hash and flags any that no longer match. Content OUTSIDE
+/// the markers is project-owned and never compared, and JSON settings merges
+/// (no text markers; the record holds the shipped preset's hash, not the
+/// on-disk block) are skipped. WARN only; stays quiet where it cannot read the
+/// record or a file — it flags, it never guesses.
+fn check_managed_drift(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let pass = |msg: String| CheckResult {
+        name: "managed-drift".into(),
+        status: Status::Pass,
+        message: msg,
+        duration: start.elapsed(),
+    };
+
+    let Ok(installed) = InstalledManifest::load_or_default(&root, "0") else {
+        return pass("no readable installed manifest; drift check skipped".into());
+    };
+
+    let mut drifted: Vec<String> = Vec::new();
+    for (dest, file) in &installed.files {
+        if file.ownership != Ownership::ManagedRegion {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(root.join(dest)) else {
+            continue; // file absent: presence is another check's concern
+        };
+        // Marker-delimited regions only (markdown/hash). A JSON settings merge
+        // has no text markers, so extraction returns None and it is skipped —
+        // its recorded hash is the shipped preset, not the on-disk block.
+        let Some(block) = region::extract_block(&content, RegionFormat::Markdown)
+            .or_else(|| region::extract_block(&content, RegionFormat::Hash))
+        else {
+            continue;
+        };
+        if sha256_hex(block.as_bytes()) != file.sha256 {
+            drifted.push(dest.clone());
+        }
+    }
+
+    if drifted.is_empty() {
+        return pass("no managed-region drift (codeflow blocks match the record)".into());
+    }
+    CheckResult {
+        name: "managed-drift".into(),
+        status: Status::Warn,
+        message: format!(
+            "{} managed region(s) hand-edited inside codeflow markers — `codeflow update` will regenerate and lose these edits: {}",
+            drifted.len(),
+            drifted.join(", ")
+        ),
+        duration: start.elapsed(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,7 +664,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 7);
+        assert_eq!(check_names().len(), 9);
     }
 
     #[test]
@@ -836,6 +972,161 @@ mod tests {
         // git unavailable / not a repo → no signal → pass, never guess.
         let opts = test_opts(); // exec_command returns Err
         let r = check_repo_integrity(&opts);
+        assert_eq!(r.status, Status::Pass);
+    }
+
+    // --- ci-perimeter -------------------------------------------------------
+
+    fn write_ci(root: &Path, body: &str) {
+        let ci = root.join(CI_DEFAULT_DEST);
+        std::fs::create_dir_all(ci.parent().unwrap()).unwrap();
+        std::fs::write(&ci, body).unwrap();
+    }
+
+    #[test]
+    fn test_ci_perimeter_placeholder_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ci(
+            dir.path(),
+            "steps:\n  - name: Install codeflow\n    run: echo \"::error::codeflow install step is an unwired PLACEHOLDER\"\n",
+        );
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Warn);
+        assert!(r.message.contains("not armed"), "got: {}", r.message);
+        assert!(r.message.contains("codeflow-ci.yml"), "names the file: {}", r.message);
+    }
+
+    #[test]
+    fn test_ci_perimeter_wired_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ci(
+            dir.path(),
+            "steps:\n  - name: Install codeflow\n    run: curl -fsSL https://example/installer.sh | sh\n",
+        );
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(r.message.contains("armed"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_ci_perimeter_missing_file_skips_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Pass);
+        assert!(r.message.contains("no codeflow CI workflow"), "got: {}", r.message);
+    }
+
+    // --- managed-drift ------------------------------------------------------
+
+    /// A single managed-region record whose sha256 is the hash of `block`,
+    /// exactly as `codeflow update` records it.
+    fn record_region(root: &Path, dest: &str, src: &str, sha_of: &str) {
+        use crate::scaffold::state::InstalledFile;
+        let mut m = InstalledManifest::new("2.0.0");
+        m.files.insert(
+            dest.to_string(),
+            InstalledFile {
+                src: src.to_string(),
+                ownership: Ownership::ManagedRegion,
+                sha256: sha256_hex(sha_of.as_bytes()),
+                exec: false,
+            },
+        );
+        m.store(root).unwrap();
+    }
+
+    const REGION_BLOCK: &str =
+        "<!-- codeflow:managed:begin scaffold=2.0.0 -->\nrules\n<!-- codeflow:managed:end -->";
+
+    #[test]
+    fn test_managed_drift_clean_when_block_matches_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("AGENTS.md"), format!("# Mine\n\n{REGION_BLOCK}\n\ntail\n")).unwrap();
+        record_region(root, "AGENTS.md", "AGENTS.md.tmpl", REGION_BLOCK);
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_managed_drift_flags_in_marker_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // On disk the region has been hand-edited INSIDE the markers.
+        let edited =
+            "<!-- codeflow:managed:begin scaffold=2.0.0 -->\nrules HAND EDITED\n<!-- codeflow:managed:end -->";
+        std::fs::write(root.join("AGENTS.md"), format!("# Mine\n\n{edited}\n")).unwrap();
+        // The record still holds the pristine block's hash.
+        record_region(root, "AGENTS.md", "AGENTS.md.tmpl", REGION_BLOCK);
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert_eq!(r.status, Status::Warn);
+        assert!(r.message.contains("AGENTS.md"), "names the drifted file: {}", r.message);
+        assert!(r.message.contains("codeflow update"), "explains the risk: {}", r.message);
+    }
+
+    #[test]
+    fn test_managed_drift_ignores_outside_marker_edits_and_json_regions() {
+        use crate::scaffold::state::InstalledFile;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Edits OUTSIDE the markers are project-owned and must NOT flag.
+        std::fs::write(
+            root.join("AGENTS.md"),
+            format!("# Heavily customized intro\n\n{REGION_BLOCK}\n\nlots of my own notes\n"),
+        )
+        .unwrap();
+        // A JSON managed-region (settings): no text markers, and its recorded
+        // hash is the shipped preset, never the on-disk block — must be skipped
+        // even though the sha deliberately does not match.
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join(".claude/settings.json"), "{\"hooks\": {}}\n").unwrap();
+
+        let mut m = InstalledManifest::new("2.0.0");
+        m.files.insert(
+            "AGENTS.md".into(),
+            InstalledFile {
+                src: "AGENTS.md.tmpl".into(),
+                ownership: Ownership::ManagedRegion,
+                sha256: sha256_hex(REGION_BLOCK.as_bytes()),
+                exec: false,
+            },
+        );
+        m.files.insert(
+            ".claude/settings.json".into(),
+            InstalledFile {
+                src: "settings/default.json".into(),
+                ownership: Ownership::ManagedRegion,
+                sha256: "deadbeef".into(),
+                exec: false,
+            },
+        );
+        m.store(root).unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert_eq!(r.status, Status::Pass, "outside-marker/JSON must not flag: {}", r.message);
+    }
+
+    #[test]
+    fn test_managed_drift_no_manifest_passes_quietly() {
+        // No installed manifest → nothing to compare → pass, never guess.
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
         assert_eq!(r.status, Status::Pass);
     }
 

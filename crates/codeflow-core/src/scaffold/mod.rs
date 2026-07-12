@@ -36,6 +36,7 @@ mod hash;
 mod version;
 
 pub use assets::{AssetSource, DirSource};
+pub use hash::sha256_hex;
 pub use init::{init, InitAnswers, InitOptions};
 pub use manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest, Tier};
 pub use report::{Action, FileReport, Report};
