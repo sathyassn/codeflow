@@ -13,12 +13,14 @@ where a mistake is irreversible or invisible.
 ## Choosing process weight
 
 Match machinery to the work; escalate only when the lighter rung fails. Every
-rung that builds code carries an independent `cf-reviewer` pass — review is a
-stage, not a courtesy, and self-review is not review. Selecting the execution
+rung that builds code carries an independent review pass — the `cf-reviewer`
+subagent in Claude Code; a separate read-only interactive review pass on any
+other harness, never headless (cf-develop carries the same branch) — review is
+a stage, not a courtesy, and self-review is not review. Selecting the execution
 skill is itself a planning decision, orthogonal to weight: the rungs below set
 how much *process*; a separate choice sets *who reviews* — solo (the
-`cf-reviewer` pass alone) or duo (a second, independently-trained model beside
-it). Make both calls in `cf-plan`, not mid-build.
+independent review pass alone) or duo (a second, independently-trained model
+beside it). Make both calls in `cf-plan`, not mid-build.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
 - **Inline `/cf-develop` loop** for interactive work — the default path:
@@ -221,4 +223,7 @@ Downgrade is never destructive: stop managing, do not delete.
 - **Agent-merging a protected branch.** An agent never merges into protected —
   a human merges the PR, or `codeflow integrate` lands it. Override envs
   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only; setting them
-  in-session is laundering and is blocked. Never `gh pr merge --delete-branch`.
+  in-session is laundering — blocked wherever a PreToolUse guard binds (Claude
+  Code always; interactive codex after the one-time `/hooks` trust), while the
+  git-hook plane honors the env by design as the sanctioned human path; the
+  remote perimeter is the hard line. Never `gh pr merge --delete-branch`.
