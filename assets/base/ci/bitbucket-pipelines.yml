@@ -1,0 +1,45 @@
+# codeflow CI for Bitbucket Pipelines — a THIN WRAPPER (ADR-0017). The checks
+# live in the `codeflow` binary (single source of truth, no drift from the git
+# hooks or the Claude git-guard):
+#   codeflow ci             — verify the PR commit range + branch name against
+#                             .codeflow/policy.json
+#   codeflow test           — the test gate
+#   codeflow validate --docs — the doc-graph integrity lint
+#
+# `codeflow ci` auto-detects the range from Bitbucket's default variables:
+# BITBUCKET_PR_DESTINATION_COMMIT (base) and BITBUCKET_COMMIT (head), plus the
+# source branch BITBUCKET_BRANCH. `clone: depth: full` puts the destination
+# commit in history so the range walk resolves.
+#
+# NOTE: Bitbucket does not expose the PR description as an environment variable,
+# so the PR-body attribution/emoji scan is skipped here (the commit + branch
+# checks still run). To also scan the body, fetch it via the Bitbucket API and
+# pass `codeflow ci --pr-body-file <file>`.
+#
+# This is a copy-in template (see this directory's README): `codeflow init`
+# scaffolds the GitHub workflow today; a platform picker is a follow-up.
+#
+# Optional external add-ons — add as extra script steps:
+#   gitleaks detect --source . --redact --no-banner --exit-code 1   # secret scan
+#   osv-scanner scan -r .                                           # dep audit
+
+image: debian:stable-slim
+
+clone:
+  depth: full   # `codeflow ci` needs the PR destination commit in history
+
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: codeflow
+          script:
+            # PLACEHOLDER: install the codeflow binary onto PATH, e.g.
+            #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+            #   export PATH="$HOME/.codeflow/bin:$PATH"
+            # Until wired, the gate fails RED — a missing binary is an unarmed
+            # perimeter, not a pass (do NOT "fix" the red by skipping).
+            - command -v codeflow >/dev/null 2>&1 || { echo "codeflow not installed — wire the install step above; failing red (unarmed perimeter)."; exit 1; }
+            - codeflow ci
+            - codeflow test
+            - codeflow validate --docs

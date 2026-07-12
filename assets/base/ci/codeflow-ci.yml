@@ -8,7 +8,10 @@
 # perimeter, not a pass. This is a loud, honest signal that the gate is not yet
 # enforcing; wire the install step to turn it green. Do NOT "fix" the red by
 # making a missing binary skip — that hands branch protection a job that ran
-# nothing. The secret-scan and commit-lint jobs work out of the box.
+# nothing. The secret-scan and security-review jobs work out of the box
+# (external pinned tools); the commit-standards job now runs the same
+# `codeflow ci` binary as the gates, so it shares the Install-codeflow step and
+# fails RED until that step is wired (ADR-0017 — one source of truth, no drift).
 name: codeflow-ci
 
 on:
@@ -128,53 +131,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Lint PR commits (format, no AI attribution, no emoji)
+      - name: Install codeflow
+        run: |
+          # PLACEHOLDER: replace with the release installer once published, e.g.
+          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "::error::codeflow install step is an unwired PLACEHOLDER — the commit-standards gate below fails RED until you replace this with the real installer. The perimeter is intentionally not armed."
+
+      # One source of truth: `codeflow ci` runs the SAME commit-format,
+      # no-AI-attribution, no-emoji, breaking-footer, and branch-naming checks as
+      # the git-client hooks and the Claude git-guard, reading .codeflow/policy.json
+      # for the level of each (block/warn/off). No inline regex to drift (ADR-0017).
+      # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated into
+      # the script), so an untrusted body cannot inject shell.
+      - name: codeflow ci (commit + branch + PR-body standards)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          set -u
-          fail=0
-          types='feat|fix|docs|refactor|test|chore|ci|perf|build|revert'
-
-          while IFS= read -r subject; do
-            if ! printf '%s\n' "$subject" | grep -qE "^(${types})(\([a-zA-Z0-9._/-]+\))?!?: .+[^.]$"; then
-              echo "::error::malformed commit subject: ${subject}"
-              fail=1
-            fi
-          done < <(git log --no-merges --format=%s "${BASE_SHA}..${HEAD_SHA}")
-
-          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
-            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
-            echo "::error::AI attribution found in commit message(s)"
-            fail=1
+          if command -v codeflow >/dev/null 2>&1; then
+            codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF"
+          else
+            echo "::error::codeflow not installed — commit-standards gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
           fi
-
-          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
-            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
-            echo "::error::emoji found in commit message(s)"
-            fail=1
-          fi
-
-          exit "$fail"
-
-      - name: Lint PR body (no AI attribution, no emoji)
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          set -u
-          fail=0
-
-          if printf '%s\n' "${PR_BODY}" \
-            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
-            echo "::error::AI attribution found in PR body"
-            fail=1
-          fi
-
-          if printf '%s\n' "${PR_BODY}" \
-            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
-            echo "::error::emoji found in PR body"
-            fail=1
-          fi
-
-          exit "$fail"
