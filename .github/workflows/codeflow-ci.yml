@@ -132,11 +132,12 @@ jobs:
 
           exit "$fail"
 
-  # warn-first; threshold gate later — report-only, never fails the build
+  # Line-coverage floor: fails the build when workspace line coverage drops
+  # below 90% (current ~95% — headroom to avoid flakiness while still catching
+  # real regressions instead of letting them land silently).
   coverage:
     name: coverage report
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -146,5 +147,5 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Coverage summary (printed to the job log)
-        run: cargo llvm-cov --workspace --summary-only
+      - name: Coverage summary + floor (fails under 90% line coverage)
+        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 90
