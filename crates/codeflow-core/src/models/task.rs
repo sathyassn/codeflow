@@ -6,11 +6,11 @@
 //! (`stage`, `stage_status`, `stage_history`), and external task-tracker
 //! mirroring fields are removed with their subsystems (charter §3.2, D22).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::status::TaskStatus;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Task {
     /// ULID-based internal id (e.g., `task-01abc...`).
     pub id: String,
@@ -25,15 +25,12 @@ pub struct Task {
     pub work_type: String,
     /// Trimmed from the scaffold template; defaults keep records that omit it
     /// parseable (else the store silently skips them and `status` undercounts).
-    #[serde(default)]
     pub priority: String,
     pub estimate: Option<String>,
     /// Acceptance criteria — the input-clarity contract (charter §2.1). Lives
     /// in the body checklist now, not the frontmatter, so default when absent.
-    #[serde(default)]
     pub acceptance: Vec<String>,
     /// Test references that verify this task.
-    #[serde(default)]
     pub tests: Vec<String>,
     pub branch: Option<String>,
     pub pr_number: Option<i64>,
@@ -43,9 +40,96 @@ pub struct Task {
     pub completed_at: Option<String>,
 }
 
+/// Deserialization tolerates the canonical hand-authored planning frontmatter
+/// (the pm-template/validator shape), mirroring `Epic`: `created` is accepted as
+/// an alias of `created_at`, a missing `updated_at` falls back to the creation
+/// timestamp, and template-trimmed fields default — otherwise a task scaffolded
+/// from the template (or `codeflow task new`) fails to parse and the store
+/// silently skips it, undercounting `codeflow status`. Serialization stays
+/// canonical so store rewrites normalize the record.
+impl<'de> Deserialize<'de> for Task {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            id: String,
+            format_id: String,
+            epic_id: String,
+            title: String,
+            #[serde(default)]
+            description: Option<String>,
+            status: TaskStatus,
+            work_type: String,
+            #[serde(default)]
+            priority: String,
+            #[serde(default)]
+            estimate: Option<String>,
+            #[serde(default)]
+            acceptance: Vec<String>,
+            #[serde(default)]
+            tests: Vec<String>,
+            #[serde(default)]
+            branch: Option<String>,
+            #[serde(default)]
+            pr_number: Option<i64>,
+            #[serde(alias = "created")]
+            created_at: String,
+            #[serde(default)]
+            updated_at: Option<String>,
+            #[serde(default)]
+            started_at: Option<String>,
+            #[serde(default)]
+            completed_at: Option<String>,
+        }
+
+        let w = Wire::deserialize(deserializer)?;
+        let updated_at = w.updated_at.unwrap_or_else(|| w.created_at.clone());
+        Ok(Task {
+            id: w.id,
+            format_id: w.format_id,
+            epic_id: w.epic_id,
+            title: w.title,
+            description: w.description,
+            status: w.status,
+            work_type: w.work_type,
+            priority: w.priority,
+            estimate: w.estimate,
+            acceptance: w.acceptance,
+            tests: w.tests,
+            branch: w.branch,
+            pr_number: w.pr_number,
+            created_at: w.created_at,
+            updated_at,
+            started_at: w.started_at,
+            completed_at: w.completed_at,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_task_parses_template_shape_with_created_alias() {
+        // A task authored from task.md.tmpl uses `created:` (not created_at),
+        // omits updated_at, and omits the trimmed fields. It must still parse —
+        // else the store skips it and `codeflow status` undercounts. updated_at
+        // falls back to created_at, mirroring Epic.
+        let yaml = r"
+id: task-01abc
+format_id: TSK-001-002
+epic_id: epic-01abc
+title: Do the thing
+status: todo
+work_type: fix
+created: 2026-07-05T00:00:00Z
+";
+        let task: Task = serde_yaml::from_str(yaml).expect("template-shape task must parse");
+        assert_eq!(task.created_at, "2026-07-05T00:00:00Z");
+        assert_eq!(task.updated_at, "2026-07-05T00:00:00Z", "updated_at falls back to created_at");
+        assert_eq!(task.priority, "");
+        assert!(task.acceptance.is_empty());
+    }
 
     fn make_task() -> Task {
         Task {
