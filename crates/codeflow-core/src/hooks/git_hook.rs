@@ -1520,8 +1520,11 @@ mod tests {
         let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
         assert!(
-            report.notes.iter().any(|n| n.contains("test gate skipped")),
-            "no-targets must be a loud skip: {:?}",
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("test gate skipped") && n.contains("no enabled target")),
+            "no-targets must be a loud skip naming the NoTargets reason: {:?}",
             report.notes
         );
     }

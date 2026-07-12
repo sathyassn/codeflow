@@ -192,8 +192,7 @@ mod tests {
     // `scan_line` still receives the full value and validates the detector.
     #[test]
     fn test_scan_line_github_fine_grained_token() {
-        // `github_pat_` + a 38-char body: must not be swallowed by the
-        // `gh[pousr]_` generic-token pattern that sits just above it.
+        // `github_pat_` + a 38-char body → the fine-grained-token detector.
         let line = format!("token: github_pat_{}", "A".repeat(38));
         assert_eq!(scan_line(&line), Some("GitHub fine-grained token"));
     }
