@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::capability::{CapabilityEntry, parse_capabilities};
-use crate::models::{EpicFilter, TaskFilter};
+use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
 use crate::workgraph::{MarkdownStore, RecordStore};
 
 /// A git worktree attached to the repository.
@@ -33,6 +33,41 @@ pub struct WorkSummary {
     pub active_tasks: Vec<String>,
 }
 
+/// One epic under a capability, with its open/total task counts rolled up
+/// from the epic ↔ task link.
+#[derive(Debug, Clone)]
+pub struct EpicDelivery {
+    /// Epic format id (`EPC-###`) as referenced by the capability.
+    pub format_id: String,
+    pub title: String,
+    /// Epic status string as written.
+    pub status: String,
+    /// Tasks not yet `complete` or `cancelled`.
+    pub open_tasks: usize,
+    /// All tasks linked to this epic.
+    pub total_tasks: usize,
+    /// Up to a few next actionable tasks (`todo`/`in_progress`), formatted
+    /// `"<format_id> <title>"`.
+    pub next_tasks: Vec<String>,
+}
+
+/// A capability's delivery rollup: the epics that build it and, transitively,
+/// their open tasks. Generated purely from `capability.epics[]` → epic →
+/// `task.epic_id`; never stored.
+#[derive(Debug, Clone)]
+pub struct CapabilityDelivery {
+    /// Capability id (`CAP-###`).
+    pub id: String,
+    pub name: String,
+    /// Capability status string as written.
+    pub status: String,
+    /// Epics referenced by the capability that resolve to a record.
+    pub epics: Vec<EpicDelivery>,
+    /// Epic ids the capability names that have no matching epic record — a
+    /// dangling link surfaced rather than silently dropped.
+    pub missing_epics: Vec<String>,
+}
+
 /// The complete generated view.
 #[derive(Debug)]
 pub struct StatusView {
@@ -43,6 +78,9 @@ pub struct StatusView {
     pub work: Option<WorkSummary>,
     /// `None` when `docs/capabilities.md` is absent.
     pub capabilities: Option<Vec<CapabilityEntry>>,
+    /// Per-capability delivery rollup. `None` when either the registry or the
+    /// project-management tier is absent (the view needs both links).
+    pub delivery: Option<Vec<CapabilityDelivery>>,
     /// Tier/degradation notes (absent layers, parse problems).
     pub notes: Vec<String>,
 }
@@ -66,12 +104,14 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
 
     let work = collect_work(repo_root, &mut notes);
     let capabilities = collect_capabilities(repo_root, &mut notes);
+    let delivery = collect_delivery(repo_root, capabilities.as_deref());
 
     StatusView {
         branch,
         worktrees,
         work,
         capabilities,
+        delivery,
         notes,
     }
 }
@@ -159,6 +199,83 @@ fn collect_capabilities(repo_root: &Path, notes: &mut Vec<String>) -> Option<Vec
     Some(entries)
 }
 
+/// Roll up capability delivery from the existing links: each capability's
+/// `epics[]` (by `EPC-###` format id) → epic record → tasks (by
+/// `task.epic_id`, the epic's internal id). Read-only and generated; needs
+/// both the registry and the project-management tier, so returns `None` when
+/// either is absent (their absence is already noted by the other collectors).
+fn collect_delivery(
+    repo_root: &Path,
+    capabilities: Option<&[CapabilityEntry]>,
+) -> Option<Vec<CapabilityDelivery>> {
+    let capabilities = capabilities?;
+    let pm = repo_root.join("project-management");
+    if !pm.is_dir() {
+        return None;
+    }
+    let store = MarkdownStore::new(&pm).ok()?;
+    let epics = store.list_epics(EpicFilter::default()).ok()?;
+    let tasks = store.list_tasks(TaskFilter::default()).ok()?;
+
+    // Capabilities reference epics by format id; tasks reference their epic by
+    // its internal id. Index both so the join is a lookup, not a scan.
+    let epic_by_format: BTreeMap<&str, &Epic> =
+        epics.iter().map(|e| (e.format_id.as_str(), e)).collect();
+    let mut tasks_by_epic: BTreeMap<&str, Vec<&Task>> = BTreeMap::new();
+    for task in &tasks {
+        tasks_by_epic
+            .entry(task.epic_id.as_str())
+            .or_default()
+            .push(task);
+    }
+
+    let rollup = capabilities
+        .iter()
+        .map(|cap| {
+            let mut epic_deliveries = Vec::new();
+            let mut missing_epics = Vec::new();
+            for epic_fid in &cap.epics {
+                let Some(epic) = epic_by_format.get(epic_fid.as_str()) else {
+                    missing_epics.push(epic_fid.clone());
+                    continue;
+                };
+                let epic_tasks: &[&Task] = tasks_by_epic
+                    .get(epic.id.as_str())
+                    .map_or(&[], Vec::as_slice);
+                let open_tasks = epic_tasks
+                    .iter()
+                    .filter(|t| {
+                        !matches!(t.status, TaskStatus::Complete | TaskStatus::Cancelled)
+                    })
+                    .count();
+                let next_tasks = epic_tasks
+                    .iter()
+                    .filter(|t| matches!(t.status, TaskStatus::Todo | TaskStatus::InProgress))
+                    .take(3)
+                    .map(|t| format!("{} {}", t.format_id, t.title))
+                    .collect();
+                epic_deliveries.push(EpicDelivery {
+                    format_id: epic.format_id.clone(),
+                    title: epic.title.clone(),
+                    status: epic.status.to_string(),
+                    open_tasks,
+                    total_tasks: epic_tasks.len(),
+                    next_tasks,
+                });
+            }
+            CapabilityDelivery {
+                id: cap.id.clone(),
+                name: cap.name.clone(),
+                status: cap.status.clone(),
+                epics: epic_deliveries,
+                missing_epics,
+            }
+        })
+        .collect();
+
+    Some(rollup)
+}
+
 /// Render the view as the human-readable status report.
 ///
 /// With `capabilities_table`, every capability entry is listed; otherwise
@@ -244,6 +361,53 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
         let _ = writeln!(out, "note: {note}");
     }
 
+    out
+}
+
+/// Render the capability-delivery rollup: for each capability, its status and
+/// the epics that build it, each with open/total task counts and the next
+/// actionable tasks. Generated from the existing links, so it degrades the
+/// same way the base view does.
+#[must_use]
+pub fn render_delivery(view: &StatusView) -> String {
+    let mut out = String::new();
+    match &view.delivery {
+        Some(caps) if !caps.is_empty() => {
+            let _ = writeln!(out, "capability delivery:");
+            for cap in caps {
+                let _ = writeln!(out, "  {}  {:<10}  {}", cap.id, cap.status, cap.name);
+                if cap.epics.is_empty() && cap.missing_epics.is_empty() {
+                    let _ = writeln!(out, "    (no epics linked)");
+                }
+                for epic in &cap.epics {
+                    let _ = writeln!(
+                        out,
+                        "    {} {}  [{}]  tasks {}/{} open",
+                        epic.format_id,
+                        epic.title,
+                        epic.status,
+                        epic.open_tasks,
+                        epic.total_tasks
+                    );
+                    for task in &epic.next_tasks {
+                        let _ = writeln!(out, "      next: {task}");
+                    }
+                }
+                for missing in &cap.missing_epics {
+                    let _ = writeln!(out, "    {missing} (no epic record)");
+                }
+            }
+        }
+        Some(_) => {
+            let _ = writeln!(out, "capability delivery: (no capabilities in registry)");
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "capability delivery: (unavailable — needs both the registry and project-management tier)"
+            );
+        }
+    }
     out
 }
 
@@ -437,6 +601,93 @@ mod tests {
             "trimmed task must be counted, not skipped: {:?}",
             view.notes
         );
+    }
+
+    #[test]
+    fn delivery_groups_tasks_under_capability_via_epic_link() {
+        use crate::models::{Epic, EpicStatus, Task, TaskStatus};
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+
+        let store = MarkdownStore::new(dir.path().join("project-management")).unwrap();
+        let mk_epic = |id: &str, fid: &str, title: &str| Epic {
+            id: id.into(),
+            format_id: fid.into(),
+            title: title.into(),
+            summary: None,
+            status: EpicStatus::InProgress,
+            work_type: "feat".into(),
+            priority: "high".into(),
+            pr_number: None,
+            created_at: "2026-07-05T00:00:00Z".into(),
+            updated_at: "2026-07-05T00:00:00Z".into(),
+        };
+        // Epic linked to the capability, plus an unrelated epic whose tasks
+        // must NOT roll up under the capability.
+        store.create_epic(&mk_epic("epic-01a", "EPC-001", "Deliver flow")).unwrap();
+        store.create_epic(&mk_epic("epic-02b", "EPC-002", "Unrelated")).unwrap();
+
+        let mk_task = |id: &str, fid: &str, epic_id: &str, title: &str, status: TaskStatus| Task {
+            id: id.into(),
+            format_id: fid.into(),
+            epic_id: epic_id.into(),
+            title: title.into(),
+            description: None,
+            status,
+            work_type: "feat".into(),
+            priority: "normal".into(),
+            estimate: None,
+            acceptance: vec![],
+            tests: vec![],
+            branch: None,
+            pr_number: None,
+            created_at: "2026-07-05T00:00:00Z".into(),
+            updated_at: "2026-07-05T00:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
+        };
+        // Two tasks under the linked epic (one open, one done) and one task
+        // under the unrelated epic.
+        store.create_task(&mk_task("task-01a", "TSK-001-001", "epic-01a", "Wire CLI", TaskStatus::Todo)).unwrap();
+        store.create_task(&mk_task("task-01b", "TSK-001-002", "epic-01a", "Ship it", TaskStatus::Complete)).unwrap();
+        store.create_task(&mk_task("task-02a", "TSK-002-001", "epic-02b", "Elsewhere", TaskStatus::Todo)).unwrap();
+
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(
+            dir.path().join("docs/capabilities.md"),
+            "# caps\n\n```yaml\nid: CAP-001\nname: flow delivery\narea: engine\nstatus: building\nverified_by: []\nepics: [EPC-001, EPC-404]\nadrs: []\n```\n",
+        )
+        .unwrap();
+
+        let view = collect_status(dir.path());
+        let delivery = view.delivery.as_ref().expect("delivery present");
+        assert_eq!(delivery.len(), 1);
+        let cap = &delivery[0];
+        assert_eq!(cap.id, "CAP-001");
+        assert_eq!(cap.status, "building");
+
+        // Only EPC-001 resolves; its two tasks group here (one open of two),
+        // while the unrelated epic's task does not leak in.
+        assert_eq!(cap.epics.len(), 1);
+        let epic = &cap.epics[0];
+        assert_eq!(epic.format_id, "EPC-001");
+        assert_eq!(epic.total_tasks, 2);
+        assert_eq!(epic.open_tasks, 1);
+        assert_eq!(epic.next_tasks, vec!["TSK-001-001 Wire CLI"]);
+
+        // A referenced-but-missing epic is surfaced, not silently dropped.
+        assert_eq!(cap.missing_epics, vec!["EPC-404"]);
+
+        let rendered = render_delivery(&view);
+        assert!(rendered.contains("capability delivery:"), "{rendered}");
+        assert!(rendered.contains("CAP-001"), "{rendered}");
+        assert!(rendered.contains("EPC-001 Deliver flow  [in_progress]  tasks 1/2 open"), "{rendered}");
+        assert!(rendered.contains("next: TSK-001-001 Wire CLI"), "{rendered}");
+        assert!(rendered.contains("EPC-404 (no epic record)"), "{rendered}");
+        // The unrelated epic and its task never appear in the rollup.
+        assert!(!rendered.contains("Elsewhere"), "{rendered}");
+        assert!(!rendered.contains("EPC-002"), "{rendered}");
     }
 
     #[test]
