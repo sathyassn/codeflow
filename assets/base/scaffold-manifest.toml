@@ -203,6 +203,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "claude/agents/cf-security-reviewer.md"
+dest = ".claude/agents/cf-security-reviewer.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "claude/skills/cf-method/SKILL.md"
 dest = ".claude/skills/cf-method/SKILL.md"
 ownership = "managed"
