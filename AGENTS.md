@@ -169,6 +169,14 @@ to reason from, not a rote checklist.
 - **Write it well.** Favor the simplest change that fully solves the problem: DRY,
   idiomatic, coherent with the existing architecture — its conventions over your
   taste. Leave it more consistent than you found it.
+- **Shape the deliverable.** Layer it concept → detail, each layer complete at
+  its own altitude; reveal depth progressively — never dump, and never cut key
+  information to condense. Bullets for the enumerable; prose only where it
+  earns its place; visuals where they explain better. Presentation creative,
+  elegant, modern, fit to the domain; web artifacts componentized, never
+  monolithic. Then take the audience's seat: structured, logical, progressive,
+  the sought depth findable? Craft lives in the details — sloppy work is a
+  defect, not a style.
 - **Prove it at every surface.** Verify the work where it runs — unit,
   integration, end-to-end, and user-facing behavior (drive a real UI with a
   browser/computer-use tool when that is the surface) — and check what it affects
