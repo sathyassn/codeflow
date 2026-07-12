@@ -1,0 +1,60 @@
+# release-plz — automated SemVer bump + CHANGELOG + tag from the conventional
+# commits codeflow already enforces (fix -> patch, feat -> minor, `!` /
+# `BREAKING CHANGE:` -> major).
+#
+# Division of labor (ADR-0010):
+#   release-plz  OWNS the version, CHANGELOG.md, and the vX.Y.Z git tag —
+#                proposed via a "release" PR that a HUMAN merges (ADR-0006/0007);
+#   cargo-dist   stays the artifact builder (dist-workspace.toml +
+#                .github/workflows/release.yml), triggered by the tag release-plz
+#                pushes.
+# codeflow is distributed as cargo-dist binaries, NOT as a crates.io crate, so
+# nothing here publishes to a registry.
+
+[workspace]
+# No crates.io publish — codeflow ships as binaries.
+publish = false
+# There is no registry to query for the "last released version"; read it from
+# the existing git tags instead (v1-final, v2.0.0, ...).
+git_only = true
+# cargo-dist authors the GitHub Release from the tag; release-plz must NOT also
+# create one, or they collide.
+git_release_enable = false
+# release-plz DOES create the tag — that tag is the handoff that triggers
+# cargo-dist's release.yml.
+git_tag_enable = true
+# One lockstep tag matching the established convention (v2.0.0) — NOT the
+# per-package default (`codeflow-cli-v2.0.0`). release.yml's trigger
+# (`**[0-9]+.[0-9]+.[0-9]+*`) matches this.
+git_tag_name = "v{{ version }}"
+# No registry baseline exists (publish = false), so an API semver check can't run.
+semver_check = false
+# Release only when the release PR is merged (a human merges it), never on every
+# push to main.
+release_always = false
+# Maintain the single root CHANGELOG.md in Keep-a-Changelog form.
+changelog_update = true
+# Do not run `cargo update` inside the release PR.
+dependencies_update = false
+
+# codeflow-cli is the single public package (codeflow-core is publish = false in
+# its Cargo.toml). It owns the root CHANGELOG.md; its version bump propagates to
+# codeflow-core via workspace-version inheritance, so both stay lockstep.
+[[package]]
+name = "codeflow-cli"
+changelog_path = "CHANGELOG.md"
+
+[changelog]
+# Keep-a-Changelog compatible. release-plz groups commits by conventional type.
+protect_breaking_commits = true
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "Miscellaneous" },
+  { message = "^ci", skip = true },
+  { message = "^test", skip = true },
+]
