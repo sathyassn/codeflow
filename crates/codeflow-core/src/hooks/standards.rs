@@ -96,8 +96,10 @@ pub fn check_breaking_footer(subject: &str, message: &str) -> Option<String> {
     {
         return None;
     }
-    for raw in message.lines() {
-        let line = raw.trim_start();
+    for line in message.lines() {
+        // A footer sits at column 0 (no indentation) — matching what versioning
+        // tooling (release-plz, git-cliff) actually recognizes; an indented line
+        // is not a footer, so it is neither a breaking signal nor a mis-case.
         let lower = line.to_ascii_lowercase();
         let token_len = if lower.starts_with("breaking change") {
             "breaking change".len()
@@ -251,6 +253,31 @@ mod tests {
         // "breaking change" not at footer position (line start + colon) is prose
         let msg = "fix: thing\n\nThis is not a breaking change: really";
         assert_eq!(check_breaking_footer("fix: thing", msg), None);
+    }
+
+    #[test]
+    fn test_breaking_footer_non_footer_forms_not_flagged() {
+        // Only a column-0 `breaking change:` / `breaking-change:` footer counts.
+        for msg in [
+            "feat: add x\n\nBREAKING CHANGES: plural is not the footer token",
+            "feat: add x\n\nSome BREAKING CHANGE: not at line start",
+            "feat: add x\n\n    breaking change: indented is not a footer",
+            "feat: add x\n\n- breaking change: a list item",
+        ] {
+            assert_eq!(check_breaking_footer("feat: add x", msg), None, "{msg}");
+        }
+    }
+
+    #[test]
+    fn test_breaking_footer_crlf() {
+        // `lines()` strips the trailing `\r`, so CRLF footers are handled.
+        assert_eq!(
+            check_breaking_footer("feat: x", "feat: x\r\n\r\nBREAKING CHANGE: y\r\n"),
+            None
+        );
+        assert!(
+            check_breaking_footer("feat: x", "feat: x\r\n\r\nbreaking change: y\r\n").is_some()
+        );
     }
 
     // -- attribution --
