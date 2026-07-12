@@ -22,8 +22,13 @@ pub const SCHEMA_REF: &str = ".codeflow/test-config.schema.json";
 /// Result of a setup operation.
 #[derive(Debug)]
 pub enum SetupResult {
-    /// Config was written successfully.
+    /// Config was written successfully with at least one target.
     Written,
+    /// Config was written, but auto-detection found no supported stack, so it
+    /// has zero targets. Distinguished from [`SetupResult::Written`] so the
+    /// caller reports the zero-detection outcome plainly instead of implying a
+    /// stack was configured.
+    WrittenNoTargets,
     /// User aborted.
     Aborted,
 }
@@ -90,8 +95,21 @@ pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     };
 
     write_config(&config_path, &config)?;
-    println!("Auto-detected config written to {}", config_path.display());
 
+    // Honesty: when detection found nothing, say so plainly rather than
+    // implying a stack was configured. The empty config is still written (the
+    // documented `init` contract — a fresh project starts from an empty config
+    // it can extend), but the outcome is reported as zero-detection.
+    if config.targets.is_empty() {
+        println!(
+            "No supported stack detected — wrote a config with no targets to {}. \
+             Add one with `codeflow test setup --add-target`.",
+            config_path.display()
+        );
+        return Ok(SetupResult::WrittenNoTargets);
+    }
+
+    println!("Auto-detected config written to {}", config_path.display());
     Ok(SetupResult::Written)
 }
 
@@ -459,7 +477,11 @@ mod tests {
         std::fs::create_dir_all(root.join(".claude")).unwrap();
 
         let result = run_auto(&nested).unwrap();
-        assert!(matches!(result, SetupResult::Written));
+        // No stack markers in the fixture → zero detection, but still written.
+        assert!(matches!(
+            result,
+            SetupResult::Written | SetupResult::WrittenNoTargets
+        ));
 
         let nested_cfg = nested.join(".codeflow/test-config.json");
         let canonical_cfg = root.join(".codeflow/test-config.json");
@@ -497,11 +519,17 @@ mod tests {
         assert!(config_path(dir.path()).exists());
     }
 
+    /// Zero-detection honesty: an empty repo still gets a config written (the
+    /// `init` contract), but the outcome is reported as `WrittenNoTargets` — not
+    /// a plain `Written` that would imply a stack was configured.
     #[test]
-    fn run_auto_empty_repo() {
+    fn run_auto_empty_repo_reports_no_targets() {
         let dir = tempfile::tempdir().unwrap();
         let result = run_auto(dir.path()).unwrap();
-        assert!(matches!(result, SetupResult::Written));
+        assert!(
+            matches!(result, SetupResult::WrittenNoTargets),
+            "empty repo must report zero-detection, got {result:?}"
+        );
         let config = config::load_test_config(&config_path(dir.path())).unwrap();
         assert!(config.targets.is_empty());
     }
@@ -625,6 +653,7 @@ mod tests {
                 coverage: None,
                 ci_skip: None,
                 ci_skip_reason: None,
+                timeout_seconds: None,
                 structural: None,
                 tags: Vec::new(),
                 test_files: Vec::new(),
@@ -679,6 +708,7 @@ mod tests {
                 coverage: None,
                 ci_skip: None,
                 ci_skip_reason: None,
+                timeout_seconds: None,
                 structural: None,
                 tags: Vec::new(),
                 test_files: Vec::new(),

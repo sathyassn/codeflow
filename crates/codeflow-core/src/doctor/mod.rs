@@ -134,6 +134,7 @@ const CHECK_NAMES: &[&str] = &[
     "repo-integrity",
     "ci-perimeter",
     "managed-drift",
+    "test-config",
 ];
 
 /// Return the ordered list of all available check names.
@@ -157,6 +158,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("repo-integrity", check_repo_integrity);
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("managed-drift", check_managed_drift);
+    m.insert("test-config", check_test_config);
     m
 }
 
@@ -650,6 +652,54 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
     }
 }
 
+/// Generic-testing config health. When `.codeflow/test-config.json` exists,
+/// runs the testing engine's config-health checks (cwd existence, command
+/// parsing, path safety, glob validity, runner probes, …) and WARNS with a
+/// compact summary if any fail. Skips cleanly (Pass) when the file is absent —
+/// a project need not configure the testing engine. WARN only, never a block:
+/// the authoritative gate is `codeflow test` itself.
+fn check_test_config(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let config_path = root.join(".codeflow").join("test-config.json");
+
+    if !config_path.exists() {
+        return CheckResult {
+            name: "test-config".into(),
+            status: Status::Pass,
+            message: "no .codeflow/test-config.json (generic testing engine not configured)".into(),
+            duration: start.elapsed(),
+        };
+    }
+
+    let checks = crate::testing::doctor::run_all_checks(&root);
+    let failures: Vec<String> = checks
+        .iter()
+        .filter(|c| c.status == crate::testing::doctor::CheckStatus::Fail)
+        .map(|c| c.name.clone())
+        .collect();
+
+    if failures.is_empty() {
+        return CheckResult {
+            name: "test-config".into(),
+            status: Status::Pass,
+            message: format!("test-config.json healthy ({} checks passed)", checks.len()),
+            duration: start.elapsed(),
+        };
+    }
+
+    CheckResult {
+        name: "test-config".into(),
+        status: Status::Warn,
+        message: format!(
+            "{} test-config health check(s) failed: {} — run `codeflow test doctor` for detail",
+            failures.len(),
+            failures.join(", ")
+        ),
+        duration: start.elapsed(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 9);
+        assert_eq!(check_names().len(), 10);
     }
 
     #[test]
@@ -1128,6 +1178,52 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_managed_drift(&opts);
         assert_eq!(r.status, Status::Pass);
+    }
+
+    // --- test-config --------------------------------------------------------
+
+    fn write_test_config(root: &Path, body: &str) {
+        let cf = root.join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(cf.join("test-config.json"), body).unwrap();
+    }
+
+    #[test]
+    fn test_check_test_config_absent_passes_quietly() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_test_config(&opts);
+        assert_eq!(r.status, Status::Pass);
+        assert!(r.message.contains("no .codeflow/test-config.json"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_test_config_present_healthy_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_config(dir.path(), r#"{"schema_version":"1.0","targets":[]}"#);
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_test_config(&opts);
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(r.message.contains("healthy"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_test_config_present_unhealthy_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        // Loadable config, but the target's cwd does not exist → cwd-exists FAIL.
+        // `custom` runner emits no probe, so the check stays hermetic.
+        write_test_config(
+            dir.path(),
+            r#"{"schema_version":"1.0","targets":[{"name":"t","runner":"custom","cwd":"nope","modes":{"full":{"command":"echo hi"}}}]}"#,
+        );
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_test_config(&opts);
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.message.contains("failed"), "got: {}", r.message);
+        assert!(r.message.contains("codeflow test doctor"), "points to detail: {}", r.message);
     }
 
     #[test]

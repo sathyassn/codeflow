@@ -132,6 +132,12 @@
         "ci_skip_reason": {
           "type": "string",
           "description": "Human-readable justification for ci_skip."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 600,
+          "description": "Per-target wall-clock timeout in seconds. When the command runs longer, the runner kills it and the target fails loudly. Omitted → 600s. Guards the gate/pre-push against a single hanging target blocking forever."
         }
       },
       "additionalProperties": false

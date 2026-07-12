@@ -416,6 +416,7 @@ mod tests {
             coverage: None,
             ci_skip: None,
             ci_skip_reason: None,
+            timeout_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),

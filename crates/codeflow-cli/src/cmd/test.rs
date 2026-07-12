@@ -129,8 +129,10 @@ fn run_setup() -> i32 {
             println!("Next: run `codeflow test --mode essential` to try it.");
             0
         }
-        // `run_auto` never aborts, but the match stays exhaustive.
-        Ok(SetupResult::Aborted) => 0,
+        // Zero-detection: run_auto already printed the honest "no stack
+        // detected" line; nothing to run yet, so don't suggest it.
+        // (`run_auto` never aborts, but the arm stays exhaustive.)
+        Ok(SetupResult::WrittenNoTargets | SetupResult::Aborted) => 0,
         Err(SetupError::ConfigExists(path)) => {
             // Idempotent: a real, populated config is never overwritten.
             println!(

@@ -109,6 +109,13 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_skip_reason: Option<String>,
 
+    /// Per-target wall-clock timeout in seconds. When the command runs longer
+    /// than this, the runner kills it and the target FAILS loudly. Omitted →
+    /// [`crate::testing::runner::DEFAULT_TIMEOUT_SECONDS`] (600s). Guards the
+    /// gate/pre-push against a single hanging target blocking forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+
     /// Optional structural integrity configuration. When present, the
     /// structural integrity check validates bidirectional
     /// source↔test mapping for this target.
@@ -409,6 +416,7 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
             "coverage",
             "ci_skip",
             "ci_skip_reason",
+            "timeout_seconds",
             "structural",
             "tags",
             "test_files",
@@ -681,6 +689,7 @@ mod tests {
                 coverage: None,
                 ci_skip: None,
                 ci_skip_reason: None,
+                timeout_seconds: None,
                 structural: None,
                 tags: Vec::new(),
                 test_files: Vec::new(),

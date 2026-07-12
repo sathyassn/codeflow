@@ -3,12 +3,25 @@
 //! Spawns each enabled target's mode-specific command via `std::process::Command`
 //! in the target's cwd, capturing stdout/stderr.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::testing::config::{Tag, TargetConfig};
 use crate::testing::error::TestingError;
+
+/// Default per-target wall-clock timeout, applied when a target omits
+/// `timeout_seconds`. A hanging test target must never block the gate or
+/// pre-push forever, so every target has a finite ceiling.
+pub const DEFAULT_TIMEOUT_SECONDS: u64 = 600;
+
+/// Exit code reported for a target killed after exceeding its timeout. Matches
+/// the GNU `timeout(1)` convention so the failure reads unambiguously.
+const TIMEOUT_EXIT_CODE: i32 = 124;
+
+/// Polling interval while waiting for a target command to finish.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Result of running a single target's test command.
 #[derive(Debug, Clone)]
@@ -43,18 +56,38 @@ pub fn run_target(
 
     let cwd = resolve_cwd(project_dir, target.cwd.as_deref())?;
 
+    let timeout_secs = target.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+    let timeout = Duration::from_secs(timeout_secs);
+
     let start = Instant::now();
-    let output = spawn_command(&mode_cmd.command, &cwd, &target.env, &target.name)?;
+    let outcome = spawn_command(&mode_cmd.command, &cwd, &target.env, &target.name, timeout)?;
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let report_path = target.report.as_ref().map(|r| cwd.join(&r.path));
     let coverage_path = target.coverage.as_ref().map(|c| cwd.join(&c.path));
 
+    // On timeout the target FAILS loudly: force a non-zero exit code and append
+    // a message naming the timeout and the `timeout_seconds` config field, while
+    // preserving whatever partial output was captured before the kill.
+    let (exit_code, stderr) = if outcome.timed_out {
+        (
+            TIMEOUT_EXIT_CODE,
+            format!(
+                "{}\n[codeflow test] TIMEOUT: target '{}' exceeded its {timeout_secs}s wall-clock \
+                 limit and was killed. Raise the `timeout_seconds` field for this target if the \
+                 command legitimately needs longer.\n",
+                outcome.stderr, target.name,
+            ),
+        )
+    } else {
+        (outcome.exit_code, outcome.stderr)
+    };
+
     Ok(TargetRunResult {
         target_name: target.name.clone(),
-        exit_code: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code,
+        stdout: outcome.stdout,
+        stderr,
         duration_ms,
         report_path,
         coverage_path,
@@ -251,12 +284,22 @@ fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, 
     }
 }
 
+/// Outcome of running a single target command, capturing whatever output was
+/// produced and whether the wall-clock timeout fired.
+struct CommandOutcome {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+}
+
 fn spawn_command(
     command: &str,
     cwd: &Path,
     env: &std::collections::BTreeMap<String, String>,
     target_name: &str,
-) -> Result<std::process::Output, TestingError> {
+    timeout: Duration,
+) -> Result<CommandOutcome, TestingError> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command).current_dir(cwd);
 
@@ -280,10 +323,61 @@ fn spawn_command(
         cmd.env(key, val);
     }
 
-    cmd.output().map_err(|e| TestingError::CommandSpawnError {
+    // Pipe output so it can be captured while we poll for the timeout. Reader
+    // threads drain the pipes concurrently — without them a chatty command
+    // could fill the pipe buffer and deadlock while we sit in try_wait().
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let spawn_err = |e: std::io::Error| TestingError::CommandSpawnError {
         target: target_name.to_string(),
         message: format!("{e}"),
+    };
+
+    let mut child = cmd.spawn().map_err(spawn_err)?;
+
+    let stdout_reader = child.stdout.take().map(spawn_reader);
+    let stderr_reader = child.stderr.take().map(spawn_reader);
+
+    let start = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(spawn_err)? {
+            break status;
+        }
+        if start.elapsed() >= timeout {
+            // Deadline hit: kill and reap so the child cannot linger and
+            // so the reader threads' pipes close and they can finish.
+            let _ = child.kill();
+            timed_out = true;
+            break child.wait().map_err(spawn_err)?;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let stdout = join_reader(stdout_reader);
+    let stderr = join_reader(stderr_reader);
+
+    Ok(CommandOutcome {
+        exit_code: status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        timed_out,
     })
+}
+
+/// Spawn a thread that drains a child pipe to EOF, returning the raw bytes.
+fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        buf
+    })
+}
+
+/// Join a reader thread, yielding its captured bytes (empty if absent or the
+/// thread panicked — capture is best-effort and never masks the run result).
+fn join_reader(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default()
 }
 
 /// Validate an environment variable key.
@@ -364,6 +458,7 @@ mod tests {
             coverage: None,
             ci_skip: None,
             ci_skip_reason: None,
+            timeout_seconds: None,
             structural: None,
             tags: Vec::new(),
             test_files: Vec::new(),
@@ -400,6 +495,50 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert_eq!(result.exit_code, 1);
+    }
+
+    /// A target whose command hangs past its `timeout_seconds` is killed and
+    /// FAILS fast with a loud message naming the timeout and the config field —
+    /// it must not block for the full sleep duration.
+    #[test]
+    fn test_run_target_times_out_and_fails_fast() {
+        let mut target = make_target("hanger", "sleep 30");
+        target.timeout_seconds = Some(1);
+        let dir = tempfile::tempdir().unwrap();
+
+        let start = Instant::now();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        let elapsed = start.elapsed();
+
+        assert_ne!(result.exit_code, 0, "timed-out target must fail");
+        assert_eq!(result.exit_code, TIMEOUT_EXIT_CODE);
+        assert!(
+            result.stderr.contains("TIMEOUT"),
+            "loud timeout message expected, got: {}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains("timeout_seconds"),
+            "message must name the config field, got: {}",
+            result.stderr
+        );
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "must fail fast, not wait out the full sleep (took {elapsed:?})"
+        );
+    }
+
+    /// A normal, fast target is unaffected by the timeout machinery: it exits 0
+    /// with its output intact and no timeout message.
+    #[test]
+    fn test_run_target_within_timeout_unaffected() {
+        let mut target = make_target("quick", "echo done");
+        target.timeout_seconds = Some(60);
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("done"));
+        assert!(!result.stderr.contains("TIMEOUT"));
     }
 
     #[test]
@@ -680,6 +819,7 @@ mod tests {
             Path::new("."),
             &BTreeMap::new(),
             "probe",
+            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
         )
         .expect("probe command runs");
         // SAFETY: cleanup before asserting so a failure never leaks the decoy env.
@@ -689,8 +829,7 @@ mod tests {
             std::env::remove_var("GIT_INDEX_FILE");
         }
         assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            "cleared|cleared|cleared",
+            out.stdout, "cleared|cleared|cleared",
             "the test gate must not leak an inherited git env into the test command"
         );
     }
