@@ -4,8 +4,11 @@
 #
 # IMPORTANT: the "Install codeflow" step below is a PLACEHOLDER. Until you
 # replace it with the release installer (or a from-source build), the codeflow
-# `test`/`validate` gates are skipped and this perimeter does not block. The
-# secret-scan and commit-lint jobs work out of the box.
+# `test`/`validate` gates FAIL RED by design — a missing binary is an unarmed
+# perimeter, not a pass. This is a loud, honest signal that the gate is not yet
+# enforcing; wire the install step to turn it green. Do NOT "fix" the red by
+# making a missing binary skip — that hands branch protection a job that ran
+# nothing. The secret-scan and commit-lint jobs work out of the box.
 name: codeflow-ci
 
 on:
@@ -30,14 +33,15 @@ jobs:
           # PLACEHOLDER: replace with the release installer once published, e.g.
           #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
           #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
-          echo "::warning::codeflow install step is a placeholder; binary gates are skipped until it is wired"
+          echo "::error::codeflow install step is an unwired PLACEHOLDER — the test/validate gates below fail RED until you replace this with the real installer. The perimeter is intentionally not armed."
 
       - name: codeflow test
         run: |
           if command -v codeflow >/dev/null 2>&1; then
             codeflow test
           else
-            echo "::warning::codeflow not installed — test gate skipped"
+            echo "::error::codeflow not installed — test gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
           fi
 
       - name: codeflow validate --docs
@@ -45,7 +49,8 @@ jobs:
           if command -v codeflow >/dev/null 2>&1; then
             codeflow validate --docs
           else
-            echo "::warning::codeflow not installed — validate gate skipped"
+            echo "::error::codeflow not installed — validate gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
           fi
 
   secret-scan:
