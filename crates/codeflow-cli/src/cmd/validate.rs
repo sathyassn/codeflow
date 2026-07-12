@@ -43,6 +43,19 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     }
 
     let files = if base.is_file() {
+        // An explicitly named file must be validatable — silently skipping it
+        // and reporting "0 record(s) clean" would be a false green.
+        let name = base
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if !name.starts_with("TSK-") && !name.starts_with("EPC-") {
+            eprintln!(
+                "validate: {} is not an epic/task record (expected an EPC-*/TSK-* filename) — nothing validated",
+                base.display()
+            );
+            return false;
+        }
         vec![base.clone()]
     } else {
         collect_record_files(&base)
