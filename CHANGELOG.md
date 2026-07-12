@@ -50,6 +50,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`codeflow policy explain` / `policy show` — the policy file is fully
+  discoverable from the binary.** `explain` renders the complete
+  `.codeflow/policy.json` key schema — every key's type, default (rendered live
+  from the built-in defaults), valid values, purpose, and sharp edges (e.g.
+  `allow` and `off` are both inactive levels) — grouped top-level/git/security;
+  `show` prints the EFFECTIVE policy: each key's current value, whether it comes
+  from the project file or the built-in default, and a loud flag on invalid
+  values. Consumers get only the binary, so both need no source access; the
+  schema registry is pinned to the policy struct's serde fields by a
+  drift-guard test, so a new key cannot ship undocumented.
+- **Strict `policy.json` validation — invalid config fails loudly, never a
+  silent default-revert.** Malformed JSON, an unknown key, a wrong-typed value,
+  an invalid enum value, or an unparseable `commit_ticket_pattern` regex is now
+  a hard error naming every offending key, its value, and the valid set (e.g.
+  `invalid value 'worn' for git.commit_ticket_required; expected one of: off,
+  warn, allow, block`) — surfaced at the commit-msg git hook (exit 1),
+  `codeflow ci` (exit 2, nothing verified), and `codeflow validate` (exit 1).
+  Previously one invalid value made the whole file fail-parse and silently
+  reverted EVERY key to the built-in defaults — including keys a consumer had
+  hardened past them. The enforcement loaders keep their fail-safe fallback;
+  the loud check is an explicit pre-check at those three surfaces.
 - **Opt-in footer trailers and required footers, strict by default (ADR-0020).**
   The commit body stays bullets + a `BREAKING CHANGE:` footer only — every other
   trailer blocks — but a project can now open specific escape hatches via

@@ -63,7 +63,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs"]
 epics: [EPC-001]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017]
 ```
@@ -79,7 +79,14 @@ authoritative perimeter — CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline
 drift, portable across CI hosts via thin GitHub/GitLab/Bitbucket/generic
 wrappers — ADR-0017), and remote branch protection (`codeflow remote protect`).
-Every rule is a policy value, user-flippable per repo.
+Every rule is a policy value, user-flippable per repo. The policy file is
+discoverable and strict from the binary alone: `codeflow policy explain`
+renders every key's type, default, and valid values from a schema registry
+drift-guarded against the policy struct; `codeflow policy show` prints the
+effective values and their source; and a present-but-invalid file fails
+loudly — naming each offending key, its value, and the valid set — at the
+commit-msg hook, `codeflow ci`, and `codeflow validate`, instead of silently
+reverting every key to the built-in defaults.
 
 ## CAP-004 — test-gate
 

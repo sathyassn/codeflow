@@ -340,6 +340,51 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
 }
 
 #[test]
+fn commit_msg_blocks_on_invalid_policy_value() {
+    // Strict validation: a typo'd policy value must fail loudly at the hook,
+    // naming the key and its valid options — never silently revert the whole
+    // file to defaults (which could disable a hardened gate). A conforming
+    // message is otherwise irrelevant.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(
+        dir.path(),
+        r#"{"schema_version":1,"git":{"commit_ticket_required":"worn"}}"#,
+    );
+    let msg = dir.path().join("MSG");
+    std::fs::write(&msg, "feat: x\n").unwrap();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1), "an invalid policy must block");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("git.commit_ticket_required"), "{stderr}");
+    assert!(stderr.contains("off, warn, allow, block"), "{stderr}");
+
+    // Fixing the value lets the same commit through.
+    write_policy(
+        dir.path(),
+        r#"{"schema_version":1,"git":{"commit_ticket_required":"block","commit_ticket_keys":["Refs"]}}"#,
+    );
+    std::fs::write(&msg, "feat: x\n\n- do it\n\nRefs: PROJ-1\n").unwrap();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+            .current_dir(dir.path()),
+        "",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a valid policy + conforming commit passes: {stderr}"
+    );
+}
+
+#[test]
 fn commit_msg_warn_level_proceeds() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
