@@ -106,7 +106,7 @@ boundary is remote"). The rules, compressed:
   `integration/<epic>` branch (agents merge there); only the finished body
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
   work."
-- **PR bodies:** summary, changes, test results, linked epic/capability IDs.
+- **PR bodies:** follow the template — summary, changes, verification (name the surface, paste evidence), and linked capability/ADR IDs. Type and breaking-change come from the conventional commits, not the body.
 - When a gate blocks you, fix the cause â never bypass (`--no-verify`, editing
   hooks, exporting gate tokens). Gates exist only where mistakes are
   irreversible or invisible.
