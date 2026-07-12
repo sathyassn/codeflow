@@ -15,6 +15,8 @@
 //! | `adr`        | `docs/decisions/*.md` |
 //! | `pm`         | `project-management/{epics,tasks}/*.md` |
 //! | `capability` | `docs/capabilities.md` |
+//! | `product`    | `docs/product.md` |
+//! | `plan`       | `docs/plan/**/*.md` (recursive) |
 //!
 //! where `<state>` is the repo's runtime state dir (`.git/codeflow`).
 //! Results disclose coverage gaps — repos or source kinds that were never
@@ -72,7 +74,8 @@ impl Default for RecallOptions {
 pub struct RecallResult {
     /// Repo display name.
     pub repo: String,
-    /// Source kind (`ledger`, `session`, `adr`, `pm`, `capability`).
+    /// Source kind (`ledger`, `session`, `adr`, `pm`, `capability`,
+    /// `product`, `plan`).
     pub kind: String,
     /// Source path relative to the repo root.
     pub path: String,
@@ -103,7 +106,15 @@ pub struct RecallReport {
 }
 
 /// Source kinds in the recall corpus.
-const KINDS: &[&str] = &["ledger", "session", "adr", "pm", "capability"];
+const KINDS: &[&str] = &[
+    "ledger",
+    "session",
+    "adr",
+    "pm",
+    "capability",
+    "product",
+    "plan",
+];
 
 // ---------------------------------------------------------------------------
 // Repo runtime state location
@@ -187,6 +198,28 @@ fn md_files_in(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Recursively collect markdown files under `dir` (sorted). Plan docs nest
+/// (`docs/plan/v2/…`), so a flat read would miss the charter and its siblings.
+fn md_files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    md_files_under_inner(dir, &mut files);
+    files.sort();
+    files
+}
+
+fn md_files_under_inner(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+        if path.is_dir() {
+            md_files_under_inner(&path, out);
+        } else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+            out.push(path);
+        }
+    }
+}
+
 fn rel_to(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
@@ -249,6 +282,26 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
             rel: rel_to(root, &caps),
             abs: caps,
             kind: "capability",
+        });
+    }
+
+    // Product WHYs: the human-owned charter of purpose/scope/non-goals plus the
+    // plan of record. Without these, product decisions (e.g. D17/D18/D22) are
+    // un-findable via recall while technical whys (ADRs, capabilities) are.
+    let product = root.join("docs/product.md");
+    if product.is_file() {
+        sources.push(SourceFile {
+            rel: rel_to(root, &product),
+            abs: product,
+            kind: "product",
+        });
+    }
+
+    for abs in md_files_under(&root.join("docs/plan")) {
+        sources.push(SourceFile {
+            rel: rel_to(root, &abs),
+            abs,
+            kind: "plan",
         });
     }
 
@@ -569,6 +622,18 @@ mod tests {
         .unwrap();
     }
 
+    fn write_product(root: &Path, body: &str) {
+        let dir = root.join("docs");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("product.md"), body).unwrap();
+    }
+
+    fn write_plan(root: &Path, rel: &str, body: &str) {
+        let path = root.join("docs/plan").join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
     fn target(name: &str, root: &Path) -> RepoTarget {
         RepoTarget {
             name: name.to_string(),
@@ -653,6 +718,50 @@ mod tests {
         let adr = report.results.iter().find(|r| r.kind == "adr").unwrap();
         assert_eq!(adr.title, "Use bundled zanzibar index");
         assert!(adr.path.starts_with("docs/decisions/"));
+    }
+
+    /// Product WHYs must be findable: a charter decision in a nested
+    /// `docs/plan/**/*.md` and a scope decision in `docs/product.md` each
+    /// surface as their own source kind, not just technical ADRs.
+    #[test]
+    fn test_recall_indexes_product_and_plan() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        make_repo(repo.path());
+        write_product(
+            repo.path(),
+            "# codeflow — product\n\n## Non-goals\n\n\
+             D18: no orchestration framework — the harness supplies the middle.\n",
+        );
+        // Nested to prove the recursive walk reaches docs/plan/v2/… (the charter).
+        write_plan(
+            repo.path(),
+            "v2/00-charter.md",
+            "# Charter\n\nD22: v1 is a quarry, not a source tree; \
+             code crosses only by a deliberate keep-decision.\n",
+        );
+        let db = home.path().join("recall.db");
+        let targets = [target("r1", repo.path())];
+
+        // Charter decision term reaches the nested plan doc.
+        let plan_hit = recall(&db, &targets, "D22 quarry", &RecallOptions::default()).unwrap();
+        let plan = plan_hit
+            .results
+            .iter()
+            .find(|r| r.kind == "plan")
+            .expect("nested charter plan doc must surface");
+        assert_eq!(plan.path, "docs/plan/v2/00-charter.md");
+        assert_eq!(plan.title, "Charter");
+
+        // Scope decision term reaches docs/product.md as its own kind.
+        let product_hit =
+            recall(&db, &targets, "D18 orchestration", &RecallOptions::default()).unwrap();
+        let product = product_hit
+            .results
+            .iter()
+            .find(|r| r.kind == "product")
+            .expect("docs/product.md must surface");
+        assert_eq!(product.path, "docs/product.md");
     }
 
     #[test]

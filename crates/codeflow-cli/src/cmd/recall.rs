@@ -1,5 +1,6 @@
 //! `codeflow recall [--all] "<query>"` — FTS5 search over ledgers, session
-//! summaries, ADRs, epics/tasks, and capabilities (charter §8).
+//! summaries, ADRs, epics/tasks, capabilities, and the product WHY docs
+//! (`docs/product.md` + `docs/plan/`) (charter §8).
 
 use std::path::PathBuf;
 
