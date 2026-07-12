@@ -82,7 +82,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 36] = [
+pub const SCHEMA: [KeySpec; 39] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -304,6 +304,35 @@ pub const SCHEMA: [KeySpec; 36] = [
         valid: LEVEL_VALID,
         purpose: "Emoji in commit subjects and PR bodies.",
         notes: "",
+    },
+    // ---- git: PR-body structure --------------------------------------------
+    KeySpec {
+        path: "git.pr_sections",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Required sections in the PR/MR body — the structure check `codeflow ci` runs on a provided PR body.",
+        notes: "Governs pr_required_sections and pr_code_sections — off/allow \
+                disables both. Runs only when a PR body is provided (--pr-body, \
+                --pr-body-file, or CODEFLOW_PR_BODY); the template-remnant scan \
+                it carries always WARNS, never blocks.",
+    },
+    KeySpec {
+        path: "git.pr_required_sections",
+        kind: KeyKind::StringList,
+        valid: "an array of heading names without the leading ## (e.g. Summary)",
+        purpose: "Headings every PR body must carry, matched case-insensitively at ##/### depth.",
+        notes: "A present-but-empty section (only HTML comments and bare `-` \
+                bullets) counts as missing; enforced under pr_sections.",
+    },
+    KeySpec {
+        path: "git.pr_code_sections",
+        kind: KeyKind::StringList,
+        valid: "an array of heading names without the leading ## (e.g. Testing)",
+        purpose: "Headings required only when the commit range touches non-docs files.",
+        notes: "Docs-only = every changed path is *.md, *.txt, LICENSE*, \
+                docs/**, or a .github template; anything else — or a range \
+                whose files could not be resolved — counts as code. Enforced \
+                under pr_sections.",
     },
     KeySpec {
         path: "git.branch_naming",

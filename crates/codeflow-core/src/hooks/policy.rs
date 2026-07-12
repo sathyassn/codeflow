@@ -168,6 +168,24 @@ pub struct GitPolicy {
     pub breaking_watch_paths: Vec<String>,
     pub ai_attribution: PolicyLevel,
     pub commit_emoji: PolicyLevel,
+    /// Structure of the PR/MR body — the section check `codeflow ci` runs when
+    /// a PR body is provided (`--pr-body`, `--pr-body-file`, or
+    /// `CODEFLOW_PR_BODY`). Level (off/warn/allow/block); default `block`.
+    /// Governs both section lists below; the always-warn template-remnant
+    /// scan rides along. No PR body provided = the check is skipped, exactly
+    /// like the attribution/emoji PR-body scan.
+    pub pr_sections: PolicyLevel,
+    /// Markdown headings every PR body must carry (matched case-insensitively
+    /// at `##`/`###` depth). A present-but-empty section — nothing but HTML
+    /// comments and bare `-` bullets before the next heading — counts as
+    /// missing. Default `["Summary", "Changes"]`. Enforced under `pr_sections`.
+    pub pr_required_sections: Vec<String>,
+    /// Headings required ONLY when the commit range touches non-docs files
+    /// (docs-only = every changed path is `*.md`, `*.txt`, `LICENSE*`,
+    /// `docs/**`, or a `.github` template; anything else — or an unresolvable
+    /// range — counts as code). Default `["Testing"]`. Enforced under
+    /// `pr_sections`.
+    pub pr_code_sections: Vec<String>,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
@@ -216,6 +234,9 @@ impl Default for GitPolicy {
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
             commit_emoji: PolicyLevel::Block,
+            pr_sections: PolicyLevel::Block,
+            pr_required_sections: vec!["Summary".into(), "Changes".into()],
+            pr_code_sections: vec!["Testing".into()],
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
                 "feat/",
@@ -504,6 +525,7 @@ impl GitPolicy {
         self.commit_required_footers = Vec::new();
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
+        self.pr_sections = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
         self.security_review = PolicyLevel::Off;
@@ -573,6 +595,10 @@ mod tests {
         assert!(g.breaking_watch_paths.is_empty());
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
+        // PR-body structure gate: the doctrine sections ship block-enforced.
+        assert_eq!(g.pr_sections, PolicyLevel::Block);
+        assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
+        assert_eq!(g.pr_code_sections, vec!["Testing"]);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
         assert_eq!(g.branch_prefixes.len(), 12);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
@@ -636,6 +662,12 @@ mod tests {
             from_asset.git.breaking_watch_paths,
             defaults.breaking_watch_paths
         );
+        assert_eq!(from_asset.git.pr_sections, defaults.pr_sections);
+        assert_eq!(
+            from_asset.git.pr_required_sections,
+            defaults.pr_required_sections
+        );
+        assert_eq!(from_asset.git.pr_code_sections, defaults.pr_code_sections);
         assert_eq!(from_asset.git.branch_prefixes, defaults.branch_prefixes);
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);
         assert_eq!(from_asset.git.security_review, defaults.security_review);
