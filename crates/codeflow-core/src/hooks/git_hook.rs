@@ -1,5 +1,6 @@
 //! Git client hook stages (charter §6.1 plane 1): pre-commit, commit-msg,
-//! pre-push. Harness-agnostic — they work for any agent or human.
+//! pre-merge-commit, reference-transaction, pre-push. Harness-agnostic — they
+//! work for any agent or human.
 //!
 //! The shims in `.git/hooks/` exec `codeflow git-hook <stage>`; ALL levels
 //! and lists come from `.codeflow/policy.json` (D7/D8 — nothing hardcoded).
@@ -79,6 +80,12 @@ fn scan_staged(repo: &Repository, policy: &GitPolicy, report: &mut StageReport) 
     };
 
     for delta in diff.deltas() {
+        // A staged DELETION is the remediation the policy prescribes (getting
+        // a tracked env file OUT of git) — never a leak. Only content entering
+        // the repo is scanned; the content scan below is already '+'-lines-only.
+        if delta.status() == git2::Delta::Deleted {
+            continue;
+        }
         let Some(path) = delta.new_file().path() else {
             continue;
         };
@@ -711,6 +718,32 @@ mod tests {
                 .violations
                 .iter()
                 .any(|v| v.rule == "git.secret_scan" && v.message.contains(".env"))
+        );
+    }
+
+    #[test]
+    fn test_pre_commit_allows_staged_env_file_deletion() {
+        // A dotenv file already tracked (committed before codeflow adoption):
+        // ADDING it blocks, but staging its DELETION is the very remediation
+        // the policy prescribes and must pass.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), ".env", "DB_PASSWORD=hunter2hunter2\n");
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.secret_scan"),
+            "adding a dotenv file still blocks"
+        );
+        git(dir.path(), &["commit", "-m", "chore: pre-adoption env file"]);
+        git(dir.path(), &["rm", ".env"]);
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert!(
+            report.violations.is_empty(),
+            "deleting a tracked dotenv file must pass: {:?}",
+            report.violations
         );
     }
 
