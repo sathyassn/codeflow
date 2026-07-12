@@ -333,6 +333,19 @@ fn spawn_command(
         message: format!("{e}"),
     };
 
+    // Run the command in its own process group (Unix) so a timeout can kill
+    // the WHOLE tree. `sh -c` may fork the real command as a grandchild that
+    // inherits the pipe write-ends; killing only `sh` then leaves the reader
+    // threads blocked until the orphan exits (observed on Linux CI: a
+    // timed-out `sleep 30` held the gate for the full 30s). The trade: a
+    // terminal Ctrl-C no longer reaches the test child automatically —
+    // acceptable, since the deadline below reaps the whole group either way.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
     let mut child = cmd.spawn().map_err(spawn_err)?;
 
     let stdout_reader = child.stdout.take().map(spawn_reader);
@@ -345,8 +358,18 @@ fn spawn_command(
             break status;
         }
         if start.elapsed() >= timeout {
-            // Deadline hit: kill and reap so the child cannot linger and
-            // so the reader threads' pipes close and they can finish.
+            // Deadline hit: kill the whole process group (not just `sh`) so
+            // grandchildren die too and the reader threads' pipes close —
+            // otherwise an orphan holding a pipe write-end blocks read_to_end
+            // below for its full runtime. `--` keeps the negative (group) pid
+            // from parsing as a flag; best-effort, with child.kill() as the
+            // direct-child backstop.
+            #[cfg(unix)]
+            {
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                    .status();
+            }
             let _ = child.kill();
             timed_out = true;
             break child.wait().map_err(spawn_err)?;
