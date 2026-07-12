@@ -30,6 +30,9 @@ pub enum Action {
     KeptUserModified,
     /// Overwritten because `--force` was passed.
     Forced,
+    /// Unmodified managed file deleted because it is no longer shipped by the
+    /// new manifest (an artifact removed or renamed upstream).
+    Removed,
 }
 
 impl Action {
@@ -47,6 +50,7 @@ impl Action {
             Self::Unchanged => "unchanged",
             Self::KeptUserModified => "kept (user-modified)",
             Self::Forced => "forced",
+            Self::Removed => "removed",
         }
     }
 }
@@ -144,6 +148,7 @@ impl fmt::Display for Report {
             (Action::MissingAsset, self.count(Action::MissingAsset)),
             (Action::KeptUserModified, self.count(Action::KeptUserModified)),
             (Action::Forced, self.count(Action::Forced)),
+            (Action::Removed, self.count(Action::Removed)),
             (Action::Unchanged, self.count(Action::Unchanged)),
         ];
         let parts: Vec<String> = summary

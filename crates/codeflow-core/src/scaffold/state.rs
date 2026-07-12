@@ -198,6 +198,20 @@ impl Baseline {
     pub fn write(root: &Path, dest: &str, content: &str) -> Result<(), ScaffoldError> {
         write_file(&Self::path(root, dest), content.as_bytes())
     }
+
+    /// Removes the baseline copy for `dest`. A missing baseline is not an error.
+    ///
+    /// # Errors
+    ///
+    /// IO failures other than not-found.
+    pub fn remove(root: &Path, dest: &str) -> Result<(), ScaffoldError> {
+        let path = Self::path(root, dest);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(ScaffoldError::io(&path, e)),
+        }
+    }
 }
 
 /// Creates parent directories and writes `bytes` to `path`.

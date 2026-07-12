@@ -20,8 +20,17 @@
 //! "unmodified"; recording a merged hash would misclassify a customized file as
 //! pristine and overwrite it on the next update.
 //!
+//! After applying the new manifest, update **reconciles orphans**: files
+//! managed under the OLD installed manifest but absent from the NEW manifest
+//! entirely (an artifact removed or renamed upstream, e.g. the
+//! `.claude/commands/*` -> `.claude/skills/*/SKILL.md` migration). An unmodified
+//! whole-file `managed` orphan is deleted (file + baseline + record); anything
+//! that might hold user content (user-modified `managed`, `managed-region`,
+//! `user-owned`) is kept and merely unmanaged. Without this, a stale orphan
+//! lingers and can collide with its renamed replacement.
+//!
 //! The update always ends with a printed report
-//! (changed / merged / conflicted / skipped / added).
+//! (changed / merged / conflicted / skipped / added / removed).
 
 use std::path::{Path, PathBuf};
 
@@ -93,6 +102,8 @@ pub fn update(
             source, root, entry, &ctx, &state, opts, &mut installed, &mut report, &mut diffs,
         )?;
     }
+
+    prune_orphans(root, &manifest, &mut installed, &mut report)?;
 
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
@@ -439,6 +450,101 @@ fn add_new_keys(
             }
             Some(_) => {} // user value: never mutated
         }
+    }
+}
+
+/// Reconcile files managed under the OLD installed manifest that are absent
+/// from the NEW source manifest entirely — an artifact removed or renamed
+/// upstream (e.g. the `.claude/commands/*` -> `.claude/skills/*/SKILL.md`
+/// migration). Without this, an orphan lingers and can collide with its
+/// renamed replacement (a stale `/cf-plan` command beside the new skill).
+///
+/// Never deletes user data:
+/// - **managed** (whole-file, codeflow-owned): the file + baseline are removed
+///   when the file is unmodified (or already gone); a user-MODIFIED orphan is
+///   kept on disk and merely unmanaged (baseline + record dropped).
+/// - **managed-region / user-owned**: the file may hold content outside a
+///   codeflow block, so it is never deleted — only unmanaged.
+///
+/// The "still shipped" set spans ALL tiers of the new manifest, so a lower-tier
+/// project never prunes a file the manifest still ships at a higher tier (a
+/// tier downgrade stops managing, never deletes).
+fn prune_orphans(
+    root: &Path,
+    manifest: &ScaffoldManifest,
+    installed: &mut InstalledManifest,
+    report: &mut Report,
+) -> Result<(), ScaffoldError> {
+    let shipped: std::collections::BTreeSet<&str> =
+        manifest.entries.iter().map(|e| e.dest.as_str()).collect();
+    let orphans: Vec<String> = installed
+        .files
+        .keys()
+        .filter(|dest| !shipped.contains(dest.as_str()))
+        .cloned()
+        .collect();
+
+    for dest in orphans {
+        let file = installed.files[&dest].clone();
+        let dest_path = root.join(&dest);
+
+        if file.ownership == Ownership::Managed {
+            let unmodified = match std::fs::read_to_string(&dest_path) {
+                Ok(current) => hash::sha256_hex(current.as_bytes()) == file.sha256,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+                Err(e) => return Err(ScaffoldError::io(&dest_path, e)),
+            };
+            if unmodified {
+                if dest_path.exists() {
+                    std::fs::remove_file(&dest_path)
+                        .map_err(|e| ScaffoldError::io(&dest_path, e))?;
+                    remove_empty_ancestors(root, &dest_path);
+                }
+                let baseline_path = Baseline::path(root, &dest);
+                Baseline::remove(root, &dest)?;
+                remove_empty_ancestors(root, &baseline_path);
+                installed.files.remove(&dest);
+                report.file_with_notes(
+                    &dest,
+                    Action::Removed,
+                    vec!["no longer shipped; unmodified managed file removed".to_string()],
+                );
+                continue;
+            }
+            // User-modified: keep the file, stop managing it.
+            Baseline::remove(root, &dest)?;
+            installed.files.remove(&dest);
+            report.file_with_notes(
+                &dest,
+                Action::KeptUserModified,
+                vec!["no longer shipped; your modified copy kept and no longer managed".to_string()],
+            );
+            continue;
+        }
+
+        // managed-region / user-owned: never delete a file that may hold user
+        // content outside a codeflow block — just stop managing it.
+        Baseline::remove(root, &dest)?;
+        installed.files.remove(&dest);
+        report.file_with_notes(
+            &dest,
+            Action::Skipped,
+            vec!["no longer shipped; file kept (not codeflow-owned to remove)".to_string()],
+        );
+    }
+    Ok(())
+}
+
+/// Removes now-empty ancestor directories of `file`, up to (not including)
+/// `root`, stopping at the first non-empty directory. `remove_dir` only
+/// succeeds on an empty directory, so a non-empty ancestor ends the walk.
+fn remove_empty_ancestors(root: &Path, file: &Path) {
+    let mut cur = file.parent().map(Path::to_path_buf);
+    while let Some(dir) = cur {
+        if dir == root || !dir.starts_with(root) || std::fs::remove_dir(&dir).is_err() {
+            break;
+        }
+        cur = dir.parent().map(Path::to_path_buf);
     }
 }
 

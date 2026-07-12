@@ -184,6 +184,25 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
     (dir, source)
 }
 
+/// Rewrites a fixture's `scaffold-manifest.toml` to drop the `[[entry]]` whose
+/// `dest` matches — simulating an artifact removed or renamed upstream.
+fn drop_manifest_entry(assets_dir: &Path, dest: &str) {
+    let mpath = assets_dir.join("base/scaffold-manifest.toml");
+    let text = std::fs::read_to_string(&mpath).unwrap();
+    let marker = "[[entry]]";
+    let head_end = text.find(marker).expect("manifest has entries");
+    let needle = format!("dest = \"{dest}\"");
+    let mut out = text[..head_end].to_string();
+    for block in text[head_end..].split(marker) {
+        if block.trim().is_empty() || block.contains(&needle) {
+            continue;
+        }
+        out.push_str(marker);
+        out.push_str(block);
+    }
+    std::fs::write(&mpath, out).unwrap();
+}
+
 fn opts(tier: Option<Tier>, version: &str) -> InitOptions {
     InitOptions {
         tier,
@@ -603,6 +622,11 @@ fn update_replaces_unmodified_managed_files() {
     let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
 
     assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Changed);
+    assert_eq!(
+        report.count(Action::Removed),
+        0,
+        "nothing is pruned when the manifest still ships every file"
+    );
     assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V2);
     assert_eq!(
         read(&root, ".codeflow/.baseline/.claude/workflows/develop.md"),
@@ -689,6 +713,125 @@ fn update_conflict_writes_dot_new_and_never_clobbers() {
         .unwrap()
         .notes;
     assert!(notes.iter().any(|n| n.contains(".new")));
+}
+
+#[test]
+fn update_prunes_orphaned_unmodified_managed_file() {
+    // An artifact removed/renamed upstream (its manifest entry gone) must be
+    // pruned — the file, its baseline, and its manifest record — not left as a
+    // lingering orphan that collides with a renamed replacement.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    assert!(root.join(".claude/workflows/develop.md").exists());
+    assert!(root
+        .join(".codeflow/.baseline/.claude/workflows/develop.md")
+        .exists());
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
+    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Removed
+    );
+    assert!(
+        !root.join(".claude/workflows/develop.md").exists(),
+        "orphan file removed"
+    );
+    assert!(
+        !root
+            .join(".codeflow/.baseline/.claude/workflows/develop.md")
+            .exists(),
+        "orphan baseline removed"
+    );
+    assert!(
+        !root.join(".claude/workflows").exists(),
+        "now-empty parent dir cleaned"
+    );
+    assert!(
+        !read(&root, ".codeflow/manifest.json").contains(".claude/workflows/develop.md"),
+        "manifest record dropped"
+    );
+}
+
+#[test]
+fn update_prunes_already_deleted_managed_orphan() {
+    // If the orphan's file was already removed from disk, update still cleans up
+    // its baseline + record and reports it removed (the NotFound branch).
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    std::fs::remove_file(root.join(".claude/workflows/develop.md")).unwrap();
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
+    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Removed
+    );
+    assert!(
+        !root
+            .join(".codeflow/.baseline/.claude/workflows/develop.md")
+            .exists(),
+        "baseline cleaned even though the file was already gone"
+    );
+    assert!(
+        !read(&root, ".codeflow/manifest.json").contains(".claude/workflows/develop.md"),
+        "record dropped"
+    );
+}
+
+#[test]
+fn update_keeps_user_modified_managed_orphan_unmanaged() {
+    // A user-MODIFIED managed file that is dropped upstream is never deleted —
+    // it is kept on disk and merely unmanaged.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    std::fs::write(root.join(".claude/workflows/develop.md"), "my own workflow\n").unwrap();
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
+    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::KeptUserModified
+    );
+    assert_eq!(
+        read(&root, ".claude/workflows/develop.md"),
+        "my own workflow\n",
+        "user's file is never deleted"
+    );
+    assert!(
+        !read(&root, ".codeflow/manifest.json").contains(".claude/workflows/develop.md"),
+        "no longer managed"
+    );
+}
+
+#[test]
+fn update_never_deletes_user_owned_orphan() {
+    // A user-owned file dropped upstream is kept (never codeflow's to delete),
+    // just unmanaged.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    assert!(root.join("docs/product.md").exists());
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), "docs/product.md");
+    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, "docs/product.md"), Action::Skipped);
+    assert!(root.join("docs/product.md").exists(), "user-owned file kept");
+    assert!(
+        !read(&root, ".codeflow/manifest.json").contains("docs/product.md"),
+        "no longer managed"
+    );
 }
 
 #[test]
