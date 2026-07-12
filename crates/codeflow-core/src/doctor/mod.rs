@@ -494,14 +494,15 @@ fn check_network(opts: &Options) -> CheckResult {
 
 /// Cross-vendor delegation readiness (ADR-0005). Optional by design, so a
 /// missing or unauthenticated delegate warns — never fails. `codex` is the
-/// primary tier: authenticated under the user's own subscription. `agy`
-/// (Antigravity) is a degraded, opt-in consult tier reported informationally.
+/// only sanctioned delegate transport is interactive (ADR-0018): the
+/// codex-plugin-cc plugin from Claude Code. `agy` is reported informationally
+/// only — it is not a delegate tier (headless-only; retired per ADR-0018).
 fn check_delegates(opts: &Options) -> CheckResult {
     let start = Instant::now();
 
     // `agy` presence is informational; codex authentication decides pass/warn.
     let agy_note = if opts.do_look_path("agy").is_ok() {
-        "; agy present (degraded read-only consult tier, opt-in)"
+        "; agy present (not a delegate tier — retired per ADR-0018; git hooks + CI still bind it)"
     } else {
         ""
     };
