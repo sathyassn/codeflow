@@ -134,7 +134,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs"]
 epics: [EPC-001]
-adrs: []
+adrs: [ADR-0013]
 ```
 
 `codeflow orient` generates the session-start digest live (≤30 lines,
@@ -143,9 +143,12 @@ capability counts, recent ADR titles, gate status, paths to read more. The
 `session-summary` SessionEnd hook appends a session record to the ledger —
 recall's zero-ceremony corpus. Both are wired through `.claude/settings.json`;
 the orient digest is also wired for Codex via `.codex/hooks.json` (SessionStart,
-all sources), so a Codex session opens with the same digest and re-orients after
-a compaction (`source=compact`). One handler serves both harnesses — plain-text
-stdout each injects as session context — so there is no per-harness duplication.
+all sources — ADR-0013), so an **interactive** Codex session opens with the same
+digest and re-orients after a compaction (`source=compact`). One handler serves
+both harnesses — plain-text stdout each injects as session context — so there is
+no per-harness duplication. Headless `codex exec` does not fire project hooks
+(ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
+JSON wiring, while live firing rests on Codex's documented hooks contract.
 
 ## CAP-008 — remote-protect-doctor
 

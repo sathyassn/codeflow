@@ -109,9 +109,49 @@ fn sessionstart_wires_orient_across_all_sources() {
         "SessionStart: session-orient not wired"
     );
     let matcher = start[0]["matcher"].as_str().unwrap_or_default();
+    // Both headline behaviors must stay covered: `startup` = a session opens with
+    // the digest; `compact` = it re-orients after a compaction. (resume/clear are
+    // wired too, but these two are the behaviors the capability claims.)
+    for source in ["startup", "compact"] {
+        assert!(
+            matcher.contains(source),
+            "SessionStart matcher must include the {source:?} source, got {matcher:?}"
+        );
+    }
+}
+
+#[test]
+fn guards_and_orient_stay_on_their_own_events() {
+    // The events are not interchangeable: a mis-wire that adds a guard to
+    // SessionStart, or orient to PreToolUse, must fail here.
+    let v = hooks_json();
+    let mut pre = Vec::new();
+    collect_hook_commands(&v["hooks"]["PreToolUse"], &mut pre);
+    let mut start = Vec::new();
+    collect_hook_commands(&v["hooks"]["SessionStart"], &mut start);
     assert!(
-        matcher.contains("compact"),
-        "SessionStart matcher must include the compact source for \
-         post-compaction re-orientation, got {matcher:?}"
+        !pre.iter().any(|c| c.contains("session-orient")),
+        "orient must not ride PreToolUse — it is a per-session digest, not a per-tool gate"
+    );
+    for guard in ["git-guard", "exec-guard"] {
+        assert!(
+            !start.iter().any(|c| c.contains(guard)),
+            "{guard} must not ride SessionStart — guards gate tool calls, not session open"
+        );
+    }
+}
+
+#[test]
+fn dogfood_codex_hooks_matches_shipped_scaffold() {
+    // This repo is its own first consumer: the dogfood `.codex/hooks.json` must
+    // stay byte-identical to the scaffold it ships, or the two silently diverge.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let shipped = std::fs::read_to_string(root.join("assets/base/codex/hooks.json"))
+        .expect("read shipped codex hooks.json");
+    let dogfood = std::fs::read_to_string(root.join(".codex/hooks.json"))
+        .expect("read dogfood .codex/hooks.json");
+    assert_eq!(
+        shipped, dogfood,
+        "dogfood .codex/hooks.json drifted from assets/base/codex/hooks.json"
     );
 }

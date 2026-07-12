@@ -55,8 +55,10 @@ policy) and `exec-guard` (the `security` section: destructive commands block,
 privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
 through a byte-compatible PreToolUse payload, for an interactive Codex session in
 `.codex/hooks.json` (ADR-0008; headless `codex exec` 0.142.5 does not run project
-PreToolUse hooks, so headless Codex relies on the git-hook plane). PR-content
-checks (attribution/emoji,
+PreToolUse hooks, so headless Codex relies on the git-hook plane). Beyond the
+guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
+interactive Codex session opens with — and re-orients after a compaction from —
+the same orientation digest Claude gets. PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
 

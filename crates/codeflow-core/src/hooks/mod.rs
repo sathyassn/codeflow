@@ -15,6 +15,10 @@
 //! `codex exec` 0.142.5 does not invoke project `PreToolUse` hooks, so headless
 //! Codex leans on the harness-agnostic git-hook plane instead — ADR-0008.)
 //!
+//! `session-orient` is likewise wired for Codex `SessionStart` (ADR-0013): the
+//! same plain-text handler, so an interactive Codex session opens with the
+//! orientation digest and re-orients after a compaction (`source=compact`).
+//!
 //! All enforcement levels are read from `.codeflow/policy.json` (charter D7:
 //! policy in config, not code) via [`policy::Policy`]; nothing is hardcoded.
 //! Every blocking message names the violated policy rule and the sanctioned
