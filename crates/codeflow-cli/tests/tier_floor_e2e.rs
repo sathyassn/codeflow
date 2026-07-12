@@ -398,6 +398,80 @@ fn minimal_floor_blocks_a_non_conventional_commit() {
     );
 }
 
+/// The restored v1 commit standard (ADR-0020) is enforced by the floor: after
+/// `init --minimal`, the commit-msg hook rejects a story-body commit — a
+/// conventional subject followed by a prose paragraph — both as a direct hook
+/// invocation naming `git.commit_body` and as a real `git commit` on a feature
+/// branch, while a bullet-body commit of the same change passes.
+#[test]
+fn minimal_floor_blocks_a_story_body_commit() {
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+
+    // Direct hook invocation: a prose body is rejected and names the body rule.
+    let story = root.join("story-msg.txt");
+    std::fs::write(
+        &story,
+        "feat: add a thing\n\nThis is a story paragraph about why the thing was added.\n",
+    )
+    .unwrap();
+    let out = codeflow(&root, &["git-hook", "commit-msg", story.to_str().unwrap()]);
+    let msg = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success(),
+        "commit-msg hook accepted a story-body commit: {msg}"
+    );
+    assert!(
+        msg.contains("commit_body"),
+        "commit-msg block did not name the commit_body rule:\n{msg}"
+    );
+
+    // The same change with a bullet body passes.
+    let bullets = root.join("bullet-msg.txt");
+    std::fs::write(&bullets, "feat: add a thing\n\n- wire the new path\n").unwrap();
+    assert!(
+        codeflow(&root, &["git-hook", "commit-msg", bullets.to_str().unwrap()])
+            .status
+            .success(),
+        "commit-msg hook rejected a conforming bullet-body commit"
+    );
+
+    // End-to-end: a real story-body commit on a feature branch is blocked by the
+    // wired hook.
+    assert!(git(&root, &["checkout", "-b", "feat/body-shape"])
+        .status
+        .success());
+    std::fs::write(root.join("body.txt"), "hello\n").unwrap();
+    assert!(git(&root, &["add", "body.txt"]).status.success());
+    let commit = git(
+        &root,
+        &[
+            "commit",
+            "-m",
+            "feat: add a thing",
+            "-m",
+            "This is a story paragraph, not a bullet.",
+        ],
+    );
+    assert!(
+        !commit.status.success(),
+        "a story-body commit was accepted by the wired commit-msg hook"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&commit.stdout),
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    assert!(
+        combined.contains("BLOCKED") && combined.contains("commit_body"),
+        "commit rejection did not report a commit_body BLOCK:\n{combined}"
+    );
+}
+
 /// Rolls a fresh `--minimal` install back to the OLD-minimal shape: the moved
 /// files and their baselines are deleted, their manifest records dropped, and
 /// the recorded scaffold version rolled back — exactly what a repo initialized
