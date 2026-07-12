@@ -634,6 +634,38 @@ fn update_three_way_merges_user_modified_file() {
 }
 
 #[test]
+fn update_twice_preserves_merged_user_edits() {
+    // Regression: after a clean 3-way merge, a SECOND `codeflow update` must not
+    // silently wipe the merged-in user edits. The bug recorded hash(merged) as
+    // the manifest hash, so the next run classified the file "unmodified" and
+    // overwrote it with the pristine shipped version.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    let mine =
+        read(&root, ".claude/workflows/develop.md").replace("step eight", "step eight (mine)");
+    std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    // First update: clean 3-way merge (upstream head change + user tail edit).
+    let r1 = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&r1, ".claude/workflows/develop.md"), Action::Merged);
+    let after1 = read(&root, ".claude/workflows/develop.md");
+    assert!(after1.contains("step eight (mine)") && after1.contains("step one (improved)"));
+
+    // Second update against the SAME assets (no new upstream change): the merged
+    // user edit must survive.
+    let _r2 = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    let after2 = read(&root, ".claude/workflows/develop.md");
+    assert!(
+        after2.contains("step eight (mine)"),
+        "second update wiped the merged user edit"
+    );
+    assert!(!root.join(".claude/workflows/develop.md.new").exists());
+}
+
+#[test]
 fn update_conflict_writes_dot_new_and_never_clobbers() {
     isolate_git();
     let (_p, root) = project_dir();

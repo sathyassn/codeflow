@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `codeflow update` no longer silently discards merged-in user edits to a
+  managed file on the *next* update. After a clean 3-way merge the manifest now
+  records the pristine shipped hash (restoring the invariant `recorded ==
+  hash(baseline)`), so a merged file stays classified user-modified and is
+  re-merged rather than overwritten with the shipped version.
+
 ## [2.0.0] - 2026-07-03
 
 2.0.0 is a complete Rust rewrite of codeflow. The 1.x line (a shell/Node tooling

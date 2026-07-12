@@ -217,7 +217,13 @@ fn update_entry(
             }
             if let Ok(merged) = diffy::merge(&base, &current, &rendered) {
                 write_dest(root, entry, &merged)?;
-                record(installed, entry, hash::sha256_hex(merged.as_bytes()));
+                // Record the pristine shipped hash (not the merged file's), so the
+                // manifest invariant `recorded == hash(baseline)` holds: the merged
+                // file carries user edits, so the next update must classify it
+                // "user-modified" and re-merge, never treat it as pristine and
+                // overwrite. Recording hash(merged) here silently wiped the merge
+                // on the following update.
+                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 push_diff(diffs, &entry.dest, &current, &merged);
                 report.file_with_notes(
