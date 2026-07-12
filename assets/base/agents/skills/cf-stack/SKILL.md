@@ -1,6 +1,7 @@
 ---
 name: cf-stack
 description: Set up or extend the project's stack — test config, lint config, standards. Use when detecting or configuring the build/test/lint mechanics of a repo.
+disable-model-invocation: true
 ---
 
 # cf-stack — configure stack mechanics

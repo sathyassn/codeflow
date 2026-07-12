@@ -198,42 +198,47 @@ dest = ".claude/skills/cf-delegate/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# The five workflow commands are now SKILL.md skills. Claude Code merged custom
+# commands into skills (v2.1.101, 2026-04-11): `.claude/skills/<name>/SKILL.md`
+# creates `/<name>` just like the old `.claude/commands/<name>.md` did. Keeping
+# both would conflict on the same slash name, so codeflow ships skills only.
+# `disable-model-invocation` keeps these explicit-invoke, matching prior command
+# behavior. They install to .claude/skills (Claude) and .agents/skills (Codex).
+
 [[entry]]
-src = "claude/commands/cf-plan.md"
-dest = ".claude/commands/cf-plan.md"
+src = "agents/skills/cf-plan/SKILL.md"
+dest = ".claude/skills/cf-plan/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "claude/commands/cf-develop.md"
-dest = ".claude/commands/cf-develop.md"
+src = "agents/skills/cf-develop/SKILL.md"
+dest = ".claude/skills/cf-develop/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "claude/commands/cf-ship.md"
-dest = ".claude/commands/cf-ship.md"
+src = "agents/skills/cf-ship/SKILL.md"
+dest = ".claude/skills/cf-ship/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "claude/commands/cf-stack.md"
-dest = ".claude/commands/cf-stack.md"
+src = "agents/skills/cf-stack/SKILL.md"
+dest = ".claude/skills/cf-stack/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "claude/commands/cf-consult.md"
-dest = ".claude/commands/cf-consult.md"
+src = "agents/skills/cf-consult/SKILL.md"
+dest = ".claude/skills/cf-consult/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
-# Cross-harness skills (.agents/skills/): the Agent Skills location read by Codex
-# and other compatible harnesses. The two method skills mirror the .claude/skills
-# sources byte-for-byte; the five command-skills are harness-neutral SKILL.md
-# renderings of the .claude slash commands. Claude Code reads .claude/skills and
-# .claude/commands; other harnesses read .agents/skills. (agy uses a plugin model
-# and is bound at the git-hook plane, not here.)
+# Cross-harness mirror (.agents/skills/): the Agent Skills location read by Codex
+# and other compatible harnesses. Every cf-* skill above also installs here so a
+# non-Claude harness gets the same method. (agy uses a plugin model and is bound
+# at the git-hook plane, not here.)
 
 [[entry]]
 src = "claude/skills/cf-method/SKILL.md"
