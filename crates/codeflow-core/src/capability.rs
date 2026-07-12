@@ -51,18 +51,42 @@ struct RawCapability {
     adrs: Vec<String>,
 }
 
+/// Blank out every character inside an HTML comment (`<!-- ... -->`),
+/// preserving newlines so 1-based line numbers stay accurate. An unterminated
+/// comment runs to end of input. This keeps example capability entries that
+/// live inside comments — such as the scaffold template's `<!-- ... ##
+/// CAP-001 ... -->` — from being parsed as real entries (which would surface a
+/// phantom capability named `<name>` in a fresh repo's `status`/`orient`).
+fn mask_html_comments(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let body = &rest[start..];
+        let end = body[4..].find("-->").map_or(body.len(), |rel| 4 + rel + 3);
+        for ch in body[..end].chars() {
+            out.push(if ch == '\n' { '\n' } else { ' ' });
+        }
+        rest = &body[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Parse capability entries out of registry markdown content.
 ///
 /// Scans for fenced ` ```yaml ` blocks whose yaml carries an `id` starting
-/// with `CAP-`; other yaml blocks are ignored. Malformed blocks that look
-/// like capability entries are reported as parse issues, never silently
-/// dropped (charter principle 8: legible degradation).
+/// with `CAP-`; other yaml blocks are ignored. Content inside HTML comment
+/// blocks is skipped, so example entries embedded in comments are not parsed.
+/// Malformed blocks that look like capability entries are reported as parse
+/// issues, never silently dropped (charter principle 8: legible degradation).
 #[must_use]
 pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<CapabilityParseIssue>) {
     let mut entries = Vec::new();
     let mut issues = Vec::new();
 
-    let lines: Vec<&str> = content.lines().collect();
+    let masked = mask_html_comments(content);
+    let lines: Vec<&str> = masked.lines().collect();
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
@@ -194,6 +218,35 @@ Generated status views.
         let (entries, issues) = parse_capabilities(content);
         assert_eq!(entries.len(), 1, "issues: {issues:?}");
         assert_eq!(entries[0].id, "CAP-009");
+    }
+
+    #[test]
+    fn skips_capability_entries_inside_html_comments() {
+        // The scaffold template ships its example entry inside an HTML comment;
+        // parsing it as real produced a phantom capability named `<name>` in a
+        // fresh repo's status/orient. A comment-only registry yields nothing.
+        const COMMENTED: &str = r"# myproject — capabilities
+
+<!-- Entry format (example, not a real capability):
+
+     ## CAP-001 — <name>
+
+     ```yaml
+     id: CAP-001
+     name: <name>
+     area: <area>
+     status: planned
+     verified_by: []
+     epics: []
+     adrs: []
+     ```
+
+     One paragraph describing the capability.
+-->
+";
+        let (entries, issues) = parse_capabilities(COMMENTED);
+        assert!(entries.is_empty(), "phantom entries: {entries:?}");
+        assert!(issues.is_empty(), "unexpected issues: {issues:?}");
     }
 
     #[test]
