@@ -65,6 +65,12 @@ softening the commit rules quietly breaks it.
   and the whole subject line ≤ 72. A body, when present, is **only** `-` bullets —
   at most 3, each a single line ≤ 72 chars — optionally followed by a
   `BREAKING CHANGE:` footer; no prose paragraphs. One logical change per commit.
+- **Breaking changes:** before each commit, ask whether it changes anything a
+  consumer depends on (API, CLI flags, config schema, file formats, defaults,
+  managed-file semantics). If yes, mark `type!:` and add a `BREAKING CHANGE:`
+  footer with the migration path — the footer drives the major bump. A
+  `policy.json` `breaking_watch_paths` glob warns on an unmarked touch of a
+  declared surface, but detection is a judgment call, not a gate.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies.
 - **No emoji** in commit subjects or PR bodies.

@@ -88,6 +88,13 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   present, is **only** `-` bullets — at most 3, each a single line ≤ 72 chars —
   optionally followed by a `BREAKING CHANGE:` footer; no prose paragraphs. One
   logical change per commit.
+- **Breaking changes are a judgment call, made every commit.** Before each
+  commit, ask whether it changes anything a consumer depends on — API, CLI flags,
+  config schema, file formats, defaults, or managed-file semantics. If yes, mark
+  the subject `type!:` and add a `BREAKING CHANGE:` footer stating the migration
+  path; that footer is what drives the major version bump. A `policy.json`
+  `breaking_watch_paths` glob warns when a declared contract surface is touched
+  unmarked, but the glob only nudges — detection is yours, not the gate's.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
