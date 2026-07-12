@@ -1,8 +1,8 @@
-//! Post-test pipeline: parse reports, evaluate coverage, render PR body.
+//! Post-test pipeline: parse reports, evaluate coverage, persist results.
 //!
 //! Coordinates the downstream steps after `runner::run_all_targets()`:
-//! report parsing, coverage parsing, threshold evaluation, PR body rendering,
-//! and report persistence.
+//! report parsing, coverage parsing, threshold evaluation, and report
+//! persistence.
 
 use std::io::Write;
 use std::path::Path;
@@ -10,7 +10,6 @@ use std::path::Path;
 use crate::testing::config::{CoverageFormat, ReportFormat, TargetConfig};
 use crate::testing::coverage::{self, FileCoverage};
 use crate::testing::error::TestingError;
-use crate::testing::pr_body::{self, TargetPrData};
 use crate::testing::report::CanonicalTestReport;
 use crate::testing::runner::TargetRunResult;
 use crate::testing::threshold;
@@ -128,97 +127,6 @@ pub fn evaluate_target_thresholds(
     )
 }
 
-/// Build PR body data for a target.
-#[must_use]
-pub fn build_target_pr_data(post: &TargetPostData) -> TargetPrData {
-    let exceptions = post
-        .target_config
-        .coverage
-        .as_ref()
-        .map(|c| c.exceptions.clone())
-        .unwrap_or_default();
-
-    let total_lines_found: u64 = post.file_coverages.iter().map(|c| c.lines_found).sum();
-    let total_lines_hit: u64 = post.file_coverages.iter().map(|c| c.lines_hit).sum();
-    let workspace_coverage = if total_lines_found > 0 {
-        Some(FileCoverage::compute_percent(
-            total_lines_found,
-            total_lines_hit,
-        ))
-    } else {
-        None
-    };
-
-    let coverage_na_reason = if post.target_config.coverage.is_none() {
-        Some("no coverage configured".to_string())
-    } else if post.file_coverages.is_empty() {
-        Some("no coverage data collected".to_string())
-    } else {
-        None
-    };
-
-    let failing_count = post
-        .threshold_results
-        .iter()
-        .filter(|r| !r.pass && !r.exception_applied)
-        .count();
-    let passing_count = post.threshold_results.iter().filter(|r| r.pass).count();
-    let coverage_summary = if post.file_coverages.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "{} files evaluated, {} pass, {} fail",
-            post.threshold_results.len(),
-            passing_count,
-            failing_count,
-        ))
-    };
-
-    TargetPrData {
-        name: post.name.clone(),
-        mode: post.mode.clone(),
-        report: post.report.clone(),
-        run_result: Some(post.run_result.clone()),
-        file_coverages: post.file_coverages.clone(),
-        threshold_results: post.threshold_results.clone(),
-        exceptions,
-        workspace_coverage,
-        coverage_summary,
-        coverage_na_reason,
-    }
-}
-
-/// Render the full PR body markdown from post-test data.
-pub fn render_full_pr_body(
-    targets: &[TargetPostData],
-    changed_files: &[String],
-    consecutive_clean_runs: u32,
-) -> String {
-    let pr_targets: Vec<TargetPrData> = targets.iter().map(build_target_pr_data).collect();
-
-    let modified_file_results: Vec<(String, String, f64, u32, bool)> = targets
-        .iter()
-        .flat_map(|t| {
-            let scoped = strip_target_cwd_prefix(changed_files, t.target_config.cwd.as_deref());
-            t.threshold_results
-                .iter()
-                .filter(|r| scoped.iter().any(|f| f == &r.file))
-                .map(|r| {
-                    (
-                        t.name.clone(),
-                        r.file.clone(),
-                        r.coverage_percent,
-                        r.threshold,
-                        r.pass,
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    pr_body::render_pr_body(&pr_targets, &modified_file_results, consecutive_clean_runs)
-}
-
 /// Normalise `changed_files` (project-root-relative per `git diff`) to the
 /// target's cwd-relative format so the filter against `ThresholdResult.file`
 /// (which `parse_target_coverage` already stripped to cwd-relative paths)
@@ -229,7 +137,7 @@ pub fn render_full_pr_body(
 /// - File lives under `target_cwd/…` → returned with prefix stripped.
 /// - File lives OUTSIDE `target_cwd/…` → dropped (not in target's scope).
 ///
-/// Section 3 (Modified File Coverage) is per-target by design: a docs-only
+/// The ledger's modified-file audit is per-target by design: a docs-only
 /// file changed at the repo root is not a covered artifact for the rust-core
 /// target, so excluding it here is semantically correct.
 fn strip_target_cwd_prefix(changed_files: &[String], target_cwd: Option<&str>) -> Vec<String> {
@@ -653,102 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_target_pr_data_with_coverage() {
-        let target = make_target("rust", true);
-        let post = TargetPostData {
-            name: "rust".to_string(),
-            mode: "full".to_string(),
-            run_result: make_run_result("rust"),
-            report: Some(make_report()),
-            file_coverages: vec![
-                FileCoverage {
-                    path: "src/main.rs".to_string(),
-                    lines_found: 100,
-                    lines_hit: 90,
-                    percent: 90.0,
-                },
-                FileCoverage {
-                    path: "untestable.rs".to_string(),
-                    lines_found: 50,
-                    lines_hit: 0,
-                    percent: 0.0,
-                },
-            ],
-            threshold_results: vec![threshold::ThresholdResult {
-                file: "src/main.rs".to_string(),
-                coverage_percent: 90.0,
-                threshold: 85,
-                pass: true,
-                rule_scope: CoverageScope::PerFile,
-                exception_applied: false,
-            }],
-            target_config: target,
-        };
-
-        let pr_data = build_target_pr_data(&post);
-        assert_eq!(pr_data.name, "rust");
-        assert!(pr_data.workspace_coverage.is_some());
-        assert_eq!(pr_data.exceptions.len(), 1);
-    }
-
-    #[test]
-    fn test_build_target_pr_data_no_coverage() {
-        let target = make_target("shell", false);
-        let post = TargetPostData {
-            name: "shell".to_string(),
-            mode: "full".to_string(),
-            run_result: make_run_result("shell"),
-            report: Some(make_report()),
-            file_coverages: Vec::new(),
-            threshold_results: Vec::new(),
-            target_config: target,
-        };
-
-        let pr_data = build_target_pr_data(&post);
-        assert_eq!(
-            pr_data.coverage_na_reason.as_deref(),
-            Some("no coverage configured")
-        );
-    }
-
-    #[test]
-    fn test_render_full_pr_body_produces_sections() {
-        let target = make_target("rust", true);
-        let post = TargetPostData {
-            name: "rust".to_string(),
-            mode: "full".to_string(),
-            run_result: make_run_result("rust"),
-            report: Some(make_report()),
-            file_coverages: vec![FileCoverage {
-                path: "src/main.rs".to_string(),
-                lines_found: 100,
-                lines_hit: 90,
-                percent: 90.0,
-            }],
-            threshold_results: vec![threshold::ThresholdResult {
-                file: "src/main.rs".to_string(),
-                coverage_percent: 90.0,
-                threshold: 85,
-                pass: true,
-                rule_scope: CoverageScope::PerFile,
-                exception_applied: false,
-            }],
-            target_config: target,
-        };
-
-        let md = render_full_pr_body(&[post], &["src/main.rs".to_string()], 1);
-        assert!(
-            md.contains("### 1. Overall Test Pass Status"),
-            "missing section 1"
-        );
-        assert!(md.contains("### 2. Overall Coverage"), "missing section 2");
-        assert!(
-            md.contains("### 3. Modified File Coverage"),
-            "missing section 3"
-        );
-    }
-
-    #[test]
     fn test_write_test_report() {
         let dir = tempfile::tempdir().unwrap();
         let post = TargetPostData {
@@ -1063,12 +875,12 @@ mod tests {
         assert_eq!(strip_target_cwd_prefix(&changed, Some(".")), changed);
     }
 
-    /// End-to-end guard: drive `render_full_pr_body` with the shape that
-    /// once produced an empty Section 3 — a target whose `cwd = "backend"`
-    /// holds a cwd-relative threshold result, while `changed_files` is
-    /// project-root-relative. The per-target filter must find the match.
+    /// Regression guard for the shape that once produced an empty modified-file
+    /// audit: a target whose `cwd = "backend"` holds a cwd-relative threshold
+    /// result, while `changed_files` is project-root-relative. The per-target
+    /// filter in the ledger summary must still find the match.
     #[test]
-    fn test_render_full_pr_body_finds_modified_files_under_target_cwd() {
+    fn test_ledger_summary_finds_modified_files_under_target_cwd() {
         use crate::testing::config::{
             CoverageConfig, CoverageFormat, CoverageScope, ModeCommand, RunnerType, TargetConfig,
         };
@@ -1135,7 +947,6 @@ mod tests {
             ".claude/CLAUDE.md".to_string(),
         ];
 
-        // Also assert the ledger summary path matches — same filter runs there.
         let summary = build_target_ledger_summary(&post, &changed_files);
         let modified = summary["modified_file_results"].as_array().unwrap();
         assert_eq!(
@@ -1144,12 +955,5 @@ mod tests {
             "ledger summary must include exactly the in-scope modified file; got: {modified:?}"
         );
         assert_eq!(modified[0]["file"], "cli/src/cmd/test.rs");
-
-        // Full PR body render must also surface the same file in Section 3.
-        let body = render_full_pr_body(&[post], &changed_files, 1);
-        assert!(
-            body.contains("cli/src/cmd/test.rs"),
-            "PR body Section 3 must list the modified file; got body:\n{body}"
-        );
     }
 }

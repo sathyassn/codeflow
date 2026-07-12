@@ -5,7 +5,6 @@
 //! consumers (PR body, ledger, diff, external reporters) read this model.
 
 pub mod ctrf;
-pub mod diff;
 pub mod junit;
 pub mod junit_to_ctrf;
 
