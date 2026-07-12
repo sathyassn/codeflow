@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use super::policy::PolicyLevel;
+
 /// Conventional commit subject: `type(scope)!: description`.
 fn conventional_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -187,13 +189,47 @@ fn is_breaking_footer_start(line: &str) -> bool {
     line[token_len..].trim_start().starts_with(':')
 }
 
-/// Check the commit *body* shape (ADR-0020, the restored v1 standard): after the
-/// subject, the only sanctioned content is blank lines, `- ` bullets (at most
-/// `max_bullets`, each a single line ≤ `bullet_max` chars including the marker),
-/// and an optional trailing `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer block.
-/// A prose paragraph, a numbered list, a story-body — anything that is not a
-/// bullet, a blank line, or the footer — is a violation naming the offending
-/// line.
+/// Parse a git-trailer footer line into `(token, value)` (ADR-0020 footer/ticket
+/// amendment). Two forms are accepted:
+/// - `<Token>: <value>` — a colon, one or more spaces/tabs, then a non-empty
+///   value.
+/// - `<Token> #<value>` — a space then a `#`-prefixed issue ref (value keeps the
+///   `#`).
+///
+/// `<Token>` is a single word of letters, digits, and hyphens (so multi-word
+/// prose like `This change: …` never parses as a trailer, and a `key:value` with
+/// no space — e.g. a bare `http://…` URL — is not mistaken for one). Returns
+/// `None` when the line is not trailer-shaped. Token whitelisting and the
+/// `BREAKING CHANGE` footer are handled by the callers, not here.
+fn trailer_kv(line: &str) -> Option<(&str, &str)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"^(?P<token>[A-Za-z][A-Za-z0-9-]*)(?::[ \t]+(?P<v1>\S.*)| +(?P<v2>#\S.*))$")
+            .expect("valid regex")
+    });
+    let caps = re.captures(line.trim_end())?;
+    let token = caps.name("token")?.as_str();
+    let value = caps.name("v1").or_else(|| caps.name("v2"))?.as_str();
+    Some((token, value))
+}
+
+/// Check the commit *body* shape (ADR-0020, the restored v1 standard plus the
+/// footer/ticket amendment). After the subject the body is: optional `- ` bullets
+/// (at most `max_bullets`, each a single line ≤ `bullet_max` chars including the
+/// marker), then an optional footer block — the `BREAKING CHANGE:` /
+/// `BREAKING-CHANGE:` footer (which may carry a wrapping multi-line description),
+/// which is ALWAYS allowed, plus any git-trailer line `<Token>: <value>` (or
+/// `<Token> #<value>` for an issue ref) whose `<Token>` is in `footer_tokens`.
+/// `footer_tokens` is the project's opt-in set (empty by default — the strict
+/// baseline is bullets plus `BREAKING CHANGE:` only), so a `Refs:` or
+/// `Signed-off-by:` line blocks unless the project opted the token in. Blank lines
+/// are allowed anywhere. A prose paragraph, a numbered list, a story-body, or a
+/// trailer whose token is not opted in is a violation naming the offending line.
+///
+/// A trailer value is single-line and cannot span into prose (each body line is
+/// checked on its own), so the no-stories guarantee holds. A `- ` bullet that
+/// appears *after* a footer trailer is out of order and blocks — bullets come
+/// before the footer.
 ///
 /// Auto-generated subjects (merge/revert/fixup/squash) are exempt as a class,
 /// mirroring [`check_commit_format`]: their bodies are tool-authored. Merge
@@ -209,6 +245,7 @@ pub fn check_commit_body(
     message: &str,
     max_bullets: u32,
     bullet_max: u32,
+    footer_tokens: &[String],
 ) -> Option<String> {
     if FORMAT_EXEMPT_PREFIXES
         .iter()
@@ -218,6 +255,7 @@ pub fn check_commit_body(
     }
     let mut seen_subject = false;
     let mut bullets: u32 = 0;
+    let mut in_footer = false;
     for line in message.lines() {
         if !seen_subject {
             // Skip everything up to and including the subject (first non-blank).
@@ -231,11 +269,30 @@ pub fn check_commit_body(
             continue; // blank lines are always allowed
         }
         if is_breaking_footer_start(content) {
-            // The footer block runs to the end of the message; everything from
-            // here on is the sanctioned footer, so stop scanning body lines.
+            // The BREAKING CHANGE block runs to the end of the message (its
+            // description may wrap across lines); everything from here on is the
+            // sanctioned footer, so stop scanning body lines.
             return over_bullet_budget(bullets, max_bullets);
         }
+        if let Some((token, _value)) = trailer_kv(content) {
+            if footer_tokens.iter().any(|t| t == token) {
+                in_footer = true;
+                continue;
+            }
+            return Some(format!(
+                "commit body footer trailer {token:?} is not an allowed footer token — only \
+                 `BREAKING CHANGE:` is allowed unless the project opts the token in via \
+                 git.commit_footer_tokens / commit_ticket_keys / commit_required_footers: \
+                 {content:?}"
+            ));
+        }
         if content.starts_with("- ") {
+            if in_footer {
+                return Some(format!(
+                    "commit body `- ` bullet appears after a footer trailer; put all bullets \
+                     before the footer: {content:?}"
+                ));
+            }
             bullets += 1;
             let len = content.chars().count();
             if len > bullet_max as usize {
@@ -247,10 +304,123 @@ pub fn check_commit_body(
             continue;
         }
         return Some(format!(
-            "commit body line is not a `- ` bullet or a BREAKING CHANGE footer: {content:?}"
+            "commit body line is not a `- ` bullet, a footer trailer, or a BREAKING CHANGE \
+             footer: {content:?}"
         ));
     }
     over_bullet_budget(bullets, max_bullets)
+}
+
+/// Enforce the ticket-reference footer with the allow-vs-require split (ADR-0020
+/// footer/ticket amendment). `ticket_keys` names the ticket tokens the project
+/// recognizes; when empty the feature is off and this returns `None` (a stray
+/// `Refs:` is then blocked by the body-shape check, which does not allow it).
+///
+/// With `ticket_keys` non-empty:
+/// - a present ticket trailer is *allowed* (the body-shape check recognizes the
+///   token via [`GitPolicy::allowed_footer_tokens`]);
+/// - when `required` is `warn`/`block`, at least one *matching* ticket trailer
+///   must be present — else a violation at the `required` level;
+/// - when `pattern` is non-empty, a present ticket trailer whose value does not
+///   match is a malformed reference and blocks (level `Block`) even when a ticket
+///   is not required — a botched reference is unambiguously wrong.
+///
+/// Merge/revert/fixup/squash commits are exempt as a class. An unparseable
+/// `pattern` degrades to no format check (fail-open, matching
+/// [`path_matches_glob`]). Returns `Some((level, reason))` for the single most
+/// relevant finding, else `None`.
+#[must_use]
+pub fn check_commit_ticket(
+    subject: &str,
+    message: &str,
+    ticket_keys: &[String],
+    required: PolicyLevel,
+    pattern: &str,
+) -> Option<(PolicyLevel, String)> {
+    if ticket_keys.is_empty()
+        || FORMAT_EXEMPT_PREFIXES
+            .iter()
+            .any(|p| subject.starts_with(p))
+    {
+        return None;
+    }
+    let re = (!pattern.is_empty())
+        .then(|| Regex::new(pattern))
+        .and_then(Result::ok);
+    let mut present_any = false;
+    let mut present_matching = false;
+    let mut malformed: Option<String> = None;
+    for line in message.lines() {
+        let Some((token, value)) = trailer_kv(line.trim_end()) else {
+            continue;
+        };
+        if !ticket_keys.iter().any(|k| k == token) {
+            continue;
+        }
+        present_any = true;
+        match &re {
+            Some(re) if !re.is_match(value) => {
+                if malformed.is_none() {
+                    malformed = Some(value.to_string());
+                }
+            }
+            _ => present_matching = true,
+        }
+    }
+    // Required, but no *matching* ticket trailer present (none at all, or every
+    // present one is malformed): report at the configured `required` level.
+    if required.is_active() && !present_matching {
+        let reason = if present_any {
+            format!(
+                "commit requires a ticket reference matching /{pattern}/ — the present one does not \
+                 (keys: {})",
+                ticket_keys.join(", ")
+            )
+        } else {
+            format!(
+                "this project requires a ticket reference — add a footer trailer such as \
+                 `Refs: <id>` (keys: {})",
+                ticket_keys.join(", ")
+            )
+        };
+        return Some((required, reason));
+    }
+    // Optional-but-present: a present ticket whose value fails the pattern is a
+    // malformed reference and blocks regardless of the (off) requirement.
+    if let Some(bad) = malformed {
+        return Some((
+            PolicyLevel::Block,
+            format!("malformed ticket reference {bad:?} — value must match /{pattern}/"),
+        ));
+    }
+    None
+}
+
+/// Every token in `required_footers` must appear as a body footer trailer of the
+/// non-exempt commit (ADR-0020 footer/ticket amendment — the DCO `Signed-off-by`
+/// case). Merge/revert/fixup/squash commits are exempt as a class. Returns the
+/// first missing token's reason, else `None`. A required token is implicitly
+/// allowed by the body-shape check (see [`GitPolicy::allowed_footer_tokens`]).
+#[must_use]
+pub fn check_required_footers(
+    subject: &str,
+    message: &str,
+    required_footers: &[String],
+) -> Option<String> {
+    if required_footers.is_empty()
+        || FORMAT_EXEMPT_PREFIXES
+            .iter()
+            .any(|p| subject.starts_with(p))
+    {
+        return None;
+    }
+    required_footers.iter().find_map(|token| {
+        let present = message
+            .lines()
+            .filter_map(|line| trailer_kv(line.trim_end()))
+            .any(|(t, _)| t == token);
+        (!present).then(|| format!("commit is missing the required footer trailer `{token}:`"))
+    })
 }
 
 /// `Some(reason)` when the running bullet count exceeds the budget, else `None`.
@@ -339,6 +509,17 @@ mod tests {
 
     fn types() -> Vec<String> {
         super::super::policy::GitPolicy::default().commit_types
+    }
+
+    /// The default (strict) allowed-footer set — empty, so only bullets and the
+    /// `BREAKING CHANGE:` footer pass.
+    fn footers() -> Vec<String> {
+        super::super::policy::GitPolicy::default().allowed_footer_tokens()
+    }
+
+    /// A project that opted the given tokens into the allowed footer set.
+    fn allow(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|t| (*t).to_string()).collect()
     }
 
     // -- commit format --
@@ -507,21 +688,21 @@ mod tests {
     #[test]
     fn test_body_none_and_bullets_pass() {
         // No body at all, and a conforming bullet body, both pass.
-        assert_eq!(check_commit_body("feat: x", "feat: x", 3, 72), None);
+        assert_eq!(check_commit_body("feat: x", "feat: x", 3, 72, &footers()), None);
         let msg = "feat: x\n\n- first note\n- second note\n- third note";
-        assert_eq!(check_commit_body("feat: x", msg, 3, 72), None);
+        assert_eq!(check_commit_body("feat: x", msg, 3, 72, &footers()), None);
     }
 
     #[test]
     fn test_body_blank_lines_allowed() {
         let msg = "feat: x\n\n- one\n\n- two\n";
-        assert_eq!(check_commit_body("feat: x", msg, 3, 72), None);
+        assert_eq!(check_commit_body("feat: x", msg, 3, 72, &footers()), None);
     }
 
     #[test]
     fn test_body_paragraph_prose_blocked() {
         let msg = "feat: x\n\nThis is a prose paragraph explaining why.";
-        let reason = check_commit_body("feat: x", msg, 3, 72).unwrap();
+        let reason = check_commit_body("feat: x", msg, 3, 72, &footers()).unwrap();
         assert!(reason.contains("not a `- ` bullet"), "{reason}");
         assert!(reason.contains("prose paragraph"), "{reason}");
     }
@@ -529,7 +710,7 @@ mod tests {
     #[test]
     fn test_body_four_bullets_blocked() {
         let msg = "feat: x\n\n- one\n- two\n- three\n- four";
-        let reason = check_commit_body("feat: x", msg, 3, 72).unwrap();
+        let reason = check_commit_body("feat: x", msg, 3, 72, &footers()).unwrap();
         assert!(reason.contains('4'), "{reason}");
         assert!(reason.contains("bullet"), "{reason}");
     }
@@ -538,7 +719,7 @@ mod tests {
     fn test_body_bullet_over_limit_blocked() {
         let long = format!("- {}", "w".repeat(80));
         let msg = format!("feat: x\n\n{long}");
-        let reason = check_commit_body("feat: x", &msg, 3, 72).unwrap();
+        let reason = check_commit_body("feat: x", &msg, 3, 72, &footers()).unwrap();
         assert!(reason.contains("over the 72-char limit"), "{reason}");
     }
 
@@ -546,19 +727,276 @@ mod tests {
     fn test_body_breaking_footer_block_allowed() {
         // Bullets then a (possibly multi-line) BREAKING CHANGE footer block.
         let msg = "feat: x\n\n- one\n\nBREAKING CHANGE: the old api is gone\nsee the migration guide";
-        assert_eq!(check_commit_body("feat: x", msg, 3, 72), None);
+        assert_eq!(check_commit_body("feat: x", msg, 3, 72, &footers()), None);
         // The dashed spelling is equally sanctioned.
         let msg2 = "feat: x\n\n- one\n\nBREAKING-CHANGE: gone";
-        assert_eq!(check_commit_body("feat: x", msg2, 3, 72), None);
+        assert_eq!(check_commit_body("feat: x", msg2, 3, 72, &footers()), None);
     }
 
     #[test]
     fn test_body_merge_and_revert_exempt() {
         // Auto-generated subjects carry tool-authored bodies — exempt as a class.
         let merge = "Merge branch 'main'\n\nA paragraph git wrote, not a bullet.";
-        assert_eq!(check_commit_body("Merge branch 'main'", merge, 3, 72), None);
+        assert_eq!(
+            check_commit_body("Merge branch 'main'", merge, 3, 72, &footers()),
+            None
+        );
         let revert = "Revert \"feat: x\"\n\nThis reverts commit abc123.";
-        assert_eq!(check_commit_body("Revert \"feat: x\"", revert, 3, 72), None);
+        assert_eq!(
+            check_commit_body("Revert \"feat: x\"", revert, 3, 72, &footers()),
+            None
+        );
+    }
+
+    // -- commit body footer trailers: strict default + opt-in (ADR-0020) --
+
+    #[test]
+    fn test_body_trailers_block_by_default() {
+        // Strict baseline: with no opted-in tokens, standard git trailers BLOCK —
+        // only bullets and the BREAKING CHANGE footer are allowed.
+        for msg in [
+            "feat: x\n\n- do it\n\nRefs: PROJ-142",
+            "fix: y\n\nCloses: #45",
+            "fix: y\n\nCloses #45",
+            "chore: z\n\nSigned-off-by: Ada Lovelace <ada@example.com>",
+        ] {
+            let subject = msg.lines().next().unwrap();
+            let reason = check_commit_body(subject, msg, 3, 72, &footers())
+                .unwrap_or_else(|| panic!("{msg:?} should block by default"));
+            assert!(reason.contains("not an allowed footer token"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn test_body_opted_in_trailer_passes() {
+        // A project that opts a token in gets it recognized; a still-unlisted
+        // token in the same body blocks.
+        let allow = allow(&["Signed-off-by", "Refs"]);
+        assert_eq!(
+            check_commit_body(
+                "feat: x",
+                "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>\nRefs: PROJ-1",
+                3,
+                72,
+                &allow,
+            ),
+            None
+        );
+        // `Reviewed-by` was not opted in → blocks.
+        let reason = check_commit_body(
+            "feat: x",
+            "feat: x\n\nReviewed-by: Grace <grace@example.com>",
+            3,
+            72,
+            &allow,
+        )
+        .unwrap();
+        assert!(reason.contains("Reviewed-by"), "{reason}");
+    }
+
+    #[test]
+    fn test_body_issue_ref_forms_pass_when_opted_in() {
+        let allow = allow(&["Closes"]);
+        for msg in ["fix: y\n\nCloses: #45", "fix: y\n\nCloses #45"] {
+            assert_eq!(check_commit_body("fix: y", msg, 3, 72, &allow), None, "{msg:?}");
+        }
+    }
+
+    #[test]
+    fn test_body_unknown_trailer_token_blocked() {
+        // A trailer-shaped line whose token is not opted in blocks, naming it.
+        let msg = "feat: x\n\nNote: this is a sneaky prose line";
+        let reason = check_commit_body("feat: x", msg, 3, 72, &footers()).unwrap();
+        assert!(reason.contains("Note"), "{reason}");
+        assert!(reason.contains("not an allowed footer token"), "{reason}");
+    }
+
+    #[test]
+    fn test_body_coauthor_only_passes_shape_when_opted_in() {
+        // By default Co-authored-by is NOT allowed — it blocks on shape (human or
+        // AI alike).
+        let human = "feat: x\n\nCo-authored-by: Ada Lovelace <ada@example.com>";
+        assert!(check_commit_body("feat: x", human, 3, 72, &footers()).is_some());
+        // A project may opt the token in; then the body shape accepts it and the
+        // AI/human distinction is ai_attribution's job.
+        let allow = allow(&["Co-authored-by"]);
+        assert_eq!(check_commit_body("feat: x", human, 3, 72, &allow), None);
+        assert_eq!(find_attribution(human), None);
+        // An AI value passes the shape (token opted in) but STILL blocks via
+        // ai_attribution — the two checks are orthogonal.
+        let ai = "feat: x\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>";
+        assert_eq!(
+            check_commit_body("feat: x", ai, 3, 72, &allow),
+            None,
+            "opted-in token passes the shape check"
+        );
+        assert_eq!(find_attribution(ai), Some("Co-Authored-By AI trailer"));
+    }
+
+    #[test]
+    fn test_body_prose_with_colon_still_blocked() {
+        // A prose line that merely contains a colon is not a trailer (its token
+        // would be multi-word) — it still blocks.
+        let msg = "feat: x\n\nThis change: refactors the parser and adds a test";
+        let reason = check_commit_body("feat: x", msg, 3, 72, &footers()).unwrap();
+        assert!(reason.contains("not a `- ` bullet"), "{reason}");
+    }
+
+    #[test]
+    fn test_body_bullet_after_trailer_blocked() {
+        // Bullets come before the footer; a bullet after a trailer is out of order.
+        let allow = allow(&["Refs"]);
+        let msg = "feat: x\n\nRefs: PROJ-1\n- a late bullet";
+        let reason = check_commit_body("feat: x", msg, 3, 72, &allow).unwrap();
+        assert!(reason.contains("after a footer trailer"), "{reason}");
+    }
+
+    // -- required footers (DCO / sign-off) --
+
+    #[test]
+    fn test_required_footer_missing_blocks() {
+        let required = allow(&["Signed-off-by"]);
+        let reason =
+            check_required_footers("feat: x", "feat: x\n\n- do it", &required).unwrap();
+        assert!(reason.contains("Signed-off-by"), "{reason}");
+        assert!(reason.contains("missing"), "{reason}");
+    }
+
+    #[test]
+    fn test_required_footer_present_passes() {
+        let required = allow(&["Signed-off-by"]);
+        let msg = "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>";
+        assert_eq!(check_required_footers("feat: x", msg, &required), None);
+    }
+
+    #[test]
+    fn test_required_footer_empty_and_exempt_pass() {
+        assert_eq!(check_required_footers("feat: x", "feat: x", &[]), None);
+        let required = allow(&["Signed-off-by"]);
+        assert_eq!(
+            check_required_footers("Merge branch 'main'", "Merge branch 'main'", &required),
+            None
+        );
+    }
+
+    // -- commit ticket: allow vs require (ADR-0020 footer/ticket amendment) --
+
+    fn keys() -> Vec<String> {
+        allow(&["Refs", "Closes"])
+    }
+
+    #[test]
+    fn test_ticket_feature_off_when_keys_empty() {
+        // No keys configured → the ticket check is inert (body-shape blocks a
+        // stray `Refs:` separately).
+        assert_eq!(
+            check_commit_ticket("feat: x", "feat: x\n\nRefs: PROJ-1", &[], PolicyLevel::Block, ""),
+            None
+        );
+    }
+
+    #[test]
+    fn test_ticket_optional_present_and_absent_pass() {
+        // required=Off: a present ticket passes AND an absent one is fine.
+        let present = check_commit_ticket(
+            "feat: x",
+            "feat: x\n\nRefs: PROJ-1",
+            &keys(),
+            PolicyLevel::Off,
+            "",
+        );
+        assert_eq!(present, None);
+        let absent = check_commit_ticket("feat: x", "feat: x\n\n- do it", &keys(), PolicyLevel::Off, "");
+        assert_eq!(absent, None);
+    }
+
+    #[test]
+    fn test_ticket_required_absent_blocks_present_passes() {
+        let absent =
+            check_commit_ticket("feat: x", "feat: x\n\n- do it", &keys(), PolicyLevel::Block, "");
+        let (level, reason) = absent.expect("required ticket missing must block");
+        assert_eq!(level, PolicyLevel::Block);
+        assert!(reason.contains("ticket reference"), "{reason}");
+        // A present matching ticket satisfies the requirement.
+        assert_eq!(
+            check_commit_ticket("feat: x", "feat: x\n\nRefs: PROJ-1", &keys(), PolicyLevel::Block, ""),
+            None
+        );
+    }
+
+    #[test]
+    fn test_ticket_required_warn_level_carries_through() {
+        let (level, _) =
+            check_commit_ticket("feat: x", "feat: x", &keys(), PolicyLevel::Warn, "").unwrap();
+        assert_eq!(level, PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_ticket_pattern_malformed_present_blocks_even_when_optional() {
+        // required=Off but a present ticket's value fails the pattern → malformed,
+        // blocks at Block level.
+        let (level, reason) = check_commit_ticket(
+            "feat: x",
+            "feat: x\n\nRefs: nope",
+            &keys(),
+            PolicyLevel::Off,
+            r"^PROJ-\d+$",
+        )
+        .expect("a malformed optional ticket blocks");
+        assert_eq!(level, PolicyLevel::Block);
+        assert!(reason.contains("malformed"), "{reason}");
+        // A matching value passes.
+        assert_eq!(
+            check_commit_ticket(
+                "feat: x",
+                "feat: x\n\nRefs: PROJ-42",
+                &keys(),
+                PolicyLevel::Off,
+                r"^PROJ-\d+$",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_ticket_required_with_pattern_needs_a_match() {
+        // required=Block + pattern: a present-but-nonmatching ticket does not
+        // satisfy the requirement.
+        let (level, reason) = check_commit_ticket(
+            "feat: x",
+            "feat: x\n\nRefs: nope",
+            &keys(),
+            PolicyLevel::Block,
+            r"^PROJ-\d+$",
+        )
+        .unwrap();
+        assert_eq!(level, PolicyLevel::Block);
+        assert!(reason.contains("PROJ"), "{reason}");
+    }
+
+    #[test]
+    fn test_ticket_merge_revert_exempt() {
+        for subject in ["Merge branch 'main'", "Revert \"feat: x\"", "fixup! feat: x"] {
+            assert_eq!(
+                check_commit_ticket(subject, subject, &keys(), PolicyLevel::Block, ""),
+                None,
+                "{subject} exempt"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ticket_unparseable_pattern_degrades_to_no_format_check() {
+        // A malformed regex degrades to no format check (fail-open): a present
+        // ticket passes, and required still blocks only when none is present.
+        let bad = "([unclosed";
+        assert_eq!(
+            check_commit_ticket("feat: x", "feat: x\n\nRefs: anything", &keys(), PolicyLevel::Off, bad),
+            None
+        );
+        assert!(
+            check_commit_ticket("feat: x", "feat: x", &keys(), PolicyLevel::Block, bad).is_some()
+        );
     }
 
     // -- breaking marker + contract-surface tripwire (ADR-0020) --

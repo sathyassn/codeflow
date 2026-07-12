@@ -142,9 +142,58 @@ fn scan_staged(repo: &Repository, policy: &GitPolicy, report: &mut StageReport) 
 // commit-msg
 // ---------------------------------------------------------------------------
 
+/// The `commit_format` sub-checks — conventional shape, the subject-length
+/// budget (ADR-0020), and the breaking-footer casing — each pushed at the
+/// `commit_format` level. Split out to keep [`commit_msg`] readable; only called
+/// when `commit_format` is active.
+fn push_format_violations(
+    policy: &GitPolicy,
+    subject: &str,
+    cleaned: &str,
+    report: &mut StageReport,
+) {
+    if let Some(reason) = standards::check_commit_format(subject, &policy.commit_types) {
+        report.violations.push(Violation::new(
+            "git.commit_format",
+            policy.commit_format,
+            reason,
+            format!(
+                "use `type(scope): description` with type one of: {}",
+                policy.commit_types.join(", ")
+            ),
+        ));
+    }
+    if let Some(reason) = standards::check_subject_length(
+        subject,
+        policy.commit_desc_max_len,
+        policy.commit_subject_max_len,
+    ) {
+        report.violations.push(Violation::new(
+            "git.commit_format",
+            policy.commit_format,
+            reason,
+            format!(
+                "keep the description ≤ {} chars and the whole subject line ≤ {} chars",
+                policy.commit_desc_max_len, policy.commit_subject_max_len
+            ),
+        ));
+    }
+    if let Some(reason) = standards::check_breaking_footer(subject, cleaned) {
+        report.violations.push(Violation::new(
+            "git.commit_format",
+            policy.commit_format,
+            reason,
+            "signal a breaking change with `type!: description` or the exact footer \
+             `BREAKING CHANGE:` (uppercase)"
+                .to_string(),
+        ));
+    }
+}
+
 /// The commit-msg stage: conventional format (whitelisted types), the restored
-/// v1 subject-length budget and body-shape rule (ADR-0020), the
-/// no-AI-attribution rule, and the no-emoji rule (charter §6.4, AC #13).
+/// v1 subject-length budget and body-shape rule (ADR-0020), standard git-trailer
+/// footers with an optional ticket requirement, the no-AI-attribution rule, and
+/// the no-emoji rule (charter §6.4, AC #13).
 #[must_use]
 pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
     let mut report = StageReport::default();
@@ -154,42 +203,7 @@ pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
     };
 
     if policy.commit_format.is_active() {
-        if let Some(reason) = standards::check_commit_format(subject, &policy.commit_types) {
-            report.violations.push(Violation::new(
-                "git.commit_format",
-                policy.commit_format,
-                reason,
-                format!(
-                    "use `type(scope): description` with type one of: {}",
-                    policy.commit_types.join(", ")
-                ),
-            ));
-        }
-        if let Some(reason) = standards::check_subject_length(
-            subject,
-            policy.commit_desc_max_len,
-            policy.commit_subject_max_len,
-        ) {
-            report.violations.push(Violation::new(
-                "git.commit_format",
-                policy.commit_format,
-                reason,
-                format!(
-                    "keep the description ≤ {} chars and the whole subject line ≤ {} chars",
-                    policy.commit_desc_max_len, policy.commit_subject_max_len
-                ),
-            ));
-        }
-        if let Some(reason) = standards::check_breaking_footer(subject, &cleaned) {
-            report.violations.push(Violation::new(
-                "git.commit_format",
-                policy.commit_format,
-                reason,
-                "signal a breaking change with `type!: description` or the exact footer \
-                 `BREAKING CHANGE:` (uppercase)"
-                    .to_string(),
-            ));
-        }
+        push_format_violations(policy, subject, &cleaned, &mut report);
     }
 
     if policy.commit_body.is_active() {
@@ -198,15 +212,54 @@ pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
             &cleaned,
             policy.commit_body_max_bullets,
             policy.commit_body_bullet_max_len,
+            &policy.allowed_footer_tokens(),
         ) {
             report.violations.push(Violation::new(
                 "git.commit_body",
                 policy.commit_body,
                 reason,
                 format!(
-                    "the body is only `- ` bullets (max {}, each ≤ {} chars), blank lines, and an \
-                     optional trailing `BREAKING CHANGE:` footer",
+                    "the body is `- ` bullets (max {}, each ≤ {} chars) and an optional \
+                     `BREAKING CHANGE:` footer; blank lines are fine, prose paragraphs are not. \
+                     Other trailers are allowed only when opted in via git.commit_footer_tokens",
                     policy.commit_body_max_bullets, policy.commit_body_bullet_max_len
+                ),
+            ));
+        }
+        if let Some(reason) =
+            standards::check_required_footers(subject, &cleaned, &policy.commit_required_footers)
+        {
+            report.violations.push(Violation::new(
+                "git.commit_body",
+                policy.commit_body,
+                reason,
+                format!(
+                    "every commit must carry these footer trailers: {}",
+                    policy.commit_required_footers.join(", ")
+                ),
+            ));
+        }
+    }
+
+    // Ticket allow-and-require (ADR-0020). Active only when the project has
+    // configured ticket keys; the returned level distinguishes a required-but-
+    // missing ticket (`commit_ticket_required`) from a malformed present one
+    // (block).
+    if !policy.commit_ticket_keys.is_empty() {
+        if let Some((level, reason)) = standards::check_commit_ticket(
+            subject,
+            &cleaned,
+            &policy.commit_ticket_keys,
+            policy.commit_ticket_required,
+            &policy.commit_ticket_pattern,
+        ) {
+            report.violations.push(Violation::new(
+                "git.commit_ticket",
+                level,
+                reason,
+                format!(
+                    "add a ticket-reference footer trailer (key one of: {})",
+                    policy.commit_ticket_keys.join(", ")
                 ),
             ));
         }
@@ -984,6 +1037,140 @@ mod tests {
         let msg = "feat: add a thing\n\n- wire the new path\n- cover it with a test\n\nBREAKING CHANGE: the old path is gone\n";
         let report = commit_msg(&GitPolicy::default(), msg);
         assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    // -- footer trailers + ticket enforcement (ADR-0020 amendment) --
+
+    #[test]
+    fn test_commit_msg_trailers_block_by_default() {
+        // Strict baseline: no trailer is allowed by default, so a `Refs:` or
+        // `Signed-off-by:` footer blocks at commit_body until opted in.
+        for msg in [
+            "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n",
+            "fix: y\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n",
+        ] {
+            let report = commit_msg(&GitPolicy::default(), msg);
+            assert!(
+                report.violations.iter().any(|v| v.rule == "git.commit_body"),
+                "{msg:?} should block by default"
+            );
+        }
+    }
+
+    #[test]
+    fn test_commit_msg_opted_in_trailer_passes() {
+        // A project opts `Refs` in → the trailer passes the body-shape check.
+        let policy = GitPolicy {
+            commit_footer_tokens: vec!["Refs".into()],
+            ..GitPolicy::default()
+        };
+        let report = commit_msg(&policy, "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n");
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_commit_msg_ai_coauthor_blocks_even_when_token_opted_in() {
+        // With Co-authored-by opted in, the body shape accepts the token — but an
+        // AI value STILL blocks via ai_attribution (orthogonal checks).
+        let policy = GitPolicy {
+            commit_footer_tokens: vec!["Co-authored-by".into()],
+            ..GitPolicy::default()
+        };
+        let msg = "feat: x\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>\n";
+        let report = commit_msg(&policy, msg);
+        assert!(
+            report.violations.iter().any(|v| v.rule == "git.ai_attribution"),
+            "AI co-author must block via attribution"
+        );
+        assert!(
+            !report.violations.iter().any(|v| v.rule == "git.commit_body"),
+            "the opted-in trailer token must not trip the body-shape check"
+        );
+        // A human co-author with the token opted in clears both checks.
+        let human = commit_msg(&policy, "feat: x\n\nCo-authored-by: Ada <ada@example.com>\n");
+        assert!(human.violations.is_empty(), "{:?}", human.violations);
+    }
+
+    #[test]
+    fn test_commit_msg_human_coauthor_blocks_by_default() {
+        // By default Co-authored-by is not opted in → the body shape blocks it
+        // (human or AI alike) before attribution even matters.
+        let msg = "feat: x\n\nCo-authored-by: Ada Lovelace <ada@example.com>\n";
+        let report = commit_msg(&GitPolicy::default(), msg);
+        assert!(report.violations.iter().any(|v| v.rule == "git.commit_body"));
+    }
+
+    #[test]
+    fn test_commit_msg_unknown_trailer_token_blocks_body() {
+        let msg = "feat: x\n\nNote: a sneaky prose line masquerading as a trailer\n";
+        let report = commit_msg(&GitPolicy::default(), msg);
+        let v = report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.commit_body")
+            .expect("a commit_body violation");
+        assert!(v.message.contains("Note"), "{}", v.message);
+    }
+
+    #[test]
+    fn test_commit_msg_required_footer_missing_blocks() {
+        // commit_required_footers=[Signed-off-by] (DCO) → a commit without it blocks.
+        let policy = GitPolicy {
+            commit_required_footers: vec!["Signed-off-by".into()],
+            ..GitPolicy::default()
+        };
+        let missing = commit_msg(&policy, "feat: x\n\n- do it\n");
+        let v = missing
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.commit_body" && v.message.contains("Signed-off-by"))
+            .expect("a missing-required-footer violation");
+        assert_eq!(v.level, PolicyLevel::Block);
+        // Present (the required token is implicitly allowed) → clean.
+        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>\n");
+        assert!(ok.violations.is_empty(), "{:?}", ok.violations);
+    }
+
+    #[test]
+    fn test_commit_msg_ticket_default_off_no_requirement() {
+        // Default: no ticket keys configured → no commit_ticket finding at all,
+        // and a stray `Refs:` blocks on shape (not opted in).
+        let plain = commit_msg(&GitPolicy::default(), "feat: x\n\n- just a bullet\n");
+        assert!(!plain.violations.iter().any(|v| v.rule == "git.commit_ticket"));
+    }
+
+    #[test]
+    fn test_commit_msg_ticket_allowed_optional() {
+        // keys set, required Off: a matching ticket passes; absence is also fine.
+        let policy = GitPolicy {
+            commit_ticket_keys: vec!["Refs".into()],
+            ..GitPolicy::default()
+        };
+        let present = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n");
+        assert!(present.violations.is_empty(), "{:?}", present.violations);
+        let absent = commit_msg(&policy, "feat: x\n\n- do it\n");
+        assert!(!absent.violations.iter().any(|v| v.rule == "git.commit_ticket"));
+    }
+
+    #[test]
+    fn test_commit_msg_ticket_required_blocks_when_missing() {
+        let policy = GitPolicy {
+            commit_ticket_keys: vec!["Refs".into()],
+            commit_ticket_required: PolicyLevel::Block,
+            commit_ticket_pattern: r"^PROJ-\d+$".to_string(),
+            ..GitPolicy::default()
+        };
+        // No ticket trailer → blocked at commit_ticket.
+        let missing = commit_msg(&policy, "feat: x\n\n- no ticket here\n");
+        let v = missing
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.commit_ticket")
+            .expect("a commit_ticket violation");
+        assert_eq!(v.level, PolicyLevel::Block);
+        // A conforming `Refs: PROJ-1` trailer → clean.
+        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n");
+        assert!(ok.violations.is_empty(), "{:?}", ok.violations);
     }
 
     // -- contract-surface tripwire (ADR-0020) --

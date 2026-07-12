@@ -118,6 +118,40 @@ pub struct GitPolicy {
     /// Max length of a single commit-body bullet line, including the `- `
     /// marker (ADR-0020).
     pub commit_body_bullet_max_len: u32,
+    /// Extra footer-trailer tokens ALLOWED (optional) in the body beyond the
+    /// always-allowed `BREAKING CHANGE:` footer (ADR-0020 footer/ticket
+    /// amendment). Default empty — the strict baseline is bullets plus
+    /// `BREAKING CHANGE:` only, so an agent cannot fill a default-allowed trailer
+    /// slot with noise; a project opts a trailer in deliberately (e.g.
+    /// `Signed-off-by` for DCO). A footer line `<Token>: <value>` (or
+    /// `<Token> #<value>` for an issue ref) whose `<Token>` is here — matched
+    /// exactly, case-sensitively — is a sanctioned footer, not a blocked prose
+    /// line. Enforced under `commit_body`.
+    pub commit_footer_tokens: Vec<String>,
+    /// Footer-trailer tokens that MUST appear in every non-exempt commit (e.g.
+    /// `["Signed-off-by"]` for DCO). Default empty. A required token is implicitly
+    /// allowed (no need to also list it in [`commit_footer_tokens`]); a commit
+    /// missing one is blocked under `commit_body`.
+    pub commit_required_footers: Vec<String>,
+    /// Ticket-reference footer tokens the project recognizes (e.g.
+    /// `["Refs", "Closes"]`). Default empty = the ticket feature is off and a
+    /// `Refs:` line is NOT auto-allowed (it blocks unless added to
+    /// [`commit_footer_tokens`]). Non-empty = ticket trailers with these tokens
+    /// are allowed in the footer; whether one is *required* is
+    /// [`commit_ticket_required`].
+    pub commit_ticket_keys: Vec<String>,
+    /// Whether a matching ticket-reference trailer is REQUIRED (ADR-0020). Default
+    /// `off` — ticket trailers are allowed-but-optional (a present one passes, an
+    /// absent one is fine). `warn`/`block` require at least one matching trailer;
+    /// a commit without one warns or blocks. Only meaningful when
+    /// [`commit_ticket_keys`] is non-empty. Merge/revert/fixup/squash exempt.
+    pub commit_ticket_required: PolicyLevel,
+    /// Optional regex a ticket trailer's value must match (empty = no format
+    /// check). When set, a present ticket trailer whose value does not match is a
+    /// malformed reference and blocks; when a ticket is required, the present one
+    /// must match. An unparseable pattern degrades to no format check (fail-open,
+    /// matching the glob convention).
+    pub commit_ticket_pattern: String,
     /// Path globs (the `glob` crate's syntax) naming the repo's declared
     /// contract surfaces (ADR-0020). When non-empty, a commit-msg WARN fires if a
     /// staged file matches one of these globs and the message carries no breaking
@@ -162,6 +196,15 @@ impl Default for GitPolicy {
             commit_body: PolicyLevel::Block,
             commit_body_max_bullets: 3,
             commit_body_bullet_max_len: 72,
+            // Strict baseline: no extra footer tokens are allowed by default —
+            // only `- ` bullets and the `BREAKING CHANGE:` footer. Every opt-in
+            // list is empty and ticket enforcement is off; a project turns on
+            // exactly what it needs (an agent fills every default-allowed slot).
+            commit_footer_tokens: Vec::new(),
+            commit_required_footers: Vec::new(),
+            commit_ticket_keys: Vec::new(),
+            commit_ticket_required: PolicyLevel::Off,
+            commit_ticket_pattern: String::new(),
             // Empty by default: consumers declare their own contract surfaces.
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
@@ -220,6 +263,27 @@ impl GitPolicy {
     #[must_use]
     pub fn protected_branch_names(&self) -> Vec<String> {
         self.protected_branches.clone()
+    }
+
+    /// The footer-trailer tokens the body-shape check recognizes as sanctioned
+    /// (ADR-0020): the opt-in `commit_footer_tokens`, every `commit_required_footers`
+    /// entry (a required token is implicitly allowed), and every `commit_ticket_keys`
+    /// entry (a ticket trailer is allowed when the ticket feature is on).
+    /// `BREAKING CHANGE:` is always allowed and handled separately. Empty by
+    /// default → the strict baseline (bullets plus `BREAKING CHANGE:` only).
+    #[must_use]
+    pub fn allowed_footer_tokens(&self) -> Vec<String> {
+        let mut tokens = self.commit_footer_tokens.clone();
+        for extra in self
+            .commit_required_footers
+            .iter()
+            .chain(&self.commit_ticket_keys)
+        {
+            if !tokens.contains(extra) {
+                tokens.push(extra.clone());
+            }
+        }
+        tokens
     }
 
     /// The first non-glob protected branch — used as the default integration
@@ -426,6 +490,11 @@ impl GitPolicy {
         self.hook_integrity = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
         self.commit_body = PolicyLevel::Off;
+        // Neutralize the footer/ticket opt-ins so the scaffold commit is never
+        // walled by a required trailer during the pre-first-commit grace window.
+        self.commit_ticket_required = PolicyLevel::Off;
+        self.commit_ticket_keys = Vec::new();
+        self.commit_required_footers = Vec::new();
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
@@ -484,6 +553,15 @@ mod tests {
         assert_eq!(g.commit_body, PolicyLevel::Block);
         assert_eq!(g.commit_body_max_bullets, 3);
         assert_eq!(g.commit_body_bullet_max_len, 72);
+        // Footer/ticket amendment (ADR-0020): strict baseline — every footer
+        // opt-in is empty and ticket enforcement is off. Only `- ` bullets and
+        // the `BREAKING CHANGE:` footer are allowed until a project opts in.
+        assert!(g.commit_footer_tokens.is_empty());
+        assert!(g.commit_required_footers.is_empty());
+        assert!(g.commit_ticket_keys.is_empty());
+        assert_eq!(g.commit_ticket_required, PolicyLevel::Off);
+        assert!(g.commit_ticket_pattern.is_empty());
+        assert!(g.allowed_footer_tokens().is_empty());
         // The contract-surface tripwire ships empty — consumers declare their own.
         assert!(g.breaking_watch_paths.is_empty());
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
@@ -526,6 +604,26 @@ mod tests {
         assert_eq!(
             from_asset.git.commit_body_bullet_max_len,
             defaults.commit_body_bullet_max_len
+        );
+        assert_eq!(
+            from_asset.git.commit_footer_tokens,
+            defaults.commit_footer_tokens
+        );
+        assert_eq!(
+            from_asset.git.commit_required_footers,
+            defaults.commit_required_footers
+        );
+        assert_eq!(
+            from_asset.git.commit_ticket_keys,
+            defaults.commit_ticket_keys
+        );
+        assert_eq!(
+            from_asset.git.commit_ticket_required,
+            defaults.commit_ticket_required
+        );
+        assert_eq!(
+            from_asset.git.commit_ticket_pattern,
+            defaults.commit_ticket_pattern
         );
         assert_eq!(
             from_asset.git.breaking_watch_paths,

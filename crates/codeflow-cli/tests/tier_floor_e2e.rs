@@ -472,6 +472,69 @@ fn minimal_floor_blocks_a_story_body_commit() {
     );
 }
 
+/// The footer/ticket amendment (ADR-0020): the shipped floor is STRICT by
+/// default — a standard git-trailer footer (`Refs:`) blocks because no trailer is
+/// opted in, and the same trailer commits cleanly only after the project adds the
+/// token to `commit_footer_tokens`. Proven end-to-end through the wired
+/// commit-msg hook and a real `git commit`.
+#[test]
+fn minimal_floor_is_strict_then_opt_in_for_trailers() {
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+
+    // Direct hook invocation: a Refs footer BLOCKS at the shipped strict default.
+    let msg = root.join("trailer-msg.txt");
+    std::fs::write(&msg, "feat: add a thing\n\n- wire it\n\nRefs: PROJ-142\n").unwrap();
+    let blocked = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&blocked.stdout),
+        String::from_utf8_lossy(&blocked.stderr)
+    );
+    assert!(
+        !blocked.status.success() && text.contains("commit_body"),
+        "an unopted `Refs:` trailer must block at the strict floor:\n{text}"
+    );
+
+    // Opt `Refs` into the project's policy, then the same trailer is accepted.
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["commit_footer_tokens"] = serde_json::json!(["Refs"]);
+    std::fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+
+    let allowed = codeflow(&root, &["git-hook", "commit-msg", msg.to_str().unwrap()]);
+    assert!(
+        allowed.status.success(),
+        "an opted-in `Refs:` trailer must pass: {}{}",
+        String::from_utf8_lossy(&allowed.stdout),
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+
+    // End-to-end: with the opt-in in place, a real Refs-trailer commit lands.
+    assert!(git(&root, &["checkout", "-b", "feat/trailer"]).status.success());
+    std::fs::write(root.join("trailer.txt"), "hello\n").unwrap();
+    assert!(git(&root, &["add", "."]).status.success());
+    let commit = git(
+        &root,
+        &[
+            "commit",
+            "-m",
+            "feat: add a thing",
+            "-m",
+            "- wire it",
+            "-m",
+            "Refs: PROJ-142",
+        ],
+    );
+    assert!(
+        commit.status.success(),
+        "an opted-in Refs-trailer commit was rejected by the wired hook:\n{}{}",
+        String::from_utf8_lossy(&commit.stdout),
+        String::from_utf8_lossy(&commit.stderr)
+    );
+}
+
 /// Rolls a fresh `--minimal` install back to the OLD-minimal shape: the moved
 /// files and their baselines are deleted, their manifest records dropped, and
 /// the recorded scaffold version rolled back — exactly what a repo initialized

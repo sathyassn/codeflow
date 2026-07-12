@@ -630,6 +630,35 @@ mod tests {
     }
 
     #[test]
+    fn trailers_strict_by_default_and_opt_in_in_ci() {
+        // ADR-0020 amendment: the CI commit path reuses git_hook::commit_msg, so
+        // the strict default (a `Refs:` blocks) and the opt-in (once whitelisted,
+        // it passes) behave identically to the hook — no drift.
+        let strict = evaluate_commits(&git(), &[commit("aaaa1111", "feat: x\n\nRefs: PROJ-1")]);
+        assert!(strict.iter().any(|t| t.violation.rule == "git.commit_body"));
+        let g = GitPolicy {
+            commit_footer_tokens: vec!["Refs".into()],
+            ..GitPolicy::default()
+        };
+        let opted = evaluate_commits(&g, &[commit("bbbb2222", "feat: x\n\nRefs: PROJ-1")]);
+        assert!(opted.is_empty(), "opted-in Refs must pass: {opted:?}", opted = opted.len());
+    }
+
+    #[test]
+    fn ticket_requirement_inherits_in_ci() {
+        // keys + required=block → a ticket-less commit blocks in CI too.
+        let g = GitPolicy {
+            commit_ticket_keys: vec!["Refs".into()],
+            commit_ticket_required: PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        let missing = evaluate_commits(&g, &[commit("cccc3333", "feat: x\n\n- no ticket")]);
+        assert!(missing.iter().any(|t| t.violation.rule == "git.commit_ticket"));
+        let present = evaluate_commits(&g, &[commit("dddd4444", "feat: x\n\nRefs: PROJ-1")]);
+        assert!(!present.iter().any(|t| t.violation.rule == "git.commit_ticket"));
+    }
+
+    #[test]
     fn warn_level_does_not_block() {
         let g = GitPolicy {
             commit_format: PolicyLevel::Warn,
