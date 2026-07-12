@@ -215,7 +215,10 @@ distances, so be precise about what a given harness actually gets:
   `git-guard`/`exec-guard` add fast, pre-git feedback. They are wired for Claude
   (`.claude/settings.json`) and, via a byte-compatible payload, an **interactive**
   Codex session (`.codex/hooks.json`, ADR-0008). Headless `codex exec` does not
-  fire PreToolUse hooks — it is bound by the git-hook plane + CI instead.
+  fire PreToolUse hooks — it is bound by the git-hook plane + CI instead. That
+  guard gap is one reason headless execution is no longer a sanctioned
+  cross-model transport (ADR-0018): the consult/delegate/duo flows run
+  interactive-only, where the guards live.
 - **Guidance (AGENTS.md + the `cf-*` skills) is Claude + Codex.** Both read the
   repo `AGENTS.md` operating contract; the skills ship to `.claude/skills/`
   (Claude) and `.agents/skills/` (Codex). The **workflow** runtime
@@ -237,18 +240,22 @@ schemas) move fast on both sides; the release checklist
 
 ## Delegation quickstart (optional)
 
-Cross-vendor consult and delegation is opt-in (ADR-0005). One-time setup: run
+Cross-vendor consult and delegation is opt-in (ADR-0005; transport per
+ADR-0018 — interactive-only, one lane per direction). One-time setup: run
 `codex login` on your own ChatGPT subscription — codeflow never automates auth.
 `codeflow doctor` reports the `delegates` check.
 
-- `/cf-consult` gets an independent, read-only second opinion from `codex` and
-  makes you synthesize it against your own analysis (never paste its reply as
-  fact).
-- A full edit handoff runs only inside a worktree on a feature branch, where the
-  delegate's commits pass the same gates and `cf-reviewer` as yours — enforcement
-  is author-agnostic.
-- Missing or unauthenticated `codex` degrades legibly: do the work yourself and
-  say so.
+- `/cf-consult` gets an independent, read-only second opinion from the vendor
+  the session is *not* — from Claude Code through the official
+  `codex-plugin-cc` plugin (`/codex:review`); from Codex by driving the
+  interactive `claude` CLI in tmux — and makes you synthesize it against your
+  own analysis (never paste its reply as fact). Headless `codex exec` /
+  `claude -p` are not sanctioned delegation transports (ADR-0018).
+- A full edit handoff (`cf-delegate`; from Claude Code, `/codex:rescue`) runs
+  only inside a worktree on a feature branch, where the delegate's commits pass
+  the same gates and independent review as yours — enforcement is
+  author-agnostic.
+- A missing lane degrades legibly: do the work yourself and say so.
 
 ### Codex parity
 
@@ -274,8 +281,20 @@ interactive `codex` session once to trust the CodeFlow hooks. **Note:** in testi
 on codex-cli 0.142.5, headless `codex exec` did not run project PreToolUse hooks
 even with `--dangerously-bypass-hook-trust` and the layer trusted — so treat the
 in-session guards as an interactive-session safeguard, and rely on the git-hook
-plane (which always applies) for headless Codex runs.
+plane (which always applies) for headless Codex runs. codeflow's own flows no
+longer produce headless runs: ADR-0018 makes cross-model transport
+interactive-only (consult/delegate/duo never shell out to `codex exec`), so a
+headless Codex run happens only when a user starts one — and the git-hook
+plane + CI still bind it.
+
+A Codex-primary session gets the reverse consult lane, not the duo: it consults
+Claude by driving the interactive `claude` CLI in tmux (`cf-delegate`, Lane 2),
+while the duo develop flow is driven from Claude Code through the
+`codex-plugin-cc` plugin and degrades to solo from any other seat
+(`cf-model-orchestrator`).
 
 Google's Antigravity `agy` is **not** bound automatically (its hook dialect
 differs and its macOS reliability is unresolved); the cf-delegate skill carries
-an experimental, manual opt-in snippet for those who want it.
+an experimental, manual opt-in snippet for those who want it. As a *delegate*,
+`agy` is retired: its only documented drive shape is headless one-shot, which
+ADR-0018 prohibits.
