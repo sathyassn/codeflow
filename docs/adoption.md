@@ -118,6 +118,14 @@ baseline, and anything that cannot merge cleanly is written beside your file as
 `--diff <FILE>` writes the report plus unified diffs; `--force` replaces
 user-modified managed files instead of merging.
 
+`update` also **reconciles orphans**: when an artifact is renamed or dropped
+upstream (as the `.claude/commands/*` slash commands became `.claude/skills/*`),
+an unmodified managed file the new version no longer ships is removed — with its
+baseline and manifest record — so it cannot linger and collide with its
+replacement. Anything that could hold your content — a managed file you modified,
+a managed-region file, or a user-owned file — is kept and simply unmanaged, never
+deleted (ADR-0011).
+
 New policy keys arrive this way too. When a codeflow upgrade adds a
 `.codeflow/policy.json` key (for example the `merge_to_protected`,
 `pr_merge_to_protected`, and `local_ref_protection` keys added in ADR-0007),
@@ -190,6 +198,37 @@ and the protected-base check live in the Claude layer and CI, not the hooks.
 to the git-hook plane only** — the git-guard never trusts them, because an agent
 in a session cannot prove it is a human. `reference-transaction` needs git ≥
 2.28; on older git it is absent and protection falls back to the other planes.
+
+### How far the discipline reaches across harnesses
+
+codeflow has two kinds of thing: **enforcement** (gates that block) and
+**guidance** (instructions and skills that inform). They reach different
+distances, so be precise about what a given harness actually gets:
+
+- **Enforcement is universal — it binds *any* harness (and a human).** The git
+  client hooks and CI are harness-agnostic: they act on git operations and PRs,
+  not on which tool produced them. So conventional-commit format, the secret
+  scan, no-AI-attribution, branch/push/protected-merge rules, and the test gate
+  apply to Claude Code, Codex, a future CLI, or a human at a terminal, equally.
+  This is the authoritative floor; nothing opts out of it.
+- **In-session guards are Claude + interactive Codex.** The PreToolUse
+  `git-guard`/`exec-guard` add fast, pre-git feedback. They are wired for Claude
+  (`.claude/settings.json`) and, via a byte-compatible payload, an **interactive**
+  Codex session (`.codex/hooks.json`, ADR-0008). Headless `codex exec` does not
+  fire PreToolUse hooks — it is bound by the git-hook plane + CI instead.
+- **Guidance (AGENTS.md + the `cf-*` skills) is Claude + Codex.** Both read the
+  repo `AGENTS.md` operating contract; the skills ship to `.claude/skills/`
+  (Claude) and `.agents/skills/` (Codex). The **workflow** runtime
+  (`pipeline.workflow.js`) is Claude-Code-only.
+- **A harness codeflow does not specifically integrate** (for example Google's
+  Antigravity `agy`) is **still bound by the git-hook plane + CI** — because those
+  are harness-agnostic — but does **not** receive the in-session guards, the
+  skills, or (verified on `agy` 1.0.15) the `AGENTS.md` instructions. Its reliable
+  boundary is enforcement, not guidance.
+
+The one-line version: **codeflow *enforces* the same rules on every harness (git
+hooks + CI); it *guides* Claude and Codex.** Any tool that touches the repo is
+disciplined; the richer in-session help is where the integrations are.
 
 ## Delegation quickstart (optional)
 
