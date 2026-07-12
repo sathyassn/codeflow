@@ -48,7 +48,10 @@ PreToolUse (Bash) guards, and remote branch protection read one config
 (`.codeflow/policy.json`); the scaffolded CI runs the same git standards through
 the `codeflow ci` binary (commit format, attribution, emoji, breaking-footer,
 branch naming) — one source of truth, no inline drift, and portable across CI
-hosts via thin per-platform wrappers (ADR-0017). CI also carries the
+hosts via thin per-platform wrappers (ADR-0017). This four-plane floor is the
+**minimal** tier: it installs from `--minimal` up, before any of the method or
+project-management scaffolding; the tiers scale project-management, not
+enforcement (ADR-0019). CI also carries the
 **security-review** plane (ADR-0016): a `security-review` job whose deterministic
 floor is `osv-scanner` — stack-agnostic SCA across every lockfile ecosystem, the
 universal floor today (per-stack scanners such as `cargo audit` / `pip-audit` /

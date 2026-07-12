@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Enforcement is the floor; the tiers scale project-management (ADR-0019).**
+  The `--minimal` tier now installs the complete four-plane enforcement floor,
+  not just the pre-commit secret scan: the `commit-msg`, `pre-push`,
+  `pre-merge-commit`, and `reference-transaction` git hooks, the scaffolded CI
+  workflow (`codeflow-ci.yml`), the in-session `git-guard`/`exec-guard` +
+  orient/summary hooks (`.claude/settings.json` and the `.codex/` starter), and a
+  new lean `CLAUDE.md` all moved into the minimal tier alongside the armed policy
+  it already shipped. `--standard` and `--full` are unchanged; they still add the
+  method (cf-* skills, reviewer agents, the pipeline), the traceability spine, and
+  project-management on top. The change is additive — nothing is removed from any
+  tier.
+- **Existing `--minimal` installs gain the enforcement floor automatically on
+  their next `codeflow update`.** The update reconciliation installs manifest
+  entries that are in-tier but missing on disk, so an old-minimal repo's next
+  update adds the moved hooks, CI, settings, and Codex starter and records them —
+  no re-init required.
+
+### Added
+
+- **"Think independently — not a yes-man"** working principle in both the minimal
+  and full agent contracts: a request, opinion, claim, or proposed approach — the
+  operator's included — is owed analysis and evidence, not agreement; the operator
+  still makes the final call. Agreement without examination is a failure mode, not
+  deference.
+
 ## [2.1.0] - 2026-07-05
 
 ### Added
@@ -56,5 +85,5 @@ set) shares no code with it and is preserved at the `v1-final` tag.
 - cargo-dist release pipeline with prebuilt binaries for macOS (arm64/x64) and
   Linux (x64) and a shell installer.
 
-[Unreleased]: https://github.com/sathyassn/codeflow/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/sathyassn/codeflow/compare/v2.1.0...HEAD
 [2.0.0]: https://github.com/sathyassn/codeflow/releases/tag/v2.0.0

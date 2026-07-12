@@ -30,8 +30,10 @@ consumed-native or deferred, never the design center.
   `.codeflow/policy.json` by every enforcement plane.
 - A six-layer knowledge model (product, capabilities, architecture, ADRs, work,
   ledger) maintained inside the ship flow, with `recall` over the record.
-- Graduated weight — minimal / standard / full tiers — the binary validating
-  every shape so growth is mechanical.
+- Graduated weight — minimal / standard / full tiers, where the git-discipline
+  enforcement floor is the same at every tier and the tiers scale only the
+  project-management on top (ADR-0019) — the binary validating every shape so
+  growth is mechanical.
 
 ## Non-goals
 

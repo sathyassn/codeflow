@@ -17,17 +17,22 @@ id: CAP-001
 name: scaffold-init
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs"]
+verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001]
-adrs: []
+adrs: [ADR-0019]
 ```
 
 `codeflow init [--minimal|--standard|--full] [--yes]` lays the discipline
-layer into any repo: AGENTS.md/CLAUDE.md, git-hook shims, Claude settings and
-artifacts, docs knowledge model, CI template, and (full tier)
-project-management/. Idempotent, non-destructive, offline (assets embedded
-via rust-embed), with bootstrap grace, husky/hooksPath detection, and a
-printed per-file report. Re-running at a higher tier is an additive upgrade.
+layer into any repo. Enforcement is the floor; the tiers scale project-management
+(ADR-0019): `--minimal` installs the complete four-plane enforcement floor (all
+five git-hook shims, the CI check, the in-session `git-guard`/`exec-guard` +
+orient/summary hooks in `.claude/settings.json` and the `.codex/` starter, the
+armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md`);
+`--standard` adds the method (Claude/agent skills, reviewer agents, the pipeline)
+and the six-layer docs spine and full contract; `--full` adds
+project-management/. Idempotent, non-destructive, offline (assets embedded via
+rust-embed), with bootstrap grace, husky/hooksPath detection, and a printed
+per-file report. Re-running at a higher tier is an additive upgrade.
 
 ## CAP-002 — scaffold-update
 
@@ -36,17 +41,20 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest"]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001]
-adrs: []
+adrs: [ADR-0011, ADR-0019]
 ```
 
 `codeflow update` refreshes managed scaffold files by ownership class:
 unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
-user-owned schema-versioned files only gain new keys with defaults. Never
-clobbers, never silently skips.
+user-owned schema-versioned files only gain new keys with defaults. It also
+installs any manifest entry that is in-tier but missing on disk — so a file that
+became in-tier since the last install (e.g. an old `--minimal` repo gaining the
+enforcement floor under ADR-0019) is reconciled into place and recorded, not just
+refreshed. Never clobbers, never silently skips.
 
 ## CAP-003 — git-policy-gates
 

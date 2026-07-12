@@ -41,11 +41,14 @@ from `PATH` (see "The update story").
 Tier is recorded in `.codeflow/project.toml`; re-running `init` at a higher tier
 is an idempotent additive upgrade (downgrade = stop managing, never delete).
 
+Enforcement is the floor; the tiers scale project-management (ADR-0019). Every
+tier is a clean superset of the one below.
+
 | Tier | Adds | For |
 |---|---|---|
-| `--minimal` | `AGENTS.md`, secret-scan pre-commit, `.gitignore`; the same armed policy as every tier | Throwaways |
-| `--standard` (default) | + full git gates, `.claude/` settings/agents/skills/workflows, the six-layer `docs/`, the test gate, recall capture, a CI template | Real projects |
-| `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Work that outlives sessions |
+| `--minimal` | The complete git-discipline enforcement floor: all five git hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the CI check, the in-session `git-guard`/`exec-guard` + orient/summary hooks (`.claude/settings.json` + the `.codex/` starter), the armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md` | Any repo — doc-sets, config repos, small tools |
+| `--standard` (default) | + the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine, the full contract, the test gate, recall capture, and harness integration | Code projects |
+| `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Programs whose work outlives sessions |
 
 ## Greenfield — an empty directory
 
@@ -86,9 +89,14 @@ scan is the one rule that is never graced (charter §6.3).
   existing steps). `codeflow doctor` surfaces the unwired state so it stays
   visible.
 
-Adopt gradually: start `--minimal` (just the secret scan + gitignore + the
-armed policy), run for a while, then re-init `--standard` and later `--full` as
-the work earns the weight. Each step is additive and idempotent.
+Adopt gradually: start `--minimal` (the full enforcement floor — all the git
+hooks, CI, the in-session guards, and the armed policy — with none of the method
+machinery), run for a while, then re-init `--standard` and later `--full` as the
+work earns the weight. Each step is additive and idempotent, and — because the
+floor is the same at every tier — the upgrade never *adds* enforcement you were
+missing, only the method on top. An existing `--minimal` repo initialized before
+this floor moved down gains the rest of the enforcement plane automatically on
+its next `codeflow update` (the reconciliation installs the now-in-tier files).
 
 ## Ownership model — who owns what on update
 
@@ -172,12 +180,13 @@ backdoor to it. See cf-method's "Managing a body of work" for the full procedure
 
 ## Enforcement planes — who catches what
 
-One policy (`.codeflow/policy.json`), four planes. Git hooks are
-harness-agnostic (any agent or human — including Codex); the in-session
-PreToolUse guards (`git-guard` + `exec-guard`) are a fast bonus for Claude and,
-through a byte-compatible payload, an **interactive** Codex session (ADR-0008);
-CI re-runs the gates as the perimeter; remote branch protection is the
-server-side backstop. Local planes are feedback — CI and remote are the
+One policy (`.codeflow/policy.json`), four planes — and all four install from
+`--minimal` up: enforcement is the floor, not a standard-tier feature (ADR-0019).
+Git hooks are harness-agnostic (any agent or human — including Codex); the
+in-session PreToolUse guards (`git-guard` + `exec-guard`) are a fast bonus for
+Claude and, through a byte-compatible payload, an **interactive** Codex session
+(ADR-0008); CI re-runs the gates as the perimeter; remote branch protection is
+the server-side backstop. Local planes are feedback — CI and remote are the
 authoritative line (charter §6.5).
 
 | Protection | git hooks | in-session guard | CI | remote |
@@ -268,7 +277,8 @@ comes from two layers, and it helps to be precise about which does what.
   git.push_to_protected`) exactly as any agent's would be. Verified live on
   codex-cli 0.142.5. This needs no Codex configuration.
 - **The in-session PreToolUse guards are an interactive-Codex bonus.** The
-  scaffold ships a `.codex/` starter (standard and full tiers): `hooks.json`
+  scaffold ships a `.codex/` starter (part of the enforcement floor, from
+  `--minimal` up): `hooks.json`
   wires `codeflow hook git-guard` and `codeflow hook exec-guard` onto Codex's
   `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with
   workspace autonomy (`sandbox_mode = "workspace-write"`,
