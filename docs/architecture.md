@@ -10,9 +10,9 @@
 
 A two-crate Cargo workspace that builds one binary with the scaffold embedded.
 `codeflow-core` is the engine library — all mechanics live here. `codeflow-cli`
-is a thin dispatcher: `main.rs` is a clap command surface over 14 subcommands
-(`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `status`,
-`integrate`, `doctor`, `recall`, `remote`, `epic`, `task`) — most a small handler in `cmd/` that
+is a thin dispatcher: `main.rs` is a clap command surface over 15 subcommands
+(`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
+`status`, `integrate`, `doctor`, `recall`, `remote`, `epic`, `task`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
 read `assets/` from disk for instant scaffold iteration). The consuming repo is
@@ -44,8 +44,10 @@ Core modules grouped by responsibility:
 
 Enforcement is spread across four planes: git client hooks, the in-session
 PreToolUse (Bash) guards, and remote branch protection read one config
-(`.codeflow/policy.json`); the scaffolded CI re-implements the git standards
-(commit format, attribution, emoji) inline rather than reading it. Local planes are
+(`.codeflow/policy.json`); the scaffolded CI runs the same git standards through
+the `codeflow ci` binary (commit format, attribution, emoji, breaking-footer,
+branch naming) — one source of truth, no inline drift, and portable across CI
+hosts via thin per-platform wrappers (ADR-0017). Local planes are
 fast feedback; CI + remote protection are the authoritative perimeter (charter §6.5). The
 git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),
