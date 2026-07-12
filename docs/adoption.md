@@ -63,7 +63,8 @@ hooks via `core.hooksPath`, and arms branch policy. The printed report lists
 every file written. From there:
 
 1. Start your first feature on a `feat/*` branch, in a worktree.
-2. Build with tests; commit small (`type(scope): description`).
+2. Build with tests; commit small (`type(scope): description` — description ≤ 50
+   chars, subject line ≤ 72, a body of only `-` bullets when one is needed).
 3. Land via a PR (or `codeflow integrate` with no remote).
 
 **Bootstrap grace.** codeflow needs exactly one commit before its gates guard
@@ -147,8 +148,10 @@ the values you already set — so tightening ships without a manual migration.
    read the pointed docs, not the digest, for depth.
 2. **Branch in a worktree.** Work on a `{prefix}/{kebab-name}` branch in a
    worktree; never develop on the root protected-branch checkout.
-3. **Gates as you go.** pre-commit (secret scan), commit-msg (format, no AI
-   attribution, no emoji), pre-merge-commit and reference-transaction
+3. **Gates as you go.** pre-commit (secret scan), commit-msg (conventional
+   format with the restored 50-char description / 72-char subject budget and the
+   bullet-only body shape — ADR-0020 — plus no AI attribution and no emoji),
+   pre-merge-commit and reference-transaction
    (protected-branch merge/ref rules — the latter also catches fast-forward
    merges, `reset --hard`, and `branch -D`), pre-push (branch naming,
    protected-branch rules, test gate). Keep `codeflow test` and `codeflow

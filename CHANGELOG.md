@@ -24,6 +24,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   entries that are in-tier but missing on disk, so an old-minimal repo's next
   update adds the moved hooks, CI, settings, and Codex starter and records them —
   no re-init required.
+- **The original commit standard is restored and block-enforced (ADR-0020).**
+  The subject description is capped at 50 chars and the whole subject line at 72,
+  and a commit body is again only `-` bullets (at most 3, each ≤ 72 chars) plus
+  an optional `BREAKING CHANGE:` footer — a prose "story" body is now a blocked
+  mistake. The rules ship armed at every tier via five new `git` policy keys
+  (`commit_desc_max_len`, `commit_subject_max_len`, `commit_body`,
+  `commit_body_max_bullets`, `commit_body_bullet_max_len`), added to an existing
+  `policy.json` with their defaults on the next `codeflow update`.
 
 ### Added
 
