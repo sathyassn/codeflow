@@ -18,10 +18,10 @@
 - `/cf-develop` runs the build → review → verify loop inline; the pipeline
   (`.claude/workflows/pipeline.workflow.js`) composes the same stages for batch,
   parallel, or unattended runs.
-- Match weight to work: trivial → just do it; a feature or change → `/cf-develop`;
-  a batch/parallel or multi-task epic → the pipeline preset or the
-  integration-branch flow; nothing fits → author a custom ad-hoc workflow. Full
-  ladder in the `cf-method` skill.
+- Pick the fitting skill first, then match weight to work: trivial → just do it;
+  a feature or change → `/cf-develop`; a batch/parallel or multi-task epic → the
+  pipeline preset or the integration-branch flow; nothing fits → author a custom
+  ad-hoc workflow. Full ladder in the `cf-method` skill.
 - Compose stages and models in config (`args.stages`, `args.models`, or a
   `[workflows]` table in `.codeflow/project.toml`) — never hardcode them; the
   pipeline file is user-owned and `codeflow update` never touches it.

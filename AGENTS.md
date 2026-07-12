@@ -41,10 +41,16 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Entry points
 
+Before starting any non-trivial task, match your intent to a codeflow skill and
+use it — the table below maps the common entry points, and each skill carries
+the current method, so working around one drifts from it. A trivial edit or a
+conversational answer needs no skill.
+
 | Intent | Use |
 |---|---|
 | Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
 | Build planned work | `/cf-develop` — build → independent review → verify, bounded rework |
+| Build higher-stakes planned work with a second model | `/cf-model-orchestrator` — duo Claude+codex build → review → verify with a joint gate; silently degrades to solo `/cf-develop` when codex is unavailable |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
@@ -89,6 +95,12 @@ boundary is remote"). The rules, compressed:
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
   can corrupt the root repo).
+- **Durability push:** when a remote is configured, push the working branch after
+  each committed logical unit so work survives a machine failure; use `git push
+  --force-with-lease` (never bare `--force`) when history was rewritten. This is
+  backup, not a merge — the pre-commit secret scan still guards what is pushed and
+  every merge gate still stands. Teams that want to forbid it set
+  `git.force_push_unprotected` in `policy.json` (default allow).
 - **Bodies of work:** a multi-task epic lands task-by-task on a non-protected
   `integration/<epic>` branch (agents merge there); only the finished body
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of

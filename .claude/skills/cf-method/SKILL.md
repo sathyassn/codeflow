@@ -14,7 +14,11 @@ where a mistake is irreversible or invisible.
 
 Match machinery to the work; escalate only when the lighter rung fails. Every
 rung that builds code carries an independent `cf-reviewer` pass — review is a
-stage, not a courtesy, and self-review is not review.
+stage, not a courtesy, and self-review is not review. Selecting the execution
+skill is itself a planning decision, orthogonal to weight: the rungs below set
+how much *process*; a separate choice sets *who reviews* — solo (the
+`cf-reviewer` pass alone) or duo (a second, independently-trained model beside
+it). Make both calls in `cf-plan`, not mid-build.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
 - **Inline `/cf-develop` loop** for interactive work — the default path:

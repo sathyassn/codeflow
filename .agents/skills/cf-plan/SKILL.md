@@ -26,5 +26,10 @@ You are planning work, not building it.
    schema change, boundary change). For a multi-task epic, propose the
    integration-branch flow, `integration/<epic-id>-<slug>` (see cf-method,
    "Managing a body of work").
-6. Run `codeflow validate`, then present the plan for approval. Do not start
+6. Name the execution skill in the plan — solo `/cf-develop`, or
+   `/cf-model-orchestrator` (duo: a second, independently-trained reviewer
+   alongside cf-reviewer) when the blast radius warrants it. Let that skill's own
+   description settle the solo-vs-duo call; deciding it now makes the build path a
+   reviewed choice, not an in-flight default.
+7. Run `codeflow validate`, then present the plan for approval. Do not start
    building — that is `cf-develop`.

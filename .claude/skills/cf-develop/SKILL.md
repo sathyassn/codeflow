@@ -15,7 +15,10 @@ Drive the planned work to done.
 3. Work on a correctly prefixed branch in a worktree — never on the root
    protected-branch checkout.
 4. Run the loop:
-   a. **Build**: implement with tests; small conventional commits.
+   a. **Build**: implement with tests; small conventional commits. When a remote
+      is configured, push the branch after each committed unit so work survives a
+      machine failure — backup, not a merge (`--force-with-lease` if you rewrote
+      history).
    b. **Review**: get an *independent* review against the criteria — in Claude
       Code, spawn the `cf-reviewer` subagent; in another harness, run a separate
       read-only review pass (self-review is not review). For unattended or batch
