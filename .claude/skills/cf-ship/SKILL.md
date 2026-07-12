@@ -27,8 +27,11 @@ description: Land finished work — docs and capability updates, then a PR throu
    `-` bullets (at most 3, each a single line ≤ 72 chars) with an optional
    trailing `BREAKING CHANGE:` footer, one logical change each; reword or squash
    any that drifted before pushing. PR body: follow the PR template — summary,
-   changes, testing, linked epic and capability IDs — every section in short
-   one-line bullets, never paragraph-walls. `## Testing` is non-negotiable for
+   changes, testing, linked epic and capability IDs — matching presentation to
+   the data's shape: tables for tabular data (coverage, test→pins, exit-code
+   matrices), fenced blocks for pasted output, short one-line bullets for the
+   rest, never paragraph-walls; the summary in plain language a zero-context
+   reader understands. `## Testing` is non-negotiable for
    a code change and carries evidence, not claims: paste the real test-summary
    output (fenced block), the coverage number (CI's coverage job computes it),
    the new tests added and what each pins, manual/e2e commands with the

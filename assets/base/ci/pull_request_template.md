@@ -1,10 +1,13 @@
 <!-- PR bodies are linted by CI (`codeflow ci`): no AI attribution, no emoji.
 
-     FORMAT RULES (they matter as much as the content):
-     - Every section is BULLETS. One point per bullet, ONE line where possible.
-     - No paragraph-bullets: a bullet that wraps past ~2 lines is two bullets.
-     - Inline code sparingly — a reader scans this; heavy `code` mid-sentence
-       makes a wall. Fenced blocks are for pasted output, not prose.
+     FORMAT RULES — match the presentation to the SHAPE of the data:
+     - TABLES for tabular data: coverage metrics, test→what-it-pins lists,
+       exit-code or before/after matrices. Never force these into sentences.
+     - Fenced blocks for pasted output. Numbered lists for sequences.
+     - Bullets only for genuinely enumerable points — one point per bullet,
+       ONE line where possible; a bullet wrapping past ~2 lines is two bullets.
+     - PLAIN language in Summary: a reader with zero context must understand
+       it — no jargon, no internal shorthand; say what it means for the user.
      - Evidence over claims, numbers over adjectives.
 
      Type and breaking-change are NOT re-declared here. They come from your
@@ -15,7 +18,8 @@
 
 ## Summary
 
-<!-- 2–4 bullets: what this PR does, and why now. Not a paragraph. -->
+<!-- 2–4 bullets, plain words: what this does and why now. The test: someone
+     who has never seen this repo understands every bullet. -->
 
 -
 
@@ -29,18 +33,10 @@
 ## Testing
 
 <!-- REQUIRED for any code change — a code PR without real test evidence is
-     not reviewable. Paste actual output, don't summarize:
+     not reviewable. Paste actual output; put tabular data in the tables.
 
-     - Results: the real summary line(s) — `X passed; 0 failed` per suite or
-       workspace total — in a fenced block.
-     - Coverage: the line-coverage % (and the delta vs main when you have it);
-       CI's coverage job computes it — paste the number, don't just link.
-     - New tests: name each new/changed test → what behavior it pins.
-     - Manual / e2e: the command(s) you ran and what you observed.
-     - State plainly what was NOT tested.
-
-     Docs-only PR? Replace the bullets with one line: "Docs-only — no code
-     paths changed", plus the doc checks you ran (`codeflow validate --docs`). -->
+     Docs-only PR? Replace this section's content with one line — "Docs-only —
+     no code paths changed" — plus the doc checks you ran. -->
 
 - Results:
 
@@ -48,10 +44,25 @@
 (paste the real test summary output here)
 ```
 
-- Coverage:
-- New tests:
-- Manual / e2e:
-- Not tested:
+- Coverage (from the CI coverage job — paste numbers, don't link):
+
+| Metric | This PR | Floor / main |
+|---|---|---|
+| Line coverage |  |  |
+
+- New / changed tests:
+
+| Test | What it pins |
+|---|---|
+|  |  |
+
+- Manual / e2e verification:
+
+| What was run | Observed result |
+|---|---|
+|  |  |
+
+- Not tested: <!-- plainly state the gaps -->
 
 ## Linked work
 

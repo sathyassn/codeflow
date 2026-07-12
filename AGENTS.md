@@ -124,8 +124,12 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
   work."
 - **PR bodies:** follow the template — summary, changes, testing, linked
-  capability/ADR IDs — and keep every section **digestible: short one-line
-  bullets, never paragraph-walls**. A code PR **must** carry real test
+  capability/ADR IDs — and **match the presentation to the shape of the
+  data**: tables for tabular data (coverage, test→pins, exit-code or
+  before/after matrices), fenced blocks for pasted output, short one-line
+  bullets for the rest — never paragraph-walls. The Summary is plain
+  language a reader with zero context understands — no jargon, say what
+  it means for the user. A code PR **must** carry real test
   evidence in `## Testing`: the pasted test-summary output, the coverage
   number, the new tests it adds, and what was NOT tested — "tests pass" as
   prose is a claim, not evidence, and is not reviewable. Docs-only PRs say
