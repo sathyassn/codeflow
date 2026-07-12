@@ -11,7 +11,11 @@
 //! `security_review` (the umbrella gate for the `security-review` job) and,
 //! through `codeflow ci`, the commit and branch rules. Every field is a default
 //! the user may flip per repo; missing or malformed files fall back to the strict
-//! charter defaults so enforcement never silently disables itself.
+//! charter defaults so enforcement never silently disables itself. That fallback
+//! is fail-safe, not consumer-friendly — a present-but-invalid file is caught
+//! loudly by the [`policy_schema`](super::policy_schema) strict validator at the
+//! commit-msg hook, `codeflow ci`, and `codeflow validate`, and the whole key
+//! schema is renderable from the binary via `codeflow policy explain`.
 
 use std::fmt;
 use std::path::Path;
@@ -99,24 +103,25 @@ pub struct GitPolicy {
     pub hook_integrity: PolicyLevel,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
-    /// Max length of the commit *description* — the text after `type(scope): `
-    /// (the restored v1 50-char subject budget, ADR-0020). Enforced under
-    /// `commit_format`.
-    pub commit_desc_max_len: u32,
-    /// Max length of the whole subject line, git's 72-column wrap (ADR-0020).
+    /// Max length of the commit *description* — the text after `type(scope): `.
+    /// Integer characters; default 50 (the restored v1 subject budget, ADR-0020).
     /// Enforced under `commit_format`.
+    pub commit_desc_max_len: u32,
+    /// Max length of the whole subject line (git's 72-column wrap). Integer
+    /// characters; default 72 (ADR-0020). Enforced under `commit_format`.
     pub commit_subject_max_len: u32,
-    /// Shape of the commit body (ADR-0020): only `- ` bullets (at most
-    /// `commit_body_max_bullets`, each a single line ≤ `commit_body_bullet_max_len`
-    /// chars), blank lines, and an optional trailing `BREAKING CHANGE:` /
-    /// `BREAKING-CHANGE:` footer block. A prose paragraph, a numbered list, or a
-    /// story is a violation. Auto-generated subjects (merge/revert/fixup/squash)
-    /// are exempt as a class. Default `block`.
+    /// Whether the commit-body shape is enforced (ADR-0020). Level
+    /// (off/warn/allow/block); default `block`. When active, the body is only
+    /// `- ` bullets (≤ `commit_body_max_bullets`, each ≤ `commit_body_bullet_max_len`
+    /// chars), blank lines, an optional `BREAKING CHANGE:` footer, and any opted-in
+    /// footer trailers; a prose paragraph, numbered list, or story blocks.
+    /// Auto-generated subjects (merge/revert/fixup/squash) are exempt.
     pub commit_body: PolicyLevel,
-    /// Max number of `- ` bullets allowed in a commit body (ADR-0020).
+    /// Max number of `- ` bullets allowed in a commit body. Integer; default 3
+    /// (ADR-0020).
     pub commit_body_max_bullets: u32,
-    /// Max length of a single commit-body bullet line, including the `- `
-    /// marker (ADR-0020).
+    /// Max length of a single commit-body bullet line, including the `- ` marker.
+    /// Integer characters; default 72 (ADR-0020).
     pub commit_body_bullet_max_len: u32,
     /// Extra footer-trailer tokens ALLOWED (optional) in the body beyond the
     /// always-allowed `BREAKING CHANGE:` footer (ADR-0020 footer/ticket
@@ -146,11 +151,13 @@ pub struct GitPolicy {
     /// a commit without one warns or blocks. Only meaningful when
     /// [`commit_ticket_keys`] is non-empty. Merge/revert/fixup/squash exempt.
     pub commit_ticket_required: PolicyLevel,
-    /// Optional regex a ticket trailer's value must match (empty = no format
-    /// check). When set, a present ticket trailer whose value does not match is a
-    /// malformed reference and blocks; when a ticket is required, the present one
-    /// must match. An unparseable pattern degrades to no format check (fail-open,
-    /// matching the glob convention).
+    /// Regex a ticket trailer's value must match. String; default empty = no
+    /// format check. When set, a present ticket trailer whose value does not match
+    /// is a malformed reference and blocks; when a ticket is required, the present
+    /// one must match. At enforcement time an unparseable pattern degrades to no
+    /// format check (fail-open, matching the glob convention) — which is why the
+    /// strict validator ([`policy_schema`](super::policy_schema)) rejects it
+    /// loudly first.
     pub commit_ticket_pattern: String,
     /// Path globs (the `glob` crate's syntax) naming the repo's declared
     /// contract surfaces (ADR-0020). When non-empty, a commit-msg WARN fires if a

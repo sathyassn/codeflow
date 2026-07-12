@@ -29,6 +29,7 @@ pub mod git_guard;
 pub mod git_hook;
 pub mod orient;
 pub mod policy;
+pub mod policy_schema;
 pub mod repo;
 pub mod scan;
 pub mod session_summary;
