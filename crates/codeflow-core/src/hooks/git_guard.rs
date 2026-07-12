@@ -1246,10 +1246,23 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
 }
 
 /// Scan a `gh pr create` body for AI attribution / emoji (charter §6.4).
+///
+/// Both the inline `--body`/`-b` value and the content of a `--body-file`/`-F`
+/// file are scanned. Fail-open (matching the guard's doctrine): a missing or
+/// unreadable body file passes rather than blocking. A stdin body (`-F -`) is
+/// out of scope — its content is not available to the guard, so it is not read.
 fn check_gh_pr_create(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
-    let Some(body) = flag_value(rest, &["--body", "-b"]) else {
-        return;
-    };
+    let inline = flag_value(rest, &["--body", "-b"]);
+    let from_file = flag_value(rest, &["--body-file", "-F"])
+        .filter(|path| *path != "-")
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    for body in inline.into_iter().chain(from_file.as_deref()) {
+        scan_pr_body(body, policy, out);
+    }
+}
+
+/// Flag AI-attribution and emoji violations in a single PR-body string.
+fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
     if policy.ai_attribution.is_active() {
         if let Some(which) = standards::find_attribution(body) {
             out.push(Violation::new(
@@ -2058,6 +2071,36 @@ mod tests {
             ..default_policy()
         };
         let cmd = "gh pr create --body 'Generated with Bot \u{1F916}'";
+        assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
+    fn test_pr_body_file_attribution_blocked() {
+        let p = default_policy();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.md");
+        std::fs::write(&path, "Summary.\n\nGenerated with Claude Code").unwrap();
+        let cmd = format!("gh pr create --title 'feat: x' --body-file '{}'", path.display());
+        let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.ai_attribution");
+    }
+
+    #[test]
+    fn test_pr_body_file_clean_allowed() {
+        let p = default_policy();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.md");
+        std::fs::write(&path, "Summary: adds the hook plane.").unwrap();
+        let cmd = format!("gh pr create -t 'feat: x' -F '{}'", path.display());
+        assert!(evaluate(&cmd, &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
+    fn test_pr_body_file_missing_passes() {
+        // Fail-open: an unreadable / missing body file must not block.
+        let p = default_policy();
+        let cmd = "gh pr create -t 'feat: x' --body-file '/no/such/body/file.md'";
         assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty());
     }
 
