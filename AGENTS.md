@@ -188,6 +188,13 @@ Principles to reason from with judgment, not a rote checklist.
 - **This repo builds the product and is its own first consumer.** `assets/` is
   as much the product as `crates/` — scaffold content is held to the charter's
   §4.4 size caps and is embedded into the binary via rust-embed.
+- **Wire a managed artifact in the same change you add it.** When you add or
+  rename a managed artifact (a skill, agent, resource, or workflow), do it
+  end-to-end: add its `assets/base/scaffold-manifest.toml` `[[entry]]`(ies),
+  mirror any skill byte-identically across `.claude/skills` and `.agents/skills`,
+  and resync the managed baseline. The `manifest_consistency` test
+  (`crates/codeflow-core/tests/`) enforces the first two — an asset missing from
+  the manifest or a drifted mirror fails the build.
 - **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli`;
   `scaffold` = `assets/` (base scaffold + stack profiles); `docs` = `docs/`.
 - **v1 is a quarry, not a source tree** (charter D22). It lives at
