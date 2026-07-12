@@ -15,10 +15,11 @@
 //                         build, security, review, consult, qa, verify.
 //                         Default: PRESETS.default = ['build', 'review', 'verify']
 //                         (solo). PRESETS.duo = ['plan-align','build','security',
-//                         'review','verify'] is the opt-in cross-vendor batch path
-//                         (ADR-0015); pass it via args.stages.
-//                         'consult' is an optional cross-vendor second opinion
-//                         (codex, read-only); off unless named (ADR-0005).
+//                         'review','verify'] is the opt-in duo batch path
+//                         (ADR-0015); its stages run single-vendor here — genuine
+//                         cross-vendor duo work is interactive-only (ADR-0018).
+//                         'consult' is an optional independent second read
+//                         (single-vendor; ADR-0018); off unless named.
 //   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
 //                         stage defaults to 'inherit' (the caller's model).
 //   maxRework  number?    total build-attempt budget shared by all gate back-edges
@@ -52,12 +53,16 @@ const CRITERIA = A.criteria.map((c) => `- ${c}`).join('\n');
 const WHERE = A.dir ? `Working directory: ${A.dir}.` : '';
 const MAX_REWORK = A.maxRework ?? 3;
 // Named presets (opt-in via args.stages). The DEFAULT is unchanged — the solo
-// build -> review -> verify path. 'duo' is the batch/unattended counterpart to
-// the /cf-model-orchestrator lead-session skill: it prepends the cross-vendor
-// plan-align convergence gate (ADR-0015) and inserts the cf-security-reviewer
-// red-team (ADR-0016), and silently degrades to solo when codex is unavailable at flow
-// start (each cross-vendor stage preflights `codex login status` and notes the
-// skip). Pass it explicitly, e.g. args.stages = PRESETS.duo.
+// build -> review -> verify path. 'duo' adds the plan-align convergence gate
+// (ADR-0015) and the cf-security-reviewer red-team (ADR-0016). NOTE (ADR-0018):
+// genuine cross-vendor duo work is interactive-only — the /cf-model-orchestrator
+// skill drives the second vendor through the plugin (from Claude) or tmux (from
+// codex). This unattended pipeline runs fresh-context subagents that reach
+// neither interactive lane, and headless execution is prohibited, so 'duo' here
+// runs plan-align and security SINGLE-VENDOR (Claude) over the deterministic
+// scanner floor, recording the reduced assurance; for a real cross-vendor duo,
+// run the work interactively through /cf-model-orchestrator. Pass a preset
+// explicitly, e.g. args.stages = PRESETS.duo.
 const PRESETS = {
   default: ['build', 'review', 'verify'],
   duo: ['plan-align', 'build', 'security', 'review', 'verify'],
@@ -123,9 +128,10 @@ const STAGES = {
     ].filter(Boolean).join('\n\n'),
     apply: (out) => { ctx.spec = out.spec; },
   },
-  // Cross-vendor plan convergence gate (duo flow, ADR-0015 sibling to the
-  // /cf-model-orchestrator skill): the two independently-trained models agree on
-  // the plan + acceptance criteria before any build, producing the contract later
+  // Plan convergence gate (duo flow, ADR-0015 sibling to the
+  // /cf-model-orchestrator skill): a rigorous, self-critiqued plan + acceptance
+  // criteria before any build, producing the contract later. Genuine cross-vendor
+  // convergence is interactive-only (ADR-0018) — see the preset note above.
   // stages grade against. Bounded rounds to agreement; no agreement stops for the
   // human. kind 'gate' so it shares the rework budget, but it sits BEFORE build,
   // so a changes_requested has no build to rework into and the loop throws loudly
@@ -149,7 +155,7 @@ const STAGES = {
       `Acceptance criteria to ratify:\n${CRITERIA}`,
       ctx.analysis && `Analysis findings:\n${ctx.analysis}`,
       ctx.spec && `Draft spec:\n${ctx.spec}`,
-      'Two independently-trained models must converge on the plan and the acceptance criteria before any build. Draft or hold the plan and ACs as Claude, then hand them to codex for an independent critique via the cf-delegate skill\'s read-only ADR-0005 invocation (run `codex login status` first; if codex is missing or unauthenticated, degrade to solo silently and note it in a finding — duo was never promised).',
+      'Converge on a plan and acceptance criteria before any build. Genuine cross-vendor convergence — a second independently-trained model critiquing the plan — is a property of the INTERACTIVE /cf-model-orchestrator duo, which drives the second vendor through the ADR-0018 lane (the codex-plugin-cc plugin, from Claude). This unattended pipeline stage cannot reach that lane (headless execution is prohibited, ADR-0018), so draft the plan and ACs as Claude, then run an adversarial self-critique pass — challenge each assumption and every edge/error case — and record in a finding that cross-vendor convergence was not run here.',
       'Reconcile to agreement, bounded to <=2 rounds. Never launder a disagreement into a default.',
       'On agreement: return verdict approved and put the agreed, pinned, testable plan + acceptance-criteria contract in `contract` — later stages grade against it; findings may note residual assumptions.',
       'On no agreement after the bounded rounds: return verdict changes_requested with one finding per unresolved disagreement, and the pipeline halts for the human.',
@@ -171,7 +177,7 @@ const STAGES = {
     apply: (out) => { ctx.buildSummary = typeof out === 'string' ? out : JSON.stringify(out); },
   },
   security: gate('security',
-    'Run the dual-vendor adversarial red-team: Claude as the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and codex as the read-only assume-breach attacker (ADR-0005 handoff) — an attacker and a defender on the same model share blind spots, so the two vendors must differ. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes. Preflight `codex login status`, then degrade per ADR-0015/ADR-0016, mapped to findings: codex absent at flow start (never available this run — the flow already degraded to single-vendor) → run the defender lens alone and record the degradation as a finding; codex lost mid-duo, or missing for a requested duo security stage → return changes_requested with a finding naming the lost second vendor, since losing it defeats the red team.',
+    'Run the adversarial red-team. A genuine dual-vendor red-team — a second-vendor attacker lens independent of the Claude defender — is a property of the INTERACTIVE /cf-model-orchestrator duo (it drives the second vendor through the ADR-0018 lane, the codex-plugin-cc `/codex:adversarial-review`). This unattended pipeline stage cannot reach that lane (headless execution is prohibited, ADR-0018), so run the red-team SINGLE-VENDOR — Claude as both the defender lens (full repo context, triaging the deterministic-scanner floor for reachability) and the assume-breach attacker — and record in a finding that the cross-vendor lens was not run here; the deterministic scanner floor still hard-blocks High+ in CI regardless. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover the seven axes — secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface — each tagged to OWASP Top 10:2025 / OWASP LLM Top 10:2025 / CWE Top 25 (2025). Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence); surface each as one string carrying its class+severity+confidence. Layer on the deterministic scanner floor (which hard-blocks High+ in CI) — consume its output as evidence, never re-run the secret regexes. For a genuine cross-vendor red-team, run the work through the interactive /cf-model-orchestrator duo instead of this batch stage.',
     {
       role: 'Role (.claude/agents/cf-security-reviewer.md): load the cf-security-reviewer agent as the reviewer for this stage — it owns the deep seven-axis checklist. Independent evaluator, read-only on code — never fix anything; every claim in the verdict needs evidence.',
       rule: "SET your `verdict` from the SecurityFinding enums, never from prose — the gate branches on that verdict: return 'changes_requested' when any finding has severity in {critical,high} AND confidence in {confirmed,likely}; otherwise 'approved'. One finding string per issue.",
@@ -180,21 +186,21 @@ const STAGES = {
     'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
-  // Optional cross-vendor consult (ADR-0005): a Bash-driven agent step that runs
-  // an independent read-only codex review of the built diff via the cf-delegate
-  // skill's canonical invocation, then synthesizes it. kind 'gate' so its verdict
-  // shares the one rework budget with review; off unless 'consult' is in the preset.
+  // Optional independent-review consult: a fresh-context second read of the built
+  // diff against the criteria. Genuine cross-vendor consult is interactive-only
+  // (ADR-0018; the cf-consult skill), so this unattended stage runs single-vendor.
+  // kind 'gate' so its verdict shares the one rework budget with review; off
+  // unless 'consult' is in the preset.
   consult: {
     kind: 'gate',
     model: A.models?.consult ?? 'inherit',
     schema: VERDICT,
     prompt: () => [
-      `Independent cross-vendor consult on the latest build for: ${TASK}`, WHERE,
+      `Independent fresh-context consult on the latest build for: ${TASK}`, WHERE,
       `Acceptance criteria:\n${CRITERIA}`,
       `Builder summary:\n${ctx.buildSummary || '(not captured)'}`,
-      'Load the cf-delegate skill. First run `codex login status`: if codex is missing or unauthenticated, this optional tier is unavailable — return verdict approved with one finding noting the consult was skipped (degrade legibly; never block the pipeline on an optional delegate).',
-      'Otherwise run a READ-ONLY codex consult via the skill\'s canonical invocation — `codex exec --json --cd "$PWD" --skip-git-repo-check --sandbox read-only "<review the built diff against the criteria; cite file:line; end with VERDICT: approved or changes_requested>"` — and read the reply from the item.completed agent_message (.item.text).',
-      'Synthesize codex\'s reply against your own read of the diff; verify each point yourself (never paste it verbatim).',
+      'Genuine cross-vendor consult is interactive-only (the cf-consult skill, ADR-0018); this unattended stage cannot reach that lane, so perform a rigorous independent second read yourself in this fresh context.',
+      'Review the built diff against the criteria, cite file:line, and challenge the builder summary rather than trusting it — verify each point against the actual diff.',
       "Return verdict 'changes_requested' ONLY for substantive defects you can confirm; otherwise 'approved'. One finding string per issue.",
     ].filter(Boolean).join('\n\n'),
   },

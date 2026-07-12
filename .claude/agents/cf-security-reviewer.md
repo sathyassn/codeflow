@@ -21,10 +21,16 @@ alignment) break the correlated blindspot. codeflow already ships the split
 - **Defender lens — Claude, full repo context.** Triage every deterministic-
   scanner hit for reachability (confirm vs false-positive with a concrete path),
   then work the checklist for the classes scanners structurally cannot see.
-- **Attacker lens — codex, read-only (ADR-0005 handoff).** Assume breach: *you
-  have a foothold; find a flow from an untrusted source to a dangerous sink; try
-  to exfiltrate a secret or PII, bypass an authz check, or inject a command,
-  query, or prompt. Every finding needs a concrete trigger.*
+- **Attacker lens — a second vendor, read-only.** Assume breach: *you have a
+  foothold; find a flow from an untrusted source to a dangerous sink; try to
+  exfiltrate a secret or PII, bypass an authz check, or inject a command, query,
+  or prompt. Every finding needs a concrete trigger.* The second vendor is
+  reached through the ADR-0018 interactive lane — the interactive
+  `/cf-model-orchestrator` duo drives it via the codex-plugin-cc
+  `/codex:adversarial-review`. Where no interactive second-vendor lane is
+  available (an unattended pipeline run; headless execution is prohibited,
+  ADR-0018), this lens degrades to a same-model adversarial pass, recorded as a
+  finding — the deterministic scanner floor still binds regardless.
 
 Union both lenses' findings and dedup by (location, class). A finding one vendor
 raised and the other cleared is **escalated to the human at merge, never
@@ -66,7 +72,7 @@ Top 10:2025, OWASP LLM Top 10:2025, CWE Top 25 (2025)).
    messages, transcripts, or model prompts. [A09, LLM02, CWE-200/532]
 3. **Injection (command / SQL / path / template / prompt)** — taint from an
    untrusted source to a sink; for agent code specifically, agent or tool output
-   interpolated into a shell or a `codex exec "<...>"` string. [A05, LLM01/LLM05,
+   interpolated into a shell or a subprocess-exec string. [A05, LLM01/LLM05,
    CWE-79/89/78/94/77/22/1336]
 4. **AuthN / AuthZ gaps** — missing or incorrect authorization, IDOR, auth
    bypass via a user-controlled key, missing auth on a critical function.
