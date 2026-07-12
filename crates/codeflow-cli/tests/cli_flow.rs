@@ -71,6 +71,50 @@ fn test_command_no_stack_is_loud_no_op_exit_zero() {
 }
 
 #[test]
+fn test_command_strict_no_stack_exits_nonzero_with_banner() {
+    // Scripted/unattended callers pass --strict so a "nothing ran" outcome
+    // does NOT read as green: it exits non-zero while keeping the loud banner.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let output = codeflow(dir.path(), &["test", "--strict"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "strict no-stack must exit non-zero (2 == nothing ran)"
+    );
+    let err = stderr(&output);
+    assert!(err.contains("WARNING"), "banner still printed under strict: {err}");
+    assert!(err.contains("No tests were executed"), "loud no-op text kept: {err}");
+    assert!(err.contains("--strict"), "explains the non-zero exit: {err}");
+}
+
+#[test]
+fn test_command_strict_with_targets_still_passes() {
+    // --strict only escalates the NoTargets no-op; a real run that passes is
+    // unaffected, so this repo's own configured gates keep exiting 0.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    write(
+        dir.path(),
+        ".codeflow/test-config.json",
+        r#"{"schema_version": "1.0", "targets": [{"name": "gate", "runner": "custom", "modes": {"full": {"command": "exit 0"}, "quick": {"command": "exit 0"}}}]}"#,
+    );
+
+    let output = codeflow(dir.path(), &["test", "--strict"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a passing configured gate exits 0 even under --strict: {}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("WARNING"),
+        "no no-op banner when targets ran"
+    );
+}
+
+#[test]
 fn test_command_configured_stack_runs_and_gates() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());

@@ -83,11 +83,14 @@ epics: [EPC-001]
 adrs: []
 ```
 
-`codeflow test [--mode full|quick|essential]` runs the generic test engine
-against configured targets (`.codeflow/test-config.json`) or runtime stack
+`codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
+engine against configured targets (`.codeflow/test-config.json`) or runtime stack
 detection (`quick` is an alias for `essential`, the lighter mode). No stack
-detected is a loud no-op; with a stack it is a real gate, wired into pre-push
-via the `test_gate_on_push` policy and re-run in CI.
+detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
+`--strict` escalates that no-op to a non-zero exit for scripted/unattended callers
+(CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
+stack it is a real gate, wired into pre-push via the `test_gate_on_push` policy and
+re-run in CI.
 
 ## CAP-005 — integrate
 

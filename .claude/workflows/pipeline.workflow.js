@@ -123,7 +123,7 @@ const STAGES = {
   security: gate('security',
     'Security lens: hunt secret exposure, injection (command/SQL/path/template), and authorization gaps in the changed code; any concrete instance is a blocker finding.'),
   review: gate('review',
-    'Run `codeflow validate` and `codeflow test --mode quick`; any nonzero exit is an automatic changes_requested.'),
+    'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
   // Optional cross-vendor consult (ADR-0005): a Bash-driven agent step that runs
@@ -150,9 +150,9 @@ const STAGES = {
     schema: VERDICT,
     prompt: () => [
       `Final verification gate for: ${TASK}`, WHERE,
-      'Run `codeflow test --mode full` and report the exact exit code as a finding; any nonzero exit is changes_requested.',
+      'Run `codeflow test --mode full --strict` and report the exact exit code as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
       `Then check every acceptance criterion one by one, citing evidence per criterion in findings:\n${CRITERIA}`,
-      "Verdict 'approved' only when the full test gate is green and every criterion is met.",
+      "Verdict 'approved' only when the full test gate actually ran and is green (never on a NoTargets/no-op run) and every criterion is met.",
     ].filter(Boolean).join('\n\n'),
   },
 };

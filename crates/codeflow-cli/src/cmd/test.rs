@@ -9,6 +9,15 @@ pub struct TestArgs {
     /// for `essential` — the lighter mode shipped test-configs define.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
+
+    /// Treat "nothing to run" as a failure (exit non-zero) instead of a loud
+    /// no-op. For scripted/unattended callers — CI, the pipeline verify gate —
+    /// where a run that executed zero tests must NOT read as green. The default
+    /// (no `--strict`) keeps the loud-no-op-exit-0 behavior so the
+    /// bootstrap/early-setup path of a brand-new repo without tests is not
+    /// broken.
+    #[arg(long)]
+    pub strict: bool,
 }
 
 pub fn run(args: &TestArgs) -> i32 {
@@ -16,14 +25,21 @@ pub fn run(args: &TestArgs) -> i32 {
 
     match run_gate(&root, &args.mode) {
         Ok(GateOutcome::NoTargets { reason }) => {
-            // AC #7: no stack = loud no-op, exit 0. Loud means unmissable.
+            // AC #7: no stack = loud no-op. The banner is unmissable in both
+            // modes. Default exits 0 (bootstrap/early-setup stays green);
+            // `--strict` exits non-zero so a scripted/unattended caller cannot
+            // mistake "ran nothing" for "passed".
             eprintln!("==============================================================");
             eprintln!("WARNING: codeflow test had nothing to run — {reason}.");
             eprintln!("         No tests were executed. This is NOT a green test run.");
             eprintln!("         Configure .codeflow/test-config.json or add a");
             eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
+            if args.strict {
+                eprintln!("         --strict: exiting non-zero so no script reads this as green.");
+            }
             eprintln!("==============================================================");
-            0
+            // Distinct from a failed gate (exit 1): 2 == "nothing ran".
+            if args.strict { 2 } else { 0 }
         }
         Ok(GateOutcome::Completed { results, passed, coverage }) => {
             for r in &results {
