@@ -1,17 +1,19 @@
 ---
 name: cf-model-orchestrator
-description: Decide solo vs duo for planned dev work, then run it. Duo adds codex as a second, independently-trained reviewer alongside the cf-reviewer subagent in the build → review → verify loop, reserved for real blast radius in a codeflow repo — a Tier-3-grade decision (new dependency, schema/API change, module boundary change), anything touching auth, secrets, payments, or a data migration, or a change to a shipped capability's public contract. Use when about to build a feature, change, or fix that already has acceptance criteria and whose stakes go beyond a small, easily self-reviewed edit — not for a trivial fix, a conversational answer, or a docs-only change. Duo is driven from Claude Code through the official codex-plugin-cc plugin (ADR-0018); it silently degrades to solo /cf-develop when either half is missing — this session is not Claude Code, the plugin surface is absent, or codex is missing/unauthenticated — never blocks or prompts for auth.
+description: Run planned dev work as the Claude+codex duo — the DEFAULT for all dev work, not a high-stakes exception. Claude orchestrates (plans, analyses, designs, final-reviews); codex cross-reviews the plan, executes it, and runs first tests — each model reviews the other's work, every time. Use whenever about to build a feature, change, fix, or doc change that has acceptance criteria — however small; only a conversational answer or pure question needs no duo. Duo is driven from Claude Code through the official codex-plugin-cc plugin (ADR-0018); it silently degrades to solo /cf-develop (cf-reviewer as the independent pass) ONLY when either half is missing — this session is not Claude Code, the plugin surface is absent, or codex is missing/unauthenticated — never blocks or prompts for auth.
 ---
 
-# cf-model-orchestrator — solo or duo, then drive it
+# cf-model-orchestrator — the duo, by default
 
-Decide how many independent models guard this work, then run it. This is an axis
-**orthogonal** to the weight ladder in `cf-method` (how *much* process): it sets
-*who reviews* — the `cf-reviewer` subagent alone (solo), or codex as a second,
-independently-trained model alongside it (duo). It never replaces `/cf-develop`;
-solo **is** `/cf-develop`.
+The duo — codex as a second, independently-trained model beside the
+`cf-reviewer` subagent — is the **default for all dev work**: each model reviews
+the other's work, every time (operator policy; this reverses the earlier
+stakes-gated design). This axis is **orthogonal** to the weight ladder in
+`cf-method` (how *much* process): it sets *who reviews*. Solo — the independent
+review pass alone — is not a choice but the **degradation path** when the duo is
+genuinely unavailable. It never replaces `/cf-develop`; solo **is** `/cf-develop`.
 
-## Decide: solo or duo
+## Preflight: duo available?
 
 1. The work must already have acceptance criteria (from an epic, task, spec, or
    the prompt). None stated → run the clarity gate in `cf-plan` first; never
@@ -37,12 +39,11 @@ solo **is** `/cf-develop`.
    with `cf-reviewer` as the independent pass, and note it once in your
    report. Never prompt for `codex login` or a plugin install, never nag — duo
    was never promised.
-4. Available **and** the stakes clear the bar → **duo**. The bar (the skill
-   description is the canonical list): a Tier-3-grade change (new dependency,
-   schema/API change, module-boundary change), anything touching auth, secrets,
-   payments, or a data migration, or a change to a shipped capability's public
-   contract. A trivial fix, a docs-only change, or an easily self-reviewed edit
-   → solo. On a genuine judgment call, prefer duo.
+4. Both halves available → **duo, always**. There is no stakes bar: a feature,
+   a fix, a docs change, a small edit — all dev work runs the duo, because the
+   cross-model review of each other's work is the point, not a premium added
+   for blast radius. The only non-duo dev path is the degradation of steps
+   2–3; the only non-duo work is a conversational answer or pure question.
 
 ## The duo loop
 

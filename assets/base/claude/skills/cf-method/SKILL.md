@@ -18,9 +18,11 @@ subagent in Claude Code; a separate read-only interactive review pass on any
 other harness, never headless (cf-develop carries the same branch) — review is
 a stage, not a courtesy, and self-review is not review. Selecting the execution
 skill is itself a planning decision, orthogonal to weight: the rungs below set
-how much *process*; a separate choice sets *who reviews* — solo (the
-independent review pass alone) or duo (a second, independently-trained model
-beside it). Make both calls in `cf-plan`, not mid-build.
+how much *process*; *who reviews* is set too — the duo (codex as a second,
+independently-trained model beside the independent pass, each reviewing the
+other's work) is the **default for all dev work**; solo is only the
+degradation when the duo is unavailable (`cf-model-orchestrator`). Make the
+weight call in `cf-plan`, not mid-build.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
 - **Inline `/cf-develop` loop** for interactive work — the default path:

@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The Claude+codex duo is the default for all dev work** (operator policy;
+  reverses the stakes-gated design). `cf-model-orchestrator` now runs for any
+  feature, change, fix, or doc change with acceptance criteria — codex
+  cross-reviews the plan, executes, and first-tests; Claude orchestrates and
+  final-reviews; each model reviews the other's work. Solo `/cf-develop` is
+  the degradation path only, when the duo is unavailable (seat/plugin/auth).
+  `cf-plan` names the duo as the default execution skill; `cf-method` and the
+  scaffolded AGENTS.md entry-point table match. The codex pin stays
+  `gpt-5.6-sol` at `xhigh` (the verified API ceiling on ChatGPT OAuth).
 - **Enforcement is the floor; the tiers scale project-management (ADR-0019).**
   The `--minimal` tier now installs the complete four-plane enforcement floor,
   not just the pre-commit secret scan: the `commit-msg`, `pre-push`,

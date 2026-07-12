@@ -49,8 +49,8 @@ conversational answer needs no skill.
 | Intent | Use |
 |---|---|
 | Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
-| Build planned work | `/cf-develop` — build → independent review → verify, bounded rework |
-| Build higher-stakes planned work with a second model | `/cf-model-orchestrator` — duo Claude+codex build → review → verify with a joint gate; the duo needs Claude Code as the orchestrating seat plus an authenticated codex, and silently degrades to solo `/cf-develop` when either half is unavailable |
+| Build planned work | `/cf-model-orchestrator` — the Claude+codex duo is the **default for all dev work**: codex cross-reviews the plan, executes, and first-tests; Claude orchestrates and final-reviews — each model reviews the other's work. Needs Claude Code as the orchestrating seat plus an authenticated codex; silently degrades to solo `/cf-develop` when either half is unavailable |
+| Build planned work when the duo is unavailable | `/cf-develop` — the solo fallback: build → independent review (`cf-reviewer`) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
