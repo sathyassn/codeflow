@@ -51,7 +51,26 @@
 #   .codeflow/manifest.json  — installed-file record: dest → {src, ownership, sha256}
 #   .codeflow/.baseline/     — pristine rendered copies (3-way merge bases)
 #
-# ## Tier policy (no transform)
+# ## Tier policy — enforcement is the floor; tiers scale project-management
+#
+#   codeflow bundles two orthogonal concerns. (A) git-discipline ENFORCEMENT is
+#   universal, near-zero cost, and independent of project shape; (B) PROJECT-
+#   MANAGEMENT machinery is opinionated and scales with the project. Nobody wants
+#   B without A; many want A without B (doc-sets, config repos, small tools). So
+#   the tiers are a clean superset — minimal ⊂ standard ⊂ full — split on that
+#   seam (ADR-0019):
+#
+#     - minimal  = the COMPLETE four-plane enforcement floor: all five git-hook
+#                  shims (pre-commit, commit-msg, pre-push, pre-merge-commit,
+#                  reference-transaction), the scaffolded CI, the in-session
+#                  git-guard/exec-guard + orient/summary hooks (.claude/settings.json
+#                  + the .codex/ starter), the armed policy.json, and a lean
+#                  agent contract (AGENTS.md + CLAUDE.md). For ANY repo.
+#     - standard = + the develop-loop method (cf-* skills, reviewer agents, the
+#                  pipeline) + the traceability spine (product/capabilities/
+#                  architecture/ADRs) + the full contract + harness convenience.
+#                  For a code project.
+#     - full     = + project-management (epics, tasks, specs). For a program.
 #
 #   ALL tiers ship the SAME enforced policy.json — including --minimal. Git
 #   discipline is armed from the first commit at every tier; the engine performs
@@ -64,12 +83,16 @@ schema_version = 1
 
 # --- root contracts ---------------------------------------------------------
 
-# AGENTS.md is tier-honest: two entries, one dest, selected by tier (the same
-# same-dest / disjoint-selector shape the settings presets use). The full
-# contract advertises the whole method — the six-layer model, the /cf-* skills,
-# project-management/, the session digest. A --minimal repo installs none of that
-# machinery (only AGENTS.md + .gitignore + policy.json + the pre-commit hook), so
-# it gets a trimmed contract that advertises only what its tier installs.
+# AGENTS.md and CLAUDE.md are tier-honest: two entries each, one dest, selected
+# by tier (the same same-dest / disjoint-selector shape the settings presets
+# use). The full contract advertises the whole method — the six-layer model, the
+# /cf-* skills, project-management/, the session digest. A --minimal repo installs
+# the four-plane enforcement floor but none of that method machinery, so it gets a
+# trimmed contract that advertises only what its tier installs: the git rules
+# (now all hook-enforced at minimal) and the working principles. Both minimal and
+# the full tiers ship a CLAUDE.md, because minimal now wires .claude/settings.json
+# (the git-guard/exec-guard + orient/summary hooks) and Claude Code needs the lean
+# contract to document them.
 [[entry]]
 src = "AGENTS.md.tmpl"
 dest = "AGENTS.md"
@@ -92,6 +115,14 @@ dest = "CLAUDE.md"
 ownership = "managed-region"
 region = "markdown"
 tiers = ["standard", "full"]
+template = true
+
+[[entry]]
+src = "CLAUDE.minimal.md.tmpl"
+dest = "CLAUDE.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["minimal"]
 template = true
 
 [[entry]]
@@ -122,38 +153,42 @@ exec = true
 src = "git-hooks/commit-msg"
 dest = ".codeflow/git-hooks/commit-msg"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 exec = true
 
 [[entry]]
 src = "git-hooks/pre-push"
 dest = ".codeflow/git-hooks/pre-push"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 exec = true
 
 [[entry]]
 src = "git-hooks/pre-merge-commit"
 dest = ".codeflow/git-hooks/pre-merge-commit"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 exec = true
 
 [[entry]]
 src = "git-hooks/reference-transaction"
 dest = ".codeflow/git-hooks/reference-transaction"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 exec = true
 
 # --- Claude settings presets (exactly one applies, chosen at init) -----------
+# Part of the enforcement floor (ADR-0019): .claude/settings.json wires the
+# in-session git-guard/exec-guard PreToolUse hooks and the orient/summary session
+# hooks, so it ships from --minimal up. The three presets stay disjoint-selected
+# by the permission preset chosen at init; only one lands.
 
 [[entry]]
 src = "settings/default.json"
 dest = ".claude/settings.json"
 ownership = "managed-region"
 region = "json"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 preset = "default"
 
 [[entry]]
@@ -161,7 +196,7 @@ src = "settings/acceptEdits.json"
 dest = ".claude/settings.json"
 ownership = "managed-region"
 region = "json"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 preset = "acceptEdits"
 
 [[entry]]
@@ -169,7 +204,7 @@ src = "settings/bypass-sandboxed.json"
 dest = ".claude/settings.json"
 ownership = "managed-region"
 region = "json"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 preset = "bypassPermissions"
 
 # --- Codex starter (harness parity, ADR-0008) --------------------------------
@@ -183,13 +218,13 @@ preset = "bypassPermissions"
 src = "codex/hooks.json"
 dest = ".codex/hooks.json"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 
 [[entry]]
 src = "codex/config.toml"
 dest = ".codex/config.toml"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 
 # --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 9 skills, 1 workflow;
 #     cf-stack is the agent-led stack setup (ADR-0003); cf-delegate + cf-consult
@@ -382,7 +417,7 @@ tiers = ["standard", "full"]
 src = "ci/codeflow-ci.yml"
 dest = ".github/workflows/codeflow-ci.yml"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 
 [[entry]]
 src = "ci/pull_request_template.md"

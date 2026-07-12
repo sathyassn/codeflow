@@ -1,0 +1,19 @@
+@AGENTS.md
+
+## Claude-specific notes
+
+- This is codeflow's **minimal** tier: the four-plane enforcement floor and a
+  lean contract, no method machinery. There is no `.claude/skills/` and no
+  workflow runtime here — so this file documents only the session wiring, not a
+  skill ladder. `codeflow init --standard` is the additive upgrade that adds the
+  develop-loop skills, the reviewer agents, and the pipeline.
+- Session hooks are wired in `.claude/settings.json`: the orient digest at
+  SessionStart, the session summary at SessionEnd, and `git-guard` + `exec-guard`
+  before every Bash call. When a command is blocked, read the guard message — it
+  names the violated policy rule and the sanctioned path.
+- The permission preset and sandbox mode were chosen at init and live in
+  `.claude/settings.json`; change them there, not ad hoc.
+- The AGENTS.md git rules are **hook-enforced** here — the commit-msg, pre-push,
+  pre-merge-commit, and reference-transaction hooks plus `git-guard` block
+  violations before they land, so fix the cause, never route around them. Full
+  rules: AGENTS.md, "Git rules."

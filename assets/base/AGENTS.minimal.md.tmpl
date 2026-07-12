@@ -16,28 +16,41 @@ repo. The block between the codeflow markers below is maintained by
 
 ## What this tier installs
 
-This is codeflow's **minimal** tier: git hygiene plus working principles, and
-nothing else. The knowledge model, the planning and delivery skills, durable work
-tracking, and the session hooks are **not** installed here — so this contract does
-not point at them. `codeflow init --standard` is an additive upgrade that installs
-the full method and rewrites this block to match; do it when the project grows past
-a scratch repo.
+This is codeflow's **minimal** tier: the complete git-discipline enforcement
+floor plus working principles — for any repo. All four enforcement planes are
+here (the five git hooks, the CI check, the in-session guards, the armed policy),
+so the git rules below are mechanically enforced, not merely advised. What is
+**not** installed is the *method*: the knowledge model (product / capabilities /
+architecture / ADRs), the planning and delivery skills, the reviewer agents, the
+pipeline, and durable work tracking — so this contract does not point at them.
+`codeflow init --standard` is an additive upgrade that adds the method and
+rewrites this block to match; do it when the repo is a code project that has
+earned the weight, not a doc-set or a small tool. Enforcement is the floor; the
+tiers scale project-management.
 
-Installed and load-bearing at this tier: this file, `.gitignore`,
-`.codeflow/policy.json`, and the `.codeflow/git-hooks/pre-commit` shim.
+Installed and load-bearing at this tier: this file and `CLAUDE.md`,
+`.codeflow/policy.json`, `.gitignore`, all five git-hook shims (`pre-commit`,
+`commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the
+scaffolded CI workflow, and the in-session guards wired in `.claude/settings.json`
+(`git-guard`, `exec-guard`) and the `.codex/` starter (for interactive Codex).
 
 ## Git rules
 
-Git discipline is armed from the first commit: codeflow ships the same armed
-`.codeflow/policy.json` as every other tier, and the **pre-commit** hook — the
-one hook this tier installs — mechanically blocks commits on protected branches
-and staged secrets (credentials, API keys, tokens, `.env` files). The **secret
-scan** is the one gate never relaxed — not even during bootstrap grace. The
-remaining rules below are contract at this tier, not hook-blocked: commit
-format, AI attribution, and emoji are commit-msg-stage gates, and branch naming
-plus the push/force-push/delete protections are pre-push and
-reference-transaction-stage gates — hooks the additive `codeflow init
---standard` upgrade installs. Follow them as written until then.
+Git discipline is armed from the first commit and mechanically enforced at this
+tier: codeflow ships the same armed `.codeflow/policy.json` as every other tier,
+and minimal installs the full git-hook plane that reads it — **pre-commit**
+(protected-branch commits, staged secrets), **commit-msg** (commit format, AI
+attribution, emoji), **pre-push** (branch naming, protected-branch push /
+force-push / delete), and **pre-merge-commit** + **reference-transaction** (the
+protected-branch merge and ref backstops) — plus the scaffolded CI, which re-runs
+the same checks as the server-side perimeter, and the in-session `git-guard`.
+Every rule below is a gate that blocks, not advice. The **secret scan** is the
+one gate never relaxed — not even during bootstrap grace.
+
+`codeflow init --standard` does **not** add enforcement — this tier already has
+all of it. What `--standard` adds is the *method*: the develop-loop skills, the
+reviewer agents, the traceability spine, and project machinery. Enforcement is
+the floor; the tiers scale project-management.
 
 A team may relax specific rules by editing `.codeflow/policy.json` if it
 deliberately chooses to, but that is **not recommended**: conventional-commit
@@ -53,8 +66,11 @@ softening the commit rules quietly breaks it.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies.
 - **No emoji** in commit subjects or PR bodies.
-- **Protected branches** (`main`/`master`): never commit, push, force-push,
-  delete, or hard-reset on them — land work through a branch and a reviewed PR.
+- **Secrets:** never stage credentials, API keys, tokens, or `.env` files. The
+  pre-commit secret scan (and the CI secret-scan job) block them.
+- **Protected branches** (`main`/`master`): never commit, merge, push,
+  force-push, delete, or hard-reset on them — land work through a branch and a
+  reviewed PR.
 
 ## Workflow discipline
 
@@ -69,6 +85,13 @@ to reason from, not a rote checklist.
 - **Ground it in evidence — never assume.** Treat an unclear requirement, API, or
   fact as a stop-and-verify, not a guess. Research non-trivial decisions in the
   project's own code and docs first, then the best current external sources.
+- **Think independently — not a yes-man.** Do not accept a request, an opinion, a
+  claim, or a proposed approach — the operator's included — on assertion alone.
+  Research it, weigh the alternatives, and stress-test it; when you disagree or
+  see a better path, say so with reasoning and evidence. The operator makes the
+  final call and their decision is respected — but they are owed your honest
+  analysis, not agreement. Agreement without examination is a failure mode, not
+  deference.
 - **Write it well.** Favor the simplest change that fully solves the problem: DRY,
   idiomatic, coherent with the existing architecture — its conventions over your
   taste. Leave it more consistent than you found it.
