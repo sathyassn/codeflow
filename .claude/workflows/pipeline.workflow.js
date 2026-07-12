@@ -18,9 +18,9 @@
 //                         (codex, read-only); off unless named (ADR-0005).
 //   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
 //                         stage defaults to 'inherit' (the caller's model).
-//   maxRework  number?    build-attempt budget shared by all gate back-edges
-//                         (review/security/qa changes_requested -> build).
-//                         Default 3.
+//   maxRework  number?    total build-attempt budget shared by all gate back-edges
+//                         (review/security/qa changes_requested -> build). Counts
+//                         the initial build, so N permits N-1 reworks. Default 3.
 //   dir        string?    working-directory context added to stage prompts.
 //
 // Runtime contract: plain JS executed as an async-function body — no imports,
@@ -173,6 +173,10 @@ while (i < PRESET.length) {
   if (stage.schema) opts.schema = stage.schema;
   const out = await agent(stage.prompt(), opts);
   if (stage.apply) stage.apply(out);
+  // The build just consumed ctx.findings in its prompt; clear it so only findings
+  // from a gate failure that follows are surfaced (a later build in a multi-build
+  // preset must not be told it is rework for a prior loop's findings).
+  if (name === 'build') ctx.findings = [];
   trail.push({ stage: name, verdict: out?.verdict ?? null, findings: out?.findings ?? null });
 
   if ((stage.kind === 'gate' || stage.kind === 'final') && out.verdict !== 'approved') {

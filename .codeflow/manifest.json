@@ -23,7 +23,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "91a3d65952b29e1ba206c881372e6b2c8fca24b127f20af5587a7ffa437af3d5",
+      "sha256": "0690a303eaa091dcf2d9ae59751f40d7485c3e039f97b815e7be879bdeca721b",
       "exec": false
     },
     ".agents/skills/cf-plan/SKILL.md": {
@@ -77,7 +77,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "91a3d65952b29e1ba206c881372e6b2c8fca24b127f20af5587a7ffa437af3d5",
+      "sha256": "0690a303eaa091dcf2d9ae59751f40d7485c3e039f97b815e7be879bdeca721b",
       "exec": false
     },
     ".claude/skills/cf-plan/SKILL.md": {
@@ -167,7 +167,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "6470a9d11985e2e12de2d905734c4940ad592c799c56f82b58f101dce65c0e4c",
+      "sha256": "1fe004541ed102d319dff27634b861c85467c5dc958263a2b22a5f923ac70552",
       "exec": false
     },
     "CLAUDE.md": {
@@ -215,7 +215,7 @@
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "9f55d09d8401c1f17046744381142d8c0d0c77994640fecb5b510b8e07459863",
+      "sha256": "d31f376dc7bb8a83937fd8d87a0e86d9faea5b28ba0d54c4c54b66cb4e40da65",
       "exec": false
     },
     "project-management/templates/task.md": {

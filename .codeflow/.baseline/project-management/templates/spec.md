@@ -9,11 +9,13 @@ created: {{DATE}}
 
 # SPC-{{NNN}} — {{TITLE}}
 
-<!-- Specs are inputs to work, not living documents. Write one only when
+<!-- Specs are hand-authored input docs, not living documents and not managed
+     by any CLI tooling — no allocator (pick SPC-{{NNN}} by hand to match this
+     file's epic), no model, no `validate` support. Write one only when
      interfaces, formats, or behavior need pinning down before building —
      many epics need no spec. Frozen at ship: after that, truth lives in
-     architecture + capabilities + tests. Never update a frozen spec to
-     match later reality. -->
+     architecture + capabilities + tests, findable via `codeflow recall`.
+     Never update a frozen spec to match later reality. -->
 
 ## Summary
 
