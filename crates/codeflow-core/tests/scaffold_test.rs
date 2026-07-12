@@ -319,6 +319,32 @@ fn fresh_init_empty_dir_bootstrap_grace() {
 }
 
 #[test]
+fn fresh_init_leaves_clean_committable_tree() {
+    // Regression: init must not leave a fresh adopter with a dirty,
+    // un-committable tree. The scaffold commit has to capture project.toml's
+    // FINAL policy_armed + git_hooks values — otherwise a post-commit re-store
+    // flips git_hooks ("unwired" -> "wired") and leaves project.toml modified on
+    // the just-armed protected branch, where the commit_to_protected gate then
+    // refuses to let the adopter commit it.
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+
+    // Nothing left uncommitted or untracked after a fresh init.
+    let status = git(&root, &["status", "--porcelain"]);
+    assert!(status.is_empty(), "working tree not clean after init:\n{status}");
+
+    // The committed project.toml already carries the final wired + armed record,
+    // so the working copy matches HEAD and a checkout/clone never resurrects a
+    // stale value.
+    let committed = git(&root, &["show", "HEAD:.codeflow/project.toml"]);
+    assert!(committed.contains("policy_armed = true"), "{committed}");
+    assert!(committed.contains("git_hooks = \"wired\""), "{committed}");
+}
+
+#[test]
 fn init_minimal_tier_subset_and_softened_policy() {
     isolate_git();
     let (_a, assets) = fixture_assets(false);

@@ -183,16 +183,36 @@ pub fn init(
     written.push(super::state::INSTALLED_MANIFEST.to_string());
     written.push(super::state::BASELINE_DIR.to_string());
 
-    // Phase 3: the scaffold commit (fresh repos only). Policy is armed FIRST
-    // so the committed project.toml carries policy_armed = true — otherwise a
-    // later `git checkout <protected-branch>` or a fresh clone silently
-    // resurrects the disarmed bootstrap state. The commit itself is a
-    // sanctioned path: it passes the armed hooks via the gate-context token
-    // (and hooks are wired only in phase 4, so bootstrap never depends on the
-    // capabilities of whatever `codeflow` binary is on PATH).
+    // Finalize the recorded state BEFORE the fresh-repo scaffold commit, so the
+    // committed project.toml carries its FINAL policy_armed + git_hooks values
+    // and the working tree matches HEAD once init returns. The hook-manager
+    // check here is a pure detection (AC #2); the actual `git config
+    // core.hooksPath` side effect is deferred to phase 4 (below) so the scaffold
+    // commit still runs with hooks unwired and never depends on whatever
+    // `codeflow` binary is on PATH honoring the gate token (charter D9). Baking
+    // the values in before the commit is what stops init leaving a fresh adopter
+    // with a dirty, un-committable project.toml on the just-armed protected
+    // branch: a post-commit re-store would otherwise flip git_hooks and dirty
+    // the file that the armed policy now refuses to let them commit.
+    let hook_manager = detect::detect_hook_manager(root);
+    state.git_hooks = if hook_manager.is_none() {
+        GIT_HOOKS_WIRED.to_string()
+    } else {
+        GIT_HOOKS_UNWIRED.to_string()
+    };
+    // Arm the policy. Fresh repos need the committed project.toml to carry the
+    // armed state — otherwise a later `git checkout <protected-branch>` or a
+    // fresh clone silently resurrects the disarmed bootstrap state. Existing
+    // repos are armed for their still-uncommitted scaffold.
+    let newly_armed = !state.policy_armed;
+    state.policy_armed = true;
+    state.store(root)?;
+
+    // Phase 3: the scaffold commit (fresh repos only). project.toml already
+    // carries its final values, so nothing dirties the tree afterward. The
+    // commit is a sanctioned path: it passes via the gate-context token, and
+    // hooks are still unwired at this point.
     if fresh_repo {
-        state.policy_armed = true;
-        state.store(root)?;
         gitutil::add_and_commit(
             root,
             &written,
@@ -207,33 +227,31 @@ pub fn init(
         );
     }
 
-    // Phase 4: wire git hooks unless another manager owns them (AC #2).
-    match detect::detect_hook_manager(root) {
+    // Phase 4: apply the hook-wiring side effect, deferred from the detection
+    // above so the scaffold commit ran with hooks unwired (AC #2).
+    match hook_manager {
         None => {
             gitutil::config_set(root, "core.hooksPath", CODEFLOW_HOOKS_PATH)?;
-            state.git_hooks = GIT_HOOKS_WIRED.to_string();
             report
                 .notes
                 .push(format!("git hooks wired: core.hooksPath = {CODEFLOW_HOOKS_PATH}"));
         }
         Some(manager) => {
-            state.git_hooks = GIT_HOOKS_UNWIRED.to_string();
             report.notes.push(format!(
                 "existing hook manager detected ({manager}) — not clobbered. To enable codeflow's git gates, call the shims from your hook manager, e.g. add `\"$(git rev-parse --show-toplevel)\"/{CODEFLOW_HOOKS_PATH}/pre-commit` to its pre-commit step (same for commit-msg and pre-push). Recorded git_hooks = \"unwired\"; `codeflow doctor` will surface this."
             ));
         }
     }
 
-    // Phase 5: arm branch policy and persist the final state (including the
-    // hook-wiring outcome from phase 4).
-    if !state.policy_armed {
-        state.policy_armed = true;
+    // Phase 5: for an existing repo the armed state is still uncommitted —
+    // surface the arming and the branch guidance. Fresh repos already committed
+    // the armed state above, so their tree is clean and needs no such note.
+    if newly_armed && !fresh_repo {
         report.notes.push(
             "branch policy armed (policy_armed = true); start feature work on a feat/* branch"
                 .to_string(),
         );
     }
-    state.store(root)?;
 
     Ok(report)
 }
