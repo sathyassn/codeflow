@@ -23,13 +23,13 @@ enum Command {
     /// Scaffold this project (idempotent, non-destructive, offline).
     #[command(group(ArgGroup::new("tier").args(["minimal", "standard", "full"])))]
     Init {
-        /// Throwaway tier: trimmed AGENTS.md + gitignore + pre-commit secret scan; the same armed policy as every tier.
+        /// The discipline floor: full git-discipline enforcement (all hooks + CI + in-session guards + armed policy) and a lean agent contract — for any repo.
         #[arg(long)]
         minimal: bool,
-        /// Real-project tier (default): full gates, docs, Claude artifacts, CI.
+        /// A code project (default): everything in minimal, plus the develop-loop skills, reviewer agents, the traceability spine (product/capabilities/architecture/ADRs), and harness integration.
         #[arg(long)]
         standard: bool,
-        /// Adds project-management (epics, tasks, specs, templates).
+        /// A program: everything in standard, plus project-management (epics, tasks, specs).
         #[arg(long)]
         full: bool,
         /// No prompts; sane defaults (standard tier).

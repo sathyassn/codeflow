@@ -639,8 +639,9 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 /// step that fails RED by design (a missing binary is an unarmed perimeter,
 /// not a pass). This WARNS while that placeholder stands — the gate compiles
 /// and runs but enforces nothing real — and skips cleanly (Pass) when no CI
-/// workflow was scaffolded (e.g. a minimal-tier project). WARN only, never a
-/// block.
+/// workflow is present (the CI workflow ships from --minimal up, so this is a
+/// repo that opted out via `[scaffold] ignore` or predates it). WARN only,
+/// never a block.
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
