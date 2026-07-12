@@ -7,5 +7,9 @@ paths = [
   '''crates/codeflow-core/src/hooks/scan\.rs$''',
   '''crates/codeflow-core/src/hooks/git_hook\.rs$''',
   '''crates/codeflow-cli/tests/hooks_cli\.rs$''',
+  # Load-bearing for full-history scans: the pre-rename `codeflow-rs/` layout is
+  # gone from the working tree but still lives in git history, where it carried
+  # the same test fixtures. Do NOT remove — dropping it un-hides 2 historical
+  # fixture "secrets" (github-pat + generic-api-key in tooluse.rs) and fails CI.
   '''^codeflow-rs/''',
 ]
