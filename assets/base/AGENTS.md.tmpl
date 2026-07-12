@@ -51,6 +51,7 @@ conversational answer needs no skill.
 | Build higher-stakes planned work with a second model | `/cf-model-orchestrator` — duo Claude+codex build → review → verify with a joint gate; silently degrades to solo `/cf-develop` when codex is unavailable |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
+| Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
 | Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `task new` |
 
@@ -181,4 +182,4 @@ Principles to reason from with judgment, not a rote checklist.
 
 <!-- Everything below is yours. `codeflow update` never touches it. -->
 
-{{PROJECT_NOTES}}
+<!-- Add project-specific notes here. -->

@@ -28,11 +28,16 @@ Installed and load-bearing at this tier: this file, `.gitignore`,
 
 ## Git rules
 
-Git discipline is **enforced from the first commit** at this tier — exactly as at
-every other tier. codeflow ships the same armed `.codeflow/policy.json`, so the
-rules below are gates the pre-commit hook blocks on, not advice. The **secret
-scan** (never stage credentials, API keys, tokens, or `.env` files) is the one
-gate never relaxed — not even during bootstrap grace.
+Git discipline is armed from the first commit: codeflow ships the same armed
+`.codeflow/policy.json` as every other tier, and the **pre-commit** hook — the
+one hook this tier installs — mechanically blocks commits on protected branches
+and staged secrets (credentials, API keys, tokens, `.env` files). The **secret
+scan** is the one gate never relaxed — not even during bootstrap grace. The
+remaining rules below are contract at this tier, not hook-blocked: commit
+format, AI attribution, and emoji are commit-msg-stage gates, and branch naming
+plus the push/force-push/delete protections are pre-push and
+reference-transaction-stage gates — hooks the additive `codeflow init
+--standard` upgrade installs. Follow them as written until then.
 
 A team may relax specific rules by editing `.codeflow/policy.json` if it
 deliberately chooses to, but that is **not recommended**: conventional-commit
@@ -80,4 +85,4 @@ Principles to reason from with judgment, not a rote checklist.
 
 <!-- Everything below is yours. `codeflow update` never touches it. -->
 
-{{PROJECT_NOTES}}
+<!-- Add project-specific notes here. -->

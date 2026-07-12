@@ -53,6 +53,7 @@ conversational answer needs no skill.
 | Build higher-stakes planned work with a second model | `/cf-model-orchestrator` — duo Claude+codex build → review → verify with a joint gate; silently degrades to solo `/cf-develop` when codex is unavailable |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
+| Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
 | Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `task new` |
 
@@ -198,10 +199,11 @@ Principles to reason from with judgment, not a rote checklist.
   the manifest or a drifted mirror fails the build.
 - **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli`;
   `scaffold` = `assets/` (base scaffold + stack profiles); `docs` = `docs/`.
-- **v1 is a quarry, not a source tree** (charter D22). It lives at
-  `archive/v1`. Code crosses only via a deliberate keep-decision, trimmed and
-  re-tested; docs, templates, and Claude artifacts are always re-authored from
-  scratch — never copied.
+- **v1 is a quarry, not a source tree** (charter D22). It lives on the
+  `archive/v1` branch — no archive folder in the working tree; retrieve files
+  via `git checkout archive/v1 -- <path>`. Code crosses only via a deliberate
+  keep-decision, trimmed and re-tested; docs, templates, and Claude artifacts
+  are always re-authored from scratch — never copied.
 - **Rust gates:** `cargo test` and `cargo clippy` (workspace lints: clippy all
   = deny, pedantic = warn) must be green before push. Edition 2021,
   workspace-managed dependency versions in the root `Cargo.toml`.
