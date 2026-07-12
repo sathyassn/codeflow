@@ -24,14 +24,17 @@ repo. The block between the codeflow markers below is maintained by
 | RULES — how we work | this file + the agent skills (`.claude/skills/`, `.agents/skills/`) | rarely |
 | WHAT — what the system does | `docs/capabilities.md` (CAP-### registry) | every ship |
 | HOW — structure and decisions | `docs/architecture.md` + `docs/decisions/` (ADRs) | per decision |
-| WORK — planned and active work | `project-management/` (epics, tasks, specs) | daily |
+| WORK — planned and active work | `project-management/` (epics, tasks — allocated via `epic new`/`task new`; specs — hand-authored) | daily |
 | TRACE — what happened and why | ledger + `codeflow recall` | automatic |
 
 The traceability spine runs downward: capability → epics → ADRs → specs → PRs →
 ledger. Only the capability ↔ epic ↔ ADR links are enforced by ID (`validate
 --docs`); the spec, PR, and ledger links are by convention, found via `codeflow
-recall`. Answer "why is X this way" by following frontmatter links or `codeflow
-recall "X"` — never by reading all the code.
+recall`. Specs carry no CLI tooling of their own (no allocator, no model, no
+validation) — they are hand-authored input docs, frozen (`status:
+implemented`) when their epic ships, findable via `codeflow recall`. Answer
+"why is X this way" by following frontmatter links or `codeflow recall "X"` —
+never by reading all the code.
 
 Before building anything: check `docs/capabilities.md` (does it already exist?
 what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
@@ -45,7 +48,7 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
-| Mechanics | `codeflow` CLI: `test`, `validate [--docs]`, `status`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote` |
+| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `task new` |
 
 ## Planning and tracking
 
@@ -99,8 +102,7 @@ boundary is remote"). The rules, compressed:
 
 Develop in a worktree per session (native worktree support). Protected branches
 stay checked out only at the repo root, so git itself refuses a second checkout —
-structural protection for free. `codeflow doctor` warns when an agent session
-edits the root checkout directly.
+structural protection for free.
 
 ## Session flow
 

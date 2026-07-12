@@ -45,13 +45,15 @@ greenfield/brownfield paths, tiers, ownership model, and the daily flow.
 | `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`) |
 | `git-hook` | Git client hook target the `.git/hooks` shims exec |
 | `orient` | Print the session-start digest (pointers, not content) |
-| `test` | Run the test gate (configured targets or runtime stack detection) |
+| `test` | Run the test gate (configured targets or runtime stack detection); `test setup` detects the stack and writes `.codeflow/test-config.json` |
 | `validate` | Validate record frontmatter; `--docs` adds the doc-graph lint |
-| `status` | Generated view: branch, worktrees, in-flight work, capabilities |
+| `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
 | `doctor` | Health checks (7): hooks, claude, config, permissions, network, delegates, repo-integrity |
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | `remote` | Remote provider operations (branch protection) |
+| `epic new` | Allocate the next `EPC-NNN` and scaffold the epic from the template |
+| `task new` | Allocate the next `TSK-NNN-MMM` under an epic and scaffold it |
 
 ## Enforcement planes
 
