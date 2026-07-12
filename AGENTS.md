@@ -89,7 +89,10 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   the description ≤ 50 chars and the whole subject line ≤ 72. A body, when
   present, is **only** `-` bullets — at most 3, each a single line ≤ 72 chars —
   optionally followed by a `BREAKING CHANGE:` footer; no prose paragraphs. One
-  logical change per commit.
+  logical change per commit. Other git-trailer footers (`Refs:`, `Signed-off-by:`,
+  …) are blocked unless the project opts them in — a team can allow specific
+  trailers, require a ticket reference, or require `Signed-off-by` (DCO) via
+  `policy.json`.
 - **Breaking changes are a judgment call, made every commit.** Before each
   commit, ask whether it changes anything a consumer depends on — API, CLI flags,
   config schema, file formats, defaults, or managed-file semantics. If yes, mark

@@ -119,7 +119,17 @@ draft and confirm.
   specifics. **Never edit inside the managed block** — `codeflow update` owns it.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
-  allowlists are ready; protected-branch globs; branch prefixes.
+  allowlists are ready; protected-branch globs; branch prefixes. **Footer
+  policy** — the commit body is `-` bullets + a `BREAKING CHANGE:` footer only by
+  default; every other trailer blocks until opted in. Decide per class: (a)
+  **track tickets in commits?** if yes, set `commit_ticket_keys` (e.g.
+  `["Refs","Closes"]`) to *allow* them, then `commit_ticket_required`
+  (`warn`/`block`) if every commit must *carry* one, and `commit_ticket_pattern`
+  (e.g. `^PROJ-\d+$`) to constrain the ID format; (b) **DCO / sign-off?** add the
+  token to `commit_required_footers` (e.g. `["Signed-off-by"]`) to require it on
+  every commit; (c) any other trailer a workflow needs → add it to
+  `commit_footer_tokens` to allow it. Leave every list empty for the strict
+  default — an agent fills any slot you open, so open only what you mean.
 - **`.claude/workflows/pipeline.workflow.js`** — per-stage models and whether to
   default to the duo preset. It is user-owned; `codeflow update` never touches it.
 - **`.codex/config.toml`** — model pins and MCP servers (adding Playwright for duo

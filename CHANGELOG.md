@@ -41,6 +41,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Opt-in footer trailers and required footers, strict by default (ADR-0020).**
+  The commit body stays bullets + a `BREAKING CHANGE:` footer only — every other
+  trailer blocks — but a project can now open specific escape hatches via
+  `policy.json`, all empty by default: `git.commit_footer_tokens` *allows* named
+  trailers (e.g. `Signed-off-by`), and `git.commit_required_footers` *requires*
+  them on every commit (e.g. DCO sign-off). Deliberately no populated default —
+  in an agent-driven repo every default-allowed trailer is a slot an agent fills.
+  Even when `Co-authored-by` is opted in, the `ai_attribution` rule still blocks
+  an AI value; a human co-author passes only when the token is opted in.
+- **Opt-in ticket references with an allow-vs-require split (ADR-0020).**
+  `git.commit_ticket_keys` (default empty) *allows* ticket trailers (e.g. `Refs`,
+  `Closes`); `git.commit_ticket_required` (default `off`; `warn`/`block`) makes a
+  matching ticket *required*; `git.commit_ticket_pattern` (e.g. `^PROJ-\d+$`)
+  constrains the value — a present-but-malformed reference blocks even when
+  optional. Merge/revert/fixup commits are exempt; the git hook and `codeflow ci`
+  enforce it identically.
+
 - **Two working principles in both the minimal and full agent contracts.**
   *"Think independently — not a yes-man"*: a request, opinion, claim, or proposed
   approach — the operator's included — is owed analysis and evidence, not

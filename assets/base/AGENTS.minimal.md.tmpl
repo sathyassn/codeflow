@@ -65,6 +65,9 @@ softening the commit rules quietly breaks it.
   and the whole subject line ≤ 72. A body, when present, is **only** `-` bullets —
   at most 3, each a single line ≤ 72 chars — optionally followed by a
   `BREAKING CHANGE:` footer; no prose paragraphs. One logical change per commit.
+  Other git-trailer footers are blocked unless the project opts them in — a team
+  can allow specific trailers, require a ticket reference, or require
+  `Signed-off-by` (DCO) via `policy.json`.
 - **Breaking changes:** before each commit, ask whether it changes anything a
   consumer depends on (API, CLI flags, config schema, file formats, defaults,
   managed-file semantics). If yes, mark `type!:` and add a `BREAKING CHANGE:`
