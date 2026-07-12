@@ -1,6 +1,8 @@
-//! `codeflow git-hook <pre-commit|commit-msg|pre-push>` — the target the
-//! `.git/hooks` shims exec (charter §6.1 plane 1). Exit 1 blocks the git
-//! operation; warn-level findings are printed and let it proceed.
+//! `codeflow git-hook
+//! <pre-commit|commit-msg|pre-merge-commit|reference-transaction|pre-push>` —
+//! the target the `.git/hooks` shims exec (charter §6.1 plane 1). Exit 1
+//! blocks the git operation; warn-level findings are printed and let it
+//! proceed.
 
 use std::io::Read;
 use std::path::PathBuf;

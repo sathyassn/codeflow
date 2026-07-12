@@ -43,7 +43,7 @@ is an idempotent additive upgrade (downgrade = stop managing, never delete).
 
 | Tier | Adds | For |
 |---|---|---|
-| `--minimal` | `AGENTS.md`, secret-scan pre-commit, `.gitignore`; branch/commit policy at warn | Throwaways — blocking policy on a scratch repo trains bypassing |
+| `--minimal` | `AGENTS.md`, secret-scan pre-commit, `.gitignore`; the same armed policy as every tier | Throwaways |
 | `--standard` (default) | + full git gates, `.claude/` settings/agents/skills/workflows, the six-layer `docs/`, the test gate, recall capture, a CI template | Real projects |
 | `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Work that outlives sessions |
 
@@ -86,9 +86,9 @@ scan is the one rule that is never graced (charter §6.3).
   existing steps). `codeflow doctor` surfaces the unwired state so it stays
   visible.
 
-Adopt gradually: start `--minimal` (just the secret scan + gitignore, policy at
-warn), run for a while, then re-init `--standard` and later `--full` as the work
-earns the weight. Each step is additive and idempotent.
+Adopt gradually: start `--minimal` (just the secret scan + gitignore + the
+armed policy), run for a while, then re-init `--standard` and later `--full` as
+the work earns the weight. Each step is additive and idempotent.
 
 ## Ownership model — who owns what on update
 

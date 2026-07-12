@@ -23,7 +23,7 @@ enum Command {
     /// Scaffold this project (idempotent, non-destructive, offline).
     #[command(group(ArgGroup::new("tier").args(["minimal", "standard", "full"])))]
     Init {
-        /// Throwaway tier: AGENTS.md + secret scan + gitignore; policy warns.
+        /// Throwaway tier: trimmed AGENTS.md + gitignore + pre-commit secret scan; the same armed policy as every tier.
         #[arg(long)]
         minimal: bool,
         /// Real-project tier (default): full gates, docs, Claude artifacts, CI.
@@ -65,7 +65,7 @@ enum Command {
     Status(cmd::status::StatusArgs),
     /// Land a branch into a target: flock(rebase -> test -> ff-merge).
     Integrate(cmd::integrate::IntegrateArgs),
-    /// Health checks: hooks, claude wiring, config, permissions, network, delegates, repo integrity, CI perimeter, managed-region drift.
+    /// Health checks: hooks, claude wiring, config, permissions, network, delegates, repo integrity, CI perimeter, managed-region drift, test config — `doctor --list` names them all.
     Doctor(cmd::doctor::DoctorArgs),
     /// Search project memory: ledger, session summaries, ADRs, epics, capabilities.
     Recall(cmd::recall::RecallArgs),

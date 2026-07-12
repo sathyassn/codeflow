@@ -27,7 +27,11 @@
 //!
 //! [`network`](crate::security::network) and [`tmp`](crate::security::tmp) are
 //! intentionally NOT wired here: v1 network semantics conflict with the v2 PR
-//! doctrine, and the tmp module is inert without managed scratch folders.
+//! doctrine, and the tmp module is inert without managed scratch folders. The
+//! remaining modules (`git`, `path`, `fileops`, `branch`) and the
+//! `SecurityChecker` orchestrator are likewise unwired anywhere today — the
+//! live git protections are the separate `hooks/git_guard.rs` implementation
+//! (see the `security` module doc for the full wired/unwired map).
 
 use crate::security::dangerous::DangerousModule;
 use crate::security::privilege::PrivilegeModule;

@@ -2,10 +2,30 @@
 //!
 //! Imported from v1 (charter section 3.2) and trimmed: the v1 hook-pipeline
 //! adapter, session resolution, and `PathFlow` awareness are gone. The scanner
-//! is a pure library — the git-guard hook and git-hook shims build a
-//! [`CheckContext`] and route the verdict.
+//! is a pure library.
 //!
-//! Orchestrates 8 modules in priority order (critical first):
+//! ## What is wired to a production plane — and what is not
+//!
+//! Only these parts run in production today:
+//!
+//! - [`pattern`] — path/glob matching, used by the git-guard
+//!   (`hooks/git_guard.rs`) and the scaffold state (`scaffold/state.rs`).
+//! - [`git::is_on_protected_branch`] — used by `hooks/policy.rs` and
+//!   `integrate.rs`.
+//! - [`dangerous::DangerousModule`] and [`privilege::PrivilegeModule`] — run by
+//!   the exec-guard (`hooks/exec_guard.rs`, ADR-0008), which builds the only
+//!   production [`CheckContext`].
+//!
+//! The [`SecurityChecker`] orchestrator, [`default_modules`], and the other six
+//! `SecurityModule` impls ([`git::GitModule`], [`path`], [`fileops`],
+//! [`branch`], [`tmp`], [`network`]) are currently UNWIRED — no production
+//! plane invokes them. The live git protections are an independent
+//! implementation in `hooks/git_guard.rs`; do not mistake `GitModule` for
+//! active enforcement. They stay here, unit-tested, for the planned
+//! exec-guard extension (ADR-0008 wires the modules incrementally).
+//!
+//! When orchestrated, [`SecurityChecker`] runs 8 modules in priority order
+//! (critical first):
 //! 1. `dangerous` - Destructive commands (rm -rf /, fork bombs)
 //! 2. `privilege` - Privilege escalation (sudo, su, doas)
 //! 3. `git` - Git hook bypass, force push, protected branches
