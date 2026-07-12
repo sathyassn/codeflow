@@ -182,16 +182,20 @@ fn work_line(root: &Path) -> Option<String> {
 }
 
 /// Count capability statuses from `docs/capabilities.md` yaml entries.
+///
+/// Delegates to the canonical registry parser
+/// (`crate::capability::parse_capabilities`) rather than an ad-hoc text scan,
+/// so HTML-commented example entries (the scaffold's `<!-- ... CAP-001 ...
+/// -->`) are masked out here exactly as they are in `status`/`validate`
+/// — a fresh repo must not count its own doc-comment example as a real
+/// capability.
 fn capabilities_line(root: &Path) -> Option<String> {
     const STATUSES: [&str; 4] = ["shipped", "building", "planned", "deprecated"];
     let text = std::fs::read_to_string(root.join("docs").join("capabilities.md")).ok()?;
+    let (entries, _issues) = crate::capability::parse_capabilities(&text);
     let mut counts = [0usize; 4];
-    for line in text.lines() {
-        let Some(value) = line.trim().strip_prefix("status:") else {
-            continue;
-        };
-        let value = value.split('#').next().unwrap_or("").trim();
-        if let Some(idx) = STATUSES.iter().position(|s| *s == value) {
+    for entry in &entries {
+        if let Some(idx) = STATUSES.iter().position(|s| *s == entry.status) {
             counts[idx] += 1;
         }
     }
@@ -458,11 +462,38 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("docs")).unwrap();
         std::fs::write(
             dir.path().join("docs/capabilities.md"),
-            "status: shipped\nstatus: bogus\nstatus: planned\n",
+            "# caps\n\n\
+             ```yaml\nid: CAP-001\nstatus: shipped\n```\n\n\
+             ```yaml\nid: CAP-002\nstatus: bogus\n```\n\n\
+             ```yaml\nid: CAP-003\nstatus: planned\n```\n",
         )
         .unwrap();
         let line = capabilities_line(dir.path()).unwrap();
         assert_eq!(line, "capabilities: 1 shipped · 1 planned");
+    }
+
+    /// A capability entry that lives inside an HTML comment (the scaffold
+    /// template's worked example) must not be counted — a fresh repo's
+    /// orient digest should show zero capabilities, not the doc-comment
+    /// example, matching `capability::parse_capabilities`'s masking.
+    #[test]
+    fn test_capabilities_line_ignores_html_commented_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(
+            dir.path().join("docs/capabilities.md"),
+            "# caps\n\n\
+             <!-- worked example:\n\
+             ## CAP-001 — example\n\n\
+             ```yaml\nid: CAP-001\nname: example\nstatus: shipped\n```\n\
+             -->\n",
+        )
+        .unwrap();
+        assert_eq!(
+            capabilities_line(dir.path()),
+            None,
+            "an HTML-commented example entry must not be counted"
+        );
     }
 
     #[test]
