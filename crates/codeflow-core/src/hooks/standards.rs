@@ -54,8 +54,11 @@ fn attribution_res() -> &'static [(Regex, &'static str)] {
     })
 }
 
-/// Auto-generated subjects exempt from the conventional-format check.
-const FORMAT_EXEMPT_PREFIXES: &[&str] = &["Merge ", "Revert ", "Reapply ", "fixup!", "squash!"];
+/// Auto-generated subjects exempt from the conventional-format check. `Merge `
+/// is intentionally NOT here: a real merge is exempted once, structurally, in
+/// `commit_msg` (via `MERGE_HEAD`); a one-parent commit merely NAMED `Merge ...`
+/// stays fully checked, closing the subject-spoofing bypass.
+const FORMAT_EXEMPT_PREFIXES: &[&str] = &["Revert ", "Reapply ", "fixup!", "squash!"];
 
 /// Check a commit subject against the conventional format
 /// `type(scope): description` with `type` from the policy whitelist,
@@ -560,13 +563,15 @@ mod tests {
     #[test]
     fn test_format_exempt_auto_generated() {
         for s in [
-            "Merge branch 'main' into feat/x",
             "Revert \"feat: add thing\"",
             "fixup! feat: add thing",
             "squash! feat: add thing",
         ] {
             assert_eq!(check_commit_format(s, &types()), None, "{s} exempt");
         }
+        // a one-parent commit merely NAMED `Merge ...` is NOT exempt here — a
+        // real merge is exempted structurally in commit_msg (codex review).
+        assert!(check_commit_format("Merge bypass", &types()).is_some());
     }
 
     #[test]
@@ -735,17 +740,16 @@ mod tests {
 
     #[test]
     fn test_body_merge_and_revert_exempt() {
-        // Auto-generated subjects carry tool-authored bodies — exempt as a class.
-        let merge = "Merge branch 'main'\n\nA paragraph git wrote, not a bullet.";
-        assert_eq!(
-            check_commit_body("Merge branch 'main'", merge, 3, 72, &footers()),
-            None
-        );
+        // Revert/fixup/squash carry tool-authored bodies — exempt as a class.
         let revert = "Revert \"feat: x\"\n\nThis reverts commit abc123.";
         assert_eq!(
             check_commit_body("Revert \"feat: x\"", revert, 3, 72, &footers()),
             None
         );
+        // A `Merge ...` subject is NOT body-exempt here — a real merge is
+        // exempted structurally in commit_msg; a fake one is fully checked.
+        let fake_merge = "Merge bypass\n\nA paragraph a fake-merge commit smuggled in.";
+        assert!(check_commit_body("Merge bypass", fake_merge, 3, 72, &footers()).is_some());
     }
 
     // -- commit body footer trailers: strict default + opt-in (ADR-0020) --
@@ -874,7 +878,7 @@ mod tests {
         assert_eq!(check_required_footers("feat: x", "feat: x", &[]), None);
         let required = allow(&["Signed-off-by"]);
         assert_eq!(
-            check_required_footers("Merge branch 'main'", "Merge branch 'main'", &required),
+            check_required_footers("Revert \"x\"", "Revert \"x\"", &required),
             None
         );
     }
@@ -976,7 +980,7 @@ mod tests {
 
     #[test]
     fn test_ticket_merge_revert_exempt() {
-        for subject in ["Merge branch 'main'", "Revert \"feat: x\"", "fixup! feat: x"] {
+        for subject in ["Revert \"feat: x\"", "fixup! feat: x"] {
             assert_eq!(
                 check_commit_ticket(subject, subject, &keys(), PolicyLevel::Block, ""),
                 None,

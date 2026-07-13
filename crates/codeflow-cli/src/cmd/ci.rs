@@ -282,7 +282,7 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
 fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViolation> {
     let mut out = Vec::new();
     for c in commits {
-        let stage = git_hook::commit_msg_with_files(git, &c.message, &c.files);
+        let stage = git_hook::commit_msg_with_files(git, &c.message, &c.files, false);
         for violation in stage.violations {
             out.push(TaggedViolation {
                 sha: Some(c.sha.clone()),

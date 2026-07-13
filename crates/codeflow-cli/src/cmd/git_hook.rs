@@ -157,7 +157,27 @@ fn commit_msg(
         &policy.git,
         &message,
         &staged_files(root),
+        merge_in_progress(root),
     ))
+}
+
+/// True while git is creating a real merge commit — `MERGE_HEAD` exists in the
+/// git dir. The `Merge ` subject exemption keys off THIS structural fact, not
+/// the subject text, so a normal one-parent commit named `Merge ...` is still
+/// format- and body-checked.
+fn merge_in_progress(root: &Path) -> bool {
+    let git_dir = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    match git_dir {
+        Some(dir) => root.join(dir).join("MERGE_HEAD").exists(),
+        None => false,
+    }
 }
 
 /// Files staged for the pending commit (`git diff --cached --name-only`), for

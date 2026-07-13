@@ -195,12 +195,19 @@ fn push_format_violations(
 /// footers with an optional ticket requirement, the no-AI-attribution rule, and
 /// the no-emoji rule (charter §6.4, AC #13).
 #[must_use]
-pub fn commit_msg(policy: &GitPolicy, message: &str) -> StageReport {
+pub fn commit_msg(policy: &GitPolicy, message: &str, is_merge: bool) -> StageReport {
     let mut report = StageReport::default();
     let cleaned = strip_commit_comments(message);
     let Some(subject) = cleaned.lines().find(|l| !l.trim().is_empty()) else {
         return report; // git rejects empty messages itself
     };
+
+    // A genuine merge commit carries a git-authored subject/body — exempt it
+    // ONCE, structurally (is_merge is decided from MERGE_HEAD, not the subject
+    // text), so a one-parent commit named `Merge ...` is still fully checked.
+    if is_merge && subject.starts_with("Merge ") {
+        return report;
+    }
 
     if policy.commit_format.is_active() {
         push_format_violations(policy, subject, &cleaned, &mut report);
@@ -306,8 +313,9 @@ pub fn commit_msg_with_files(
     policy: &GitPolicy,
     message: &str,
     changed_files: &[String],
+    is_merge: bool,
 ) -> StageReport {
-    let mut report = commit_msg(policy, message);
+    let mut report = commit_msg(policy, message, is_merge);
     if policy.breaking_watch_paths.is_empty() {
         return report;
     }
@@ -924,7 +932,7 @@ mod tests {
 
     #[test]
     fn test_commit_msg_valid() {
-        let report = commit_msg(&GitPolicy::default(), "feat(hooks): add the guard\n");
+        let report = commit_msg(&GitPolicy::default(), "feat(hooks): add the guard\n", false);
         assert!(report.violations.is_empty());
     }
 
@@ -933,7 +941,7 @@ mod tests {
         let report = commit_msg(
             &GitPolicy::default(),
             "feat: new api\n\nBREAKING CHANGE: removes the old one\n",
-        );
+        false);
         assert!(report.violations.is_empty());
     }
 
@@ -943,7 +951,7 @@ mod tests {
         let report = commit_msg(
             &GitPolicy::default(),
             "feat: new api\n\nbreaking change: removes the old one\n",
-        );
+        false);
         assert!(
             report
                 .violations
@@ -954,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_commit_msg_malformed_subject_blocked() {
-        let report = commit_msg(&GitPolicy::default(), "Added stuff\n");
+        let report = commit_msg(&GitPolicy::default(), "Added stuff\n", false);
         assert_eq!(report.violations[0].rule, "git.commit_format");
         assert_eq!(report.violations[0].level, PolicyLevel::Block);
     }
@@ -963,7 +971,7 @@ mod tests {
     fn test_commit_msg_attribution_blocked() {
         // AC #13: attribution trailer blocked at commit-msg.
         let msg = "feat: x\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n";
-        let report = commit_msg(&GitPolicy::default(), msg);
+        let report = commit_msg(&GitPolicy::default(), msg, false);
         assert!(
             report
                 .violations
@@ -974,7 +982,7 @@ mod tests {
 
     #[test]
     fn test_commit_msg_emoji_blocked() {
-        let report = commit_msg(&GitPolicy::default(), "feat: ship \u{1F680}\n");
+        let report = commit_msg(&GitPolicy::default(), "feat: ship \u{1F680}\n", false);
         assert!(
             report
                 .violations
@@ -990,7 +998,7 @@ mod tests {
             commit_format: PolicyLevel::Warn,
             ..GitPolicy::default()
         };
-        let report = commit_msg(&warn_policy, "Bad subject\n");
+        let report = commit_msg(&warn_policy, "Bad subject\n", false);
         assert_eq!(report.violations[0].level, PolicyLevel::Warn);
 
         let off_policy = GitPolicy {
@@ -1001,14 +1009,14 @@ mod tests {
             ..GitPolicy::default()
         };
         let msg = "Bad subject \u{1F680}\n\nGenerated with a robot\n";
-        assert!(commit_msg(&off_policy, msg).violations.is_empty());
+        assert!(commit_msg(&off_policy, msg, false).violations.is_empty());
     }
 
     #[test]
     fn test_commit_msg_long_description_blocked() {
         // ADR-0020: a description over the 50-char budget blocks at commit_format.
         let subject = format!("feat: {}", "x".repeat(60));
-        let report = commit_msg(&GitPolicy::default(), &format!("{subject}\n"));
+        let report = commit_msg(&GitPolicy::default(), &format!("{subject}\n"), false);
         let v = report
             .violations
             .iter()
@@ -1021,7 +1029,7 @@ mod tests {
     fn test_commit_msg_story_body_blocked() {
         // ADR-0020: a prose body blocks at commit_body, naming the offending line.
         let msg = "feat: add a thing\n\nThis is a story about why the thing was added.\n";
-        let report = commit_msg(&GitPolicy::default(), msg);
+        let report = commit_msg(&GitPolicy::default(), msg, false);
         let v = report
             .violations
             .iter()
@@ -1035,7 +1043,7 @@ mod tests {
     fn test_commit_msg_bullet_body_passes() {
         // A conforming bullet body with a BREAKING CHANGE footer is clean.
         let msg = "feat: add a thing\n\n- wire the new path\n- cover it with a test\n\nBREAKING CHANGE: the old path is gone\n";
-        let report = commit_msg(&GitPolicy::default(), msg);
+        let report = commit_msg(&GitPolicy::default(), msg, false);
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1049,7 +1057,7 @@ mod tests {
             "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n",
             "fix: y\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n",
         ] {
-            let report = commit_msg(&GitPolicy::default(), msg);
+            let report = commit_msg(&GitPolicy::default(), msg, false);
             assert!(
                 report.violations.iter().any(|v| v.rule == "git.commit_body"),
                 "{msg:?} should block by default"
@@ -1064,7 +1072,7 @@ mod tests {
             commit_footer_tokens: vec!["Refs".into()],
             ..GitPolicy::default()
         };
-        let report = commit_msg(&policy, "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n");
+        let report = commit_msg(&policy, "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n", false);
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1077,7 +1085,7 @@ mod tests {
             ..GitPolicy::default()
         };
         let msg = "feat: x\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>\n";
-        let report = commit_msg(&policy, msg);
+        let report = commit_msg(&policy, msg, false);
         assert!(
             report.violations.iter().any(|v| v.rule == "git.ai_attribution"),
             "AI co-author must block via attribution"
@@ -1087,7 +1095,7 @@ mod tests {
             "the opted-in trailer token must not trip the body-shape check"
         );
         // A human co-author with the token opted in clears both checks.
-        let human = commit_msg(&policy, "feat: x\n\nCo-authored-by: Ada <ada@example.com>\n");
+        let human = commit_msg(&policy, "feat: x\n\nCo-authored-by: Ada <ada@example.com>\n", false);
         assert!(human.violations.is_empty(), "{:?}", human.violations);
     }
 
@@ -1096,14 +1104,14 @@ mod tests {
         // By default Co-authored-by is not opted in → the body shape blocks it
         // (human or AI alike) before attribution even matters.
         let msg = "feat: x\n\nCo-authored-by: Ada Lovelace <ada@example.com>\n";
-        let report = commit_msg(&GitPolicy::default(), msg);
+        let report = commit_msg(&GitPolicy::default(), msg, false);
         assert!(report.violations.iter().any(|v| v.rule == "git.commit_body"));
     }
 
     #[test]
     fn test_commit_msg_unknown_trailer_token_blocks_body() {
         let msg = "feat: x\n\nNote: a sneaky prose line masquerading as a trailer\n";
-        let report = commit_msg(&GitPolicy::default(), msg);
+        let report = commit_msg(&GitPolicy::default(), msg, false);
         let v = report
             .violations
             .iter()
@@ -1119,7 +1127,7 @@ mod tests {
             commit_required_footers: vec!["Signed-off-by".into()],
             ..GitPolicy::default()
         };
-        let missing = commit_msg(&policy, "feat: x\n\n- do it\n");
+        let missing = commit_msg(&policy, "feat: x\n\n- do it\n", false);
         let v = missing
             .violations
             .iter()
@@ -1127,7 +1135,7 @@ mod tests {
             .expect("a missing-required-footer violation");
         assert_eq!(v.level, PolicyLevel::Block);
         // Present (the required token is implicitly allowed) → clean.
-        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>\n");
+        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>\n", false);
         assert!(ok.violations.is_empty(), "{:?}", ok.violations);
     }
 
@@ -1135,7 +1143,7 @@ mod tests {
     fn test_commit_msg_ticket_default_off_no_requirement() {
         // Default: no ticket keys configured → no commit_ticket finding at all,
         // and a stray `Refs:` blocks on shape (not opted in).
-        let plain = commit_msg(&GitPolicy::default(), "feat: x\n\n- just a bullet\n");
+        let plain = commit_msg(&GitPolicy::default(), "feat: x\n\n- just a bullet\n", false);
         assert!(!plain.violations.iter().any(|v| v.rule == "git.commit_ticket"));
     }
 
@@ -1146,9 +1154,9 @@ mod tests {
             commit_ticket_keys: vec!["Refs".into()],
             ..GitPolicy::default()
         };
-        let present = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n");
+        let present = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n", false);
         assert!(present.violations.is_empty(), "{:?}", present.violations);
-        let absent = commit_msg(&policy, "feat: x\n\n- do it\n");
+        let absent = commit_msg(&policy, "feat: x\n\n- do it\n", false);
         assert!(!absent.violations.iter().any(|v| v.rule == "git.commit_ticket"));
     }
 
@@ -1161,7 +1169,7 @@ mod tests {
             ..GitPolicy::default()
         };
         // No ticket trailer → blocked at commit_ticket.
-        let missing = commit_msg(&policy, "feat: x\n\n- no ticket here\n");
+        let missing = commit_msg(&policy, "feat: x\n\n- no ticket here\n", false);
         let v = missing
             .violations
             .iter()
@@ -1169,7 +1177,7 @@ mod tests {
             .expect("a commit_ticket violation");
         assert_eq!(v.level, PolicyLevel::Block);
         // A conforming `Refs: PROJ-1` trailer → clean.
-        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n");
+        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n", false);
         assert!(ok.violations.is_empty(), "{:?}", ok.violations);
     }
 
@@ -1185,7 +1193,7 @@ mod tests {
     #[test]
     fn test_watch_paths_unmarked_touch_warns() {
         let files = vec!["src/api/routes.rs".to_string()];
-        let report = commit_msg_with_files(&watch_policy(), "feat: tweak a route\n", &files);
+        let report = commit_msg_with_files(&watch_policy(), "feat: tweak a route\n", &files, false);
         let v = report
             .violations
             .iter()
@@ -1199,21 +1207,21 @@ mod tests {
     fn test_watch_paths_marked_does_not_warn() {
         let files = vec!["src/api/routes.rs".to_string()];
         // A `!` subject marker suppresses the nudge...
-        let bang = commit_msg_with_files(&watch_policy(), "feat!: drop a route\n", &files);
+        let bang = commit_msg_with_files(&watch_policy(), "feat!: drop a route\n", &files, false);
         assert!(!bang.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
         // ...and so does a BREAKING CHANGE footer.
         let footer = commit_msg_with_files(
             &watch_policy(),
             "feat: drop a route\n\nBREAKING CHANGE: the /old route is gone\n",
             &files,
-        );
+        false);
         assert!(!footer.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
     #[test]
     fn test_watch_paths_untouched_does_not_warn() {
         let files = vec!["README.md".to_string(), "src/util/log.rs".to_string()];
-        let report = commit_msg_with_files(&watch_policy(), "docs: tidy the readme\n", &files);
+        let report = commit_msg_with_files(&watch_policy(), "docs: tidy the readme\n", &files, false);
         assert!(!report.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
@@ -1221,25 +1229,25 @@ mod tests {
     fn test_watch_paths_empty_default_is_noop() {
         // The shipped default (no watched globs) never warns, even on any file.
         let files = vec!["src/api/routes.rs".to_string()];
-        let report = commit_msg_with_files(&GitPolicy::default(), "feat: tweak a route\n", &files);
+        let report = commit_msg_with_files(&GitPolicy::default(), "feat: tweak a route\n", &files, false);
         assert!(!report.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
     #[test]
     fn test_commit_msg_ignores_comment_lines() {
         let msg = "feat: x\n# Co-Authored-By: Claude <noreply@anthropic.com>\n";
-        assert!(commit_msg(&GitPolicy::default(), msg).violations.is_empty());
+        assert!(commit_msg(&GitPolicy::default(), msg, false).violations.is_empty());
     }
 
     #[test]
     fn test_commit_msg_ignores_scissors_section() {
         let msg = "feat: x\n# ------------------------ >8 ------------------------\ndiff: Generated with Claude\n";
-        assert!(commit_msg(&GitPolicy::default(), msg).violations.is_empty());
+        assert!(commit_msg(&GitPolicy::default(), msg, false).violations.is_empty());
     }
 
     #[test]
     fn test_commit_msg_merge_subject_exempt_from_format() {
-        let report = commit_msg(&GitPolicy::default(), "Merge branch 'main' into feat/x\n");
+        let report = commit_msg(&GitPolicy::default(), "Merge branch 'main' into feat/x\n", true);
         assert!(report.violations.is_empty());
     }
 
@@ -1933,4 +1941,18 @@ mod tests {
             report.notes
         );
     }
+    // Regression: a one-parent commit named `Merge ...` is checked; a real
+    // merge (is_merge = true) stays exempt (codex pre-flip review).
+    #[test]
+    fn test_fake_merge_subject_is_checked() {
+        let fake = commit_msg(
+            &GitPolicy::default(),
+            "Merge bypass\n\nprose body a real check rejects\n",
+            false,
+        );
+        assert!(!fake.violations.is_empty(), "fake merge must be checked");
+        let real = commit_msg(&GitPolicy::default(), "Merge branch 'main'\n", true);
+        assert!(real.violations.is_empty(), "real merge stays exempt");
+    }
+
 }
