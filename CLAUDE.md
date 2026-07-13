@@ -15,13 +15,16 @@
 
 ## Workflows
 
-- `/cf-develop` runs the build → review → verify loop inline; the pipeline
+- `/cf-model-orchestrator` (the Claude+codex duo) is the **default for all dev
+  work**; it silently degrades to solo `/cf-develop`, which runs the same
+  build → review → verify loop inline. The pipeline
   (`.claude/workflows/pipeline.workflow.js`) composes the same stages for batch,
   parallel, or unattended runs.
 - Pick the fitting skill first, then match weight to work: trivial → just do it;
-  a feature or change → `/cf-develop`; a batch/parallel or multi-task epic → the
-  pipeline preset or the integration-branch flow; nothing fits → author a custom
-  ad-hoc workflow. Full ladder in the `cf-method` skill.
+  a feature or change → `/cf-model-orchestrator` (the duo default; solo
+  `/cf-develop` when the duo is unavailable); a batch/parallel or multi-task
+  epic → the pipeline preset or the integration-branch flow; nothing fits →
+  author a custom ad-hoc workflow. Full ladder in the `cf-method` skill.
 - Compose stages and models in config (`args.stages`, `args.models`) — never
   hardcode them; the pipeline file is user-owned and `codeflow update` never
   touches it.
