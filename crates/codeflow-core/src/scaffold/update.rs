@@ -158,7 +158,25 @@ fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: Stri
     );
 }
 
+/// A manifest `dest` is trusted only when it is a normal project-relative path:
+/// not absolute, no `..` traversal, no root/prefix component. A tampered
+/// manifest could otherwise point `dest` outside the repo, and `root.join`
+/// would resolve there — letting update write or delete an arbitrary file.
+fn is_safe_relative_dest(dest: &str) -> bool {
+    use std::path::{Component, Path};
+    let p = Path::new(dest);
+    !p.is_absolute()
+        && p.components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
 fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), ScaffoldError> {
+    if !is_safe_relative_dest(&entry.dest) {
+        return Err(ScaffoldError::ManifestInvalid(format!(
+            "refusing to write outside the repo: unsafe dest {:?}",
+            entry.dest
+        )));
+    }
     let path = root.join(&entry.dest);
     write_file(&path, content.as_bytes())?;
     if entry.exec {
@@ -512,6 +530,15 @@ fn prune_orphans(
         .collect();
 
     for dest in orphans {
+        // A tampered installed manifest could carry an absolute or `..`-escaping
+        // `dest`; `root.join` on it would resolve OUTSIDE the repo, and pruning
+        // would then delete an arbitrary hash-matching file. Never touch an
+        // unsafe path — report it so the tamper is visible (codex pre-flip
+        // review: arbitrary out-of-repo deletion via a tampered manifest).
+        if !is_safe_relative_dest(&dest) {
+            report.file(&dest, Action::Skipped);
+            continue;
+        }
         let file = installed.files[&dest].clone();
         let dest_path = root.join(&dest);
 
@@ -577,6 +604,17 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_unsafe_dest_rejected() {
+        // codex pre-flip review: a tampered manifest must not escape the repo.
+        for bad in ["/etc/passwd", "../../etc/x", "..", "a/../../b", "/abs"] {
+            assert!(!is_safe_relative_dest(bad), "must reject {bad}");
+        }
+        for ok in ["AGENTS.md", ".codeflow/policy.json", "a/b/c.md", "./x"] {
+            assert!(is_safe_relative_dest(ok), "must allow {ok}");
+        }
+    }
+
     use super::*;
 
     #[test]
