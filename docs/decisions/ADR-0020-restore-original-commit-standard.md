@@ -81,7 +81,7 @@ format, a default, or managed-file semantics? If so, the author marks the subjec
 `type!:` and writes a `BREAKING CHANGE:` footer with the migration path; that
 footer is the machine-readable signal git-cliff turns into a MAJOR bump (the
 mechanics that *validate* the marker's casing and *version* from it already
-exist — see [`check_breaking_footer`]). Because judgment can lapse, a sixth `git`
+exist — see `check_breaking_footer` in `crates/codeflow-core/src/hooks/standards.rs`). Because judgment can lapse, a sixth `git`
 policy key `breaking_watch_paths` (path globs, serde default empty) adds a
 mechanical *tripwire*: when a commit stages a file matching a declared contract
 surface with no breaking marker, the commit-msg check — and `codeflow ci`, which
@@ -194,3 +194,16 @@ strict body shape is block-level from `--minimal` up, and every relaxation is a
 per-project opt-in on top. **This repo keeps all five at their strict defaults**
 — it references CAPs and ADRs inside bullets, not as trailers, and forbids AI
 attribution outright.
+
+## Correction — 2026-07-13: ticket-pattern validation is fail-closed in effect
+
+The Amendment above says an unparseable `commit_ticket_pattern` "degrades to no
+format check (fail-open)." That still describes the *enforcement loader's*
+internal fail-safe, but it is no longer the effective behavior. The strict
+`policy.json` validation shipped since (CHANGELOG [Unreleased]) makes an
+unparseable pattern a loud, hard error at the commit-msg hook, `codeflow ci`, and
+`codeflow validate` (`validate_policy_str`,
+`crates/codeflow-core/src/hooks/policy_schema.rs`), so the loud pre-check rejects
+the config before enforcement runs — effective behavior fails **closed**. The
+fail-open path survives only as the loader's fallback behind that pre-check.
+(Append-only note; the decision body above is unchanged.)

@@ -44,3 +44,13 @@ Land work on protected branches via pull requests only:
 ## Architecture impact
 
 None — a policy value and process change; no code changes.
+
+## Correction — 2026-07-13: merge method superseded by ADR-0020
+
+The Decision above prescribes `gh pr merge --squash`. ADR-0020 later made this
+repo **rebase-only**: squash and merge-commits are disabled at the GitHub level
+(`squashMergeAllowed=false`, `mergeCommitAllowed=false`,
+`rebaseMergeAllowed=true`), so each commit lands on `main` exactly as authored
+and the per-commit standard is never papered over by a squash. Follow ADR-0020
+for the merge method; the PR-based-landings decision here otherwise stands.
+(Append-only note; the decision body above is unchanged.)
