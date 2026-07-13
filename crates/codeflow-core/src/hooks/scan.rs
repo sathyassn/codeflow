@@ -221,8 +221,8 @@ mod tests {
         // Live value built at runtime so the source carries no literal secret
         // (mirrors the runtime-built values above). `key="val"` syntax, two on
         // one line (shell `export`): the placeholder must not shield the live one.
-        let live = format!("R3al{}", "LiveSecretValue99");
-        let line = format!(r#"export api_key="your-key-here-xx" password="{live}""#);
+        let secret = format!("R3al{}", "LiveSecretValue99");
+        let line = format!(r#"export api_key="your-key-here-xx" password="{secret}""#);
         assert!(scan_line(&line).is_some(), "later live secret must be caught");
         // both placeholders → still suppressed
         let all_ph = r#"api_key = "your-key-here-xx" password = "changeme-now-please""#;
