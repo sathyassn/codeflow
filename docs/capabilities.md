@@ -79,11 +79,19 @@ authoritative perimeter — CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline
 drift, portable across CI hosts via thin GitHub/GitLab/Bitbucket/generic
 wrappers — ADR-0017), and remote branch protection (`codeflow remote protect`).
-Every rule is a policy value, user-flippable per repo. On a provided PR/MR
-body, CI additionally gates the body's STRUCTURE (`git.pr_sections`): the
-required sections must be present with real content, a code-touching range
-must carry the testing sections, and leftover template placeholders draw a
-warn naming their line. The policy file is
+Rule *levels* are policy values, user-flippable per repo (`off`/`warn`/`allow`/
+`block`), so a team tunes strictness to its risk tolerance — including the
+PR-body structure gate (`git.pr_sections`: required sections present with real
+content, a code-touching range carries the testing sections, and leftover
+template placeholders draw a warn naming their line). The structural
+anti-bypass layer is not flippable, by design: the strict policy validator (an
+invalid file fails loud rather than silently reverting to defaults), the schema
+drift-guard pinning the registry to the policy struct, the gate-context token
+that admits a protected-branch advance only through integrate or a PR, and the
+git-guard's refusal to honor override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
+tokens) set in-session — these preserve the boundary itself and have no off
+switch. Configurable levels tune how strict a rule is; the invariants keep the
+rules from being routed around. The policy file is
 discoverable and strict from the binary alone: `codeflow policy explain`
 renders every key's type, default, and valid values from a schema registry
 drift-guarded against the policy struct; `codeflow policy show` prints the
@@ -126,10 +134,15 @@ adrs: []
 ```
 
 `codeflow integrate <branch> [--into <target>]` is the sanctioned local
-landing path for protected branches: a flock-guarded rebase → test → ff-merge
-primitive. It runs under a gate-context token verified by the git hooks and
-git-guard, so a merge commit reaches a protected branch only through
-integrate or a PR — raw `git merge` stays blocked.
+landing path for protected branches: a flock-guarded rebase → test →
+fast-forward primitive. It rebases the branch onto the target, runs the test
+gate, then advances the target with `git merge --ff-only` — a linear
+fast-forward that adds no merge commit; the target ref moves only when every
+stage succeeds. The sequence runs under a gate-context token the git hooks and
+git-guard verify, so the protected ref advances only through integrate or a
+human-merged PR — a raw `git merge` or manual ref move stays blocked. A human
+retains the local override path (`CODEFLOW_HUMAN_OVERRIDE=1`), an env the
+git-guard never honors for an agent.
 
 ## CAP-006 — recall-registry
 
@@ -232,20 +245,29 @@ epics: []
 adrs: [ADR-0015, ADR-0018]
 ```
 
-`/cf-model-orchestrator` drives higher-stakes planned work as a Claude+codex
-duo: Claude plans with explicit acceptance criteria, codex (through the
-official `codex-plugin-cc` plugin — the only sanctioned lane, ADR-0018)
-reviews the plan then executes and
+`/cf-model-orchestrator` is the **default for all dev work** — any feature,
+change, fix, or doc change with acceptance criteria runs as a Claude+codex duo
+(operator policy; this reverses the earlier stakes-gated design). Claude plans
+with explicit acceptance criteria, codex (through the official `codex-plugin-cc`
+plugin — the only sanctioned lane, ADR-0018) reviews the plan then executes and
 first-tests it including UI-driven e2e, Claude does the final verification
-grading every criterion, and the two iterate a bounded fix loop. Ships as the
-`cf-model-orchestrator` skill (mirrored across `.claude/skills`, `.agents/skills`,
-and the `assets/base` source) and an opt-in `duo` pipeline preset with a
-`plan-align` convergence gate — never the default, so trivial work pays no duo
-tax. Driven from a Claude Code seat only; silently degrades to solo
-`/cf-develop` when either half of the duo is unavailable at flow start (the
-symmetric seat gate, ADR-0018); no engine orchestration code is added, and the
-authoritative gate stays
-server-side CI plus a human-merged PR (ADR-0006).
+grading every criterion, and the two iterate a bounded fix loop — each model
+reviews the other's work. Ships as the `cf-model-orchestrator` skill (mirrored
+across `.claude/skills`, `.agents/skills`, and the `assets/base` source) and a
+`duo` pipeline preset with a `plan-align` convergence gate. Driven from a Claude
+Code seat only; it silently degrades to solo `/cf-develop` (with `cf-reviewer`
+as the independent pass) when either half of the duo is unavailable at flow
+start — the symmetric seat gate, ADR-0018 — never blocking or prompting for
+auth; only a conversational answer or pure question skips the duo. No engine
+orchestration code is added, and the authoritative gate stays server-side CI
+plus a human-merged PR (ADR-0006).
+
+Verification note: the `verified_by` checks assert only manifest wiring (the
+skill and its mirrors are present) and delegate presence — they do not assert
+the default-duo / solo-fallback semantics, which live as a prose contract kept
+in sync across AGENTS.md, CLAUDE.md, this entry, and the orchestrator skill.
+That cross-surface claim is a known semantic-drift risk; a parity assertion over
+the entry-point mapping is the sanctioned way to close it (not yet wired).
 
 ## CAP-011 — security-redteam-review
 
@@ -292,8 +314,10 @@ adrs: []
 `/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
 (or a `codeflow update` that ships new defaults to decide), it runs a
 flow-aware tool preflight — verifying the tools needed by each flow the
-project actually uses (git and the harness for every flow; the codex driver,
-its MCP servers, and tmux for the duo flow; the stack's test toolchain) —
+project actually uses (git and the harness for every flow; the `codex-plugin-cc`
+plugin, codex, and its MCP servers for the duo flow; tmux only where a codex
+seat consults claude — the reverse consult lane, not the duo itself; the
+stack's test toolchain) —
 then fills the project-owned artifacts still sitting at template defaults
 (`docs/product.md`, the AGENTS.md/CLAUDE.md project sections, policy.json gate
 levels, model pins). Analysis-then-propose: one prioritized report first, then
