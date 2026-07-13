@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Security: three enforcement-bypass fixes from the pre-release review.**
+  The destructive-command guard now tokenizes `rm` instead of pattern-matching,
+  so `rm -r -f /`, `rm --recursive --force /`, `rm -rf -- /`, and `rm -rf $HOME`
+  are blocked, not just the exact `rm -rf` spelling. The commit-standard merge
+  exemption keys off a real merge (`MERGE_HEAD`), not the subject text, so a
+  one-parent commit named `Merge ...` is fully checked. `codeflow update` rejects
+  a manifest `dest` that is absolute or escapes the repo with `..`, closing an
+  arbitrary out-of-repo file deletion via a tampered manifest.
 - **PR bodies now demand test evidence and digestible bullets.** The shipped
   PR template's `Verification` section becomes `## Testing` — required for any
   code change, carrying pasted test-summary output, the coverage number, the
