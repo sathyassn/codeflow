@@ -74,11 +74,9 @@ pub struct FailedTest {
     pub message: Option<String>,
 }
 
-/// Report-only coverage summary for one target (charter §3.1 coverage audit).
-///
-/// This never affects the gate verdict — it is surfaced so a full-mode run
-/// makes coverage visible instead of silently dropping it. Threshold gating is
-/// a future step; today the numbers are informational.
+/// Coverage summary for one target (charter §3.1 coverage audit). A configured
+/// threshold that a measured file misses fails the gate (`thresholds_failed`);
+/// a full-mode run with no coverage data recorded is informational only.
 #[derive(Debug, Clone)]
 pub struct CoverageReport {
     pub target: String,
@@ -100,9 +98,9 @@ pub enum GateOutcome {
     /// Nothing to run: no config targets and no detectable stack (or no
     /// target defines the requested mode). Callers must report this loudly.
     NoTargets { reason: String },
-    /// Targets ran; `passed` is the gate verdict. `coverage` is report-only
-    /// (populated for full-mode runs of targets that configure coverage) and
-    /// does not influence `passed`.
+    /// Targets ran; `passed` is the gate verdict — every target's tests passed
+    /// AND no configured coverage threshold was missed (`coverage`, populated
+    /// for full-mode runs of targets that configure coverage).
     Completed {
         results: Vec<GateTargetResult>,
         passed: bool,
@@ -176,9 +174,9 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
         });
     }
 
-    // Report-only coverage: for a full run, parse each covered target's artifact
-    // and summarize it. This never gates (that is a future step) — it just makes
-    // coverage visible rather than silently discarded.
+    // Coverage: for a full run, parse each covered target's artifact and
+    // summarize it. A missed threshold fails the gate verdict below; a run with
+    // no coverage data is informational only.
     let coverage = if effective_mode == "full" {
         let ok_runs: Vec<TargetRunResult> =
             raw.iter().filter_map(|r| r.as_ref().ok().cloned()).collect();
@@ -222,12 +220,23 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
         })
         .collect();
 
-    let passed = results.iter().all(GateTargetResult::passed);
+    let passed = gate_verdict(&results, &coverage);
     Ok(GateOutcome::Completed {
         results,
         passed,
         coverage,
     })
+}
+
+/// The gate verdict: every target's tests pass AND no configured coverage
+/// threshold failed. A coverage report with no usable data (missing/empty
+/// artifact — `thresholds_failed == 0`) never fails the gate; only a measured
+/// below-threshold file does (codex pre-flip review: thresholds were collected
+/// but never enforced).
+#[must_use]
+pub fn gate_verdict(results: &[GateTargetResult], coverage: &[CoverageReport]) -> bool {
+    results.iter().all(GateTargetResult::passed)
+        && coverage.iter().all(|c| c.thresholds_failed == 0)
 }
 
 /// Build report-only coverage summaries for the targets that ran successfully
@@ -377,6 +386,27 @@ fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
 
 #[cfg(test)]
 mod tests {
+    fn cov(failed: usize) -> CoverageReport {
+        CoverageReport {
+            target: "t".into(), overall_percent: Some(80.0),
+            thresholds_passed: 0, thresholds_failed: failed,
+            exceptions_applied: 0, failing_files: vec![], note: None,
+        }
+    }
+    fn ok_result() -> GateTargetResult {
+        GateTargetResult {
+            name: "t".into(), exit_code: 0, duration_ms: 1,
+            stdout: String::new(), stderr: String::new(), error: None, report: None,
+        }
+    }
+    #[test]
+    fn test_coverage_threshold_fails_gate() {
+        // codex pre-flip review: a missed coverage threshold must fail the gate.
+        assert!(gate_verdict(&[ok_result()], &[cov(0)]), "tests pass, coverage ok");
+        assert!(!gate_verdict(&[ok_result()], &[cov(1)]), "missed threshold fails");
+        assert!(gate_verdict(&[ok_result()], &[]), "no coverage config still passes");
+    }
+
     use super::*;
 
     fn write_config(dir: &Path, targets_json: &str) {
@@ -645,9 +675,10 @@ mod tests {
     }
 
     #[test]
-    fn full_mode_reports_coverage_but_does_not_gate_on_it() {
+    fn full_mode_coverage_shortfall_fails_the_gate() {
         // A target with coverage config + an lcov artifact below threshold must
-        // still PASS the gate (report-only) while surfacing the shortfall.
+        // FAIL the gate while surfacing the shortfall (codex pre-flip review:
+        // thresholds were collected but never enforced).
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("cov.lcov"),
@@ -667,7 +698,7 @@ mod tests {
             GateOutcome::Completed {
                 passed, coverage, ..
             } => {
-                assert!(passed, "coverage is report-only; the gate must still pass");
+                assert!(!passed, "a missed coverage threshold must fail the gate");
                 assert_eq!(coverage.len(), 1);
                 let cov = &coverage[0];
                 assert_eq!(cov.target, "cov");

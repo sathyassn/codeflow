@@ -16,6 +16,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one-parent commit named `Merge ...` is fully checked. `codeflow update` rejects
   a manifest `dest` that is absolute or escapes the repo with `..`, closing an
   arbitrary out-of-repo file deletion via a tampered manifest.
+- **Coverage thresholds now fail the test gate.** A configured per-file
+  coverage threshold that a measured file misses fails `codeflow test --mode
+  full` and the integrate gate, instead of being collected and silently
+  ignored. A run with no coverage data recorded stays informational.
 - **PR bodies now demand test evidence and digestible bullets.** The shipped
   PR template's `Verification` section becomes `## Testing` — required for any
   code change, carrying pasted test-summary output, the coverage number, the
