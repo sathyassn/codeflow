@@ -105,7 +105,8 @@ its next `codeflow update` (the reconciliation installs the now-in-tier files).
 |---|---|---|
 | Fully-managed | `.claude/` agents, skills; git-hook shims; CI template | Replaced if you never touched them; 3-way merged from `.codeflow/.baseline/` if you did — conflicts land as `.new` + a report |
 | Managed-region | `AGENTS.md` / `CLAUDE.md` markers; `.gitignore` markers; `.claude/settings.json` codeflow keys | Only the marked region or codeflow-owned keys are rewritten; everything else is yours |
-| User-owned, schema-versioned | `.codeflow/policy.json`, `.codeflow/project.toml`, all of `docs/` | Only *new* keys are added with defaults and reported; your values are never mutated |
+| User-owned, schema-versioned | `.codeflow/policy.json`, `.codeflow/project.toml` | Only *new* keys are added with their defaults and reported; values you set are never mutated |
+| User-owned docs (write-once seeds) | all of `docs/` — product, architecture, capabilities, ADRs | Seeded once at init; `update` never mutates them — they are yours to edit and own |
 | Engine-generated | `.codeflow/manifest.json`, `.codeflow/.baseline/`, `status` / `orient` views | Rewritten by the binary; never hand-edit |
 
 ## The update story
@@ -157,7 +158,7 @@ the values you already set — so tightening ships without a manual migration.
    protected-branch rules, test gate). Keep `codeflow test` and `codeflow
    validate --docs` green before push.
 4. **Land by PR, merged by a human.** Push the branch, open a PR from the
-   template (summary, changes, verification, linked epic/capability IDs); a
+   template (summary, changes, testing, linked epic/capability IDs); a
    human merges it on green CI (an agent-performed `gh pr merge` into a
    protected base is blocked — that is the boundary). With no remote, `codeflow
    integrate <branch> --into <target>` is the sanctioned local path, and a human
