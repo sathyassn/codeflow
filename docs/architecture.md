@@ -10,9 +10,9 @@
 
 A two-crate Cargo workspace that builds one binary with the scaffold embedded.
 `codeflow-core` is the engine library — all mechanics live here. `codeflow-cli`
-is a thin dispatcher: `main.rs` is a clap command surface over 15 subcommands
+is a thin dispatcher: `main.rs` is a clap command surface over 16 subcommands
 (`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
-`status`, `integrate`, `doctor`, `recall`, `remote`, `epic`, `task`) — most a small handler in `cmd/` that
+`status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
 read `assets/` from disk for instant scaffold iteration). The consuming repo is

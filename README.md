@@ -70,9 +70,10 @@ greenfield/brownfield paths, tiers, ownership model, and the daily flow.
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate (configured targets or runtime stack detection); `test setup` detects the stack and writes `.codeflow/test-config.json` |
 | `validate` | Validate `.codeflow/policy.json` (loudly) + record frontmatter; `--docs` adds the doc-graph lint |
+| `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
-| `doctor` | Health checks (7): hooks, claude, config, permissions, network, delegates, repo-integrity |
+| `doctor` | Health checks (11): hooks, claude, codex, config, permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift, test-config |
 | `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | `remote` | Remote provider operations (branch protection) |
