@@ -332,10 +332,13 @@ fn build_target_ledger_summary(
         coverage_percent.map_or(serde_json::Value::Null, serde_json::Value::from);
 
     let threshold_passes = target.threshold_results.iter().filter(|r| r.pass).count();
+    // `pass` already reflects the exception-lowered threshold, so every `!pass`
+    // is a real failure — matching the gate verdict (codex round-2: don't waive
+    // a file below its lowered bar just because an exception was applied).
     let threshold_failures = target
         .threshold_results
         .iter()
-        .filter(|r| !r.pass && !r.exception_applied)
+        .filter(|r| !r.pass)
         .count();
     let exception_applications = target
         .threshold_results

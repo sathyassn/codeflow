@@ -86,10 +86,17 @@ pub struct CoverageReport {
     pub thresholds_passed: usize,
     pub thresholds_failed: usize,
     pub exceptions_applied: usize,
-    /// `(file, coverage_percent, threshold)` for each failing, non-excepted file.
+    /// `(file, coverage_percent, threshold)` for each file below its (possibly
+    /// exception-lowered) threshold. An exception lowers the bar; dropping below
+    /// the lowered bar still fails.
     pub failing_files: Vec<(String, f64, u32)>,
     /// Set when coverage is configured but no usable data was produced.
     pub note: Option<String>,
+    /// Coverage was configured with enforcing rules, but no usable artifact was
+    /// produced (missing/empty/unparseable). Fails the gate — a required
+    /// coverage measurement that silently vanishes must not pass (codex round-2:
+    /// coverage fail-open on absent artifacts).
+    pub data_missing: bool,
 }
 
 /// Outcome of running the test gate.
@@ -228,15 +235,17 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
     })
 }
 
-/// The gate verdict: every target's tests pass AND no configured coverage
-/// threshold failed. A coverage report with no usable data (missing/empty
-/// artifact — `thresholds_failed == 0`) never fails the gate; only a measured
-/// below-threshold file does (codex pre-flip review: thresholds were collected
-/// but never enforced).
+/// The gate verdict: every target's tests pass AND, for every coverage report,
+/// no threshold failed AND no required coverage data went missing. A file below
+/// its (possibly exception-lowered) threshold fails; a configured-but-absent
+/// coverage artifact fails too (codex round-2: exceptions and missing artifacts
+/// both let coverage fail open).
 #[must_use]
 pub fn gate_verdict(results: &[GateTargetResult], coverage: &[CoverageReport]) -> bool {
     results.iter().all(GateTargetResult::passed)
-        && coverage.iter().all(|c| c.thresholds_failed == 0)
+        && coverage
+            .iter()
+            .all(|c| c.thresholds_failed == 0 && !c.data_missing)
 }
 
 /// Build report-only coverage summaries for the targets that ran successfully
@@ -255,6 +264,14 @@ fn collect_coverage_reports(
         if target.coverage.is_none() {
             continue;
         }
+        // Coverage with threshold rules is enforcing: if its artifact goes
+        // missing, that must fail the gate, not pass silently. A coverage block
+        // that only collects (no rules) has nothing to enforce, so a missing
+        // artifact there is merely informational.
+        let enforcing = target
+            .coverage
+            .as_ref()
+            .is_some_and(|c| !c.rules.is_empty());
 
         let coverages = match validation::parse_target_coverage(target, run) {
             Ok(c) => c,
@@ -267,6 +284,7 @@ fn collect_coverage_reports(
                     exceptions_applied: 0,
                     failing_files: Vec::new(),
                     note: Some(format!("coverage artifact could not be parsed: {e}")),
+                    data_missing: enforcing,
                 });
                 continue;
             }
@@ -280,6 +298,7 @@ fn collect_coverage_reports(
                 exceptions_applied: 0,
                 failing_files: Vec::new(),
                 note: Some("no coverage data collected".to_string()),
+                data_missing: enforcing,
             });
             continue;
         }
@@ -291,14 +310,14 @@ fn collect_coverage_reports(
 
         let thresholds = validation::evaluate_target_thresholds(target, &coverages, &[]);
         let thresholds_passed = thresholds.iter().filter(|r| r.pass).count();
-        let thresholds_failed = thresholds
-            .iter()
-            .filter(|r| !r.pass && !r.exception_applied)
-            .count();
+        // `pass` is already computed against the exception-lowered threshold, so
+        // a failing result counts regardless of `exception_applied` — otherwise
+        // an exception silently waives a file below even its lowered bar.
+        let thresholds_failed = thresholds.iter().filter(|r| !r.pass).count();
         let exceptions_applied = thresholds.iter().filter(|r| r.exception_applied).count();
         let failing_files = thresholds
             .iter()
-            .filter(|r| !r.pass && !r.exception_applied)
+            .filter(|r| !r.pass)
             .map(|r| (r.file.clone(), r.coverage_percent, r.threshold))
             .collect();
 
@@ -310,6 +329,7 @@ fn collect_coverage_reports(
             exceptions_applied,
             failing_files,
             note: None,
+            data_missing: false,
         });
     }
     reports
@@ -391,6 +411,15 @@ mod tests {
             target: "t".into(), overall_percent: Some(80.0),
             thresholds_passed: 0, thresholds_failed: failed,
             exceptions_applied: 0, failing_files: vec![], note: None,
+            data_missing: false,
+        }
+    }
+    fn cov_missing() -> CoverageReport {
+        CoverageReport {
+            target: "t".into(), overall_percent: None,
+            thresholds_passed: 0, thresholds_failed: 0,
+            exceptions_applied: 0, failing_files: vec![],
+            note: Some("no coverage data collected".into()), data_missing: true,
         }
     }
     fn ok_result() -> GateTargetResult {
@@ -405,6 +434,16 @@ mod tests {
         assert!(gate_verdict(&[ok_result()], &[cov(0)]), "tests pass, coverage ok");
         assert!(!gate_verdict(&[ok_result()], &[cov(1)]), "missed threshold fails");
         assert!(gate_verdict(&[ok_result()], &[]), "no coverage config still passes");
+    }
+
+    // codex round-2: an enforcing coverage config whose artifact is missing/
+    // unparseable must FAIL the gate, not pass silently (fail-open on absent data).
+    #[test]
+    fn test_missing_required_coverage_fails_gate() {
+        assert!(
+            !gate_verdict(&[ok_result()], &[cov_missing()]),
+            "required coverage with no data must fail"
+        );
     }
 
     use super::*;

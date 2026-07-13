@@ -266,6 +266,26 @@ mod tests {
         assert_eq!(results[0].threshold, 79);
     }
 
+    // codex round-2: an exception LOWERS the bar; a file below even the lowered
+    // bar must still fail (`pass == false`), so the gate — which now counts every
+    // `!pass` result — no longer silently waives it.
+    #[test]
+    fn test_exception_below_lowered_threshold_still_fails() {
+        let rules = vec![make_rule(CoverageScope::PerFile, 85)];
+        let coverages = vec![make_cov("worker.rs", 100, 40)]; // 40% < lowered 50%
+        let exceptions = vec![CoverageException {
+            file: "worker.rs".to_string(),
+            threshold: 50,
+            reason: "process spawning".to_string(),
+            remove_when: "mock harness".to_string(),
+        }];
+        let results = evaluate_file_thresholds(&rules, &coverages, &[], &exceptions);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].pass, "40% is below the lowered 50% bar");
+        assert!(results[0].exception_applied);
+        assert_eq!(results[0].threshold, 50);
+    }
+
     #[test]
     fn test_global_threshold() {
         let rules = vec![make_rule(CoverageScope::Global, 80)];
