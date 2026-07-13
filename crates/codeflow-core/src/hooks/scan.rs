@@ -74,15 +74,28 @@ fn secret_res() -> &'static [(Regex, &'static str)] {
 /// to the assigned value (the quoted string), never the whole line — a comment
 /// like `# example account` must not suppress a real secret (codex pre-flip
 /// review: secret-scan bypass).
+///
+/// Template-interpolation markers (`<`, `${`, `$(`) are never a raw secret, so
+/// they count anywhere. Placeholder *words* count only as a leading marker, so a
+/// live value that merely contains "example"/"xxxx" mid-string is NOT suppressed
+/// (codex round-2: over-broad substring match).
 fn is_placeholder_value(value: &str) -> bool {
     let lower = value.to_lowercase();
-    ["example", "placeholder", "changeme", "your-", "your_", "xxxx", "<", "${", "$("]
-        .iter()
-        .any(|p| lower.contains(p))
+    if ["<", "${", "$("].iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    let core = lower.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+    [
+        "your-", "your_", "changeme", "placeholder", "example", "xxxx", "redacted", "dummy",
+        "sample", "insert", "todo", "fixme",
+    ]
+    .iter()
+    .any(|p| core.starts_with(p))
 }
 
-/// The quoted value assigned in a `key = "value"` credential line, if any.
-fn assigned_value(line: &str) -> Option<&str> {
+/// Every quoted value assigned in a `key = "value"` credential line (a line can
+/// carry more than one, e.g. flow-style JSON/YAML).
+fn assigned_values(line: &str) -> Vec<&str> {
     static VALUE_RE: OnceLock<Regex> = OnceLock::new();
     let re = VALUE_RE.get_or_init(|| {
         Regex::new(
@@ -90,12 +103,19 @@ fn assigned_value(line: &str) -> Option<&str> {
         )
         .expect("valid")
     });
-    re.captures(line)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str())
+    re.captures_iter(line)
+        .filter_map(|c| c.get(1).map(|m| m.as_str()))
+        .collect()
 }
 
 /// Scan a single content line for secrets. Returns the pattern name on a hit.
+///
+/// Limitation: the generic credential-assignment detector requires a *quoted*
+/// value, so an unquoted `PASSWORD=liveSecret123` in a non-`.env` file is not
+/// matched here — that would need an entropy heuristic the low-false-positive
+/// hot path deliberately avoids. Specific token shapes (AKIA…, ghp_…, sk-…) are
+/// caught regardless of quoting, and `.env` files are blocked wholesale by
+/// [`is_env_file`].
 #[must_use]
 pub fn scan_line(line: &str) -> Option<&'static str> {
     let hit = secret_res()
@@ -103,14 +123,13 @@ pub fn scan_line(line: &str) -> Option<&'static str> {
         .find(|(re, _)| re.is_match(line))
         .map(|(_, name)| *name)?;
     // The generic assignment defers to the placeholder filter — but only on the
-    // assigned VALUE, so a placeholder word in a comment or the key name can no
-    // longer suppress a real credential. Specific token shapes (AKIA…, ghp_…)
-    // always count.
+    // assigned VALUE(s), and it suppresses only when EVERY value is a
+    // placeholder, so a placeholder assignment cannot shield a live one that
+    // follows on the same line. Specific token shapes (AKIA…, ghp_…) always count.
     if hit == "credential assignment" {
-        if let Some(value) = assigned_value(line) {
-            if is_placeholder_value(value) {
-                return None;
-            }
+        let values = assigned_values(line);
+        if !values.is_empty() && values.iter().all(|v| is_placeholder_value(v)) {
+            return None;
         }
     }
     Some(hit)
@@ -194,6 +213,35 @@ mod tests {
     }
 
     use super::*;
+
+    // codex round-2: a placeholder assignment must not shield a live credential
+    // that follows on the same line (flow-style JSON/YAML, minified config).
+    #[test]
+    fn test_placeholder_does_not_shield_later_live_secret() {
+        // Live value built at runtime so the source carries no literal secret
+        // (mirrors the runtime-built values above). `key="val"` syntax, two on
+        // one line (shell `export`): the placeholder must not shield the live one.
+        let live = format!("R3al{}", "LiveSecretValue99");
+        let line = format!(r#"export api_key="your-key-here-xx" password="{live}""#);
+        assert!(scan_line(&line).is_some(), "later live secret must be caught");
+        // both placeholders → still suppressed
+        let all_ph = r#"api_key = "your-key-here-xx" password = "changeme-now-please""#;
+        assert!(scan_line(all_ph).is_none(), "all-placeholder line stays clean");
+    }
+
+    // codex round-2: a live value that merely CONTAINS a placeholder word
+    // mid-string must still be flagged (substring match was over-broad). Values
+    // built at runtime so the source carries no literal credential assignment.
+    #[test]
+    fn test_midvalue_placeholder_word_still_flagged() {
+        let mid_example = format!("a1{}9Z8yLiveKey24", "examp".to_string() + "le");
+        let mid_xxxx = format!("p4ss{}liveSecret77", "XX".to_string() + "XX");
+        let mid_dummy = format!("real{}LookingButLive9", "dum".to_string() + "my");
+        for val in [mid_example, mid_xxxx, mid_dummy] {
+            let line = format!(r#"api_key = "{val}""#);
+            assert!(scan_line(&line).is_some(), "must flag live value: {line}");
+        }
+    }
 
     #[test]
     fn test_scan_line_aws_key() {

@@ -29,16 +29,34 @@ fn command_segments(cmd: &str) -> Vec<&str> {
     out
 }
 
-/// Strip one layer of matching surrounding quotes from a token.
-fn strip_quotes(tok: &str) -> &str {
-    let t = tok.trim();
-    let b = t.as_bytes();
-    if b.len() >= 2
-        && ((b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\''))
-    {
-        &t[1..t.len() - 1]
+/// Strip shell quoting and escaping noise from a single token so equivalent
+/// spellings collapse: `"/"`→`/`, `'/etc'`→`/etc`, `"$HOME"/`→`$HOME/`,
+/// `\/`→`/`. Applied to `rm` *operands* only (not to command-name detection),
+/// so ordinary strings like `git commit -m "rm -rf / fix"` — where the token is
+/// `"rm`, which does not basename to `rm` — are never misread as a command.
+fn unquote_unescape(tok: &str) -> String {
+    tok.chars().filter(|&c| c != '"' && c != '\'' && c != '\\').collect()
+}
+
+/// Normalize a path operand so filesystem-equivalent spellings reduce to their
+/// real target: collapse repeated and `.` slashes and resolve leading `..`, so
+/// `//`, `/./`, `//etc`, `/./etc`, `/usr/..`, and `/tmp/..` classify correctly.
+fn normalize_path(op: &str) -> String {
+    let leading = op.starts_with('/');
+    let mut segs: Vec<&str> = Vec::new();
+    for s in op.split('/') {
+        match s {
+            "" | "." => {}
+            ".." if leading => {
+                segs.pop();
+            }
+            _ => segs.push(s),
+        }
+    }
+    if leading {
+        format!("/{}", segs.join("/"))
     } else {
-        t
+        segs.join("/")
     }
 }
 
@@ -51,16 +69,26 @@ fn is_home_operand(op: &str) -> bool {
 }
 
 /// Classify an `rm` operand as a protected target (root, root glob, a system
-/// directory, or the home directory) — regardless of how it was written.
+/// directory, or the home directory) — regardless of how the path is spelled.
+/// De-quotes then normalizes so `rm -rf //`, `/./`, `//etc`, `/usr/..`, `"/"`,
+/// and `"$HOME"/` are all caught, not only the literal `/` / `/etc` forms.
+///
+/// Scope: this guards against *accidental* destructive commands (defense in
+/// depth), so it deliberately does not chase command-name obfuscation like
+/// `"/bin/rm"`, `r\m`, or `bash -c 'rm -rf /'` — an agent with shell access
+/// needs no such evasion, and matching them would force whole-line quote
+/// stripping that false-positives on ordinary `echo`/`commit` strings.
 fn dangerous_rm_target(op: &str) -> Option<&'static str> {
-    let op = strip_quotes(op);
-    if op == "/" || op == "/*" {
-        return Some("/");
-    }
+    let op = unquote_unescape(op);
+    let op = op.trim();
     if is_home_operand(op) {
         return Some("home directory");
     }
-    if let Some(rest) = op.strip_prefix('/') {
+    let norm = normalize_path(op);
+    if norm == "/" || norm == "/*" {
+        return Some("/");
+    }
+    if let Some(rest) = norm.strip_prefix('/') {
         let first = rest.split('/').next().unwrap_or("");
         if SYSTEM_DIRS.contains(&first) {
             return Some("system directory");
@@ -354,6 +382,32 @@ mod tests {
         }
     }
 
+    // Regression: path-equivalence spellings that reduce to a protected target
+    // (codex round-2 review — normalization bypass). `//`, `/./`, and `..` are
+    // filesystem-equivalent to root / a system dir and must still be blocked.
+    #[test]
+    fn test_rm_path_equivalence_blocked() {
+        for cmd in [
+            "rm -rf //",
+            "rm -rf /./",
+            "rm -rf ///",
+            "rm -rf //etc",
+            "rm -rf /./etc",
+            "rm -rf /usr/..",   // == /
+            "rm -rf /tmp/..",   // == /
+            "rm -rf /var/../etc",
+            "rm -rf \"/\"",
+            "rm -rf '/'",
+            "rm -rf \"$HOME\"/",
+            "rm -rf //*",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+    }
+
     // Recursive rm of a non-protected path stays allowed (no false positives).
     #[test]
     fn test_rm_recursive_safe_paths_allowed() {
@@ -362,13 +416,47 @@ mod tests {
             "rm -r /tmp/scratch",
             "rm -rf target",
             "rm -rf node_modules",
-            "rm -f /etc/hosts.bak", // not recursive
+            "rm -f /etc/hosts.bak",       // not recursive
+            "rm -rf /home/user/proj/..",  // == /home/user, not protected
+            "rm -rf ./scratch/..",        // relative, not protected
         ] {
             assert!(
                 DangerousModule.check(&ctx(cmd)).is_none(),
                 "should allow: {cmd}"
             );
         }
+    }
+
+    // Over-block guard: when the quote attaches to the `rm` token itself (the
+    // common case for a dangerous string inside a message/argument), the raw
+    // token is `"rm` / `'rm`, which does not basename to `rm`, so it is never
+    // misread as a command and stays allowed.
+    #[test]
+    fn test_rm_quoted_strings_not_misread_as_command() {
+        for cmd in [
+            "git commit -m \"rm -rf / fix\"",
+            "echo \"rm -rf /\"",
+            "grep -r 'rm -rf /' .",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_none(),
+                "should allow (not a real rm): {cmd}"
+            );
+        }
+    }
+
+    // Documented conservative behavior: a *bare* `rm` word followed by a
+    // recursive flag and a protected target is blocked even inside a harmless
+    // `echo '… rm -rf / …'`. A static guard cannot prove command position
+    // without a shell parser, and for a safety guard failing safe (over-block a
+    // rare echo) beats failing open (miss a real `rm -rf /`).
+    #[test]
+    fn test_bare_rm_in_string_is_conservatively_blocked() {
+        assert!(
+            DangerousModule
+                .check(&ctx("echo 'do not run rm -rf /'"))
+                .is_some()
+        );
     }
 
     #[test]
