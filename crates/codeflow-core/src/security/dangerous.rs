@@ -13,31 +13,60 @@ use super::{CheckContext, SecurityModule, Verdict, block};
 const DANGEROUS_SUBSTRINGS: &[&str] =
     &["dd if=/dev/zero", "dd if=/dev/random", "mkfs.", "> /dev/sd"];
 
-fn rm_rf_root_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+/(\s|$|\*)").expect("valid"))
+/// System directories whose recursive deletion is catastrophic.
+const SYSTEM_DIRS: &[&str] = &[
+    "etc", "var", "usr", "bin", "sbin", "boot", "lib", "lib64", "opt", "root", "sys", "proc",
+    "dev",
+];
+
+/// Split a command line into simple-command segments so an `rm` after `;`,
+/// `&&`, `||`, `|`, `&`, or a newline is still classified on its own.
+fn command_segments(cmd: &str) -> Vec<&str> {
+    let mut out = vec![cmd];
+    for sep in [";", "\n", "&&", "||", "|", "&"] {
+        out = out.into_iter().flat_map(|s| s.split(sep)).collect();
+    }
+    out
 }
 
-fn rm_fr_root_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"rm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+/(\s|$|\*)").expect("valid")
-    })
+/// Strip one layer of matching surrounding quotes from a token.
+fn strip_quotes(tok: &str) -> &str {
+    let t = tok.trim();
+    let b = t.as_bytes();
+    if b.len() >= 2
+        && ((b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\''))
+    {
+        &t[1..t.len() - 1]
+    } else {
+        t
+    }
 }
 
-fn rm_home_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+~(\s|$|/\*)").expect("valid"))
+/// A `~` / `$HOME` reference (bare or a path under it).
+fn is_home_operand(op: &str) -> bool {
+    matches!(op, "~" | "$HOME" | "${HOME}")
+        || op.starts_with("~/")
+        || op.starts_with("$HOME/")
+        || op.starts_with("${HOME}/")
 }
 
-fn rm_system_dir_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+/(etc|var|usr|bin|sbin|boot|lib|lib64|opt|root|sys|proc)(\s|$|/)",
-        )
-        .expect("valid")
-    })
+/// Classify an `rm` operand as a protected target (root, root glob, a system
+/// directory, or the home directory) — regardless of how it was written.
+fn dangerous_rm_target(op: &str) -> Option<&'static str> {
+    let op = strip_quotes(op);
+    if op == "/" || op == "/*" {
+        return Some("/");
+    }
+    if is_home_operand(op) {
+        return Some("home directory");
+    }
+    if let Some(rest) = op.strip_prefix('/') {
+        let first = rest.split('/').next().unwrap_or("");
+        if SYSTEM_DIRS.contains(&first) {
+            return Some("system directory");
+        }
+    }
+    None
 }
 
 fn dd_disk_re() -> &'static Regex {
@@ -125,34 +154,59 @@ impl SecurityModule for DangerousModule {
     }
 }
 
+/// Block recursive `rm` of a protected location, however the flags and operand
+/// are spelled. Tokenizes each simple command instead of pattern-matching the
+/// raw string, so `rm -r -f /`, `rm --recursive --force /`, `rm -rf -- /`, and
+/// `rm -rf "$HOME"` are all caught, not only the exact `rm -rf` form.
 fn check_recursive_delete(cmd: &str) -> Option<Verdict> {
-    if rm_rf_root_re().is_match(cmd) {
-        return Some(block(
-            "Dangerous Command",
-            "Recursive deletion of root directory",
-            "rm -r[f] /",
-        ));
-    }
-    if rm_fr_root_re().is_match(cmd) {
-        return Some(block(
-            "Dangerous Command",
-            "Recursive forced deletion of root",
-            "rm -fr /",
-        ));
-    }
-    if rm_home_re().is_match(cmd) {
-        return Some(block(
-            "Dangerous Command",
-            "Recursive deletion of home directory",
-            "rm -r ~",
-        ));
-    }
-    if rm_system_dir_re().is_match(cmd) {
-        return Some(block(
-            "Dangerous Command",
-            "Recursive deletion of system directory",
-            "rm -r /system-dir",
-        ));
+    for seg in command_segments(cmd) {
+        let toks: Vec<&str> = seg.split_whitespace().collect();
+        let Some(rm_idx) = toks
+            .iter()
+            .position(|t| t.rsplit('/').next().unwrap_or(t) == "rm")
+        else {
+            continue;
+        };
+
+        let mut recursive = false;
+        let mut operands: Vec<&str> = Vec::new();
+        let mut operands_only = false; // everything after a lone `--`
+        for &a in &toks[rm_idx + 1..] {
+            if operands_only {
+                operands.push(a);
+                continue;
+            }
+            if a == "--" {
+                operands_only = true;
+            } else if let Some(long) = a.strip_prefix("--") {
+                if matches!(long, "recursive" | "dir") {
+                    recursive = true;
+                }
+            } else if let Some(short) = a.strip_prefix('-') {
+                if !short.is_empty() && short.chars().all(|c| c.is_ascii_alphabetic()) {
+                    if short.contains('r') || short.contains('R') {
+                        recursive = true;
+                    }
+                } else {
+                    operands.push(a); // not a clean flag bundle → treat as operand
+                }
+            } else {
+                operands.push(a);
+            }
+        }
+
+        if !recursive {
+            continue;
+        }
+        for op in operands {
+            if let Some(target) = dangerous_rm_target(op) {
+                return Some(block(
+                    "Dangerous Command",
+                    "Recursive deletion of a protected location",
+                    target,
+                ));
+            }
+        }
     }
     None
 }
@@ -271,6 +325,50 @@ mod tests {
         assert!(DangerousModule.check(&ctx("rm -rf /etc")).is_some());
         assert!(DangerousModule.check(&ctx("rm -r /usr/")).is_some());
         assert!(DangerousModule.check(&ctx("rm -rf /var")).is_some());
+    }
+
+    // Regression: flag re-spellings that the old regex classifier missed
+    // (codex pre-flip review — exec-guard bypass).
+    #[test]
+    fn test_rm_flag_respellings_blocked() {
+        for cmd in [
+            "rm -r -f /",
+            "rm -f -r /",
+            "rm --recursive --force /",
+            "rm --recursive /",
+            "rm -rf -- /",
+            "rm -r -- /etc",
+            "rm -R /usr",
+            "rm -rf \"$HOME\"",
+            "rm -rf $HOME",
+            "rm -rf ${HOME}",
+            "rm -rf $HOME/",
+            "rm -rf --no-preserve-root /",
+            "true && rm -r -f /",
+            "sudo rm -rf --force /var",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+    }
+
+    // Recursive rm of a non-protected path stays allowed (no false positives).
+    #[test]
+    fn test_rm_recursive_safe_paths_allowed() {
+        for cmd in [
+            "rm -rf ./build",
+            "rm -r /tmp/scratch",
+            "rm -rf target",
+            "rm -rf node_modules",
+            "rm -f /etc/hosts.bak", // not recursive
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_none(),
+                "should allow: {cmd}"
+            );
+        }
     }
 
     #[test]
