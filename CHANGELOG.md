@@ -127,7 +127,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that decides the matter, and trace how each order ripples across the related
   domains, not just the immediate area.
 
-## [2.1.0] - 2026-07-05
+## [2.1.0] - 2026-07-12
 
 ### Added
 
@@ -180,4 +180,5 @@ set) shares no code with it and is preserved at the `v1-final` tag.
   Linux (x64) and a shell installer.
 
 [Unreleased]: https://github.com/sathyassn/codeflow/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/sathyassn/codeflow/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sathyassn/codeflow/releases/tag/v2.0.0
