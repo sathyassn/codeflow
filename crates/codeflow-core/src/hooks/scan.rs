@@ -70,12 +70,29 @@ fn secret_res() -> &'static [(Regex, &'static str)] {
     })
 }
 
-/// Values that look like docs/templates, not live credentials.
-fn is_placeholder(line: &str) -> bool {
-    let lower = line.to_lowercase();
+/// A value that looks like docs/templates, not a live credential. Applied ONLY
+/// to the assigned value (the quoted string), never the whole line — a comment
+/// like `# example account` must not suppress a real secret (codex pre-flip
+/// review: secret-scan bypass).
+fn is_placeholder_value(value: &str) -> bool {
+    let lower = value.to_lowercase();
     ["example", "placeholder", "changeme", "your-", "your_", "xxxx", "<", "${", "$("]
         .iter()
         .any(|p| lower.contains(p))
+}
+
+/// The quoted value assigned in a `key = "value"` credential line, if any.
+fn assigned_value(line: &str) -> Option<&str> {
+    static VALUE_RE: OnceLock<Regex> = OnceLock::new();
+    let re = VALUE_RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|password)\b\s*[:=]\s*["']([^"']{12,})["']"#,
+        )
+        .expect("valid")
+    });
+    re.captures(line)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str())
 }
 
 /// Scan a single content line for secrets. Returns the pattern name on a hit.
@@ -85,10 +102,16 @@ pub fn scan_line(line: &str) -> Option<&'static str> {
         .iter()
         .find(|(re, _)| re.is_match(line))
         .map(|(_, name)| *name)?;
-    // The generic assignment pattern defers to the placeholder filter;
-    // specific token shapes (AKIA…, ghp_…) always count.
-    if hit == "credential assignment" && is_placeholder(line) {
-        return None;
+    // The generic assignment defers to the placeholder filter — but only on the
+    // assigned VALUE, so a placeholder word in a comment or the key name can no
+    // longer suppress a real credential. Specific token shapes (AKIA…, ghp_…)
+    // always count.
+    if hit == "credential assignment" {
+        if let Some(value) = assigned_value(line) {
+            if is_placeholder_value(value) {
+                return None;
+            }
+        }
     }
     Some(hit)
 }
@@ -157,6 +180,19 @@ pub fn is_env_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_comment_cannot_suppress_secret() {
+        // codex pre-flip review: a placeholder word in a COMMENT must not
+        // suppress a real credential value.
+        let live = r#"api_key = "a1B2c3D4e5F6g7H8i9J0kL" # example account"#;
+        assert!(scan_line(live).is_some(), "comment must not suppress");
+        // a genuine placeholder VALUE is still allowed
+        let ph = r#"api_key = "your-key-goes-here-xxxx""#;
+        assert!(scan_line(ph).is_none(), "placeholder value allowed");
+        let ex = r#"password = "changeme-please-now""#;
+        assert!(scan_line(ex).is_none());
+    }
+
     use super::*;
 
     #[test]
