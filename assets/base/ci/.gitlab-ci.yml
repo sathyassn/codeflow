@@ -43,5 +43,5 @@ codeflow:
     - command -v codeflow >/dev/null 2>&1 || { echo "codeflow not installed — wire the install step above; failing red (unarmed perimeter)."; exit 1; }
   script:
     - codeflow ci
-    - codeflow test
+    - codeflow test --strict
     - codeflow validate --docs

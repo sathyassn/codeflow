@@ -42,7 +42,7 @@ if [ -n "$BASE" ] && [ -n "$HEAD" ]; then
 else
   codeflow ci
 fi
-codeflow test
+codeflow test --strict
 codeflow validate --docs
 
 # Optional external add-ons (uncomment once the tools are on PATH):

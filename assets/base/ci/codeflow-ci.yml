@@ -42,7 +42,7 @@ jobs:
       - name: codeflow test
         run: |
           if command -v codeflow >/dev/null 2>&1; then
-            codeflow test
+            codeflow test --strict
           else
             echo "::error::codeflow not installed — test gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
             exit 1

@@ -13,7 +13,7 @@ Every file in this directory is therefore a **thin wrapper**: install the
 `codeflow` binary, then run
 
 ```
-codeflow ci && codeflow test && codeflow validate --docs
+codeflow ci && codeflow test --strict && codeflow validate --docs
 ```
 
 Each wrapper only differs in how it discovers the commit range and branch, which

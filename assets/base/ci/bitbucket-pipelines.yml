@@ -42,5 +42,5 @@ pipelines:
             # perimeter, not a pass (do NOT "fix" the red by skipping).
             - command -v codeflow >/dev/null 2>&1 || { echo "codeflow not installed — wire the install step above; failing red (unarmed perimeter)."; exit 1; }
             - codeflow ci
-            - codeflow test
+            - codeflow test --strict
             - codeflow validate --docs
