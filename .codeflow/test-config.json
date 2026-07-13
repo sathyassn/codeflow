@@ -21,6 +21,19 @@
           "command": "cargo test --workspace"
         }
       }
+    },
+    {
+      "name": "rust-clippy",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        "full": {
+          "command": "cargo clippy --workspace --all-targets -- -D warnings"
+        }
+      }
     }
   ]
 }
