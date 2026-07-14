@@ -99,7 +99,8 @@ impl ProjectState {
                 }
                 table
             }
-            Err(_) => ours,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ours,
+            Err(e) => return Err(ScaffoldError::io(&path, e)),
         };
         let text = toml::to_string_pretty(&merged).map_err(|e| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
@@ -146,17 +147,40 @@ impl ScaffoldConfig {
             what: PROJECT_TOML.to_string(),
             detail: e.to_string(),
         })?;
-        let ignore = table
-            .get("scaffold")
-            .and_then(toml::Value::as_table)
-            .and_then(|s| s.get("ignore"))
-            .and_then(toml::Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToString::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let ignore = match table.get("scaffold") {
+            None => Vec::new(),
+            Some(value) => {
+                let section = value.as_table().ok_or_else(|| ScaffoldError::InvalidState {
+                    what: PROJECT_TOML.to_string(),
+                    detail: "scaffold: expected a table".to_string(),
+                })?;
+                match section.get("ignore") {
+                    None => Vec::new(),
+                    Some(value) => {
+                        let entries = value.as_array().ok_or_else(|| {
+                            ScaffoldError::InvalidState {
+                                what: PROJECT_TOML.to_string(),
+                                detail: "scaffold.ignore: expected an array of strings".to_string(),
+                            }
+                        })?;
+                        entries
+                            .iter()
+                            .enumerate()
+                            .map(|(index, value)| {
+                                value.as_str().map(ToString::to_string).ok_or_else(|| {
+                                    ScaffoldError::InvalidState {
+                                        what: PROJECT_TOML.to_string(),
+                                        detail: format!(
+                                            "scaffold.ignore[{index}]: expected a string"
+                                        ),
+                                    }
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                    }
+                }
+            }
+        };
         Ok(Self { ignore })
     }
 
@@ -277,12 +301,43 @@ impl Baseline {
     }
 }
 
-/// Creates parent directories and writes `bytes` to `path`.
+/// Creates parent directories and atomically writes `bytes` to `path`.
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| ScaffoldError::io(parent, e))?;
+    let parent = path.parent().ok_or_else(|| {
+        ScaffoldError::io(path, std::io::Error::other("destination has no parent directory"))
+    })?;
+    std::fs::create_dir_all(parent).map_err(|e| ScaffoldError::io(parent, e))?;
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("file");
+    let temp_path = parent.join(format!(".{file_name}.{}.tmp", ulid::Ulid::new()));
+
+    let result = (|| {
+        use std::io::Write;
+        let mut temp = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        temp.write_all(bytes)
+            .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        temp.sync_all()
+            .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        std::fs::rename(&temp_path, path).map_err(|e| ScaffoldError::io(path, e))?;
+        sync_directory(parent)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
     }
-    std::fs::write(path, bytes).map_err(|e| ScaffoldError::io(path, e))
+    result
+}
+
+fn sync_directory(path: &Path) -> Result<(), ScaffoldError> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(path)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| ScaffoldError::io(path, e))?;
+    }
+    Ok(())
 }
 
 /// Resolves `root.join(rel)` while refusing to traverse a symlink.
@@ -452,6 +507,57 @@ mod tests {
         assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
         write_file(&ProjectState::path(empty.path()), b"schema_version = 1\n").unwrap();
         assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
+    }
+
+    #[test]
+    fn scaffold_config_rejects_wrong_ignore_types_with_location() {
+        for (body, location) in [
+            ("[scaffold]\nignore = true\n", "scaffold.ignore"),
+            (
+                "[scaffold]\nignore = [\".codex/**\", 7]\n",
+                "scaffold.ignore[1]",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_file(&ProjectState::path(dir.path()), body.as_bytes()).unwrap();
+            let error = ScaffoldConfig::load(dir.path()).unwrap_err().to_string();
+            assert!(error.contains(location), "{error}");
+        }
+    }
+
+    #[test]
+    fn project_state_store_propagates_non_not_found_read_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ProjectState::path(dir.path())).unwrap();
+        let state = ProjectState {
+            schema_version: 1,
+            tier: Tier::Standard,
+            scaffold_version: "2.0.0".to_string(),
+            stack: "rust".to_string(),
+            areas: Vec::new(),
+            policy_armed: false,
+            git_hooks: GIT_HOOKS_UNWIRED.to_string(),
+            permission_preset: "default".to_string(),
+            product_one_liner: String::new(),
+        };
+        let error = state.store(dir.path()).unwrap_err().to_string();
+        assert!(error.contains(PROJECT_TOML), "{error}");
+        assert!(ProjectState::path(dir.path()).is_dir());
+    }
+
+    #[test]
+    fn write_file_atomically_replaces_content_and_syncs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("managed.txt");
+        write_file(&path, b"old").unwrap();
+        write_file(&path, b"new content").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new content");
+        let leftovers = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
     }
 
     // codex round-2: scaffold IO must not follow a pre-planted symlink out of
