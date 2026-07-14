@@ -198,8 +198,42 @@ pub fn integrate(
         }
     }
 
+    // Pin the exact rebased tip that the test gate runs against, so a concurrent
+    // branch move during testing cannot land untested content (the target CAS
+    // below only guards the target ref, not the branch).
+    let tested_oid = resolve_branch(&repo, branch)?;
+
     // Stage 3: test gate (full mode).
     let test_gate = run_test_stage(repo_root, &original)?;
+
+    // The branch must still point at the exact commit that was tested, and the
+    // target must be an ancestor of it (a real fast-forward), before we advance.
+    let current_tip = resolve_branch(&repo, branch)?;
+    if current_tip != tested_oid {
+        restore_checkout(repo_root, &original);
+        return Err(IntegrateError::MergeFailed {
+            target: target.to_string(),
+            message: format!(
+                "branch '{branch}' moved during integrate (tested {}, now {}) — \
+                 refusing to land untested content",
+                short_id(&repo, tested_oid),
+                short_id(&repo, current_tip)
+            ),
+        });
+    }
+    let is_fast_forward = tested_oid == target_oid
+        || repo
+            .graph_descendant_of(tested_oid, target_oid)
+            .unwrap_or(false);
+    if !is_fast_forward {
+        restore_checkout(repo_root, &original);
+        return Err(IntegrateError::MergeFailed {
+            target: target.to_string(),
+            message: format!(
+                "'{branch}' is not a fast-forward of '{target}' — refusing non-ff advance"
+            ),
+        });
+    }
 
     // Stage 4: fast-forward the target ref WITHOUT checking it out. The mandated
     // worktree doctrine keeps a protected target checked out at the repo root, so
@@ -207,12 +241,11 @@ pub fn integrate(
     // `update-ref` advances the ref in place — compare-and-swap against the
     // pre-rebase oid (safe under concurrency), with the gate token set so the
     // reference-transaction hook admits this sanctioned landing.
-    let branch_tip = resolve_branch(&repo, branch)?;
     let update = Command::new("git")
         .args([
             "update-ref",
             &format!("refs/heads/{target}"),
-            &branch_tip.to_string(),
+            &tested_oid.to_string(),
             &target_oid.to_string(),
         ])
         .env(GATE_TOKEN_ENV, ulid::Ulid::new().to_string())
@@ -503,6 +536,27 @@ mod tests {
         .trim()
         .to_string();
         assert_eq!(root_head, "main", "root worktree stays on main");
+    }
+
+    // codex round-3: if the branch moves during the test gate, the tested tip is
+    // no longer the branch tip — integrate must refuse to land untested content.
+    #[test]
+    fn rejects_a_branch_that_moved_during_the_test_gate() {
+        let dir = repo_with_feature_branch();
+        // The gate command force-advances feat/x mid-run, then exits 0 (gate passes).
+        write_test_config(dir.path(), "git commit --allow-empty -m moved; true");
+
+        let before = branch_oid(dir.path(), "main");
+        let err = integrate(dir.path(), "feat/x", "main").expect_err("must refuse");
+        assert!(
+            matches!(err, IntegrateError::MergeFailed { .. }),
+            "expected a moved-branch refusal, got {err:?}"
+        );
+        assert_eq!(
+            branch_oid(dir.path(), "main"),
+            before,
+            "main must not advance when the tested tip changed"
+        );
     }
 
     #[test]
