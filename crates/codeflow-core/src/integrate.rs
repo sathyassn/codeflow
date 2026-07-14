@@ -269,31 +269,49 @@ pub fn integrate(
         });
     }
 
-    // Stage 5: report. The branch ref already points at the rebased tip;
-    // the target now shares it.
-    let new_target_oid = resolve_branch(&repo, target)?;
-    let commits_landed = count_commits(&repo, target_oid, new_target_oid);
+    finish_integration(
+        &repo,
+        repo_root,
+        branch,
+        target,
+        target_oid,
+        tested_oid,
+        target_protected,
+        old_target_short,
+        original,
+        test_gate,
+    )
+}
 
-    // HEAD is still on `branch` (Stage 2). Return the caller to their original
-    // checkout; when that is the now-advanced target (integrate run from the
-    // target's own worktree), this updates its working tree to the landed tip.
-    let mut warnings = refresh_target_worktrees(repo_root, target, target_oid, tested_oid);
+#[allow(clippy::too_many_arguments)]
+fn finish_integration(
+    repo: &git2::Repository,
+    repo_root: &Path,
+    branch: &str,
+    target: &str,
+    old_target_oid: git2::Oid,
+    tested_oid: git2::Oid,
+    target_protected: bool,
+    old_target: String,
+    original: String,
+    test_gate: TestGateSummary,
+) -> Result<IntegrateOutcome, IntegrateError> {
+    let new_target_oid = resolve_branch(repo, target)?;
+    let mut warnings = refresh_target_worktrees(repo_root, target, old_target_oid, tested_oid);
     if let Err(message) = restore_checkout(repo_root, &original) {
         warnings.push(format!(
             "target ref advanced, but checkout restoration failed: {message}"
         ));
     }
-    let final_checkout = current_checkout(repo_root).unwrap_or(original);
-
     Ok(IntegrateOutcome {
         branch: branch.to_string(),
         target: target.to_string(),
         target_protected,
-        old_target: old_target_short,
-        new_target: short_id(&repo, new_target_oid),
-        commits_landed,
+        old_target,
+        new_target: short_id(repo, new_target_oid),
+        commits_landed: count_commits(repo, old_target_oid, new_target_oid),
         test_gate,
-        final_checkout,
+        final_checkout: current_checkout(repo_root).unwrap_or(original),
         warnings,
     })
 }

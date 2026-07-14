@@ -166,28 +166,6 @@ fn read_hook_input(mut reader: impl Read, stage: &str) -> Result<String, String>
     Ok(input)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct FailingReader;
-
-    impl Read for FailingReader {
-        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("stdin unavailable"))
-        }
-    }
-
-    #[test]
-    fn stdin_failure_note_names_degraded_stage() {
-        for stage in ["pre-push", "reference-transaction"] {
-            let note = read_hook_input(FailingReader, stage).unwrap_err();
-            assert!(note.contains(stage), "{note}");
-            assert!(note.contains("ref checks degraded"), "{note}");
-        }
-    }
-}
-
 fn commit_msg(
     root: &Path,
     policy: &Policy,
@@ -249,4 +227,26 @@ fn staged_files(root: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("stdin unavailable"))
+        }
+    }
+
+    #[test]
+    fn stdin_failure_note_names_degraded_stage() {
+        for stage in ["pre-push", "reference-transaction"] {
+            let note = read_hook_input(FailingReader, stage).unwrap_err();
+            assert!(note.contains(stage), "{note}");
+            assert!(note.contains("ref checks degraded"), "{note}");
+        }
+    }
 }

@@ -23,6 +23,7 @@
 //! indexed are reported, never silently empty (charter principle 8).
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -261,7 +262,7 @@ fn encode_path(path: &Path) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'-' | b'_') {
             encoded.push(char::from(byte));
         } else {
-            encoded.push_str(&format!("%{byte:02X}"));
+            let _ = write!(encoded, "%{byte:02X}");
         }
     }
     encoded
