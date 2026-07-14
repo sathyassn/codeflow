@@ -248,30 +248,32 @@ impl Baseline {
         root.join(BASELINE_DIR).join(dest)
     }
 
+    /// Repo-relative baseline path, for the symlink guard.
+    fn rel(dest: &str) -> String {
+        format!("{BASELINE_DIR}/{dest}")
+    }
+
     #[must_use]
     pub fn read(root: &Path, dest: &str) -> Option<String> {
-        std::fs::read_to_string(Self::path(root, dest)).ok()
+        // A symlinked baseline path resolves to `None` (treated as absent),
+        // exactly like a missing baseline — never a read that follows the link.
+        read_beneath_root(root, &Self::rel(dest)).ok().flatten()
     }
 
     /// # Errors
     ///
-    /// IO failures.
+    /// IO failures, or a symlinked baseline path (refused, not followed).
     pub fn write(root: &Path, dest: &str, content: &str) -> Result<(), ScaffoldError> {
-        write_file(&Self::path(root, dest), content.as_bytes())
+        write_beneath_root(root, &Self::rel(dest), content.as_bytes())
     }
 
     /// Removes the baseline copy for `dest`. A missing baseline is not an error.
     ///
     /// # Errors
     ///
-    /// IO failures other than not-found.
+    /// IO failures other than not-found, or a symlinked baseline path.
     pub fn remove(root: &Path, dest: &str) -> Result<(), ScaffoldError> {
-        let path = Self::path(root, dest);
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(ScaffoldError::io(&path, e)),
-        }
+        remove_beneath_root(root, &Self::rel(dest))
     }
 }
 
@@ -281,6 +283,73 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
         std::fs::create_dir_all(parent).map_err(|e| ScaffoldError::io(parent, e))?;
     }
     std::fs::write(path, bytes).map_err(|e| ScaffoldError::io(path, e))
+}
+
+/// Resolves `root.join(rel)` while refusing to traverse a symlink.
+///
+/// The manifest-text guard (`is_safe_relative_dest`) blocks an absolute or
+/// `..`-escaping dest, but `root.join(rel)` still *follows* any symlink already
+/// on disk: a leaf symlink, or a symlinked ancestor directory, pre-placed in
+/// the target repo (e.g. one cloned from a hostile repo) would let a scaffold
+/// read / write / prune land OUTSIDE the tree. `root` is trusted (it may itself
+/// sit under a symlink — a macOS `/var` tempdir does); only the components
+/// BENEATH it are checked, each with `symlink_metadata` (which never follows),
+/// so the first symlinked component is refused before any IO touches it.
+///
+/// This is a check-then-act guard: a live attacker swapping a component for a
+/// symlink between this check and the following IO is a residual TOCTOU window
+/// no `std::fs` primitive closes portably. It is sized to the real threat — a
+/// symlink pre-planted before `codeflow init`/`update` runs — not to a process
+/// racing the scaffold on the same tree.
+pub(crate) fn guard_beneath_root(root: &Path, rel: &Path) -> Result<PathBuf, ScaffoldError> {
+    use std::path::Component;
+    let mut cur = root.to_path_buf();
+    for comp in rel.components() {
+        match comp {
+            Component::CurDir => continue,
+            Component::Normal(seg) => cur.push(seg),
+            // Absolute / `..` / prefix components can only escape; `root.join`
+            // would resolve them away from the tree. Refuse rather than trust.
+            _ => return Err(ScaffoldError::UnsafeSymlink { path: rel.to_path_buf() }),
+        }
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(ScaffoldError::UnsafeSymlink { path: cur });
+            }
+            // Absent (not yet created) or a real file/dir: safe to descend.
+            _ => {}
+        }
+    }
+    Ok(cur)
+}
+
+/// Repo-relative read that refuses to follow a symlink. `Ok(None)` when the
+/// file is absent; a symlinked path (leaf or ancestor) is a hard error.
+pub(crate) fn read_beneath_root(root: &Path, rel: &str) -> Result<Option<String>, ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(rel))?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(ScaffoldError::io(&path, e)),
+    }
+}
+
+/// Repo-relative write that refuses to follow a symlink (leaf or ancestor),
+/// creating parent directories as needed.
+pub(crate) fn write_beneath_root(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(rel))?;
+    write_file(&path, bytes)
+}
+
+/// Repo-relative delete that refuses to follow a symlink (leaf or ancestor).
+/// A missing file is not an error.
+pub(crate) fn remove_beneath_root(root: &Path, rel: &str) -> Result<(), ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(rel))?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(ScaffoldError::io(&path, e)),
+    }
 }
 
 /// Sets (or clears) the executable bit.
@@ -383,5 +452,63 @@ mod tests {
         assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
         write_file(&ProjectState::path(empty.path()), b"schema_version = 1\n").unwrap();
         assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
+    }
+
+    // codex round-2: scaffold IO must not follow a pre-planted symlink out of
+    // the repo. `guard_beneath_root` checks each component beneath root no-follow.
+    #[test]
+    fn guard_beneath_root_allows_normal_and_absent_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // An absent nested dest is safe to descend (nothing on disk to follow).
+        assert_eq!(
+            guard_beneath_root(root, Path::new("a/b/c.txt")).unwrap(),
+            root.join("a/b/c.txt")
+        );
+        // A real file under a real dir is fine.
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        write_file(&root.join("real/f.txt"), b"x").unwrap();
+        assert!(guard_beneath_root(root, Path::new("real/f.txt")).is_ok());
+    }
+
+    #[test]
+    fn guard_beneath_root_refuses_parent_and_absolute_components() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(guard_beneath_root(root, Path::new("../escape")).is_err());
+        assert!(guard_beneath_root(root, Path::new("/etc/passwd")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guard_beneath_root_refuses_leaf_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        symlink(outside.path().join("target.txt"), root.join("link.txt")).unwrap();
+        let err = guard_beneath_root(root, Path::new("link.txt")).unwrap_err();
+        assert!(matches!(err, ScaffoldError::UnsafeSymlink { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guard_beneath_root_refuses_ancestor_symlink_and_writes_nothing_outside() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // A directory ancestor is a symlink pointing outside the tree.
+        symlink(outside.path(), root.join("sub")).unwrap();
+        assert!(matches!(
+            guard_beneath_root(root, Path::new("sub/evil.txt")).unwrap_err(),
+            ScaffoldError::UnsafeSymlink { .. }
+        ));
+        // A write through the ancestor link is refused and lands nothing outside.
+        assert!(write_beneath_root(root, "sub/evil.txt", b"pwned").is_err());
+        assert!(
+            !outside.path().join("evil.txt").exists(),
+            "write must not escape the repo via the ancestor symlink"
+        );
     }
 }

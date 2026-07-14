@@ -21,8 +21,8 @@ use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
 use super::settings_merge::merge_settings;
 use super::state::{
-    set_exec, write_file, Baseline, InstalledFile, InstalledManifest, ProjectState,
-    GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
+    guard_beneath_root, set_exec, write_file, Baseline, InstalledFile, InstalledManifest,
+    ProjectState, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
 use super::{gitutil, hash, ScaffoldError};
@@ -360,7 +360,9 @@ fn write_dest(
     entry: &ManifestEntry,
     content: &str,
 ) -> Result<(), ScaffoldError> {
-    let path = root.join(&entry.dest);
+    // Beneath-root, no-follow: refuses a leaf or ancestor symlink so init never
+    // writes (or sets exec) through a link pre-planted in the target directory.
+    let path = guard_beneath_root(root, Path::new(&entry.dest))?;
     write_file(&path, content.as_bytes())?;
     if entry.exec {
         set_exec(&path, true)?;
@@ -380,6 +382,13 @@ fn install_entry(
     report: &mut Report,
     written: &mut Vec<String>,
 ) -> Result<(), ScaffoldError> {
+    // Refuse an entry whose on-disk dest traverses a symlink (leaf or ancestor):
+    // a pre-planted link would otherwise let the write below escape the target
+    // directory. Reported, never silent.
+    if let Err(e) = guard_beneath_root(root, Path::new(&entry.dest)) {
+        report.file_with_notes(&entry.dest, Action::Skipped, vec![e.to_string()]);
+        return Ok(());
+    }
     let Some(rendered) = render_entry(source, entry, ctx, report)? else {
         return Ok(());
     };

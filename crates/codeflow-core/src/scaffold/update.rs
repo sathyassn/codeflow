@@ -48,7 +48,8 @@ use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
 use super::settings_merge::merge_settings;
 use super::state::{
-    set_exec, write_file, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
+    guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
+    InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
 };
 use super::{hash, ScaffoldError};
 
@@ -177,7 +178,9 @@ fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), S
             entry.dest
         )));
     }
-    let path = root.join(&entry.dest);
+    // Beneath-root, no-follow: refuses a leaf or ancestor symlink so the write
+    // (and the exec-bit set that follows) never escapes the tree.
+    let path = guard_beneath_root(root, Path::new(&entry.dest))?;
     write_file(&path, content.as_bytes())?;
     if entry.exec {
         set_exec(&path, true)?;
@@ -203,6 +206,13 @@ fn update_entry(
     report: &mut Report,
     diffs: &mut String,
 ) -> Result<(), ScaffoldError> {
+    // Refuse to touch an entry whose on-disk dest traverses a symlink (leaf or
+    // ancestor): a pre-planted link would otherwise let the write below escape
+    // the repo. Reported, never silent (module invariant #2).
+    if let Err(e) = guard_beneath_root(root, Path::new(&entry.dest)) {
+        report.file_with_notes(&entry.dest, Action::Skipped, vec![e.to_string()]);
+        return Ok(());
+    }
     let Some(rendered) = render_entry(source, entry, ctx, report)? else {
         return Ok(());
     };
@@ -255,7 +265,7 @@ fn update_entry(
             // User-modified: 3-way merge against the baseline.
             let Some(base) = Baseline::read(root, &entry.dest) else {
                 let new_path = format!("{}.new", entry.dest);
-                write_file(&root.join(&new_path), rendered.as_bytes())?;
+                write_beneath_root(root, &new_path, rendered.as_bytes())?;
                 report.file_with_notes(
                     &entry.dest,
                     Action::Conflicted,
@@ -291,7 +301,7 @@ fn update_entry(
                 );
             } else {
                 let new_path = format!("{}.new", entry.dest);
-                write_file(&root.join(&new_path), rendered.as_bytes())?;
+                write_beneath_root(root, &new_path, rendered.as_bytes())?;
                 report.file_with_notes(
                     &entry.dest,
                     Action::Conflicted,
@@ -539,6 +549,13 @@ fn prune_orphans(
             report.file(&dest, Action::Skipped);
             continue;
         }
+        // Also refuse a dest that traverses a symlink on disk: a pre-planted
+        // leaf or ancestor link would turn an orphan prune into an out-of-repo
+        // delete. Report the tamper (visible, never silent), never follow it.
+        if let Err(e) = guard_beneath_root(root, Path::new(&dest)) {
+            report.file_with_notes(&dest, Action::Skipped, vec![e.to_string()]);
+            continue;
+        }
         let file = installed.files[&dest].clone();
         let dest_path = root.join(&dest);
 
@@ -550,8 +567,7 @@ fn prune_orphans(
             };
             if unmodified {
                 if dest_path.exists() {
-                    std::fs::remove_file(&dest_path)
-                        .map_err(|e| ScaffoldError::io(&dest_path, e))?;
+                    remove_beneath_root(root, &dest)?;
                     remove_empty_ancestors(root, &dest_path);
                 }
                 let baseline_path = Baseline::path(root, &dest);

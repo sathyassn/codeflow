@@ -56,6 +56,8 @@ pub enum ScaffoldError {
     ManifestMissing(String),
     #[error("scaffold manifest invalid: {0}")]
     ManifestInvalid(String),
+    #[error("refusing to follow a symlink at {path} — scaffold IO stays beneath the repo root")]
+    UnsafeSymlink { path: std::path::PathBuf },
     #[error("not a codeflow project (no .codeflow/project.toml) — run `codeflow init`")]
     NotInitialized,
     #[error("invalid {what}: {detail}")]
