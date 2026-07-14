@@ -75,16 +75,33 @@ pub fn compact_ledger_type(
         });
     }
 
-    // Read base file events.
+    // Acquire the per-file writer lock for every file compaction will
+    // read/replace/delete, so a concurrent append cannot be lost across the
+    // read→rename→delete window. `None` = a write is in progress → defer.
     let base_path = subdir.join(format!("{type_name}.jsonl"));
+    let Some(held_locks) = acquire_file_locks(&base_path, &fragments)? else {
+        return Ok(CompactionResult {
+            type_name: type_name.to_string(),
+            merged_count: 0,
+            deleted_files: Vec::new(),
+            skipped_active: count_active_fragments(
+                &subdir,
+                type_name,
+                &completed_sessions,
+                current_session_id,
+            ),
+        });
+    };
+
+    // Read base + fragment events. Fail CLOSED: a read or parse error aborts
+    // here, BEFORE the write/delete below, so a corrupt or partially written
+    // source is never merged-and-deleted (permanent data loss).
     let mut all_events: Vec<Event> = Vec::new();
     if base_path.exists() {
-        read_events_from_file(&base_path, &mut all_events);
+        read_events_from_file(&base_path, &mut all_events)?;
     }
-
-    // Read fragment events.
     for frag_path in &fragments {
-        read_events_from_file(frag_path, &mut all_events);
+        read_events_from_file(frag_path, &mut all_events)?;
     }
 
     // Sort by timestamp (stable preserves intra-file order).
@@ -116,6 +133,9 @@ pub fn compact_ledger_type(
 
     let merged_count = deleted_files.len();
 
+    // Release the per-file locks (held across the whole read→rename→delete
+    // window) and then the compaction lock.
+    drop(held_locks);
     drop(lock_file);
 
     Ok(CompactionResult {
@@ -274,20 +294,55 @@ fn count_active_fragments(
     count
 }
 
-/// Parse JSONL events from a file, appending to `events`. Skips corrupt lines.
-fn read_events_from_file(path: &Path, events: &mut Vec<Event>) {
-    let Ok(content) = fs::read_to_string(path) else {
-        return;
-    };
-    for line in content.lines() {
+/// Try to acquire the writer lock for the base file and every fragment (each
+/// `{file}.jsonl.lock`, matching the append path). Returns `None` if any file is
+/// currently being written (defer this round), otherwise the held lock handles
+/// to keep for the whole read→rename→delete window.
+///
+/// `try_lock` never stalls a writer; the caller's `.compaction.lock` already
+/// serializes compactions, and writers hold only one file lock at a time, so
+/// acquiring several here in a stable order cannot deadlock.
+fn acquire_file_locks(
+    base_path: &Path,
+    fragments: &[PathBuf],
+) -> Result<Option<Vec<fs::File>>, LedgerError> {
+    let mut targets: Vec<PathBuf> = vec![base_path.to_path_buf()];
+    targets.extend(fragments.iter().cloned());
+    targets.sort();
+    let mut held = Vec::new();
+    for target in &targets {
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(target.with_extension("jsonl.lock"))?;
+        if lock.try_lock_exclusive().is_err() {
+            return Ok(None);
+        }
+        held.push(lock);
+    }
+    Ok(Some(held))
+}
+
+/// Parse JSONL events from a file, appending to `events`.
+///
+/// Fails closed: a read error or a single unparseable line returns an error
+/// rather than silently dropping events. The caller must abort compaction on
+/// error so a corrupt or partially written source is never merged-and-deleted
+/// (which would be permanent ledger data loss).
+fn read_events_from_file(path: &Path, events: &mut Vec<Event>) -> Result<(), LedgerError> {
+    let content = fs::read_to_string(path)?;
+    for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(event) = serde_json::from_str::<Event>(trimmed) {
-            events.push(event);
-        }
+        let event = serde_json::from_str::<Event>(trimmed).map_err(|e| {
+            LedgerError::Corrupt(format!("{}:{}: {e}", path.display(), i + 1))
+        })?;
+        events.push(event);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -450,5 +505,67 @@ mod tests {
         assert!(base.exists());
         let content = fs::read_to_string(&base).unwrap();
         assert!(content.contains("config_set"));
+    }
+
+    // codex round-3: a corrupt/partial line in a source must ABORT compaction —
+    // never merge-and-delete it (that would be permanent ledger data loss).
+    #[test]
+    fn test_corrupt_fragment_aborts_without_data_loss() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger_dir = dir.path();
+        setup_sessions_with_end(ledger_dir, "ses-done");
+        let wg_dir = ledger_dir.join("work-graph");
+        fs::create_dir_all(&wg_dir).unwrap();
+        let base = wg_dir.join("work-graph.jsonl");
+        write_line(
+            &base,
+            r#"{"event":"task_created","timestamp":"2026-01-01T00:00:00Z","session_id":"ses-old"}"#,
+        );
+        let frag = wg_dir.join("work-graph-ses-done.jsonl");
+        write_line(
+            &frag,
+            r#"{"event":"task_status_changed","timestamp":"2026-01-01T00:30:00Z","session_id":"ses-done"}"#,
+        );
+        write_line(&frag, "{ this is not valid json");
+
+        let err = compact_ledger_type(ledger_dir, "work-graph", None).unwrap_err();
+        assert!(matches!(err, LedgerError::Corrupt(_)), "got {err:?}");
+        assert!(frag.exists(), "corrupt fragment must not be deleted");
+        assert_eq!(
+            fs::read_to_string(&base).unwrap().lines().count(),
+            1,
+            "base must be untouched"
+        );
+    }
+
+    // codex round-3: while a writer holds a file's lock, compaction defers rather
+    // than reading a base it is about to overwrite (which would lose the append).
+    #[test]
+    fn test_write_in_progress_defers_compaction() {
+        use fs2::FileExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ledger_dir = dir.path();
+        setup_sessions_with_end(ledger_dir, "ses-done");
+        let wg_dir = ledger_dir.join("work-graph");
+        fs::create_dir_all(&wg_dir).unwrap();
+        let frag = wg_dir.join("work-graph-ses-done.jsonl");
+        write_line(
+            &frag,
+            r#"{"event":"task_created","timestamp":"2026-01-01T00:00:00Z","session_id":"ses-done"}"#,
+        );
+
+        // A writer holds the fragment's lock.
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(frag.with_extension("jsonl.lock"))
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+
+        let result = compact_ledger_type(ledger_dir, "work-graph", None).unwrap();
+        assert_eq!(result.merged_count, 0, "compaction defers under a held lock");
+        assert!(frag.exists(), "fragment untouched while deferred");
+        drop(lock);
     }
 }

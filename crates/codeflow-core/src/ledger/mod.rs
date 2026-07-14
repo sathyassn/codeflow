@@ -49,6 +49,9 @@ pub enum LedgerError {
     #[error("lock acquisition failed: {0}")]
     Lock(String),
 
+    #[error("corrupt ledger data: {0}")]
+    Corrupt(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
