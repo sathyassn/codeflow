@@ -275,9 +275,11 @@ to reason from, not a rote checklist.
   via `git checkout archive/v1 -- <path>`. Code crosses only via a deliberate
   keep-decision, trimmed and re-tested; docs, templates, and Claude artifacts
   are always re-authored from scratch — never copied.
-- **Rust gates:** `cargo test` and `cargo clippy` (workspace lints: clippy all
-  = deny, pedantic = warn) must be green before push. Edition 2021,
-  workspace-managed dependency versions in the root `Cargo.toml`.
+- **Rust gates:** `cargo fmt --all -- --check`, `cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` must be green
+  before push (workspace lints: clippy all = deny, pedantic = warn). Edition
+  2021, workspace-managed dependency versions in the root `Cargo.toml`.
 - **This repo lands via PRs only (ADR-0006):** push a feature branch, open a PR
   from the template; a **human** merges on green CI — agents never merge to a
   protected branch. `codeflow integrate` remains a shipped product capability

@@ -115,7 +115,9 @@ fn git_guard_blocks_push_to_protected_with_exit_2() {
 
     let payload = guard_payload("git push origin main", dir.path());
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         &payload,
     );
 
@@ -132,7 +134,9 @@ fn git_guard_allows_force_push_to_feature_branch() {
 
     let payload = guard_payload("git push --force origin feat/x", dir.path());
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         &payload,
     );
     assert_eq!(out.status.code(), Some(0), "force-push to feature allowed");
@@ -151,13 +155,13 @@ fn git_guard_honors_policy_glob_extension() {
 
     let payload = guard_payload("git commit -m 'fix: x'", dir.path());
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         &payload,
     );
     assert_eq!(out.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"),
-    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"),);
 }
 
 #[test]
@@ -191,7 +195,9 @@ fn git_guard_blocks_hook_plane_self_disarm_with_exit_2() {
     ] {
         let payload = guard_payload(cmd, dir.path());
         let out = run_with_stdin(
-            codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+            codeflow()
+                .args(["hook", "git-guard"])
+                .current_dir(dir.path()),
             &payload,
         );
         assert_eq!(out.status.code(), Some(2), "{cmd}");
@@ -208,9 +214,14 @@ fn git_guard_blocks_remote_tracking_ref_poisoning_with_exit_2() {
     // Task 2a: the agent-writable sync oracle cannot be hand-set.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    let payload = guard_payload("git update-ref refs/remotes/origin/main deadbeef", dir.path());
+    let payload = guard_payload(
+        "git update-ref refs/remotes/origin/main deadbeef",
+        dir.path(),
+    );
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         &payload,
     );
     assert_eq!(out.status.code(), Some(2));
@@ -224,10 +235,16 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
     init_repo(dir.path(), "feat/x");
     let payload = guard_payload("rm -rf /", dir.path());
     let out = run_with_stdin(
-        codeflow().args(["hook", "exec-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "exec-guard"])
+            .current_dir(dir.path()),
         &payload,
     );
-    assert_eq!(out.status.code(), Some(2), "dangerous command must block with exit 2");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "dangerous command must block with exit 2"
+    );
     assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
 }
 
@@ -239,7 +256,9 @@ fn git_guard_blocks_pr_body_attribution() {
 
     let cmd = "gh pr create --title 'feat: x' --body 'Generated with Claude Code'";
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         &guard_payload(cmd, dir.path()),
     );
     assert_eq!(out.status.code(), Some(2));
@@ -252,13 +271,17 @@ fn git_guard_ignores_non_bash_tools_and_garbage() {
     init_repo(dir.path(), "main");
 
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         r#"{"tool_name":"Write","tool_input":{"file_path":"x"}}"#,
     );
     assert_eq!(out.status.code(), Some(0));
 
     let out = run_with_stdin(
-        codeflow().args(["hook", "git-guard"]).current_dir(dir.path()),
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
         "not json",
     );
     assert_eq!(out.status.code(), Some(0), "fail open on garbage payload");
@@ -309,7 +332,11 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
     init_repo(dir.path(), "feat/x");
 
     let msg = dir.path().join("MSG");
-    std::fs::write(&msg, "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n").unwrap();
+    std::fs::write(
+        &msg,
+        "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+    )
+    .unwrap();
     let out = run_with_stdin(
         codeflow()
             .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
@@ -420,7 +447,12 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
     let stdin = format!("refs/heads/release/1.2 abc123 refs/heads/release/1.2 {ZERO}\n");
     let out = run_with_stdin(
         codeflow()
-            .args(["git-hook", "pre-push", "origin", "https://example.com/r.git"])
+            .args([
+                "git-hook",
+                "pre-push",
+                "origin",
+                "https://example.com/r.git",
+            ])
             .current_dir(dir.path()),
         &stdin,
     );
@@ -431,7 +463,12 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
     let stdin = format!("refs/heads/feat/x abc123 refs/heads/feat/x {ZERO}\n");
     let out = run_with_stdin(
         codeflow()
-            .args(["git-hook", "pre-push", "origin", "https://example.com/r.git"])
+            .args([
+                "git-hook",
+                "pre-push",
+                "origin",
+                "https://example.com/r.git",
+            ])
             .current_dir(dir.path()),
         &stdin,
     );
@@ -461,7 +498,11 @@ fn pre_merge_commit_blocks_on_protected_and_honors_overrides() {
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(out.status.code(), Some(0), "human override passes the git layer");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "human override passes the git layer"
+    );
 
     // The integrate gate token also passes (sanctioned local merge).
     let out = run_with_stdin(
@@ -533,7 +574,10 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .output()
         .unwrap();
-    assert!(!ff.status.success(), "ff-merge into protected is now refused");
+    assert!(
+        !ff.status.success(),
+        "ff-merge into protected is now refused"
+    );
     assert!(String::from_utf8_lossy(&ff.stderr).contains("git.local_ref_protection"));
 
     // A human's CODEFLOW_HUMAN_OVERRIDE=1 lets the same ff-merge through.
@@ -578,7 +622,11 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
         .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap();
-    assert!(clone.status.success(), "clone: {}", String::from_utf8_lossy(&clone.stderr));
+    assert!(
+        clone.status.success(),
+        "clone: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
     git(&work, &["config", "user.email", "t@example.com"]);
     git(&work, &["config", "user.name", "t"]);
 
@@ -669,12 +717,18 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
 
     // reset --hard on protected main is refused.
     let reset = git_run(&["reset", "--hard", "HEAD~1"]);
-    assert!(!reset.status.success(), "reset --hard on protected is refused");
+    assert!(
+        !reset.status.success(),
+        "reset --hard on protected is refused"
+    );
     assert!(String::from_utf8_lossy(&reset.stderr).contains("git.local_ref_protection"));
 
     // branch -D of a protected branch is refused (via delete_protected).
     let del = git_run(&["branch", "-D", "master"]);
-    assert!(!del.status.success(), "branch -D of a protected branch is refused");
+    assert!(
+        !del.status.success(),
+        "branch -D of a protected branch is refused"
+    );
     assert!(String::from_utf8_lossy(&del.stderr).contains("git.delete_protected"));
 }
 
@@ -689,7 +743,10 @@ fn real_wired_hook_blocks_commit_via_git() {
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
     std::fs::write(
         &hook,
-        format!("#!/bin/sh\nexec '{}' git-hook pre-commit \"$@\"\n", env!("CARGO_BIN_EXE_codeflow")),
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook pre-commit \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
     )
     .unwrap();
     #[cfg(unix)]
@@ -715,9 +772,7 @@ fn real_wired_hook_blocks_commit_via_git() {
         !out.status.success(),
         "commit on main must be refused by the wired hook"
     );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"),
-    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"),);
 }
 
 // ---------------------------------------------------------------------------
@@ -822,7 +877,11 @@ fn bootstrap_grace_is_inert_after_first_commit() {
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(out.status.code(), Some(1), "disarm flag is inert once committed");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "disarm flag is inert once committed"
+    );
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"));
 }
 
@@ -849,7 +908,11 @@ fn bootstrap_grace_applies_before_first_commit() {
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(out.status.code(), Some(0), "grace suspends branch rules pre-commit");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "grace suspends branch rules pre-commit"
+    );
 
     // Staged secret: still blocked under grace. The fixture is assembled at
     // runtime so this source file itself carries no contiguous key literal.

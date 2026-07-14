@@ -46,8 +46,7 @@ pub fn is_repo(root: &Path) -> bool {
 
 /// Does the repo have at least one commit?
 pub fn has_commits(root: &Path) -> bool {
-    git(root, &["rev-parse", "--verify", "HEAD"])
-        .is_ok_and(|o| o.status.success())
+    git(root, &["rev-parse", "--verify", "HEAD"]).is_ok_and(|o| o.status.success())
 }
 
 pub fn init_repo(root: &Path) -> Result<(), ScaffoldError> {
@@ -111,7 +110,11 @@ pub fn add_and_commit(root: &Path, paths: &[String], message: &str) -> Result<()
     // policy_armed = true (a checkout must never resurrect a disarmed state);
     // the commit itself passes the armed hooks via the gate-context token.
     args.extend(["commit", "--quiet", "-m", message]);
-    let out = git_env(root, &args, &[(crate::integrate::GATE_TOKEN_ENV, "scaffold")])?;
+    let out = git_env(
+        root,
+        &args,
+        &[(crate::integrate::GATE_TOKEN_ENV, "scaffold")],
+    )?;
     if out.status.success() {
         Ok(())
     } else {

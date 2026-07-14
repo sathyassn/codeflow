@@ -126,7 +126,10 @@ created: 2026-07-05T00:00:00Z
 ";
         let task: Task = serde_yaml::from_str(yaml).expect("template-shape task must parse");
         assert_eq!(task.created_at, "2026-07-05T00:00:00Z");
-        assert_eq!(task.updated_at, "2026-07-05T00:00:00Z", "updated_at falls back to created_at");
+        assert_eq!(
+            task.updated_at, "2026-07-05T00:00:00Z",
+            "updated_at falls back to created_at"
+        );
         assert_eq!(task.priority, "");
         assert!(task.acceptance.is_empty());
     }

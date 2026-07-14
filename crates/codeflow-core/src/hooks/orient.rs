@@ -76,8 +76,10 @@ fn enabled(project_toml: Option<&toml::Value>) -> bool {
 }
 
 fn project_name(root: &Path) -> String {
-    root.file_name()
-        .map_or_else(|| "project".to_string(), |n| n.to_string_lossy().to_string())
+    root.file_name().map_or_else(
+        || "project".to_string(),
+        |n| n.to_string_lossy().to_string(),
+    )
 }
 
 /// One line of purpose: `project.toml product_one_liner`, then product.md
@@ -149,7 +151,11 @@ fn branch_line(root: &Path) -> Option<String> {
     } else {
         info.branch.clone()
     };
-    let kind = if info.is_worktree { "worktree" } else { "root checkout" };
+    let kind = if info.is_worktree {
+        "worktree"
+    } else {
+        "root checkout"
+    };
     let protected = if policy.git.branch_is_protected(&info.branch) {
         ", protected — develop in a worktree on a feature branch"
     } else {
@@ -172,7 +178,12 @@ fn work_line(root: &Path) -> Option<String> {
         .count();
     let open_tasks = tasks
         .iter()
-        .filter(|t| matches!(t.status, TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Blocked))
+        .filter(|t| {
+            matches!(
+                t.status,
+                TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Blocked
+            )
+        })
         .count();
     Some(format!(
         "work: {} epics ({active_epics} in progress) · {} tasks ({open_tasks} open)",
@@ -255,14 +266,10 @@ fn gates_line(root: &Path) -> String {
     let mark = |on: bool| if on { "✓" } else { "✗" };
 
     let hooks_dir = git_hooks_dir(root);
-    let hook_wired = |name: &str| {
-        hooks_dir
-            .as_ref()
-            .is_some_and(|d| d.join(name).exists())
-    };
+    let hook_wired = |name: &str| hooks_dir.as_ref().is_some_and(|d| d.join(name).exists());
 
-    let settings = std::fs::read_to_string(root.join(".claude").join("settings.json"))
-        .unwrap_or_default();
+    let settings =
+        std::fs::read_to_string(root.join(".claude").join("settings.json")).unwrap_or_default();
     let codex = root.join(".codex");
 
     format!(
@@ -343,7 +350,12 @@ mod tests {
             "# caps\n\n```yaml\nid: CAP-001\nstatus: shipped\n```\n\n```yaml\nid: CAP-002\nstatus: building\n```\n\n```yaml\nid: CAP-003\nstatus: shipped\n```\n",
         )
         .unwrap();
-        for (n, title) in [(1, "use markdown"), (2, "bundle sqlite"), (3, "embed assets"), (4, "ship one binary")] {
+        for (n, title) in [
+            (1, "use markdown"),
+            (2, "bundle sqlite"),
+            (3, "embed assets"),
+            (4, "ship one binary"),
+        ] {
             std::fs::write(
                 root.join(format!("docs/decisions/ADR-{n:04}.md")),
                 format!("# ADR-{n:04} — {title}\n\nbody\n"),
@@ -358,8 +370,11 @@ mod tests {
         std::fs::write(root.join("AGENTS.md"), "# contract\n").unwrap();
         std::fs::create_dir_all(root.join(".codex")).unwrap();
         std::fs::write(root.join(".codex/hooks.json"), "{\"hooks\":{}}\n").unwrap();
-        std::fs::write(root.join(".codex/config.toml"), "approval_policy = \"on-request\"\n")
-            .unwrap();
+        std::fs::write(
+            root.join(".codex/config.toml"),
+            "approval_policy = \"on-request\"\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -370,7 +385,11 @@ mod tests {
 
         assert!(digest.lines().count() <= MAX_LINES, "{digest}");
         // <500 token budget: chars/4 is a generous proxy.
-        assert!(digest.len() < 2000, "digest too large: {} bytes", digest.len());
+        assert!(
+            digest.len() < 2000,
+            "digest too large: {} bytes",
+            digest.len()
+        );
 
         assert!(digest.contains("# orient —"));
         assert!(digest.contains("A tiny demo project"));

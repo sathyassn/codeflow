@@ -752,7 +752,11 @@ mod tests {
         // runners like ubuntu-latest, which would flip this test.
         let check = probe_command("codeflow-nonexistent-runner-xyzzy", &["--version"], "test");
         assert_eq!(check.status, CheckStatus::Warn);
-        assert!(check.message.contains("could not spawn"), "{}", check.message);
+        assert!(
+            check.message.contains("could not spawn"),
+            "{}",
+            check.message
+        );
     }
 
     // Exit code tests

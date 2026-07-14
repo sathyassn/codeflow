@@ -22,8 +22,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::security::SecurityPolicy;
 use crate::security::git::is_on_protected_branch;
+use crate::security::SecurityPolicy;
 
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,21 +135,24 @@ pub struct GitPolicy {
     pub commit_footer_tokens: Vec<String>,
     /// Footer-trailer tokens that MUST appear in every non-exempt commit (e.g.
     /// `["Signed-off-by"]` for DCO). Default empty. A required token is implicitly
-    /// allowed (no need to also list it in [`commit_footer_tokens`]); a commit
+    /// allowed (no need to also list it in
+    /// [`commit_footer_tokens`](GitPolicy::commit_footer_tokens)); a commit
     /// missing one is blocked under `commit_body`.
     pub commit_required_footers: Vec<String>,
     /// Ticket-reference footer tokens the project recognizes (e.g.
     /// `["Refs", "Closes"]`). Default empty = the ticket feature is off and a
     /// `Refs:` line is NOT auto-allowed (it blocks unless added to
-    /// [`commit_footer_tokens`]). Non-empty = ticket trailers with these tokens
+    /// [`commit_footer_tokens`](GitPolicy::commit_footer_tokens)). Non-empty =
+    /// ticket trailers with these tokens
     /// are allowed in the footer; whether one is *required* is
-    /// [`commit_ticket_required`].
+    /// [`commit_ticket_required`](GitPolicy::commit_ticket_required).
     pub commit_ticket_keys: Vec<String>,
     /// Whether a matching ticket-reference trailer is REQUIRED (ADR-0020). Default
     /// `off` — ticket trailers are allowed-but-optional (a present one passes, an
     /// absent one is fine). `warn`/`block` require at least one matching trailer;
     /// a commit without one warns or blocks. Only meaningful when
-    /// [`commit_ticket_keys`] is non-empty. Merge/revert/fixup/squash exempt.
+    /// [`commit_ticket_keys`](GitPolicy::commit_ticket_keys) is non-empty.
+    /// Merge/revert/fixup/squash exempt.
     pub commit_ticket_required: PolicyLevel,
     /// Regex a ticket trailer's value must match. String; default empty = no
     /// format check. When set, a present ticket trailer whose value does not match
@@ -210,8 +213,7 @@ impl Default for GitPolicy {
             hook_integrity: PolicyLevel::Block,
             commit_format: PolicyLevel::Block,
             commit_types: [
-                "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build",
-                "revert",
+                "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert",
             ]
             .iter()
             .map(ToString::to_string)
@@ -538,7 +540,7 @@ impl GitPolicy {
 /// Absent file, absent key, or parse failure all mean **armed** — the
 /// fail-safe direction. Init writes `policy_armed = false`, makes the
 /// scaffold commit, then flips it to `true`. Callers enforcing policy should
-/// use [`effective_armed`] (via [`Policy::load_effective`]), which additionally
+/// use `effective_armed` (via [`Policy::load_effective`]), which additionally
 /// ignores a disarmed flag once the repo has a commit (ADR-0009); this raw
 /// reader is the on-disk value only.
 #[must_use]
@@ -672,7 +674,10 @@ mod tests {
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);
         assert_eq!(from_asset.git.security_review, defaults.security_review);
         assert_eq!(from_asset.git.dep_audit, defaults.dep_audit);
-        assert_eq!(from_asset.git.merge_to_protected, defaults.merge_to_protected);
+        assert_eq!(
+            from_asset.git.merge_to_protected,
+            defaults.merge_to_protected
+        );
         assert_eq!(
             from_asset.git.pr_merge_to_protected,
             defaults.pr_merge_to_protected
@@ -918,7 +923,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         committed_repo_with_armed(dir.path(), false);
         let (policy, armed) = Policy::load_effective(dir.path());
-        assert!(armed, "a committed repo is armed despite policy_armed=false");
+        assert!(
+            armed,
+            "a committed repo is armed despite policy_armed=false"
+        );
         assert_eq!(policy.git.commit_to_protected, PolicyLevel::Block);
         assert_eq!(policy.git.hook_integrity, PolicyLevel::Block);
     }

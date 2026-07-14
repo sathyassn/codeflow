@@ -79,14 +79,8 @@ pub struct ValidateOptions {
 impl Default for ValidateOptions {
     fn default() -> Self {
         Self {
-            task_required_sections: vec![
-                "## Description".into(),
-                "## Acceptance Criteria".into(),
-            ],
-            epic_required_sections: vec![
-                "## Summary".into(),
-                "## Acceptance Criteria".into(),
-            ],
+            task_required_sections: vec!["## Description".into(), "## Acceptance Criteria".into()],
+            epic_required_sections: vec!["## Summary".into(), "## Acceptance Criteria".into()],
         }
     }
 }
@@ -357,7 +351,8 @@ fn check_filename_match(
 // Task validation
 // ---------------------------------------------------------------------------
 
-const TASK_REQUIRED_FIELDS: &[&str] = &["id", "format_id", "epic_id", "title", "status", "work_type"];
+const TASK_REQUIRED_FIELDS: &[&str] =
+    &["id", "format_id", "epic_id", "title", "status", "work_type"];
 
 const TASK_STATUS_VALUES: &[&str] = &["todo", "blocked", "in_progress", "complete", "cancelled"];
 
@@ -597,7 +592,11 @@ Criteria
             .iter()
             .filter(|e| e.message.contains("required field"))
             .collect();
-        assert_eq!(missing.len(), 5, "Expected 5 missing-field errors: {errs:?}");
+        assert_eq!(
+            missing.len(),
+            5,
+            "Expected 5 missing-field errors: {errs:?}"
+        );
     }
 
     #[test]
@@ -658,10 +657,8 @@ Criteria
     fn test_validate_task_acceptance_must_be_array() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("TSK-022-014.md");
-        let content = valid_task_content().replace(
-            "acceptance:\n  - \"All tests pass\"",
-            "acceptance: 42",
-        );
+        let content =
+            valid_task_content().replace("acceptance:\n  - \"All tests pass\"", "acceptance: 42");
         std::fs::write(&path, content).unwrap();
 
         let opts = ValidateOptions::default();
@@ -679,9 +676,9 @@ Criteria
 
         let opts = ValidateOptions::default();
         let (errs, _) = validate_task(&path, &opts).unwrap();
-        assert!(errs.iter().any(
-            |e| e.message.contains("template sentinel") || e.message.contains("placeholder")
-        ));
+        assert!(errs
+            .iter()
+            .any(|e| e.message.contains("template sentinel") || e.message.contains("placeholder")));
     }
 
     #[test]
@@ -694,7 +691,11 @@ Criteria
         let opts = ValidateOptions::default();
         let (errs, _) = validate_task(&path, &opts).unwrap();
         let section_errs: Vec<_> = errs.iter().filter(|e| e.field == "body").collect();
-        assert_eq!(section_errs.len(), 1, "Expected one section error: {errs:?}");
+        assert_eq!(
+            section_errs.len(),
+            1,
+            "Expected one section error: {errs:?}"
+        );
         assert!(section_errs[0].message.contains("Acceptance Criteria"));
     }
 
@@ -750,7 +751,11 @@ Criteria
             .iter()
             .filter(|e| e.message.contains("required field"))
             .collect();
-        assert_eq!(missing.len(), 4, "Expected 4 missing-field errors: {errs:?}");
+        assert_eq!(
+            missing.len(),
+            4,
+            "Expected 4 missing-field errors: {errs:?}"
+        );
     }
 
     #[test]
@@ -834,14 +839,8 @@ Criteria
     fn test_is_field_empty_variants() {
         let mut data = HashMap::new();
         data.insert("null_field".to_string(), serde_yaml::Value::Null);
-        data.insert(
-            "empty_seq".to_string(),
-            serde_yaml::Value::Sequence(vec![]),
-        );
-        data.insert(
-            "filled".to_string(),
-            serde_yaml::Value::String("x".into()),
-        );
+        data.insert("empty_seq".to_string(), serde_yaml::Value::Sequence(vec![]));
+        data.insert("filled".to_string(), serde_yaml::Value::String("x".into()));
         assert!(is_field_empty(&data, "null_field"));
         assert!(is_field_empty(&data, "empty_seq"));
         assert!(is_field_empty(&data, "absent"));

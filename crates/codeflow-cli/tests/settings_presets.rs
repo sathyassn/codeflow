@@ -14,7 +14,12 @@ const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-san
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
 /// `exec-guard` security stage added in ADR-0008).
-const HOOK_NAMES: [&str; 4] = ["git-guard", "exec-guard", "session-orient", "session-summary"];
+const HOOK_NAMES: [&str; 4] = [
+    "git-guard",
+    "exec-guard",
+    "session-orient",
+    "session-summary",
+];
 
 /// Hardcoded union of top-level keys actually used across the three presets.
 /// A typo'd or stray key in any preset fails here; a deliberate new key means
@@ -57,8 +62,8 @@ fn preset_files() -> Vec<String> {
 
 fn load(name: &str) -> serde_json::Value {
     let path = settings_dir().join(name);
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} is not valid JSON: {e}"))
 }
 
@@ -113,7 +118,9 @@ fn presets_parse_as_json() {
 fn every_hook_command_is_a_known_codeflow_hook() {
     for name in preset_files() {
         let value = load(&name);
-        let hooks = value.get("hooks").unwrap_or_else(|| panic!("{name}: hooks key missing"));
+        let hooks = value
+            .get("hooks")
+            .unwrap_or_else(|| panic!("{name}: hooks key missing"));
         let mut commands = Vec::new();
         collect_hook_commands(hooks, &mut commands);
         assert!(!commands.is_empty(), "{name}: no hook commands found");
@@ -131,7 +138,9 @@ fn every_hook_command_is_a_known_codeflow_hook() {
         // All three hooks are wired in every preset.
         for hook in HOOK_NAMES {
             assert!(
-                commands.iter().any(|c| c == &format!("codeflow hook {hook}")),
+                commands
+                    .iter()
+                    .any(|c| c == &format!("codeflow hook {hook}")),
                 "{name}: {hook} hook not wired"
             );
         }
@@ -159,7 +168,10 @@ fn deny_rules_cover_secret_files() {
             has("*.key") || has("*.pem"),
             "{name}: key material (*.key / *.pem) must be deny-read"
         );
-        assert!(has("*credentials*"), "{name}: *credentials* must be deny-read");
+        assert!(
+            has("*credentials*"),
+            "{name}: *credentials* must be deny-read"
+        );
     }
 }
 
@@ -231,15 +243,20 @@ fn ask_arrays_gate_escalation_and_publish() {
     for name in preset_files() {
         let ask = perm_array(&load(&name), "ask");
         for entry in expected {
-            assert!(ask.iter().any(|a| a == entry), "{name}: ask missing {entry:?}");
+            assert!(
+                ask.iter().any(|a| a == entry),
+                "{name}: ask missing {entry:?}"
+            );
         }
         // rm -rf on / and ~ is asked in some form.
         assert!(
-            ask.iter().any(|a| a.starts_with("Bash(rm -") && a.contains('/')),
+            ask.iter()
+                .any(|a| a.starts_with("Bash(rm -") && a.contains('/')),
             "{name}: ask missing an rm -rf / rule"
         );
         assert!(
-            ask.iter().any(|a| a.starts_with("Bash(rm -") && a.contains('~')),
+            ask.iter()
+                .any(|a| a.starts_with("Bash(rm -") && a.contains('~')),
             "{name}: ask missing an rm -rf ~ rule"
         );
     }
@@ -261,14 +278,20 @@ fn deny_extends_to_home_credential_stores() {
     for name in preset_files() {
         let deny = perm_array(&load(&name), "deny");
         for entry in home_stores {
-            assert!(deny.iter().any(|d| d == entry), "{name}: deny missing {entry:?}");
+            assert!(
+                deny.iter().any(|d| d == entry),
+                "{name}: deny missing {entry:?}"
+            );
         }
         assert!(
             deny.iter().any(|d| d.contains(".cargo/credentials")),
             "{name}: deny missing ~/.cargo/credentials"
         );
         // The original cwd globs survive alongside the new home-dir rules.
-        assert!(deny.iter().any(|d| d == "Read(**/.env)"), "{name}: lost cwd .env deny");
+        assert!(
+            deny.iter().any(|d| d == "Read(**/.env)"),
+            "{name}: lost cwd .env deny"
+        );
     }
 }
 
@@ -290,7 +313,10 @@ fn bypass_sandbox_uses_schema_keys() {
     let deny_read = sandbox["filesystem"]["denyRead"]
         .as_array()
         .expect("sandbox.filesystem.denyRead array");
-    let deny_read: Vec<&str> = deny_read.iter().filter_map(serde_json::Value::as_str).collect();
+    let deny_read: Vec<&str> = deny_read
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
     assert!(deny_read.contains(&"~/.ssh"), "denyRead missing ~/.ssh");
     assert!(deny_read.contains(&"~/.aws"), "denyRead missing ~/.aws");
 }

@@ -28,7 +28,8 @@ pub const LEVEL_VALUES_TEXT: &str = "off, warn, allow, block";
 
 /// One-paragraph legend for what each level does — `explain` prints it once
 /// instead of repeating it per key.
-pub const LEVEL_LEGEND: &str = "block = violations stop the operation; warn = violations are reported \
+pub const LEVEL_LEGEND: &str =
+    "block = violations stop the operation; warn = violations are reported \
      and the operation proceeds; allow = explicitly permitted; off = the check \
      is not run. `allow` and `off` are BOTH inactive — only warn/block enforce.";
 
@@ -538,9 +539,7 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
         }
     };
     let Some(obj) = root.as_object() else {
-        return Err(vec![PolicyError::file(
-            "policy.json must be a JSON object",
-        )]);
+        return Err(vec![PolicyError::file("policy.json must be a JSON object")]);
     };
 
     let mut errors = Vec::new();
@@ -553,11 +552,7 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
                         validate_leaf(&format!("{section}.{leaf}"), leaf_value, &mut errors);
                     }
                 }
-                None => errors.push(PolicyError::invalid_value(
-                    section,
-                    value,
-                    "a JSON object",
-                )),
+                None => errors.push(PolicyError::invalid_value(section, value, "a JSON object")),
             },
             _ => validate_leaf(key, value, &mut errors),
         }
@@ -731,19 +726,24 @@ mod tests {
         // The headline case: a typo'd level must ERROR naming the key, the
         // offending value, and the four valid values — never silently revert
         // the whole file to defaults.
-        let errs = validate_policy_str(r#"{"git":{"commit_ticket_required":"worn"}}"#)
-            .unwrap_err();
+        let errs = validate_policy_str(r#"{"git":{"commit_ticket_required":"worn"}}"#).unwrap_err();
         assert_eq!(errs.len(), 1);
         assert_eq!(errs[0].key, "git.commit_ticket_required");
         assert!(errs[0].message.contains("'worn'"), "{}", errs[0]);
-        assert!(errs[0].message.contains("off, warn, allow, block"), "{}", errs[0]);
+        assert!(
+            errs[0].message.contains("off, warn, allow, block"),
+            "{}",
+            errs[0]
+        );
     }
 
     #[test]
     fn test_validate_unknown_keys_error() {
-        let errs = validate_policy_str(r#"{"git":{"commit_tikcet_required":"block"}}"#)
-            .unwrap_err();
-        assert!(errs[0].message.contains("unknown key git.commit_tikcet_required"));
+        let errs =
+            validate_policy_str(r#"{"git":{"commit_tikcet_required":"block"}}"#).unwrap_err();
+        assert!(errs[0]
+            .message
+            .contains("unknown key git.commit_tikcet_required"));
         let errs = validate_policy_str(r#"{"gti":{}}"#).unwrap_err();
         assert!(errs[0].message.contains("unknown key gti"));
     }
@@ -752,27 +752,33 @@ mod tests {
     fn test_validate_bad_ticket_regex_errors() {
         // At enforcement time an unparseable pattern silently fails open; the
         // strict validator makes it loud instead.
-        let errs =
-            validate_policy_str(r#"{"git":{"commit_ticket_pattern":"("}}"#).unwrap_err();
+        let errs = validate_policy_str(r#"{"git":{"commit_ticket_pattern":"("}}"#).unwrap_err();
         assert_eq!(errs[0].key, "git.commit_ticket_pattern");
-        assert!(errs[0].message.contains("regular expression"), "{}", errs[0]);
+        assert!(
+            errs[0].message.contains("regular expression"),
+            "{}",
+            errs[0]
+        );
     }
 
     #[test]
     fn test_validate_wrong_types_name_key() {
-        let errs =
-            validate_policy_str(r#"{"git":{"commit_desc_max_len":"fifty"}}"#).unwrap_err();
+        let errs = validate_policy_str(r#"{"git":{"commit_desc_max_len":"fifty"}}"#).unwrap_err();
         assert!(errs[0].message.contains("git.commit_desc_max_len"));
         assert!(errs[0].message.contains("non-negative integer"));
-        let errs = validate_policy_str(r#"{"git":{"commit_footer_tokens":"Signed-off-by"}}"#)
-            .unwrap_err();
+        let errs =
+            validate_policy_str(r#"{"git":{"commit_footer_tokens":"Signed-off-by"}}"#).unwrap_err();
         assert!(errs[0].message.contains("array of strings"));
         let errs = validate_policy_str(r#"{"git":[]}"#).unwrap_err();
         assert!(errs[0].message.contains("expected a JSON object"));
         let errs = validate_policy_str(r#"{"human_authorization":"totp"}"#).unwrap_err();
-        assert!(errs[0].message.contains("expected one of: none"), "{}", errs[0]);
-        let errs = validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#)
-            .unwrap_err();
+        assert!(
+            errs[0].message.contains("expected one of: none"),
+            "{}",
+            errs[0]
+        );
+        let errs =
+            validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
     }
 

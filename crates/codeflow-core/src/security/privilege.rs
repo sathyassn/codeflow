@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 /// Commands that escalate privileges.
 const PRIV_ESC_CMDS: &[&str] = &["sudo", "su", "doas", "pkexec", "runuser"];
@@ -246,48 +246,36 @@ mod tests {
 
     #[test]
     fn test_doas_direct() {
-        assert!(
-            PrivilegeModule
-                .check(&ctx("doas cat /etc/shadow"))
-                .is_some()
-        );
+        assert!(PrivilegeModule
+            .check(&ctx("doas cat /etc/shadow"))
+            .is_some());
     }
 
     #[test]
     fn test_chained_sudo() {
-        assert!(
-            PrivilegeModule
-                .check(&ctx("echo test && sudo rm file"))
-                .is_some()
-        );
+        assert!(PrivilegeModule
+            .check(&ctx("echo test && sudo rm file"))
+            .is_some());
     }
 
     #[test]
     fn test_or_chained_sudo() {
         // The `|| {priv}` OR-chaining branch (distinct from `&&`).
-        assert!(
-            PrivilegeModule
-                .check(&ctx("false || sudo rm f"))
-                .is_some()
-        );
+        assert!(PrivilegeModule.check(&ctx("false || sudo rm f")).is_some());
     }
 
     #[test]
     fn test_semicolon_sudo() {
-        assert!(
-            PrivilegeModule
-                .check(&ctx("echo test; sudo rm file"))
-                .is_some()
-        );
+        assert!(PrivilegeModule
+            .check(&ctx("echo test; sudo rm file"))
+            .is_some());
     }
 
     #[test]
     fn test_piped_sudo() {
-        assert!(
-            PrivilegeModule
-                .check(&ctx("echo test | sudo tee file"))
-                .is_some()
-        );
+        assert!(PrivilegeModule
+            .check(&ctx("echo test | sudo tee file"))
+            .is_some());
     }
 
     #[test]
@@ -332,20 +320,16 @@ mod tests {
 
     #[test]
     fn test_ld_preload() {
-        assert!(
-            PrivilegeModule
-                .check(&ctx("LD_PRELOAD=/tmp/evil.so ls"))
-                .is_some()
-        );
+        assert!(PrivilegeModule
+            .check(&ctx("LD_PRELOAD=/tmp/evil.so ls"))
+            .is_some());
     }
 
     #[test]
     fn test_ld_library_path() {
-        assert!(
-            PrivilegeModule
-                .check(&ctx("LD_LIBRARY_PATH=/tmp ls"))
-                .is_some()
-        );
+        assert!(PrivilegeModule
+            .check(&ctx("LD_LIBRARY_PATH=/tmp ls"))
+            .is_some());
     }
 
     #[test]

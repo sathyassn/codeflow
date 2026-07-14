@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::git::is_on_protected_branch;
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 fn redirect_to_file_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -169,76 +169,60 @@ mod tests {
 
     #[test]
     fn test_feature_branch_allowed() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("echo test > file.txt", "feat/test"))
-                .is_none()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("echo test > file.txt", "feat/test"))
+            .is_none());
     }
 
     #[test]
     fn test_redirect_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("echo test > file.txt", "main"))
-                .is_some()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("echo test > file.txt", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_redirect_to_tmp_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("echo test > /tmp/test.txt", "main"))
-                .is_none()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("echo test > /tmp/test.txt", "main"))
+            .is_none());
     }
 
     #[test]
     fn test_sed_i_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("sed -i 's/old/new/' file.txt", "main"))
-                .is_some()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("sed -i 's/old/new/' file.txt", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_touch_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("touch newfile.txt", "main"))
-                .is_some()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("touch newfile.txt", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_cp_relative_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("cp source.txt dest.txt", "main"))
-                .is_some()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("cp source.txt dest.txt", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_cp_absolute_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch("cp source.txt /tmp/dest.txt", "main"))
-                .is_none()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch("cp source.txt /tmp/dest.txt", "main"))
+            .is_none());
     }
 
     #[test]
     fn test_tmp_claude_allowed_on_main() {
-        assert!(
-            BranchModule
-                .check(&ctx_on_branch(
-                    "echo test > /tmp/claude/staging/file.txt",
-                    "main"
-                ))
-                .is_none()
-        );
+        assert!(BranchModule
+            .check(&ctx_on_branch(
+                "echo test > /tmp/claude/staging/file.txt",
+                "main"
+            ))
+            .is_none());
     }
 }

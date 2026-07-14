@@ -232,9 +232,9 @@ pub fn init(
     match hook_manager {
         None => {
             gitutil::config_set(root, "core.hooksPath", CODEFLOW_HOOKS_PATH)?;
-            report
-                .notes
-                .push(format!("git hooks wired: core.hooksPath = {CODEFLOW_HOOKS_PATH}"));
+            report.notes.push(format!(
+                "git hooks wired: core.hooksPath = {CODEFLOW_HOOKS_PATH}"
+            ));
         }
         Some(manager) => {
             report.notes.push(format!(
@@ -283,7 +283,10 @@ fn project_name(root: &Path) -> String {
         .as_deref()
         .unwrap_or(root)
         .file_name()
-        .map_or_else(|| "project".to_string(), |n| n.to_string_lossy().to_string())
+        .map_or_else(
+            || "project".to_string(),
+            |n| n.to_string_lossy().to_string(),
+        )
 }
 
 /// Builds the substitution context shared by init and update.
@@ -339,11 +342,7 @@ pub(crate) fn render_entry(
     Ok(Some(rendered))
 }
 
-fn record(
-    installed: &mut InstalledManifest,
-    entry: &ManifestEntry,
-    sha256: String,
-) {
+fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
     installed.files.insert(
         entry.dest.clone(),
         InstalledFile {
@@ -355,11 +354,7 @@ fn record(
     );
 }
 
-fn write_dest(
-    root: &Path,
-    entry: &ManifestEntry,
-    content: &str,
-) -> Result<(), ScaffoldError> {
+fn write_dest(root: &Path, entry: &ManifestEntry, content: &str) -> Result<(), ScaffoldError> {
     // Beneath-root, no-follow: refuses a leaf or ancestor symlink so init never
     // writes (or sets exec) through a link pre-planted in the target directory.
     let path = guard_beneath_root(root, Path::new(&entry.dest))?;
@@ -403,7 +398,14 @@ fn install_entry(
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 written.push(entry.dest.clone());
-                report.file(&entry.dest, if exists { Action::Forced } else { Action::Created });
+                report.file(
+                    &entry.dest,
+                    if exists {
+                        Action::Forced
+                    } else {
+                        Action::Created
+                    },
+                );
                 return Ok(());
             }
             // Exists, no force: never overwrite. Report precisely why.
@@ -474,7 +476,14 @@ fn install_entry(
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
                     written.push(entry.dest.clone());
-                    report.file(&entry.dest, if exists { Action::Forced } else { Action::Created });
+                    report.file(
+                        &entry.dest,
+                        if exists {
+                            Action::Forced
+                        } else {
+                            Action::Created
+                        },
+                    );
                     return Ok(());
                 }
                 let current = std::fs::read_to_string(&dest_path)
@@ -506,7 +515,14 @@ fn install_entry(
                     };
                     write_dest(root, entry, &content)?;
                     written.push(entry.dest.clone());
-                    report.file(&entry.dest, if exists { Action::Forced } else { Action::Created });
+                    report.file(
+                        &entry.dest,
+                        if exists {
+                            Action::Forced
+                        } else {
+                            Action::Created
+                        },
+                    );
                     return Ok(());
                 }
                 let current = std::fs::read_to_string(&dest_path)
@@ -605,7 +621,14 @@ mod tests {
             .iter()
             .find(|e| e.dest == "AGENTS.md" && e.applies(tier, "default"))
             .expect("an AGENTS.md entry for this tier");
-        let ctx = build_context("demo", "one liner", &["core".to_string()], "rust", tier, "9.9.9");
+        let ctx = build_context(
+            "demo",
+            "one liner",
+            &["core".to_string()],
+            "rust",
+            tier,
+            "9.9.9",
+        );
         let mut report = Report::new("test".to_string());
         render_entry(&source, entry, &ctx, &mut report)
             .expect("render succeeds")

@@ -2,7 +2,7 @@
 //! `.codeflow/policy.json`, rendered from the binary alone (consumers have no
 //! source to read). `explain` prints the complete key schema — type, default,
 //! valid values, purpose, sharp edges — from the
-//! [`policy_schema`](codeflow_core::hooks::policy_schema) registry; `show`
+//! [`policy_schema`] registry; `show`
 //! prints the EFFECTIVE policy: each key's current value, whether it comes from
 //! the project file or the built-in default, and a loud flag on invalid values.
 
@@ -104,7 +104,9 @@ fn show(root: &Path) -> i32 {
 
     match Policy::source(root) {
         PolicySource::Absent => {
-            println!("codeflow policy: no .codeflow/policy.json — every key is at its built-in default");
+            println!(
+                "codeflow policy: no .codeflow/policy.json — every key is at its built-in default"
+            );
         }
         PolicySource::ProjectFile => {
             println!("codeflow policy: .codeflow/policy.json is in effect");

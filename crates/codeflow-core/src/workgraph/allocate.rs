@@ -269,7 +269,11 @@ mod tests {
         let dir = pm();
         // Dogfood layout: epics/EPC-003/EPC-003.md (dir named after its id).
         fs::create_dir_all(dir.path().join("epics/EPC-003")).unwrap();
-        fs::write(dir.path().join("epics/EPC-003/EPC-003.md"), "---\nid: x\n---\n").unwrap();
+        fs::write(
+            dir.path().join("epics/EPC-003/EPC-003.md"),
+            "---\nid: x\n---\n",
+        )
+        .unwrap();
         assert_eq!(next_epic_id(dir.path()), "EPC-004");
     }
 

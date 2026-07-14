@@ -159,9 +159,7 @@ impl MarkdownStore {
         Ok(())
     }
 
-    fn read_record<T: serde::de::DeserializeOwned>(
-        path: &Path,
-    ) -> Result<(T, String), StoreError> {
+    fn read_record<T: serde::de::DeserializeOwned>(path: &Path) -> Result<(T, String), StoreError> {
         let content = fs::read_to_string(path)?;
         let (yaml, body) = split_frontmatter(&content).ok_or_else(|| StoreError::Yaml {
             path: path.display().to_string(),
@@ -256,7 +254,9 @@ fn record_files(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
 /// parses to a generic map for field-level validation.)
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
-    let rest = rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n"))?;
+    let rest = rest
+        .strip_prefix('\n')
+        .or_else(|| rest.strip_prefix("\r\n"))?;
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
         if line.trim_end_matches(['\r', '\n']) == "---" {
@@ -280,8 +280,10 @@ impl RecordStore for MarkdownStore {
     }
 
     fn get_epic_by_format_id(&self, format_id: &str) -> Result<Option<Epic>, StoreError> {
-        Ok(find_by(&self.epics_dir(), |e: &Epic| e.format_id == format_id)?
-            .map(|(_, epic, _)| epic))
+        Ok(
+            find_by(&self.epics_dir(), |e: &Epic| e.format_id == format_id)?
+                .map(|(_, epic, _)| epic),
+        )
     }
 
     fn update_epic(&self, id: &str, update: EpicUpdate) -> Result<(), StoreError> {
@@ -323,8 +325,10 @@ impl RecordStore for MarkdownStore {
     }
 
     fn get_task_by_format_id(&self, format_id: &str) -> Result<Option<Task>, StoreError> {
-        Ok(find_by(&self.tasks_dir(), |t: &Task| t.format_id == format_id)?
-            .map(|(_, task, _)| task))
+        Ok(
+            find_by(&self.tasks_dir(), |t: &Task| t.format_id == format_id)?
+                .map(|(_, task, _)| task),
+        )
     }
 
     fn update_task(&self, id: &str, update: TaskUpdate) -> Result<(), StoreError> {
@@ -356,12 +360,7 @@ impl RecordStore for MarkdownStore {
             .into_iter()
             .map(|(_, task)| task)
             .filter(|t| filter.status.is_none_or(|s| t.status == s))
-            .filter(|t| {
-                filter
-                    .epic_id
-                    .as_deref()
-                    .is_none_or(|eid| t.epic_id == eid)
-            })
+            .filter(|t| filter.epic_id.as_deref().is_none_or(|eid| t.epic_id == eid))
             .collect())
     }
 }
@@ -442,7 +441,9 @@ mod tests {
     fn test_get_epic_by_format_id() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap();
+        store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .unwrap();
 
         let fetched = store.get_epic_by_format_id("EPC-001").unwrap().unwrap();
         assert_eq!(fetched.id, "epic-01a");
@@ -460,7 +461,9 @@ mod tests {
     fn test_update_epic_fields_and_updated_at() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap();
+        store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .unwrap();
 
         store
             .update_epic(
@@ -495,12 +498,18 @@ mod tests {
     fn test_update_preserves_markdown_body() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap();
+        store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .unwrap();
 
         // A human (or template) adds body content below the frontmatter.
         let path = dir.path().join("epics/EPC-001.md");
         let content = fs::read_to_string(&path).unwrap();
-        fs::write(&path, format!("{content}\n## Summary\nHand-written notes.\n")).unwrap();
+        fs::write(
+            &path,
+            format!("{content}\n## Summary\nHand-written notes.\n"),
+        )
+        .unwrap();
 
         store
             .update_epic(
@@ -522,7 +531,9 @@ mod tests {
     fn test_list_epics_filter_by_status() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap();
+        store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .unwrap();
         let mut second = make_epic("epic-01b", "EPC-002");
         second.status = EpicStatus::InProgress;
         store.create_epic(&second).unwrap();
@@ -649,7 +660,9 @@ mod tests {
     fn test_scan_finds_both_flat_and_nested_epics() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap(); // flat
+        store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .unwrap(); // flat
         let nested_dir = store.root().join("epics/EPC-002");
         fs::create_dir_all(&nested_dir).unwrap();
         MarkdownStore::write_record(
@@ -686,7 +699,10 @@ mod tests {
             )
             .unwrap();
 
-        assert!(nested.is_file(), "nested file must remain the record location");
+        assert!(
+            nested.is_file(),
+            "nested file must remain the record location"
+        );
         assert!(
             !store.root().join("epics/EPC-001.md").exists(),
             "no stray flat file should be created"
@@ -700,8 +716,14 @@ mod tests {
     fn test_scan_skips_unparseable_files() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        store.create_epic(&make_epic("epic-01a", "EPC-001")).unwrap();
-        fs::write(dir.path().join("epics/notes.md"), "just notes, no frontmatter").unwrap();
+        store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .unwrap();
+        fs::write(
+            dir.path().join("epics/notes.md"),
+            "just notes, no frontmatter",
+        )
+        .unwrap();
 
         let all = store.list_epics(EpicFilter::default()).unwrap();
         assert_eq!(all.len(), 1, "unparseable file must be skipped, not fatal");

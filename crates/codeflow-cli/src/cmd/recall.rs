@@ -105,7 +105,14 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
             args.query
         );
         for (i, r) in report.results.iter().enumerate() {
-            println!("{}. [{}] {} ({}) — {}", i + 1, r.repo, r.path, r.kind, r.title);
+            println!(
+                "{}. [{}] {} ({}) — {}",
+                i + 1,
+                r.repo,
+                r.path,
+                r.kind,
+                r.title
+            );
             println!("   {}", r.snippet.replace('\n', " "));
         }
     }

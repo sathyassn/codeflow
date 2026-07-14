@@ -10,6 +10,19 @@
   },
   "targets": [
     {
+      "name": "rust-format",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "cargo fmt --all -- --check"
+        },
+        "full": {
+          "command": "cargo fmt --all -- --check"
+        }
+      }
+    },
+    {
       "name": "rust-workspace",
       "enabled": true,
       "runner": "cargo",
@@ -32,6 +45,19 @@
         },
         "full": {
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
+        }
+      }
+    },
+    {
+      "name": "rustdoc",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"
+        },
+        "full": {
+          "command": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"
         }
       }
     },

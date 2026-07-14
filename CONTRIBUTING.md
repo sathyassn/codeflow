@@ -5,9 +5,11 @@ requests.
 
 ## Ground rules
 
-- `cargo test --workspace` and `cargo clippy --all-targets --workspace`
-  (workspace lints: clippy `all` = deny, `pedantic` = warn) must be green before
-  a PR is ready.
+- `cargo fmt --all -- --check`, `cargo test --workspace`,
+  `cargo clippy --all-targets --workspace`, and
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` must be green
+  before a PR is ready (workspace lints: clippy `all` = deny, `pedantic` =
+  warn).
 - Tests ship with the code that needs them, in the same PR.
 - Commits follow the conventional format `type(scope): description` — imperative
   mood, lower-case type, no trailing period; one logical change per commit.
@@ -21,13 +23,16 @@ requests.
 
 ```sh
 cargo install --path crates/codeflow-cli   # build + install the CLI
+cargo fmt --all -- --check                 # formatting gate
 cargo test --workspace                      # run the suite
 cargo clippy --all-targets --workspace      # lint
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 The operating contract for this repo is [AGENTS.md](AGENTS.md); the working
 method (planning weight, when an ADR is warranted, the capability registry) is
-in the `cf-method` skill under `.claude/skills/`.
+in the portable `cf-method` skill under `.agents/skills/`, mirrored for Claude
+Code under `.claude/skills/`.
 
 ## Reporting bugs / requesting features
 

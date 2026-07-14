@@ -160,9 +160,7 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
                 continue;
             }
 
-            let existing = cur_groups
-                .iter_mut()
-                .find(|g| matcher_of(g) == inc_matcher);
+            let existing = cur_groups.iter_mut().find(|g| matcher_of(g) == inc_matcher);
             if let Some(group) = existing {
                 let hooks = group
                     .as_object_mut()
@@ -207,9 +205,7 @@ fn merge_permissions(cur: &mut Map<String, Value>, inc_perms: &Value, report: &m
                 for item in inc_arr {
                     if !cur_arr.contains(item) {
                         cur_arr.push(item.clone());
-                        report.push(format!(
-                            "settings: added permissions.{key} entry {item}"
-                        ));
+                        report.push(format!("settings: added permissions.{key} entry {item}"));
                     }
                 }
             }
@@ -273,8 +269,10 @@ mod tests {
         assert!(bash_hooks
             .iter()
             .any(|h| h["command"] == "codeflow hook git-guard"));
-        assert_eq!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-            "codeflow hook session-orient");
+        assert_eq!(
+            v["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+            "codeflow hook session-orient"
+        );
         assert_eq!(v["statusLine"]["command"], "echo cf");
         assert!(report.iter().any(|l| l.contains("preserved user value")));
         assert!(report.iter().any(|l| l.contains("git-guard")));
@@ -287,7 +285,10 @@ mod tests {
         let mut report2 = vec![];
         let twice = merge_settings(&once, PRESET, &mut report2).unwrap();
         assert_eq!(once, twice);
-        assert!(report2.is_empty(), "second merge reports nothing: {report2:?}");
+        assert!(
+            report2.is_empty(),
+            "second merge reports nothing: {report2:?}"
+        );
     }
 
     #[test]
@@ -306,7 +307,9 @@ mod tests {
         let merged = merge_settings(user, PRESET, &mut report).unwrap();
         let v: Value = serde_json::from_str(&merged).unwrap();
         let hooks = v["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
-        assert!(!hooks.iter().any(|h| h["command"] == "codeflow hook old-guard"));
+        assert!(!hooks
+            .iter()
+            .any(|h| h["command"] == "codeflow hook old-guard"));
         assert!(hooks.iter().any(|h| h["command"] == "./mine.sh"));
         assert!(report.iter().any(|l| l.contains("removed stale hook")));
     }

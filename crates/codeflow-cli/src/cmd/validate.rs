@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::validate::docs::lint_docs;
-use codeflow_core::validate::{ValidateOptions, validate_epic, validate_task};
+use codeflow_core::validate::{validate_epic, validate_task, ValidateOptions};
 
 #[derive(Args)]
 pub struct ValidateArgs {

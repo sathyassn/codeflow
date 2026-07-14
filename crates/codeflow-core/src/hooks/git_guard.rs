@@ -165,7 +165,14 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
         let git_dir_env = git_dir_env_prefix(&tokens);
         match program_kind(program) {
             ProgramKind::Git => {
-                check_git(args, &mut branch, cd_dir.as_deref(), git_dir_env, ctx, &mut violations);
+                check_git(
+                    args,
+                    &mut branch,
+                    cd_dir.as_deref(),
+                    git_dir_env,
+                    ctx,
+                    &mut violations,
+                );
             }
             ProgramKind::Gh => check_gh(args, ctx, &mut violations),
             ProgramKind::Other => {}
@@ -209,15 +216,18 @@ const OVERRIDE_ENV_VARS: &[&str] = &[HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV];
 /// floor-raises, not a solve — an env var is not authentication (ADR-0009);
 /// a determined agent has other ways to set its own environment.
 fn laundered_override(tokens: &[String]) -> Option<&'static str> {
-    let assigns = |t: &str| OVERRIDE_ENV_VARS.iter().copied().find(|v| is_assignment_of(t, v));
+    let assigns = |t: &str| {
+        OVERRIDE_ENV_VARS
+            .iter()
+            .copied()
+            .find(|v| is_assignment_of(t, v))
+    };
     let names = |t: &str| OVERRIDE_ENV_VARS.iter().copied().find(|v| **v == *t);
 
     // An override var carried inside any token (e.g. a `git config alias.*`
     // value `!CODEFLOW_HUMAN_OVERRIDE=1 git …`) — the assignment is embedded,
     // not a leading prefix, so the positional scan below would miss it.
-    if tokens.first().map(|t| basename(t)) == Some("git")
-        && tokens.iter().any(|t| t == "config")
-    {
+    if tokens.first().map(|t| basename(t)) == Some("git") && tokens.iter().any(|t| t == "config") {
         if let Some(var) = tokens.iter().find_map(|t| embedded_override_assignment(t)) {
             return Some(var);
         }
@@ -276,9 +286,7 @@ fn embedded_override_assignment(token: &str) -> Option<&'static str> {
 
 /// `true` when `token` is `VAR=<anything>` for exactly `var`.
 fn is_assignment_of(token: &str, var: &str) -> bool {
-    token
-        .split_once('=')
-        .is_some_and(|(name, _)| name == var)
+    token.split_once('=').is_some_and(|(name, _)| name == var)
 }
 
 fn laundering_violation(var: &str) -> Violation {
@@ -346,16 +354,22 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
 /// the older `GIT_CONFIG_PARAMETERS='core.hooksPath=…'`. Parallel to the
 /// hook-skip env vars: an env-set of a protected key disarms the plane.
 fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
-    leading_env_assignments(tokens).into_iter().any(|(name, val)| {
-        (name.starts_with("GIT_CONFIG_KEY_") || name == "GIT_CONFIG_PARAMETERS")
-            && mentions_hooks_path(val)
-    })
+    leading_env_assignments(tokens)
+        .into_iter()
+        .any(|(name, val)| {
+            (name.starts_with("GIT_CONFIG_KEY_") || name == "GIT_CONFIG_PARAMETERS")
+                && mentions_hooks_path(val)
+        })
 }
 
 /// Env vars whose in-session assignment disables the client hooks. `HUSKY`
 /// only disarms at `=0`; the rest disarm at any value.
-const HOOK_SKIP_ENV_VARS: &[&str] =
-    &["GIT_SKIP_HOOKS", "SKIP_HOOKS", "PRE_COMMIT_ALLOW_NO_CONFIG", "GIT_HOOKS_PATH"];
+const HOOK_SKIP_ENV_VARS: &[&str] = &[
+    "GIT_SKIP_HOOKS",
+    "SKIP_HOOKS",
+    "PRE_COMMIT_ALLOW_NO_CONFIG",
+    "GIT_HOOKS_PATH",
+];
 
 /// Detect a hook-skip env var set as a leading prefix or via the env/declare
 /// builtins (`GIT_SKIP_HOOKS=1 git …`, `HUSKY=0 …`, `env HUSKY=0 …`).
@@ -434,7 +448,10 @@ const INTEGRITY_FILES: &[&str] = &[".codeflow/policy.json", ".codeflow/project.t
 /// left unresolved (traversal is a separate, documented residual).
 fn normalize_path(s: &str) -> String {
     let absolute = s.starts_with('/');
-    let parts: Vec<&str> = s.split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+    let parts: Vec<&str> = s
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
     let joined = parts.join("/");
     if absolute {
         format!("/{joined}")
@@ -475,7 +492,10 @@ enum RedirectTarget<'a> {
 /// followed by a filename (csh/bash `>&file`) writes both streams to it.
 fn redirect_target(token: &str) -> Option<RedirectTarget<'_>> {
     // `&>file` / `&>>file`: bash redirect of both stdout and stderr to a file.
-    if let Some(rest) = token.strip_prefix("&>>").or_else(|| token.strip_prefix("&>")) {
+    if let Some(rest) = token
+        .strip_prefix("&>>")
+        .or_else(|| token.strip_prefix("&>"))
+    {
         return Some(classify_redirect_rest(rest));
     }
     let after_fd = token.trim_start_matches(|c: char| c.is_ascii_digit());
@@ -545,7 +565,15 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
 
     if matches!(
         cmd,
-        "rm" | "unlink" | "mv" | "tee" | "dd" | "truncate" | "shred" | "chmod" | "chown" | "ln"
+        "rm" | "unlink"
+            | "mv"
+            | "tee"
+            | "dd"
+            | "truncate"
+            | "shred"
+            | "chmod"
+            | "chown"
+            | "ln"
             | "install"
     ) {
         if let Some(p) = arg_integrity_path(args) {
@@ -635,10 +663,7 @@ fn shell_c_argument(args: &[String]) -> Option<&String> {
         let a = args[i].as_str();
         let is_c_flag = a == "-c"
             || a == "--command"
-            || (a.starts_with('-')
-                && !a.starts_with("--")
-                && a.len() > 1
-                && a.contains('c'));
+            || (a.starts_with('-') && !a.starts_with("--") && a.len() > 1 && a.contains('c'));
         if is_c_flag {
             return args.get(i + 1);
         }
@@ -837,7 +862,9 @@ fn check_git(
     // the injected resolver) instead of the session branch — the review's
     // wrong-dir evasion. No resolver / unreadable dir falls back to the session
     // branch (documented residual; the target repo's git-hook plane backstops).
-    let retarget_dir = retarget_flag.or(git_dir_env).or_else(|| cd_dir.map(str::to_string));
+    let retarget_dir = retarget_flag
+        .or(git_dir_env)
+        .or_else(|| cd_dir.map(str::to_string));
     let retargeted = retarget_dir.is_some();
     let eval_branch: String = match (&retarget_dir, ctx.dir_branch_lookup) {
         (Some(dir), Some(resolver)) => resolver(dir).unwrap_or_else(|| session_branch.clone()),
@@ -951,7 +978,8 @@ fn check_git(
                 out.push(Violation::new(
                     "git.local_ref_protection",
                     policy.local_ref_protection,
-                    "`git fast-import` can rewrite any ref, including protected branches".to_string(),
+                    "`git fast-import` can rewrite any ref, including protected branches"
+                        .to_string(),
                     SANCTIONED.to_string(),
                 ));
             }
@@ -1181,7 +1209,9 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                 out.push(Violation::new(
                     "git.push_to_protected",
                     policy.push_to_protected,
-                    format!("bulk push (--all/--mirror/wildcard) reaches protected branches: {names}"),
+                    format!(
+                        "bulk push (--all/--mirror/wildcard) reaches protected branches: {names}"
+                    ),
                     SANCTIONED.to_string(),
                 ));
             }
@@ -1227,7 +1257,8 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.force_push_unprotected",
                     policy.force_push_unprotected,
                     format!("force-push to branch '{target}'"),
-                    "policy git.force_push_unprotected restricts force-pushes in this repo".to_string(),
+                    "policy git.force_push_unprotected restricts force-pushes in this repo"
+                        .to_string(),
                 ));
             }
         } else if protected && policy.push_to_protected.is_active() && !ctx.integrate_token {
@@ -1943,13 +1974,11 @@ mod tests {
         let p = default_policy();
         assert!(evaluate("git push --force origin feat/x", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("git push -f origin feat/x", &ctx(&p, "feat/x")).is_empty());
-        assert!(
-            evaluate(
-                "git push --force-with-lease origin feat/x",
-                &ctx(&p, "feat/x")
-            )
-            .is_empty()
-        );
+        assert!(evaluate(
+            "git push --force-with-lease origin feat/x",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2051,7 +2080,8 @@ mod tests {
     #[test]
     fn test_pr_body_coauthored_blocked() {
         let p = default_policy();
-        let cmd = r#"gh pr create -t "feat: x" -b "ok Co-Authored-By: Claude <noreply@anthropic.com>""#;
+        let cmd =
+            r#"gh pr create -t "feat: x" -b "ok Co-Authored-By: Claude <noreply@anthropic.com>""#;
         let v = evaluate(cmd, &ctx(&p, "feat/x"));
         assert_eq!(v[0].rule, "git.ai_attribution");
     }
@@ -2088,7 +2118,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("body.md");
         std::fs::write(&path, "Summary.\n\nGenerated with Claude Code").unwrap();
-        let cmd = format!("gh pr create --title 'feat: x' --body-file '{}'", path.display());
+        let cmd = format!(
+            "gh pr create --title 'feat: x' --body-file '{}'",
+            path.display()
+        );
         let v = evaluate(&cmd, &ctx(&p, "feat/x"));
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "git.ai_attribution");
@@ -2118,7 +2151,10 @@ mod tests {
     fn test_gh_pr_merge_blocks_on_protected_base() {
         let p = default_policy();
         let lookup = |_: &str| Some("main".to_string());
-        let v = evaluate("gh pr merge 42 --squash", &ctx_with_lookup(&p, "feat/x", &lookup));
+        let v = evaluate(
+            "gh pr merge 42 --squash",
+            &ctx_with_lookup(&p, "feat/x", &lookup),
+        );
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "git.pr_merge_to_protected");
         assert!(v[0].remedy.contains("performed by a human"));
@@ -2128,9 +2164,11 @@ mod tests {
     fn test_gh_pr_merge_allows_proven_unprotected_base() {
         let p = default_policy();
         let lookup = |_: &str| Some("develop".to_string());
-        assert!(
-            evaluate("gh pr merge 42 --squash", &ctx_with_lookup(&p, "feat/x", &lookup)).is_empty()
-        );
+        assert!(evaluate(
+            "gh pr merge 42 --squash",
+            &ctx_with_lookup(&p, "feat/x", &lookup)
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2141,7 +2179,10 @@ mod tests {
         assert_eq!(v[0].rule, "git.pr_merge_to_protected");
 
         let lookup = |_: &str| None;
-        let v = evaluate("gh pr merge --merge", &ctx_with_lookup(&p, "feat/x", &lookup));
+        let v = evaluate(
+            "gh pr merge --merge",
+            &ctx_with_lookup(&p, "feat/x", &lookup),
+        );
         assert_eq!(v[0].rule, "git.pr_merge_to_protected");
     }
 
@@ -2166,7 +2207,9 @@ mod tests {
         );
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "git.pr_merge_delete_branch");
-        assert!(v[0].remedy.contains("delete the branch from the repo root separately"));
+        assert!(v[0]
+            .remedy
+            .contains("delete the branch from the repo root separately"));
     }
 
     #[test]
@@ -2212,7 +2255,10 @@ mod tests {
     #[test]
     fn test_laundering_env_command_blocked() {
         let p = default_policy();
-        let v = evaluate("env CODEFLOW_HUMAN_OVERRIDE=1 git merge feat/x", &ctx(&p, "feat/x"));
+        let v = evaluate(
+            "env CODEFLOW_HUMAN_OVERRIDE=1 git merge feat/x",
+            &ctx(&p, "feat/x"),
+        );
         assert_eq!(v[0].rule, "git.override_token_laundering");
     }
 
@@ -2342,13 +2388,11 @@ mod tests {
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
         // A non-hooksPath --config-env is not an integrity concern.
-        assert!(
-            evaluate(
-                "NAME=x git --config-env=user.name=NAME commit -m 'feat: x'",
-                &ctx(&p, "feat/x")
-            )
-            .is_empty()
-        );
+        assert!(evaluate(
+            "NAME=x git --config-env=user.name=NAME commit -m 'feat: x'",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2522,13 +2566,11 @@ mod tests {
         // Resolver reports the target repo is on a feature branch — allowed.
         let p = default_policy();
         let resolver = |_dir: &str| Some("feat/y".to_string());
-        assert!(
-            evaluate(
-                "git -C /other commit -m x",
-                &ctx_with_dir_branch(&p, "main", &resolver)
-            )
-            .is_empty()
-        );
+        assert!(evaluate(
+            "git -C /other commit -m x",
+            &ctx_with_dir_branch(&p, "main", &resolver)
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2539,13 +2581,11 @@ mod tests {
         // allowed; session on a protected branch: still blocked.
         let p = default_policy();
         let resolver = |_dir: &str| None;
-        assert!(
-            evaluate(
-                "git -C /root commit -m x",
-                &ctx_with_dir_branch(&p, "feat/x", &resolver)
-            )
-            .is_empty()
-        );
+        assert!(evaluate(
+            "git -C /root commit -m x",
+            &ctx_with_dir_branch(&p, "feat/x", &resolver)
+        )
+        .is_empty());
         let v = evaluate(
             "git -C /root commit -m x",
             &ctx_with_dir_branch(&p, "main", &resolver),
@@ -2558,7 +2598,10 @@ mod tests {
     #[test]
     fn test_update_ref_self_move_protected_blocked() {
         let p = default_policy();
-        let v = evaluate("git update-ref refs/heads/main deadbeef", &ctx(&p, "feat/x"));
+        let v = evaluate(
+            "git update-ref refs/heads/main deadbeef",
+            &ctx(&p, "feat/x"),
+        );
         assert!(has_rule(&v, "git.local_ref_protection"), "{v:?}");
     }
 
@@ -2579,9 +2622,15 @@ mod tests {
     fn test_symbolic_ref_and_fast_import_blocked() {
         let p = default_policy();
         let v = evaluate("git symbolic-ref HEAD refs/heads/main", &ctx(&p, "feat/x"));
-        assert!(has_rule(&v, "git.local_ref_protection"), "symbolic-ref: {v:?}");
+        assert!(
+            has_rule(&v, "git.local_ref_protection"),
+            "symbolic-ref: {v:?}"
+        );
         let v = evaluate("git fast-import", &ctx(&p, "feat/x"));
-        assert!(has_rule(&v, "git.local_ref_protection"), "fast-import: {v:?}");
+        assert!(
+            has_rule(&v, "git.local_ref_protection"),
+            "fast-import: {v:?}"
+        );
     }
 
     // -- refs/remotes oracle poisoning (REFERENCE-TRANSACTION ORACLE, 2a) --
@@ -2602,13 +2651,11 @@ mod tests {
     #[test]
     fn test_update_ref_remote_tracking_feature_allowed() {
         let p = default_policy();
-        assert!(
-            evaluate(
-                "git update-ref refs/remotes/origin/feat/x abc",
-                &ctx(&p, "feat/x")
-            )
-            .is_empty()
-        );
+        assert!(evaluate(
+            "git update-ref refs/remotes/origin/feat/x abc",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     // -- bulk push (4d) --
@@ -2680,7 +2727,10 @@ mod tests {
             "git config CORE.HOOKSPATH /tmp/x",
             "git -c core.HooksPath=/dev/null commit -m x",
         ] {
-            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+            assert!(
+                has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"),
+                "{cmd}"
+            );
         }
     }
 
@@ -2694,7 +2744,10 @@ mod tests {
             "rm -rf .git/hooks/",
             "tee ./.codeflow/policy.json",
         ] {
-            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+            assert!(
+                has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"),
+                "{cmd}"
+            );
         }
     }
 
@@ -2708,7 +2761,10 @@ mod tests {
             "echo x 1>>.codeflow/project.toml",
             "echo x >|.codeflow/policy.json",
         ] {
-            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+            assert!(
+                has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"),
+                "{cmd}"
+            );
         }
     }
 
@@ -2744,7 +2800,10 @@ mod tests {
             "echo x &>>.codeflow/project.toml",
             "echo x >>&.git/hooks/pre-commit",
         ] {
-            assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
+            assert!(
+                has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"),
+                "{cmd}"
+            );
         }
     }
 
@@ -2758,13 +2817,11 @@ mod tests {
             assert!(has_rule(&evaluate(cmd, &ctx(&p, "feat/x")), "git.hook_integrity"), "{cmd}");
         }
         // A non-hooksPath GIT_CONFIG_* injection is not an integrity concern.
-        assert!(
-            evaluate(
-                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
-                &ctx(&p, "feat/x")
-            )
-            .is_empty()
-        );
+        assert!(evaluate(
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2781,15 +2838,24 @@ mod tests {
             "builtin git commit -m x",
             "sh -ec 'git commit -m x'",
         ] {
-            assert!(has_rule(&evaluate(cmd, &ctx(&p, "main")), "git.commit_to_protected"), "{cmd}");
+            assert!(
+                has_rule(&evaluate(cmd, &ctx(&p, "main")), "git.commit_to_protected"),
+                "{cmd}"
+            );
         }
     }
 
     #[test]
     fn test_b7_eval_wrapper() {
         let p = default_policy();
-        assert!(has_rule(&evaluate("eval 'git commit -m x'", &ctx(&p, "main")), "git.commit_to_protected"));
-        assert!(has_rule(&evaluate("eval git commit -m x", &ctx(&p, "main")), "git.commit_to_protected"));
+        assert!(has_rule(
+            &evaluate("eval 'git commit -m x'", &ctx(&p, "main")),
+            "git.commit_to_protected"
+        ));
+        assert!(has_rule(
+            &evaluate("eval git commit -m x", &ctx(&p, "main")),
+            "git.commit_to_protected"
+        ));
     }
 
     #[test]
@@ -2803,6 +2869,10 @@ mod tests {
         assert!(evaluate("env NODE_ENV=test npm test", &ctx(&p, "main")).is_empty());
         // `git -C <subdir>` resolving to a feature branch stays allowed.
         let resolver = |_dir: &str| Some("feat/y".to_string());
-        assert!(evaluate("git -C sub status", &ctx_with_dir_branch(&p, "main", &resolver)).is_empty());
+        assert!(evaluate(
+            "git -C sub status",
+            &ctx_with_dir_branch(&p, "main", &resolver)
+        )
+        .is_empty());
     }
 }

@@ -37,7 +37,7 @@ reversible; an edit handoff is neither.
 
 ## Transport — interactive-only, one lane per direction (ADR-0018)
 
-```
+```text
 Claude Code ──codex-plugin-cc plugin──▶ codex
 codex ──tmux-driven interactive claude CLI──▶ claude
 ```

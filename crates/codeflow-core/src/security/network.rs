@@ -8,7 +8,7 @@
 
 use regex::Regex;
 
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 const DEFAULT_GIT_NETWORK_PATTERNS: &[&str] = &[
     r"^git\s+(push|pull|fetch|clone)",
@@ -136,11 +136,9 @@ mod tests {
 
     #[test]
     fn test_git_clone_blocked() {
-        assert!(
-            NetworkModule
-                .check(&ctx("git clone https://github.com/test/repo"))
-                .is_some()
-        );
+        assert!(NetworkModule
+            .check(&ctx("git clone https://github.com/test/repo"))
+            .is_some());
     }
 
     #[test]
@@ -155,20 +153,16 @@ mod tests {
 
     #[test]
     fn test_git_push_with_bypass_allowed() {
-        assert!(
-            NetworkModule
-                .check(&ctx_with_bypass("git push origin main", true))
-                .is_none()
-        );
+        assert!(NetworkModule
+            .check(&ctx_with_bypass("git push origin main", true))
+            .is_none());
     }
 
     #[test]
     fn test_gh_pr_with_bypass_allowed() {
-        assert!(
-            NetworkModule
-                .check(&ctx_with_bypass("gh pr create", true))
-                .is_none()
-        );
+        assert!(NetworkModule
+            .check(&ctx_with_bypass("gh pr create", true))
+            .is_none());
     }
 
     #[test]

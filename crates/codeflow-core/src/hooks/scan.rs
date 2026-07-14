@@ -86,8 +86,18 @@ fn is_placeholder_value(value: &str) -> bool {
     }
     let core = lower.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
     [
-        "your-", "your_", "changeme", "placeholder", "example", "xxxx", "redacted", "dummy",
-        "sample", "insert", "todo", "fixme",
+        "your-",
+        "your_",
+        "changeme",
+        "placeholder",
+        "example",
+        "xxxx",
+        "redacted",
+        "dummy",
+        "sample",
+        "insert",
+        "todo",
+        "fixme",
     ]
     .iter()
     .any(|p| core.starts_with(p))
@@ -141,8 +151,7 @@ pub fn scan_line(line: &str) -> Option<&'static str> {
 #[allow(clippy::missing_panics_doc)] // static regex compile cannot fail
 pub fn scan_diff(diff: &str) -> Vec<SecretHit> {
     static HUNK_RE: OnceLock<Regex> = OnceLock::new();
-    let hunk_re =
-        HUNK_RE.get_or_init(|| Regex::new(r"^@@ -\d+(?:,\d+)? \+(\d+)").expect("valid"));
+    let hunk_re = HUNK_RE.get_or_init(|| Regex::new(r"^@@ -\d+(?:,\d+)? \+(\d+)").expect("valid"));
 
     let mut hits = Vec::new();
     let mut file = String::new();
@@ -150,11 +159,7 @@ pub fn scan_diff(diff: &str) -> Vec<SecretHit> {
 
     for raw in diff.lines() {
         if let Some(path) = raw.strip_prefix("+++ ") {
-            file = path
-                .strip_prefix("b/")
-                .unwrap_or(path)
-                .trim()
-                .to_string();
+            file = path.strip_prefix("b/").unwrap_or(path).trim().to_string();
             continue;
         }
         if let Some(caps) = hunk_re.captures(raw) {
@@ -223,10 +228,16 @@ mod tests {
         // one line (shell `export`): the placeholder must not shield the live one.
         let secret = format!("R3al{}", "LiveSecretValue99");
         let line = format!(r#"export api_key="your-key-here-xx" password="{secret}""#);
-        assert!(scan_line(&line).is_some(), "later live secret must be caught");
+        assert!(
+            scan_line(&line).is_some(),
+            "later live secret must be caught"
+        );
         // both placeholders → still suppressed
         let all_ph = r#"api_key = "your-key-here-xx" password = "changeme-now-please""#;
-        assert!(scan_line(all_ph).is_none(), "all-placeholder line stays clean");
+        assert!(
+            scan_line(all_ph).is_none(),
+            "all-placeholder line stays clean"
+        );
     }
 
     // codex round-2: a live value that merely CONTAINS a placeholder word
@@ -301,7 +312,9 @@ mod tests {
         // Three base64url segments joined at runtime; no segment alone is a JWT.
         let jwt = format!(
             "{}.{}.{}",
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dummyFakeSignature0123"
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+            "dummyFakeSignature0123"
         );
         assert_eq!(scan_line(&jwt), Some("JSON Web Token"));
     }

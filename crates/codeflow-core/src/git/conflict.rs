@@ -585,7 +585,10 @@ mod tests {
         .unwrap();
 
         let reference = find_target_ref(&repo, "remote-target").unwrap();
-        assert_eq!(reference.name(), Some("refs/remotes/origin/remote-target"));
+        assert_eq!(
+            reference.name().unwrap(),
+            "refs/remotes/origin/remote-target"
+        );
     }
 
     #[test]

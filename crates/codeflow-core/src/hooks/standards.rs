@@ -321,7 +321,8 @@ pub fn check_commit_body(
 ///
 /// With `ticket_keys` non-empty:
 /// - a present ticket trailer is *allowed* (the body-shape check recognizes the
-///   token via [`GitPolicy::allowed_footer_tokens`]);
+///   token via
+///   [`GitPolicy::allowed_footer_tokens`](super::policy::GitPolicy::allowed_footer_tokens));
 /// - when `required` is `warn`/`block`, at least one *matching* ticket trailer
 ///   must be present — else a violation at the `required` level;
 /// - when `pattern` is non-empty, a present ticket trailer whose value does not
@@ -329,8 +330,8 @@ pub fn check_commit_body(
 ///   is not required — a botched reference is unambiguously wrong.
 ///
 /// Merge/revert/fixup/squash commits are exempt as a class. An unparseable
-/// `pattern` degrades to no format check (fail-open, matching
-/// [`path_matches_glob`]). Returns `Some((level, reason))` for the single most
+/// `pattern` degrades to no format check (fail-open, matching the private
+/// `path_matches_glob` helper). Returns `Some((level, reason))` for the single most
 /// relevant finding, else `None`.
 #[must_use]
 pub fn check_commit_ticket(
@@ -403,7 +404,8 @@ pub fn check_commit_ticket(
 /// non-exempt commit (ADR-0020 footer/ticket amendment — the DCO `Signed-off-by`
 /// case). Merge/revert/fixup/squash commits are exempt as a class. Returns the
 /// first missing token's reason, else `None`. A required token is implicitly
-/// allowed by the body-shape check (see [`GitPolicy::allowed_footer_tokens`]).
+/// allowed by the body-shape check (see
+/// [`GitPolicy::allowed_footer_tokens`](super::policy::GitPolicy::allowed_footer_tokens)).
 #[must_use]
 pub fn check_required_footers(
     subject: &str,
@@ -428,9 +430,8 @@ pub fn check_required_footers(
 
 /// `Some(reason)` when the running bullet count exceeds the budget, else `None`.
 fn over_bullet_budget(bullets: u32, max_bullets: u32) -> Option<String> {
-    (bullets > max_bullets).then(|| {
-        format!("commit body has {bullets} bullets, over the {max_bullets}-bullet limit")
-    })
+    (bullets > max_bullets)
+        .then(|| format!("commit body has {bullets} bullets, over the {max_bullets}-bullet limit"))
 }
 
 /// `true` when the commit already carries a breaking-change *marker* — a `!`
@@ -685,7 +686,10 @@ mod tests {
         // check_commit_format's to report, not double-reported here.
         let long = "x".repeat(100);
         assert_eq!(check_subject_length(&format!("Merge {long}"), 50, 72), None);
-        assert_eq!(check_subject_length(&format!("not conventional {long}"), 50, 72), None);
+        assert_eq!(
+            check_subject_length(&format!("not conventional {long}"), 50, 72),
+            None
+        );
     }
 
     // -- commit body shape (ADR-0020) --
@@ -693,7 +697,10 @@ mod tests {
     #[test]
     fn test_body_none_and_bullets_pass() {
         // No body at all, and a conforming bullet body, both pass.
-        assert_eq!(check_commit_body("feat: x", "feat: x", 3, 72, &footers()), None);
+        assert_eq!(
+            check_commit_body("feat: x", "feat: x", 3, 72, &footers()),
+            None
+        );
         let msg = "feat: x\n\n- first note\n- second note\n- third note";
         assert_eq!(check_commit_body("feat: x", msg, 3, 72, &footers()), None);
     }
@@ -731,7 +738,8 @@ mod tests {
     #[test]
     fn test_body_breaking_footer_block_allowed() {
         // Bullets then a (possibly multi-line) BREAKING CHANGE footer block.
-        let msg = "feat: x\n\n- one\n\nBREAKING CHANGE: the old api is gone\nsee the migration guide";
+        let msg =
+            "feat: x\n\n- one\n\nBREAKING CHANGE: the old api is gone\nsee the migration guide";
         assert_eq!(check_commit_body("feat: x", msg, 3, 72, &footers()), None);
         // The dashed spelling is equally sanctioned.
         let msg2 = "feat: x\n\n- one\n\nBREAKING-CHANGE: gone";
@@ -802,7 +810,11 @@ mod tests {
     fn test_body_issue_ref_forms_pass_when_opted_in() {
         let allow = allow(&["Closes"]);
         for msg in ["fix: y\n\nCloses: #45", "fix: y\n\nCloses #45"] {
-            assert_eq!(check_commit_body("fix: y", msg, 3, 72, &allow), None, "{msg:?}");
+            assert_eq!(
+                check_commit_body("fix: y", msg, 3, 72, &allow),
+                None,
+                "{msg:?}"
+            );
         }
     }
 
@@ -860,8 +872,7 @@ mod tests {
     #[test]
     fn test_required_footer_missing_blocks() {
         let required = allow(&["Signed-off-by"]);
-        let reason =
-            check_required_footers("feat: x", "feat: x\n\n- do it", &required).unwrap();
+        let reason = check_required_footers("feat: x", "feat: x\n\n- do it", &required).unwrap();
         assert!(reason.contains("Signed-off-by"), "{reason}");
         assert!(reason.contains("missing"), "{reason}");
     }
@@ -894,7 +905,13 @@ mod tests {
         // No keys configured → the ticket check is inert (body-shape blocks a
         // stray `Refs:` separately).
         assert_eq!(
-            check_commit_ticket("feat: x", "feat: x\n\nRefs: PROJ-1", &[], PolicyLevel::Block, ""),
+            check_commit_ticket(
+                "feat: x",
+                "feat: x\n\nRefs: PROJ-1",
+                &[],
+                PolicyLevel::Block,
+                ""
+            ),
             None
         );
     }
@@ -910,20 +927,37 @@ mod tests {
             "",
         );
         assert_eq!(present, None);
-        let absent = check_commit_ticket("feat: x", "feat: x\n\n- do it", &keys(), PolicyLevel::Off, "");
+        let absent = check_commit_ticket(
+            "feat: x",
+            "feat: x\n\n- do it",
+            &keys(),
+            PolicyLevel::Off,
+            "",
+        );
         assert_eq!(absent, None);
     }
 
     #[test]
     fn test_ticket_required_absent_blocks_present_passes() {
-        let absent =
-            check_commit_ticket("feat: x", "feat: x\n\n- do it", &keys(), PolicyLevel::Block, "");
+        let absent = check_commit_ticket(
+            "feat: x",
+            "feat: x\n\n- do it",
+            &keys(),
+            PolicyLevel::Block,
+            "",
+        );
         let (level, reason) = absent.expect("required ticket missing must block");
         assert_eq!(level, PolicyLevel::Block);
         assert!(reason.contains("ticket reference"), "{reason}");
         // A present matching ticket satisfies the requirement.
         assert_eq!(
-            check_commit_ticket("feat: x", "feat: x\n\nRefs: PROJ-1", &keys(), PolicyLevel::Block, ""),
+            check_commit_ticket(
+                "feat: x",
+                "feat: x\n\nRefs: PROJ-1",
+                &keys(),
+                PolicyLevel::Block,
+                ""
+            ),
             None
         );
     }
@@ -995,7 +1029,13 @@ mod tests {
         // ticket passes, and required still blocks only when none is present.
         let bad = "([unclosed";
         assert_eq!(
-            check_commit_ticket("feat: x", "feat: x\n\nRefs: anything", &keys(), PolicyLevel::Off, bad),
+            check_commit_ticket(
+                "feat: x",
+                "feat: x\n\nRefs: anything",
+                &keys(),
+                PolicyLevel::Off,
+                bad
+            ),
             None
         );
         assert!(
@@ -1043,10 +1083,7 @@ mod tests {
             Some("assets/base/policy.json")
         );
         // No overlap → None.
-        assert_eq!(
-            first_watched_path(&["README.md".to_string()], &globs),
-            None
-        );
+        assert_eq!(first_watched_path(&["README.md".to_string()], &globs), None);
     }
 
     // -- attribution --

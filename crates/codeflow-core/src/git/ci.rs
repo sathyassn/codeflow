@@ -576,7 +576,11 @@ fn parse_gh_single_string_output(success: bool, stdout: &[u8]) -> Option<String>
         return None;
     }
     let s = String::from_utf8_lossy(stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Parse the output of `gh api repos/<repo>/branches/<base>/protection/required_status_checks/contexts`.
@@ -1143,7 +1147,7 @@ mod tests {
         };
         let required = vec!["ci".to_string()];
         let fetch = scripted_fetch(vec![Ok(vec![mk_check("ci", "")])]); // pending
-        // First call: base time. Second call: base + 120s (past 60s deadline).
+                                                                        // First call: base time. Second call: base + 120s (past 60s deadline).
         let result = wait_for_ci_green_with(
             11,
             &cfg,

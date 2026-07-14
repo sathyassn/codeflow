@@ -108,10 +108,7 @@ pub fn run(args: &CiArgs) -> i32 {
         .base
         .clone()
         .map(|b| (vec![b], "explicit --base flag".to_string()));
-    let head = args
-        .head
-        .clone()
-        .unwrap_or_else(|| detected.head.clone());
+    let head = args.head.clone().unwrap_or_else(|| detected.head.clone());
 
     let (base_candidates, range_source) = match base_spec {
         Some((cands, src)) => (cands, src),
@@ -191,7 +188,10 @@ pub fn run(args: &CiArgs) -> i32 {
             evaluate_pr_body(git, body)
                 .into_iter()
                 .chain(evaluate_pr_structure(git, body, range_files.as_deref()))
-                .map(|violation| TaggedViolation { sha: None, violation }),
+                .map(|violation| TaggedViolation {
+                    sha: None,
+                    violation,
+                }),
         );
         ran.push("PR-body");
     }
@@ -245,7 +245,11 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
         if skipped.is_empty() {
             println!("codeflow ci: clean — {} check(s) passed", ran.join(", "));
         } else {
-            let ran_desc = if ran.is_empty() { "none".to_string() } else { ran.join(", ") };
+            let ran_desc = if ran.is_empty() {
+                "none".to_string()
+            } else {
+                ran.join(", ")
+            };
             eprintln!(
                 "codeflow ci: no violations in the checks that ran ({ran_desc}) — skipped: {}",
                 skipped.join(", ")
@@ -468,8 +472,9 @@ fn find_section(body: &str, name: &str) -> SectionState {
     let mut state = SectionState::Missing;
     let mut i = 0;
     while i < lines.len() {
-        let matched = heading(lines[i])
-            .is_some_and(|(depth, text)| (2..=3).contains(&depth) && text.eq_ignore_ascii_case(name));
+        let matched = heading(lines[i]).is_some_and(|(depth, text)| {
+            (2..=3).contains(&depth) && text.eq_ignore_ascii_case(name)
+        });
         if !matched {
             i += 1;
             continue;
@@ -554,10 +559,7 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
 /// A table row whose every cell is whitespace, e.g. `|  |  |` — at least two
 /// cells, so a lone `|` or `| |` spacer is not flagged.
 fn is_empty_table_row(t: &str) -> bool {
-    let Some(inner) = t
-        .strip_prefix('|')
-        .and_then(|rest| rest.strip_suffix('|'))
-    else {
+    let Some(inner) = t.strip_prefix('|').and_then(|rest| rest.strip_suffix('|')) else {
         return false;
     };
     let cells: Vec<&str> = inner.split('|').collect();
@@ -787,10 +789,17 @@ mod tests {
     fn clean_range_passes() {
         let commits = vec![
             commit("aaaa1111", "feat(ci): add codeflow ci command"),
-            commit("bbbb2222", "fix: handle unborn head\n\n- guard the unborn head case"),
+            commit(
+                "bbbb2222",
+                "fix: handle unborn head\n\n- guard the unborn head case",
+            ),
         ];
         let v = evaluate_commits(&git(), &commits);
-        assert!(v.is_empty(), "clean commits produce no violations: {v:?}", v = v.len());
+        assert!(
+            v.is_empty(),
+            "clean commits produce no violations: {v:?}",
+            v = v.len()
+        );
     }
 
     #[test]
@@ -849,7 +858,9 @@ mod tests {
             &["crates/codeflow-core/src/hooks/policy.rs"],
         );
         let v = evaluate_commits(&g, &[marked]);
-        assert!(!v.iter().any(|t| t.violation.rule == "git.breaking_watch_paths"));
+        assert!(!v
+            .iter()
+            .any(|t| t.violation.rule == "git.breaking_watch_paths"));
     }
 
     #[test]
@@ -863,11 +874,8 @@ mod tests {
 
         let long = format!("fix: {}", "y".repeat(60));
         let v = evaluate_commits(&git(), &[commit("ffff8888", &long)]);
-        assert!(
-            v.iter()
-                .any(|t| t.violation.rule == "git.commit_format"
-                    && t.violation.message.contains("description"))
-        );
+        assert!(v.iter().any(|t| t.violation.rule == "git.commit_format"
+            && t.violation.message.contains("description")));
     }
 
     #[test]
@@ -882,7 +890,11 @@ mod tests {
             ..GitPolicy::default()
         };
         let opted = evaluate_commits(&g, &[commit("bbbb2222", "feat: x\n\nRefs: PROJ-1")]);
-        assert!(opted.is_empty(), "opted-in Refs must pass: {opted:?}", opted = opted.len());
+        assert!(
+            opted.is_empty(),
+            "opted-in Refs must pass: {opted:?}",
+            opted = opted.len()
+        );
     }
 
     #[test]
@@ -894,9 +906,13 @@ mod tests {
             ..GitPolicy::default()
         };
         let missing = evaluate_commits(&g, &[commit("cccc3333", "feat: x\n\n- no ticket")]);
-        assert!(missing.iter().any(|t| t.violation.rule == "git.commit_ticket"));
+        assert!(missing
+            .iter()
+            .any(|t| t.violation.rule == "git.commit_ticket"));
         let present = evaluate_commits(&g, &[commit("dddd4444", "feat: x\n\nRefs: PROJ-1")]);
-        assert!(!present.iter().any(|t| t.violation.rule == "git.commit_ticket"));
+        assert!(!present
+            .iter()
+            .any(|t| t.violation.rule == "git.commit_ticket"));
     }
 
     #[test]
@@ -909,7 +925,10 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].violation.level, PolicyLevel::Warn);
         let flat: Vec<Violation> = v.into_iter().map(|t| t.violation).collect();
-        assert!(!any_blocking(&flat), "a warn-level violation must not block");
+        assert!(
+            !any_blocking(&flat),
+            "a warn-level violation must not block"
+        );
     }
 
     #[test]
@@ -957,7 +976,10 @@ mod tests {
 
     #[test]
     fn pr_body_attribution_and_emoji_block() {
-        let v = evaluate_pr_body(&git(), "Summary\n\nGenerated with [Claude Code](x) \u{2728}");
+        let v = evaluate_pr_body(
+            &git(),
+            "Summary\n\nGenerated with [Claude Code](x) \u{2728}",
+        );
         assert!(v.iter().any(|x| x.rule == "git.ai_attribution"));
         assert!(v.iter().any(|x| x.rule == "git.commit_emoji"));
     }
@@ -1000,7 +1022,11 @@ mod tests {
             pr_sections: PolicyLevel::Warn,
             ..GitPolicy::default()
         };
-        let v = evaluate_pr_structure(&g, "## Changes\n\n- x\n\n## Testing\n\n- y\n", Some(&code_files()));
+        let v = evaluate_pr_structure(
+            &g,
+            "## Changes\n\n- x\n\n## Testing\n\n- y\n",
+            Some(&code_files()),
+        );
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].level, PolicyLevel::Warn);
         assert!(!any_blocking(&v), "warn-level structure must not block");
@@ -1039,7 +1065,11 @@ mod tests {
                     ## Changes\n\n- one change\n\n## Testing\n\n- ran it\n";
         let v = evaluate_pr_structure(&git(), body, Some(&code_files()));
         assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("present but empty"), "{}", v[0].message);
+        assert!(
+            v[0].message.contains("present but empty"),
+            "{}",
+            v[0].message
+        );
         assert!(v[0].message.contains("'## Summary'"), "{}", v[0].message);
     }
 
@@ -1065,10 +1095,16 @@ mod tests {
         assert!(!any_blocking(&v), "placeholders must never block");
         assert!(v.iter().all(|x| x.rule == "git.pr_sections"));
         // Each finding names its line and what the remnant is.
-        assert!(v.iter().any(|x| x.message.contains("paste-your-output")), "{v:?}");
+        assert!(
+            v.iter().any(|x| x.message.contains("paste-your-output")),
+            "{v:?}"
+        );
         assert!(v.iter().any(|x| x.message.contains("empty cells")), "{v:?}");
         assert!(
-            v.iter().filter(|x| x.message.contains("linked-work")).count() == 2,
+            v.iter()
+                .filter(|x| x.message.contains("linked-work"))
+                .count()
+                == 2,
             "{v:?}"
         );
         assert!(v.iter().all(|x| x.message.contains("line ")), "{v:?}");
@@ -1156,7 +1192,10 @@ mod tests {
     fn detect_range_env_default_branch() {
         // CODEFLOW_DEFAULT_BRANCH is the explicit escape hatch for hosts with
         // no recognized CI variables (documented in ci-generic.sh).
-        let r = detect_range(env_from(&[("CODEFLOW_DEFAULT_BRANCH", "trunk")]), &protected());
+        let r = detect_range(
+            env_from(&[("CODEFLOW_DEFAULT_BRANCH", "trunk")]),
+            &protected(),
+        );
         assert_eq!(r.base_candidates, vec!["origin/trunk", "trunk"]);
         assert_eq!(r.head, "HEAD");
         assert!(r.source.contains("CODEFLOW_DEFAULT_BRANCH"));
@@ -1206,7 +1245,10 @@ mod tests {
             Some("feat/gh".to_string())
         );
         assert_eq!(
-            detect_branch(env_from(&[("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", "feat/gl")])),
+            detect_branch(env_from(&[(
+                "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
+                "feat/gl"
+            )])),
             Some("feat/gl".to_string())
         );
         assert_eq!(
@@ -1280,6 +1322,9 @@ mod tests {
     #[test]
     fn report_blocking_violation_exits_one_even_when_skipped() {
         // A found violation outranks the incomplete-run signal.
-        assert_eq!(report(&[block_violation()], &["branch-naming"], &["commit"]), 1);
+        assert_eq!(
+            report(&[block_violation()], &["branch-naming"], &["commit"]),
+            1
+        );
     }
 }

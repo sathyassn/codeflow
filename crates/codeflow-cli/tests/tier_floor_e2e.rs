@@ -434,9 +434,12 @@ fn minimal_floor_blocks_a_story_body_commit() {
     let bullets = root.join("bullet-msg.txt");
     std::fs::write(&bullets, "feat: add a thing\n\n- wire the new path\n").unwrap();
     assert!(
-        codeflow(&root, &["git-hook", "commit-msg", bullets.to_str().unwrap()])
-            .status
-            .success(),
+        codeflow(
+            &root,
+            &["git-hook", "commit-msg", bullets.to_str().unwrap()]
+        )
+        .status
+        .success(),
         "commit-msg hook rejected a conforming bullet-body commit"
     );
 
@@ -512,7 +515,9 @@ fn minimal_floor_is_strict_then_opt_in_for_trailers() {
     );
 
     // End-to-end: with the opt-in in place, a real Refs-trailer commit lands.
-    assert!(git(&root, &["checkout", "-b", "feat/trailer"]).status.success());
+    assert!(git(&root, &["checkout", "-b", "feat/trailer"])
+        .status
+        .success());
     std::fs::write(root.join("trailer.txt"), "hello\n").unwrap();
     assert!(git(&root, &["add", "."]).status.success());
     let commit = git(

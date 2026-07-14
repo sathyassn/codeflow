@@ -42,7 +42,10 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
             }
         }
     } else {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 eprintln!("codeflow doctor: runtime: {e}");
@@ -61,7 +64,12 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
                 "FAIL"
             }
         };
-        let _ = writeln!(out, "{badge}  {name}: {message}", name = r.name, message = r.message);
+        let _ = writeln!(
+            out,
+            "{badge}  {name}: {message}",
+            name = r.name,
+            message = r.message
+        );
     }
     i32::from(failed)
 }
@@ -140,10 +148,19 @@ mod tests {
         let (code, out) = run_to_string(&args(None, false), &opts);
         assert_eq!(code, 0, "all stubbed checks pass: {out}");
         for name in doctor::check_names() {
-            assert!(out.contains(&format!("{name}:")), "{name} must render: {out}");
+            assert!(
+                out.contains(&format!("{name}:")),
+                "{name} must render: {out}"
+            );
         }
-        assert!(out.contains("config: all .codeflow/ JSON files are valid"), "got: {out}");
-        assert!(out.contains("permissions: file permissions correct"), "got: {out}");
+        assert!(
+            out.contains("config: all .codeflow/ JSON files are valid"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("permissions: file permissions correct"),
+            "got: {out}"
+        );
     }
 
     #[test]

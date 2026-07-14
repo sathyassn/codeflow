@@ -11,10 +11,9 @@ use std::path::PathBuf;
 fn shipped_config() -> toml::Value {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/codex/config.toml");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    toml::from_str(&text)
-        .unwrap_or_else(|e| panic!("codex config.toml is not valid TOML: {e}"))
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    toml::from_str(&text).unwrap_or_else(|e| panic!("codex config.toml is not valid TOML: {e}"))
 }
 
 /// The `[permissions.cf-guard.filesystem]` map, or a panic naming what is missing.

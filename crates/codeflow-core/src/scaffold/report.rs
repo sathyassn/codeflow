@@ -91,12 +91,7 @@ impl Report {
         });
     }
 
-    pub fn file_with_notes(
-        &mut self,
-        dest: impl Into<String>,
-        action: Action,
-        notes: Vec<String>,
-    ) {
+    pub fn file_with_notes(&mut self, dest: impl Into<String>, action: Action, notes: Vec<String>) {
         self.files.push(FileReport {
             dest: dest.into(),
             action,
@@ -146,7 +141,10 @@ impl fmt::Display for Report {
             (Action::KeysAdded, self.count(Action::KeysAdded)),
             (Action::Skipped, self.count(Action::Skipped)),
             (Action::MissingAsset, self.count(Action::MissingAsset)),
-            (Action::KeptUserModified, self.count(Action::KeptUserModified)),
+            (
+                Action::KeptUserModified,
+                self.count(Action::KeptUserModified),
+            ),
             (Action::Forced, self.count(Action::Forced)),
             (Action::Removed, self.count(Action::Removed)),
             (Action::Unchanged, self.count(Action::Unchanged)),
@@ -157,6 +155,14 @@ impl fmt::Display for Report {
             .map(|(a, n)| format!("{} {}", n, a.label()))
             .collect();
         writeln!(f)?;
-        writeln!(f, "  {}", if parts.is_empty() { "no changes".to_string() } else { parts.join(", ") })
+        writeln!(
+            f,
+            "  {}",
+            if parts.is_empty() {
+                "no changes".to_string()
+            } else {
+                parts.join(", ")
+            }
+        )
     }
 }

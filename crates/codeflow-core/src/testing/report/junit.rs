@@ -246,7 +246,8 @@ pub(crate) fn parse_junit_str(xml: &str, source_path: &Path) -> Result<JunitRepo
             },
             Ok(Event::Text(ref e)) => {
                 if in_failure || in_error || in_system_out || in_system_err {
-                    text_buf.push_str(&e.unescape().unwrap_or_default());
+                    let decoded = e.decode().unwrap_or_default();
+                    text_buf.push_str(&quick_xml::escape::unescape(&decoded).unwrap_or_default());
                 }
             }
             Ok(Event::CData(ref e)) => {

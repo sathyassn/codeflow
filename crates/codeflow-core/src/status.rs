@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::capability::{CapabilityEntry, parse_capabilities};
+use crate::capability::{parse_capabilities, CapabilityEntry};
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
 use crate::workgraph::{MarkdownStore, RecordStore};
 
@@ -95,7 +95,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         let branch = repo
             .head()
             .ok()
-            .and_then(|h| h.shorthand().map(ToString::to_string));
+            .and_then(|h| h.shorthand().ok().map(ToString::to_string));
         (branch, list_worktrees(&repo))
     } else {
         notes.push("not a git repository — branch/worktree state unavailable".to_string());
@@ -119,7 +119,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
 fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
     let mut out = Vec::new();
     if let Ok(names) = repo.worktrees() {
-        for name in names.iter().flatten() {
+        for name in names.iter().filter_map(|name| name.ok().flatten()) {
             if let Ok(wt) = repo.find_worktree(name) {
                 out.push(WorktreeInfo {
                     name: name.to_string(),
@@ -244,9 +244,7 @@ fn collect_delivery(
                     .map_or(&[], Vec::as_slice);
                 let open_tasks = epic_tasks
                     .iter()
-                    .filter(|t| {
-                        !matches!(t.status, TaskStatus::Complete | TaskStatus::Cancelled)
-                    })
+                    .filter(|t| !matches!(t.status, TaskStatus::Complete | TaskStatus::Cancelled))
                     .count();
                 let next_tasks = epic_tasks
                     .iter()
@@ -383,11 +381,7 @@ pub fn render_delivery(view: &StatusView) -> String {
                     let _ = writeln!(
                         out,
                         "    {} {}  [{}]  tasks {}/{} open",
-                        epic.format_id,
-                        epic.title,
-                        epic.status,
-                        epic.open_tasks,
-                        epic.total_tasks
+                        epic.format_id, epic.title, epic.status, epic.open_tasks, epic.total_tasks
                     );
                     for task in &epic.next_tasks {
                         let _ = writeln!(out, "      next: {task}");
@@ -427,6 +421,7 @@ fn format_counts(counts: &BTreeMap<String, usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{Epic, EpicStatus, Task, TaskStatus};
     use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -488,7 +483,9 @@ mod tests {
         let view = collect_status(dir.path());
         assert!(view.branch.is_none());
         assert!(
-            view.notes.iter().any(|n| n.contains("not a git repository")),
+            view.notes
+                .iter()
+                .any(|n| n.contains("not a git repository")),
             "notes: {:?}",
             view.notes
         );
@@ -605,8 +602,6 @@ mod tests {
 
     #[test]
     fn delivery_groups_tasks_under_capability_via_epic_link() {
-        use crate::models::{Epic, EpicStatus, Task, TaskStatus};
-
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
 
@@ -625,8 +620,12 @@ mod tests {
         };
         // Epic linked to the capability, plus an unrelated epic whose tasks
         // must NOT roll up under the capability.
-        store.create_epic(&mk_epic("epic-01a", "EPC-001", "Deliver flow")).unwrap();
-        store.create_epic(&mk_epic("epic-02b", "EPC-002", "Unrelated")).unwrap();
+        store
+            .create_epic(&mk_epic("epic-01a", "EPC-001", "Deliver flow"))
+            .unwrap();
+        store
+            .create_epic(&mk_epic("epic-02b", "EPC-002", "Unrelated"))
+            .unwrap();
 
         let mk_task = |id: &str, fid: &str, epic_id: &str, title: &str, status: TaskStatus| Task {
             id: id.into(),
@@ -649,9 +648,33 @@ mod tests {
         };
         // Two tasks under the linked epic (one open, one done) and one task
         // under the unrelated epic.
-        store.create_task(&mk_task("task-01a", "TSK-001-001", "epic-01a", "Wire CLI", TaskStatus::Todo)).unwrap();
-        store.create_task(&mk_task("task-01b", "TSK-001-002", "epic-01a", "Ship it", TaskStatus::Complete)).unwrap();
-        store.create_task(&mk_task("task-02a", "TSK-002-001", "epic-02b", "Elsewhere", TaskStatus::Todo)).unwrap();
+        store
+            .create_task(&mk_task(
+                "task-01a",
+                "TSK-001-001",
+                "epic-01a",
+                "Wire CLI",
+                TaskStatus::Todo,
+            ))
+            .unwrap();
+        store
+            .create_task(&mk_task(
+                "task-01b",
+                "TSK-001-002",
+                "epic-01a",
+                "Ship it",
+                TaskStatus::Complete,
+            ))
+            .unwrap();
+        store
+            .create_task(&mk_task(
+                "task-02a",
+                "TSK-002-001",
+                "epic-02b",
+                "Elsewhere",
+                TaskStatus::Todo,
+            ))
+            .unwrap();
 
         std::fs::create_dir_all(dir.path().join("docs")).unwrap();
         std::fs::write(
@@ -682,8 +705,14 @@ mod tests {
         let rendered = render_delivery(&view);
         assert!(rendered.contains("capability delivery:"), "{rendered}");
         assert!(rendered.contains("CAP-001"), "{rendered}");
-        assert!(rendered.contains("EPC-001 Deliver flow  [in_progress]  tasks 1/2 open"), "{rendered}");
-        assert!(rendered.contains("next: TSK-001-001 Wire CLI"), "{rendered}");
+        assert!(
+            rendered.contains("EPC-001 Deliver flow  [in_progress]  tasks 1/2 open"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("next: TSK-001-001 Wire CLI"),
+            "{rendered}"
+        );
         assert!(rendered.contains("EPC-404 (no epic record)"), "{rendered}");
         // The unrelated epic and its task never appear in the rollup.
         assert!(!rendered.contains("Elsewhere"), "{rendered}");

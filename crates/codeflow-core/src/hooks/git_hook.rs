@@ -378,7 +378,8 @@ fn strip_commit_comments(message: &str) -> String {
 /// The pre-merge-commit stage (charter §6.1 plane 1): git fires this hook
 /// just before recording a **non-fast-forward** merge commit. When the branch
 /// being merged into is protected, block per `merge_to_protected` — unless the
-/// `codeflow integrate` gate token or a human's [`HUMAN_OVERRIDE_ENV`] is
+/// `codeflow integrate` gate token or a human's
+/// [`HUMAN_OVERRIDE_ENV`](super::HUMAN_OVERRIDE_ENV) is
 /// present (both sanctioned paths, ADR-0007).
 ///
 /// HONEST BOUNDARY: git fires **no** client hook for a fast-forward merge
@@ -544,7 +545,7 @@ fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bo
     };
     let mut candidates: Vec<String> = Vec::new();
     if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{branch}")) {
-        if let Some(name) = upstream.as_str() {
+        if let Ok(name) = upstream.as_str() {
             candidates.push(name.to_string());
         }
     }

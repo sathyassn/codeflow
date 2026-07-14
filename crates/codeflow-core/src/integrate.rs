@@ -186,7 +186,7 @@ pub fn integrate(
     let original = repo
         .head()
         .ok()
-        .and_then(|h| h.shorthand().map(ToString::to_string))
+        .and_then(|h| h.shorthand().ok().map(ToString::to_string))
         .unwrap_or_else(|| target.to_string());
     let old_target_short = short_id(&repo, target_oid);
 
@@ -539,7 +539,7 @@ fn short_id(repo: &git2::Repository, oid: git2::Oid) -> String {
     repo.find_object(oid, None)
         .ok()
         .and_then(|o| o.short_id().ok())
-        .and_then(|b| b.as_str().map(ToString::to_string))
+        .and_then(|b| b.as_str().ok().map(ToString::to_string))
         .unwrap_or_else(|| oid.to_string())
 }
 

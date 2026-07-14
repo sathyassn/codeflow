@@ -118,9 +118,9 @@ never honors and blocks agents from setting in-session.
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
-`cargo test` and `cargo clippy` green, conventional commits, no AI attribution
-(codeflow's own hooks enforce it). Please read [SECURITY.md](SECURITY.md) before
-reporting a vulnerability, and be mindful of the
+format, tests, clippy, and rustdoc green; conventional commits; no AI
+attribution (codeflow's own hooks enforce it). Please read
+[SECURITY.md](SECURITY.md) before reporting a vulnerability, and be mindful of the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License

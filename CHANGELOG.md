@@ -18,13 +18,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   arbitrary out-of-repo file deletion via a tampered manifest. The pre-commit
   secret scan classifies each assignment by its own value, so a placeholder word
   in a comment no longer suppresses the first live quoted credential later on the
-  line. Residual, tracked before any public release: a second-pass review flagged
-  further edge-case hardening — additional destructive-command spellings and
-  shell wrappers, symlink traversal during scaffold writes, and coverage-exception
-  handling — and the accepted softer posture of the security-review CI job (policy
-  `git.security_review`/`git.dep_audit` gated, warn by default, no non-overridable
-  High+ floor or structured-findings artifact; ADR-0016). Only `secret_scan`
-  carries the never-relaxed status.
+  line. Subsequent pre-release slices closed the additional destructive-command
+  spellings and shell wrappers, scaffold symlink traversal, and vacuous
+  coverage-exception handling found by the second pass. The shipped scaffold's
+  accepted policy remains configurable and defaults dependency/security review
+  to `warn` (ADR-0016); this repository now hardens both keys to `block` after
+  triage. Only `secret_scan` is never relaxable in the shared product policy.
+- **Codeflow's own Rust verification now includes format and documentation
+  gates.** Local `codeflow test` and the independent CI Rust job both enforce
+  `cargo fmt --check` and warning-free rustdoc alongside tests and clippy; the
+  parity guard compares the complete Rust command set.
+- **Dependency security is blocking in this repository.** The project-owned
+  `git.security_review` and `git.dep_audit` levels are `block`, while the
+  consumer scaffold keeps ADR-0016's configurable `warn` default.
 - **Coverage thresholds now fail the test gate.** A configured per-file
   coverage threshold that a measured file misses fails `codeflow test --mode
   full` and the integrate gate, instead of being collected and silently
@@ -139,6 +145,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface"*: chase the implication chain ("and therefore? …") to the fundamental
   that decides the matter, and trace how each order ripples across the related
   domains, not just the immediate area.
+
+### Fixed
+
+- **Dependency advisories and maintenance debt.** `anyhow`, `git2`, and
+  `quick-xml` move to versions that clear the active RustSec advisories; the
+  unmaintained `serde_yaml` parser is replaced by the maintained
+  `serde_yaml_ng` continuation behind the same source alias (ADR-0022).
+- **Test code no longer mutates process-global environment variables from
+  parallel unit tests.** CI detection is injected into the runner tests, and
+  child Git-environment removal is verified through `Command` construction,
+  eliminating the Rust-2024-unsafe `set_var` / `remove_var` calls and the race
+  they represented.
+- **Public API documentation builds warning-free.** Broken intra-doc links in
+  the hook and policy modules and one redundant CLI link are corrected; the new
+  rustdoc gate prevents regression.
+- **Live reviewer definitions match the shipped scaffold sources.** The
+  repository's `cf-reviewer` tier guidance and `cf-security-reviewer` CI posture
+  now carry the same corrected doctrine as newly initialized projects.
+- **The full-history secret scan ignores one reviewed synthetic fixture by its
+  exact fingerprint.** The historical line demonstrated scanner behavior and
+  contained no credential; `.gitleaksignore` suppresses only that immutable
+  finding rather than weakening a rule.
 
 ## [2.1.0] - 2026-07-12
 

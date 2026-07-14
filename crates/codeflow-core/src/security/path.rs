@@ -11,7 +11,7 @@ use super::pattern::{
     extract_variable_assignments, glob_to_regex, has_variable_indirection, is_glob_path_targeted,
     is_glob_pattern, is_path_or_glob_targeted, is_path_targeted, split_command_segments,
 };
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 fn dangerous_cmds_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -406,11 +406,9 @@ mod tests {
 
     #[test]
     fn test_chmod_settings() {
-        assert!(
-            PathModule
-                .check(&ctx("chmod 777 .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("chmod 777 .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
@@ -425,20 +423,16 @@ mod tests {
 
     #[test]
     fn test_redirect_to_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("echo test > .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("echo test > .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_git_rm_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("git rm .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("git rm .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
@@ -450,32 +444,26 @@ mod tests {
 
     #[test]
     fn test_cp_to_protected_destination() {
-        assert!(
-            PathModule
-                .check(&ctx("cp evil.txt .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("cp evil.txt .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_cp_from_protected_source_allowed() {
         // cp FROM a protected path should be allowed (reading, not writing).
-        assert!(
-            PathModule
-                .check(&ctx("cp .claude/settings.json /tmp/backup.json"))
-                .is_none()
-        );
+        assert!(PathModule
+            .check(&ctx("cp .claude/settings.json /tmp/backup.json"))
+            .is_none());
     }
 
     // -- Append redirect --
 
     #[test]
     fn test_append_redirect_to_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("echo test >> .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("echo test >> .claude/settings.json"))
+            .is_some());
     }
 
     // -- .codeflow directory protection --
@@ -499,77 +487,63 @@ mod tests {
 
     #[test]
     fn test_chown_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("chown root .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("chown root .claude/settings.json"))
+            .is_some());
     }
 
     // -- Chained commands with protected paths --
 
     #[test]
     fn test_chained_rm_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("ls -la && rm .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("ls -la && rm .claude/settings.json"))
+            .is_some());
     }
 
     // -- sed on protected path --
 
     #[test]
     fn test_sed_on_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("sed -i 's/old/new/' .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("sed -i 's/old/new/' .claude/settings.json"))
+            .is_some());
     }
 
     // -- touch on protected path --
 
     #[test]
     fn test_touch_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("touch .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("touch .claude/settings.json"))
+            .is_some());
     }
 
     // -- truncate on protected path --
 
     #[test]
     fn test_truncate_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("truncate -s 0 .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("truncate -s 0 .claude/settings.json"))
+            .is_some());
     }
 
     // -- unlink on protected path --
 
     #[test]
     fn test_unlink_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("unlink .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("unlink .claude/settings.json"))
+            .is_some());
     }
 
     // -- shred on protected path --
 
     #[test]
     fn test_shred_protected() {
-        assert!(
-            PathModule
-                .check(&ctx("shred .claude/settings.json"))
-                .is_some()
-        );
+        assert!(PathModule
+            .check(&ctx("shred .claude/settings.json"))
+            .is_some());
     }
 
     // -- Empty protected paths returns None --
@@ -773,10 +747,7 @@ mod tests {
     fn test_cp_from_tmp_to_protected_file_blocked() {
         // Copying FROM scratch space TO a protected file is a write.
         let result = PathModule.check(&ctx("cp /tmp/staged.json .claude/settings.json"));
-        assert!(
-            result.is_some(),
-            "cp TO a protected path should be blocked"
-        );
+        assert!(result.is_some(), "cp TO a protected path should be blocked");
     }
 
     #[test]

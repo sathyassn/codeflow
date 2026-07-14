@@ -150,13 +150,15 @@ pub struct ProjectInfo {
 /// (`standard`), and `unknown`.
 #[must_use]
 pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
-    let dir_name = repo_root
-        .file_name()
-        .map_or_else(|| "unnamed".to_string(), |n| n.to_string_lossy().into_owned());
+    let dir_name = repo_root.file_name().map_or_else(
+        || "unnamed".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
 
-    let table: Option<toml::Table> = std::fs::read_to_string(repo_root.join(".codeflow/project.toml"))
-        .ok()
-        .and_then(|s| s.parse::<toml::Table>().ok());
+    let table: Option<toml::Table> =
+        std::fs::read_to_string(repo_root.join(".codeflow/project.toml"))
+            .ok()
+            .and_then(|s| s.parse::<toml::Table>().ok());
 
     let lookup = |key: &str| -> Option<String> {
         let table = table.as_ref()?;
@@ -216,8 +218,7 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         // from permission/transient stat errors (Err, KEEP) — exists() would
         // collapse both and could permanently drop a live repo row.
         reg.repos.retain(|r| {
-            r.path == entry.path
-                || !matches!(Path::new(&r.path).try_exists(), Ok(false))
+            r.path == entry.path || !matches!(Path::new(&r.path).try_exists(), Ok(false))
         });
         match reg.repos.iter_mut().find(|r| r.path == entry.path) {
             Some(existing) => *existing = entry.clone(),
@@ -277,9 +278,7 @@ impl UserConfig {
     pub fn load(home: &Path) -> Result<Self, String> {
         let path = user_config_path(home);
         match std::fs::read_to_string(&path) {
-            Ok(data) => {
-                toml::from_str(&data).map_err(|e| format!("config.toml parse: {e}"))
-            }
+            Ok(data) => toml::from_str(&data).map_err(|e| format!("config.toml parse: {e}")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(format!("config.toml read: {e}")),
         }
@@ -324,7 +323,11 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
-    let (month, year) = if mp < 10 { (mp + 3, y) } else { (mp - 9, y + 1) };
+    let (month, year) = if mp < 10 {
+        (mp + 3, y)
+    } else {
+        (mp - 9, y + 1)
+    };
     (year, month, day)
 }
 
@@ -351,9 +354,15 @@ mod tests {
     fn test_rfc3339_known_dates() {
         assert_eq!(rfc3339_from_epoch_secs(0), "1970-01-01T00:00:00Z");
         // 2026-06-11T12:30:45Z
-        assert_eq!(rfc3339_from_epoch_secs(1_781_181_045), "2026-06-11T12:30:45Z");
+        assert_eq!(
+            rfc3339_from_epoch_secs(1_781_181_045),
+            "2026-06-11T12:30:45Z"
+        );
         // leap day: 2024-02-29T00:00:00Z
-        assert_eq!(rfc3339_from_epoch_secs(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(
+            rfc3339_from_epoch_secs(1_709_164_800),
+            "2024-02-29T00:00:00Z"
+        );
     }
 
     #[test]
@@ -412,10 +421,7 @@ mod tests {
         assert_eq!(info.tier, "standard");
         assert_eq!(info.scaffold_version, "unknown");
         // name falls back to directory name
-        assert_eq!(
-            info.name,
-            dir.path().file_name().unwrap().to_string_lossy()
-        );
+        assert_eq!(info.name, dir.path().file_name().unwrap().to_string_lossy());
     }
 
     #[test]
@@ -532,7 +538,9 @@ mod tests {
 
         // Remove traversal permission on the parent: stat on the child now
         // errors with EACCES instead of reporting "missing".
-        let mut perms = std::fs::metadata(guarded_parent.path()).unwrap().permissions();
+        let mut perms = std::fs::metadata(guarded_parent.path())
+            .unwrap()
+            .permissions();
         perms.set_mode(0o000);
         std::fs::set_permissions(guarded_parent.path(), perms).unwrap();
         assert!(
@@ -543,7 +551,9 @@ mod tests {
         touch_registry(home.path(), live.path()).unwrap();
 
         // Restore permissions before asserting so tempdir cleanup works.
-        let mut restore = std::fs::metadata(guarded_parent.path()).unwrap().permissions();
+        let mut restore = std::fs::metadata(guarded_parent.path())
+            .unwrap()
+            .permissions();
         restore.set_mode(0o755);
         std::fs::set_permissions(guarded_parent.path(), restore).unwrap();
 

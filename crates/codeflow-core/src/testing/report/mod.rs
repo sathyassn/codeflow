@@ -263,13 +263,11 @@ mod tests {
         let parsed: CtrfTest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.status, CtrfStatus::Failed);
         assert_eq!(parsed.suite.as_deref(), Some("math::tests"));
-        assert!(
-            parsed
-                .message
-                .as_ref()
-                .unwrap()
-                .contains("assertion failed")
-        );
+        assert!(parsed
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("assertion failed"));
         assert_eq!(parsed.tags.len(), 1);
     }
 

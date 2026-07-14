@@ -292,8 +292,12 @@ impl RemoteProvider for ManualChecklistProvider {
 /// values in the shipped `codeflow-ci.yml`. Pinned as required status checks so
 /// a PR cannot merge until these jobs actually run and pass; an empty `contexts`
 /// array would require *nothing*, leaving "require status checks" toothless.
-const REQUIRED_CI_CONTEXTS: &[&str] =
-    &["codeflow gates", "secret scan", "security review", "commit standards"];
+const REQUIRED_CI_CONTEXTS: &[&str] = &[
+    "codeflow gates",
+    "secret scan",
+    "security review",
+    "commit standards",
+];
 
 /// GitHub adapter, shelling out to the `gh` CLI for auth and transport.
 pub struct GithubProvider {
@@ -308,9 +312,8 @@ impl GithubProvider {
     ///
     /// Returns `Err(String)` when `gh` is not installed/locatable.
     pub fn discover(repo_dir: &Path) -> Result<Self, String> {
-        let gh = which::which("gh").map_err(|e| {
-            format!("gh CLI not found ({e}); install GitHub CLI or use --dry-run")
-        })?;
+        let gh = which::which("gh")
+            .map_err(|e| format!("gh CLI not found ({e}); install GitHub CLI or use --dry-run"))?;
         Ok(Self::with_gh(gh, repo_dir))
     }
 
@@ -363,10 +366,7 @@ impl GithubProvider {
 
     /// Identify the repo (`owner/name`, visibility) via `gh repo view`.
     fn repo_info(&self) -> Result<(String, bool), String> {
-        let out = self.run_gh(
-            &["repo", "view", "--json", "nameWithOwner,isPrivate"],
-            None,
-        )?;
+        let out = self.run_gh(&["repo", "view", "--json", "nameWithOwner,isPrivate"], None)?;
         let v: serde_json::Value =
             serde_json::from_str(&out).map_err(|e| format!("gh repo view parse: {e}"))?;
         let nwo = v
@@ -472,22 +472,31 @@ impl RemoteProvider for GithubProvider {
                     status: ProtectStatus::Degraded,
                     lines: vec![format!("could not identify the GitHub repo: {e}")],
                     limitations: vec![
-                        "no rules were applied; the repo could not be resolved via gh"
-                            .to_string(),
+                        "no rules were applied; the repo could not be resolved via gh".to_string(),
                     ],
                     checklist: plan.manual_checklist(),
                 };
             }
         };
 
-        let mut lines = vec![format!("repo: {nwo} ({})", if private { "private" } else { "public" })];
+        let mut lines = vec![format!(
+            "repo: {nwo} ({})",
+            if private { "private" } else { "public" }
+        )];
         let mut limitations = Vec::new();
         let mut failed_rules = Vec::new();
 
         for rule in &plan.rules {
             let result = if rule.is_glob() {
                 self.run_gh(
-                    &["api", "-X", "POST", &format!("repos/{nwo}/rulesets"), "--input", "-"],
+                    &[
+                        "api",
+                        "-X",
+                        "POST",
+                        &format!("repos/{nwo}/rulesets"),
+                        "--input",
+                        "-",
+                    ],
                     Some(&Self::ruleset_body(rule)),
                 )
             } else {
@@ -505,7 +514,11 @@ impl RemoteProvider for GithubProvider {
             };
             match result {
                 Ok(_) => {
-                    let mechanism = if rule.is_glob() { "ruleset" } else { "branch protection" };
+                    let mechanism = if rule.is_glob() {
+                        "ruleset"
+                    } else {
+                        "branch protection"
+                    };
                     lines.push(format!(
                         "applied {mechanism} for {}: {}",
                         rule.pattern,
@@ -631,7 +644,10 @@ mod tests {
         assert_eq!(report.status, ProtectStatus::DryRun);
         let text = report.render();
         assert!(text.contains("main [branch protection]:"), "got:\n{text}");
-        assert!(text.contains("release/* [ruleset (glob pattern)]:"), "got:\n{text}");
+        assert!(
+            text.contains("release/* [ruleset (glob pattern)]:"),
+            "got:\n{text}"
+        );
         assert!(text.contains("require a pull request before merging"));
         assert!(text.contains("block force pushes"));
         assert!(text.contains("block branch deletion"));
@@ -673,8 +689,14 @@ mod tests {
         );
         assert!(report.limitations[0].contains("private"));
         // Checklist covers every failed rule.
-        assert!(report.checklist.iter().any(|c| c.contains("[ ] main: require a pull request")));
-        assert!(report.checklist.iter().any(|c| c.contains("[ ] release/*: block force pushes")));
+        assert!(report
+            .checklist
+            .iter()
+            .any(|c| c.contains("[ ] main: require a pull request")));
+        assert!(report
+            .checklist
+            .iter()
+            .any(|c| c.contains("[ ] release/*: block force pushes")));
         let text = report.render();
         assert!(text.contains("status: degraded"), "got:\n{text}");
     }
@@ -694,8 +716,14 @@ mod tests {
         assert!(report.limitations.is_empty());
         assert!(report.checklist.is_empty());
         let text = report.render();
-        assert!(text.contains("applied branch protection for main"), "got:\n{text}");
-        assert!(text.contains("applied ruleset for release/*"), "got:\n{text}");
+        assert!(
+            text.contains("applied branch protection for main"),
+            "got:\n{text}"
+        );
+        assert!(
+            text.contains("applied ruleset for release/*"),
+            "got:\n{text}"
+        );
         assert!(text.contains("status: applied"));
     }
 
@@ -741,7 +769,12 @@ mod tests {
             .as_array()
             .expect("contexts is an array");
         assert!(!contexts.is_empty(), "contexts must not be empty");
-        for expected in ["codeflow gates", "secret scan", "security review", "commit standards"] {
+        for expected in [
+            "codeflow gates",
+            "secret scan",
+            "security review",
+            "commit standards",
+        ] {
             assert!(
                 contexts.iter().any(|c| c.as_str() == Some(expected)),
                 "missing required context {expected}"

@@ -59,7 +59,7 @@ impl RepoInfo {
 #[must_use]
 pub fn current_branch(repo: &Repository) -> String {
     if let Ok(head) = repo.head() {
-        if let Some(name) = head.shorthand() {
+        if let Ok(name) = head.shorthand() {
             if name != "HEAD" {
                 return name.to_string();
             }
@@ -68,7 +68,7 @@ pub fn current_branch(repo: &Repository) -> String {
     }
     // Unborn branch: HEAD exists as a symbolic ref with no target commit.
     if let Ok(head_ref) = repo.find_reference("HEAD") {
-        if let Some(target) = head_ref.symbolic_target() {
+        if let Ok(Some(target)) = head_ref.symbolic_target() {
             if let Some(branch) = target.strip_prefix("refs/heads/") {
                 return branch.to_string();
             }

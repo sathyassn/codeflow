@@ -94,9 +94,18 @@ fn test_command_strict_no_stack_exits_nonzero_with_banner() {
         "strict no-stack must exit non-zero (2 == nothing ran)"
     );
     let err = stderr(&output);
-    assert!(err.contains("WARNING"), "banner still printed under strict: {err}");
-    assert!(err.contains("No tests were executed"), "loud no-op text kept: {err}");
-    assert!(err.contains("--strict"), "explains the non-zero exit: {err}");
+    assert!(
+        err.contains("WARNING"),
+        "banner still printed under strict: {err}"
+    );
+    assert!(
+        err.contains("No tests were executed"),
+        "loud no-op text kept: {err}"
+    );
+    assert!(
+        err.contains("--strict"),
+        "explains the non-zero exit: {err}"
+    );
 }
 
 #[test]
@@ -247,8 +256,7 @@ fn validate_docs_clean_graph_exits_zero() {
 fn validate_docs_dangling_epic_ref_exits_one_with_file_line() {
     let dir = clean_docs_repo();
     // Add a capability entry pointing at a nonexistent epic.
-    let registry =
-        std::fs::read_to_string(dir.path().join("docs/capabilities.md")).unwrap();
+    let registry = std::fs::read_to_string(dir.path().join("docs/capabilities.md")).unwrap();
     write(
         dir.path(),
         "docs/capabilities.md",
@@ -345,12 +353,7 @@ fn integrate_lands_branch_and_prints_report() {
     );
 
     let output = codeflow(dir.path(), &["integrate", "feat/x", "--into", "main"]);
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let out = stdout(&output);
     assert!(out.contains("integrated 'feat/x' into 'main'"), "{out}");
     assert!(out.contains("test gate: passed"), "{out}");
@@ -381,7 +384,11 @@ fn epic_new_allocates_and_scaffolds_from_template() {
     // Next allocation sees the file just written → EPC-002.
     let second = codeflow(dir.path(), &["epic", "new", "Second"]);
     assert_eq!(second.status.code(), Some(0));
-    assert!(stdout(&second).contains("EPC-002"), "max+1: {}", stdout(&second));
+    assert!(
+        stdout(&second).contains("EPC-002"),
+        "max+1: {}",
+        stdout(&second)
+    );
 }
 
 #[test]
@@ -403,7 +410,10 @@ fn task_new_scopes_numbering_to_its_epic() {
 
     let task_path = dir.path().join("project-management/tasks/TSK-001-001.md");
     let body = std::fs::read_to_string(&task_path).unwrap();
-    assert!(body.contains("epic_id: EPC-001"), "links parent epic: {body}");
+    assert!(
+        body.contains("epic_id: EPC-001"),
+        "links parent epic: {body}"
+    );
     assert!(!body.contains("{{"), "no placeholder survives: {body}");
 }
 

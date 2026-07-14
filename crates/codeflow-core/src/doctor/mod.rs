@@ -335,7 +335,9 @@ fn check_claude(opts: &Options) -> CheckResult {
 /// not the boundary.
 fn check_codex(opts: &Options) -> CheckResult {
     let start = Instant::now();
-    let hooks_json = Path::new(&opts.project_dir).join(".codex").join("hooks.json");
+    let hooks_json = Path::new(&opts.project_dir)
+        .join(".codex")
+        .join("hooks.json");
 
     if !hooks_json.exists() {
         return CheckResult {
@@ -568,7 +570,12 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
     let is_bare = opts
         .do_exec(
             "git",
-            &["-C", opts.project_dir.as_str(), "rev-parse", "--is-bare-repository"],
+            &[
+                "-C",
+                opts.project_dir.as_str(),
+                "rev-parse",
+                "--is-bare-repository",
+            ],
         )
         .map(|s| s.trim() == "true")
         .unwrap_or(false);
@@ -582,7 +589,13 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
     let policy = crate::hooks::policy::Policy::load(&root).git;
     if let Ok(list) = opts.do_exec(
         "git",
-        &["-C", opts.project_dir.as_str(), "worktree", "list", "--porcelain"],
+        &[
+            "-C",
+            opts.project_dir.as_str(),
+            "worktree",
+            "list",
+            "--porcelain",
+        ],
     ) {
         let worktrees = parse_worktree_list(&list);
         // The main (root) worktree is listed first and may hold a protected
@@ -623,7 +636,12 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
             });
         } else if let Some(refname) = line.strip_prefix("branch ") {
             if let Some(w) = cur.as_mut() {
-                w.branch = Some(refname.strip_prefix("refs/heads/").unwrap_or(refname).to_string());
+                w.branch = Some(
+                    refname
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(refname)
+                        .to_string(),
+                );
             }
         }
     }
@@ -859,7 +877,11 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_codex(&opts);
         assert_eq!(r.status, Status::Pass);
-        assert!(r.message.contains("no .codex/hooks.json"), "got: {}", r.message);
+        assert!(
+            r.message.contains("no .codex/hooks.json"),
+            "got: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -873,14 +895,26 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_codex(&opts);
         assert_eq!(r.status, Status::Warn);
-        assert!(r.message.contains("wired structurally"), "got: {}", r.message);
-        assert!(r.message.contains("/hooks"), "names the one-time step: {}", r.message);
+        assert!(
+            r.message.contains("wired structurally"),
+            "got: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("/hooks"),
+            "names the one-time step: {}",
+            r.message
+        );
         assert!(
             r.message.contains("not inspectable"),
             "must not pretend to read trust state: {}",
             r.message
         );
-        assert!(r.message.contains("codex CLI not found"), "got: {}", r.message);
+        assert!(
+            r.message.contains("codex CLI not found"),
+            "got: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -898,7 +932,12 @@ mod tests {
             }
         });
         let r = check_codex(&opts);
-        assert_eq!(r.status, Status::Warn, "presence never upgrades to pass: {}", r.message);
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "presence never upgrades to pass: {}",
+            r.message
+        );
         assert!(r.message.contains("codex CLI found"), "got: {}", r.message);
     }
 
@@ -1023,7 +1062,8 @@ mod tests {
         let r = check_hooks(&hooks_opts(dir.path()));
         assert_eq!(r.status, Status::Warn, "got: {}", r.message);
         assert!(
-            r.message.contains("git config core.hooksPath .codeflow/git-hooks"),
+            r.message
+                .contains("git config core.hooksPath .codeflow/git-hooks"),
             "remedy: {}",
             r.message
         );
@@ -1034,7 +1074,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
-        git(dir.path(), &["config", "core.hooksPath", ".codeflow/git-hooks"]);
+        git(
+            dir.path(),
+            &["config", "core.hooksPath", ".codeflow/git-hooks"],
+        );
         let r = check_hooks(&hooks_opts(dir.path()));
         assert_eq!(r.status, Status::Pass, "got: {}", r.message);
     }
@@ -1191,7 +1234,11 @@ mod tests {
         opts.exec_command = Some(|_, _| Ok("Logged in using ChatGPT".into()));
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Pass);
-        assert!(result.message.contains("subscription-authenticated"), "got: {}", result.message);
+        assert!(
+            result.message.contains("subscription-authenticated"),
+            "got: {}",
+            result.message
+        );
     }
 
     #[test]
@@ -1200,7 +1247,11 @@ mod tests {
         let opts = test_opts();
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Warn);
-        assert!(result.message.contains("optional"), "got: {}", result.message);
+        assert!(
+            result.message.contains("optional"),
+            "got: {}",
+            result.message
+        );
     }
 
     #[test]
@@ -1216,7 +1267,11 @@ mod tests {
         // exec_command errs → `codex login status` nonzero → unauthenticated.
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Warn);
-        assert!(result.message.contains("codex login"), "remedy line: {}", result.message);
+        assert!(
+            result.message.contains("codex login"),
+            "remedy line: {}",
+            result.message
+        );
     }
 
     #[test]
@@ -1230,7 +1285,11 @@ mod tests {
         opts.exec_command = Some(|_, _| Ok("Logged in".into()));
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Pass);
-        assert!(result.message.contains("agy present"), "got: {}", result.message);
+        assert!(
+            result.message.contains("agy present"),
+            "got: {}",
+            result.message
+        );
     }
 
     #[test]
@@ -1249,7 +1308,11 @@ mod tests {
         let r = check_repo_integrity(&opts);
         assert_eq!(r.status, Status::Fail);
         assert!(r.message.contains("core.bare"), "got: {}", r.message);
-        assert!(r.message.contains("git config core.bare false"), "remedy: {}", r.message);
+        assert!(
+            r.message.contains("git config core.bare false"),
+            "remedy: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -1322,7 +1385,11 @@ mod tests {
         let r = check_ci_perimeter(&opts);
         assert_eq!(r.status, Status::Warn);
         assert!(r.message.contains("not armed"), "got: {}", r.message);
-        assert!(r.message.contains("codeflow-ci.yml"), "names the file: {}", r.message);
+        assert!(
+            r.message.contains("codeflow-ci.yml"),
+            "names the file: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -1346,7 +1413,11 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_ci_perimeter(&opts);
         assert_eq!(r.status, Status::Pass);
-        assert!(r.message.contains("no codeflow CI workflow"), "got: {}", r.message);
+        assert!(
+            r.message.contains("no codeflow CI workflow"),
+            "got: {}",
+            r.message
+        );
     }
 
     // --- managed-drift ------------------------------------------------------
@@ -1375,7 +1446,11 @@ mod tests {
     fn test_managed_drift_clean_when_block_matches_record() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::write(root.join("AGENTS.md"), format!("# Mine\n\n{REGION_BLOCK}\n\ntail\n")).unwrap();
+        std::fs::write(
+            root.join("AGENTS.md"),
+            format!("# Mine\n\n{REGION_BLOCK}\n\ntail\n"),
+        )
+        .unwrap();
         record_region(root, "AGENTS.md", "AGENTS.md.tmpl", REGION_BLOCK);
 
         let mut opts = test_opts();
@@ -1399,8 +1474,16 @@ mod tests {
         opts.project_dir = root.to_string_lossy().into_owned();
         let r = check_managed_drift(&opts);
         assert_eq!(r.status, Status::Warn);
-        assert!(r.message.contains("AGENTS.md"), "names the drifted file: {}", r.message);
-        assert!(r.message.contains("codeflow update"), "explains the risk: {}", r.message);
+        assert!(
+            r.message.contains("AGENTS.md"),
+            "names the drifted file: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("codeflow update"),
+            "explains the risk: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -1444,7 +1527,12 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = root.to_string_lossy().into_owned();
         let r = check_managed_drift(&opts);
-        assert_eq!(r.status, Status::Pass, "outside-marker/JSON must not flag: {}", r.message);
+        assert_eq!(
+            r.status,
+            Status::Pass,
+            "outside-marker/JSON must not flag: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -1472,7 +1560,11 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_test_config(&opts);
         assert_eq!(r.status, Status::Pass);
-        assert!(r.message.contains("no .codeflow/test-config.json"), "got: {}", r.message);
+        assert!(
+            r.message.contains("no .codeflow/test-config.json"),
+            "got: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -1500,7 +1592,11 @@ mod tests {
         let r = check_test_config(&opts);
         assert_eq!(r.status, Status::Warn, "got: {}", r.message);
         assert!(r.message.contains("failed"), "got: {}", r.message);
-        assert!(r.message.contains("codeflow test doctor"), "points to detail: {}", r.message);
+        assert!(
+            r.message.contains("codeflow test doctor"),
+            "points to detail: {}",
+            r.message
+        );
     }
 
     #[test]

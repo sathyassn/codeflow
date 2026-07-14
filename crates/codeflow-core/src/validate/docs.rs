@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::capability::{CAPABILITY_STATUS_VALUES, parse_capabilities};
+use crate::capability::{parse_capabilities, CAPABILITY_STATUS_VALUES};
 use crate::validate::{get_string_field, parse_frontmatter};
 
 /// Legal ADR status values (charter §5; ADR template).
@@ -133,9 +133,9 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
                 .collect(),
         )
     } else {
-        report.notes.push(
-            "project-management/epics/ absent — epic reference checks skipped".to_string(),
-        );
+        report
+            .notes
+            .push("project-management/epics/ absent — epic reference checks skipped".to_string());
         None
     };
 
@@ -229,10 +229,7 @@ fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
     }
 
     for path in adr_files(&decisions) {
-        let rel = path
-            .strip_prefix(repo_root)
-            .unwrap_or(&path)
-            .to_path_buf();
+        let rel = path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf();
         let Ok(content) = std::fs::read(&path) else {
             continue;
         };
@@ -275,9 +272,8 @@ fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
                 report.issues.push(DocsLintIssue {
                     file: rel,
                     line: status_line,
-                    message:
-                        "superseded ADR has no superseded_by — name the superseding ADR id"
-                            .to_string(),
+                    message: "superseded ADR has no superseded_by — name the superseding ADR id"
+                        .to_string(),
                 });
             }
         }
@@ -291,10 +287,7 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     }
 
     for path in epic_files(&epics_dir) {
-        let rel = path
-            .strip_prefix(repo_root)
-            .unwrap_or(&path)
-            .to_path_buf();
+        let rel = path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf();
         let Ok(content) = std::fs::read(&path) else {
             continue;
         };
@@ -406,9 +399,7 @@ fn md_files(dir: &Path) -> Vec<PathBuf> {
 /// 1-based line number of the first line containing `needle`.
 fn find_line(content: &[u8], needle: &str) -> Option<usize> {
     let text = String::from_utf8_lossy(content);
-    text.lines()
-        .position(|l| l.contains(needle))
-        .map(|i| i + 1)
+    text.lines().position(|l| l.contains(needle)).map(|i| i + 1)
 }
 
 fn string_list(
@@ -480,10 +471,22 @@ mod tests {
             "docs/capabilities.md",
             &format!(
                 "# caps\n\n{}",
-                capability_block("CAP-001", "shipped", "[EPC-001]", "[ADR-0001]", "[gate-core]")
+                capability_block(
+                    "CAP-001",
+                    "shipped",
+                    "[EPC-001]",
+                    "[ADR-0001]",
+                    "[gate-core]"
+                )
             ),
         );
-        adr(root, "ADR-0001-stack-choice.md", "ADR-0001", "accepted", "null");
+        adr(
+            root,
+            "ADR-0001-stack-choice.md",
+            "ADR-0001",
+            "accepted",
+            "null",
+        );
         epic_file(root, "EPC-001", "[CAP-001]", "[ADR-0001]");
         dir
     }
@@ -537,10 +540,22 @@ mod tests {
             "docs/capabilities.md",
             &format!(
                 "# caps\n\n{}",
-                capability_block("CAP-001", "shipped", "[EPC-001]", "[ADR-0001]", "[gate-core]")
+                capability_block(
+                    "CAP-001",
+                    "shipped",
+                    "[EPC-001]",
+                    "[ADR-0001]",
+                    "[gate-core]"
+                )
             ),
         );
-        adr(root, "ADR-0001-stack-choice.md", "ADR-0001", "accepted", "null");
+        adr(
+            root,
+            "ADR-0001-stack-choice.md",
+            "ADR-0001",
+            "accepted",
+            "null",
+        );
         nested_epic_file(root, "EPC-001", "[CAP-001]", "[ADR-0001]");
         // A sibling task file inside the epic dir must NOT be treated as an epic.
         write(
@@ -629,7 +644,13 @@ mod tests {
     #[test]
     fn superseded_adr_without_superseded_by_fails() {
         let dir = clean_repo();
-        adr(dir.path(), "ADR-0002-old-way.md", "ADR-0002", "superseded", "null");
+        adr(
+            dir.path(),
+            "ADR-0002-old-way.md",
+            "ADR-0002",
+            "superseded",
+            "null",
+        );
 
         let report = lint_docs(dir.path());
         assert!(!report.is_clean());
@@ -655,7 +676,13 @@ mod tests {
             "superseded",
             "ADR-0003",
         );
-        adr(dir.path(), "ADR-0003-new-way.md", "ADR-0003", "accepted", "null");
+        adr(
+            dir.path(),
+            "ADR-0003-new-way.md",
+            "ADR-0003",
+            "accepted",
+            "null",
+        );
 
         let report = lint_docs(dir.path());
         assert!(report.is_clean(), "issues: {:?}", report.issues);
@@ -664,14 +691,17 @@ mod tests {
     #[test]
     fn illegal_adr_status_fails() {
         let dir = clean_repo();
-        adr(dir.path(), "ADR-0002-bad.md", "ADR-0002", "rejected", "null");
+        adr(
+            dir.path(),
+            "ADR-0002-bad.md",
+            "ADR-0002",
+            "rejected",
+            "null",
+        );
 
         let report = lint_docs(dir.path());
-        assert!(report
-            .issues
-            .iter()
-            .any(|i| i.message.contains("rejected")
-                && i.message.contains("proposed, accepted, superseded")));
+        assert!(report.issues.iter().any(|i| i.message.contains("rejected")
+            && i.message.contains("proposed, accepted, superseded")));
     }
 
     #[test]
@@ -708,10 +738,7 @@ mod tests {
         epic_file(dir.path(), "EPC-001", "[CAP-001]", "[ADR-0001]");
 
         let report = lint_docs(dir.path());
-        assert!(report
-            .issues
-            .iter()
-            .any(|i| i.message.contains("\"wip\"")));
+        assert!(report.issues.iter().any(|i| i.message.contains("\"wip\"")));
     }
 
     #[test]
@@ -737,10 +764,7 @@ mod tests {
         epic_file(dir.path(), "EPC-002", "[]", "[ADR-0777]");
 
         let report = lint_docs(dir.path());
-        assert!(report
-            .issues
-            .iter()
-            .any(|i| i.message.contains("ADR-0777")));
+        assert!(report.issues.iter().any(|i| i.message.contains("ADR-0777")));
     }
 
     #[test]

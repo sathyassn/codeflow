@@ -6,7 +6,7 @@
 
 use regex::Regex;
 
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 pub struct TmpModule;
 
@@ -81,49 +81,39 @@ mod tests {
 
     #[test]
     fn test_safe_command() {
-        assert!(
-            TmpModule
-                .check(&ctx("ls /tmp/claude/codeflow/managed"))
-                .is_none()
-        );
+        assert!(TmpModule
+            .check(&ctx("ls /tmp/claude/codeflow/managed"))
+            .is_none());
     }
 
     #[test]
     fn test_rm_managed_folder() {
-        assert!(
-            TmpModule
-                .check(&ctx("rm -rf /tmp/claude/codeflow/managed"))
-                .is_some()
-        );
+        assert!(TmpModule
+            .check(&ctx("rm -rf /tmp/claude/codeflow/managed"))
+            .is_some());
     }
 
     #[test]
     fn test_rmdir_managed_folder() {
-        assert!(
-            TmpModule
-                .check(&ctx("rmdir /tmp/claude/codeflow/managed"))
-                .is_some()
-        );
+        assert!(TmpModule
+            .check(&ctx("rmdir /tmp/claude/codeflow/managed"))
+            .is_some());
     }
 
     #[test]
     fn test_mv_managed_folder() {
-        assert!(
-            TmpModule
-                .check(&ctx("mv /tmp/claude/codeflow/managed /tmp/other"))
-                .is_some()
-        );
+        assert!(TmpModule
+            .check(&ctx("mv /tmp/claude/codeflow/managed /tmp/other"))
+            .is_some());
     }
 
     #[test]
     fn test_write_inside_managed_folder_allowed() {
         // Writing inside the folder is fine; only deletion/rename of the
         // folder itself is blocked.
-        assert!(
-            TmpModule
-                .check(&ctx("echo test > /tmp/claude/codeflow/managed/note.txt"))
-                .is_none()
-        );
+        assert!(TmpModule
+            .check(&ctx("echo test > /tmp/claude/codeflow/managed/note.txt"))
+            .is_none());
     }
 
     #[test]

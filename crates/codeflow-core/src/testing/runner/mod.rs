@@ -121,7 +121,33 @@ pub fn run_all_targets(
     only_tags: &[Tag],
     skip_tags: &[Tag],
 ) -> Vec<Result<TargetRunResult, TestingError>> {
-    let in_ci = is_ci_environment();
+    run_all_targets_with_ci(
+        targets,
+        mode,
+        project_dir,
+        parallel,
+        fail_fast,
+        only,
+        skip,
+        only_tags,
+        skip_tags,
+        is_ci_environment(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_all_targets_with_ci(
+    targets: &[TargetConfig],
+    mode: &str,
+    project_dir: &Path,
+    parallel: bool,
+    fail_fast: bool,
+    only: &[String],
+    skip: &[String],
+    only_tags: &[Tag],
+    skip_tags: &[Tag],
+    in_ci: bool,
+) -> Vec<Result<TargetRunResult, TestingError>> {
     let filtered: Vec<&TargetConfig> = targets
         .iter()
         .filter(|t| t.enabled)
@@ -263,13 +289,14 @@ fn run_parallel(
 /// `CI=true`; developers running locally typically leave it unset.
 #[must_use]
 pub fn is_ci_environment() -> bool {
-    match std::env::var("CI") {
-        Ok(v) => {
-            let v = v.trim();
-            !v.is_empty() && v != "false" && v != "0"
-        }
-        Err(_) => false,
-    }
+    is_ci_value(std::env::var("CI").ok().as_deref())
+}
+
+fn is_ci_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && value != "false" && value != "0"
+    })
 }
 
 fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, TestingError> {
@@ -310,28 +337,7 @@ fn spawn_command(
     target_name: &str,
     timeout: Duration,
 ) -> Result<CommandOutcome, TestingError> {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(command).current_dir(cwd);
-
-    // The test gate can run inside a git hook (the pre-push `test_gate_on_push`,
-    // or `integrate`'s internal gate), where git exports GIT_DIR / GIT_WORK_TREE
-    // / GIT_INDEX_FILE. Those would redirect any `git` the test command spawns
-    // at the outer repo instead of the test's own fixtures — silently mutating
-    // the real repository (this is what flipped `core.bare` and planted a stray
-    // commit; ADR-0007 follow-up). Clear them so the test command and its
-    // children discover git normally from `cwd`.
-    cmd.env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
-
-    // Set TARGET env var
-    cmd.env("TARGET", target_name);
-
-    // Set target-local env vars (validated)
-    for (key, val) in env {
-        validate_env_key(key, target_name)?;
-        cmd.env(key, val);
-    }
+    let mut cmd = build_command(command, cwd, env, target_name)?;
 
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
@@ -398,6 +404,37 @@ fn spawn_command(
         stdout_truncated: stdout.truncated,
         stderr_truncated: stderr.truncated,
     })
+}
+
+fn build_command(
+    command: &str,
+    cwd: &Path,
+    env: &std::collections::BTreeMap<String, String>,
+    target_name: &str,
+) -> Result<Command, TestingError> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command).current_dir(cwd);
+
+    // The test gate can run inside a git hook (the pre-push `test_gate_on_push`,
+    // or `integrate`'s internal gate), where git exports GIT_DIR / GIT_WORK_TREE
+    // / GIT_INDEX_FILE. Those would redirect any `git` the test command spawns
+    // at the outer repo instead of the test's own fixtures — silently mutating
+    // the real repository (this is what flipped `core.bare` and planted a stray
+    // commit; ADR-0007 follow-up). Clear them so the test command and its
+    // children discover git normally from `cwd`.
+    cmd.env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+
+    // Set TARGET env var
+    cmd.env("TARGET", target_name);
+
+    // Set target-local env vars (validated)
+    for (key, val) in env {
+        validate_env_key(key, target_name)?;
+        cmd.env(key, val);
+    }
+    Ok(cmd)
 }
 
 struct CapturedOutput {
@@ -851,22 +888,16 @@ mod tests {
         assert!(results.is_empty());
     }
 
-    /// CI-environment opt-out: `ci_skip=true` targets must be skipped when
-    /// `CI=true`. Uses a `#[serial(env_vars)]`-gated `set_var` to toggle the
-    /// `CI` env without racing other tests.
+    /// CI-environment opt-out: `ci_skip=true` targets must be skipped in CI.
     #[test]
-    #[serial_test::serial(env_vars)]
     fn test_run_all_targets_ci_skip_honoured_under_ci() {
-        // SAFETY: test-only env var manipulation, gated by #[serial].
-        unsafe { std::env::set_var("CI", "true") };
-
         let mut slow = make_target("slow", "echo slow");
         slow.ci_skip = Some(true);
         slow.ci_skip_reason = Some("integration tests exceed CI time budget".to_string());
         let fast = make_target("fast", "echo fast");
         let dir = tempfile::tempdir().unwrap();
 
-        let results = run_all_targets(
+        let results = run_all_targets_with_ci(
             &[slow, fast],
             "full",
             dir.path(),
@@ -876,10 +907,8 @@ mod tests {
             &[],
             &[],
             &[],
+            true,
         );
-
-        // SAFETY: cleanup before assertions so failure doesn't leak CI=true.
-        unsafe { std::env::remove_var("CI") };
 
         assert_eq!(
             results.len(),
@@ -896,48 +925,31 @@ mod tests {
     /// and planted a stray commit. `spawn_command` must clear all three so the
     /// test command discovers git from `cwd`.
     #[test]
-    #[serial_test::serial(env_vars)]
     fn spawn_command_clears_inherited_git_env() {
-        // SAFETY: test-only env var manipulation, gated by #[serial]. Simulate a
-        // decoy git env as a pre-push hook would export.
-        unsafe {
-            std::env::set_var("GIT_DIR", "/decoy/.git");
-            std::env::set_var("GIT_WORK_TREE", "/decoy");
-            std::env::set_var("GIT_INDEX_FILE", "/decoy/index");
+        let command = build_command("true", Path::new("."), &BTreeMap::new(), "probe")
+            .expect("probe command builds");
+        let removed: std::collections::BTreeSet<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_owned())
+            .collect();
+        for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
+            assert!(
+                removed.contains(std::ffi::OsStr::new(key)),
+                "{key} must be removed from the child environment"
+            );
         }
-        let out = spawn_command(
-            "printf '%s|%s|%s' \"${GIT_DIR:-cleared}\" \"${GIT_WORK_TREE:-cleared}\" \"${GIT_INDEX_FILE:-cleared}\"",
-            Path::new("."),
-            &BTreeMap::new(),
-            "probe",
-            Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
-        )
-        .expect("probe command runs");
-        // SAFETY: cleanup before asserting so a failure never leaks the decoy env.
-        unsafe {
-            std::env::remove_var("GIT_DIR");
-            std::env::remove_var("GIT_WORK_TREE");
-            std::env::remove_var("GIT_INDEX_FILE");
-        }
-        assert_eq!(
-            out.stdout, "cleared|cleared|cleared",
-            "the test gate must not leak an inherited git env into the test command"
-        );
     }
 
     /// `ci_skip=true` targets still run OUTSIDE CI (local dev loop).
     #[test]
-    #[serial_test::serial(env_vars)]
     fn test_run_all_targets_ci_skip_ignored_outside_ci() {
-        // SAFETY: test-only env var manipulation, gated by #[serial].
-        unsafe { std::env::remove_var("CI") };
-
         let mut slow = make_target("slow", "echo slow");
         slow.ci_skip = Some(true);
         slow.ci_skip_reason = Some("slow in CI only".to_string());
         let dir = tempfile::tempdir().unwrap();
 
-        let results = run_all_targets(
+        let results = run_all_targets_with_ci(
             &[slow],
             "full",
             dir.path(),
@@ -947,6 +959,7 @@ mod tests {
             &[],
             &[],
             &[],
+            false,
         );
 
         assert_eq!(results.len(), 1, "ci_skip must not affect local runs");
@@ -956,29 +969,13 @@ mod tests {
     /// `is_ci_environment` contract: treats truthy and non-empty values as CI,
     /// but recognises the `false`/`0` conventions and unset state as non-CI.
     #[test]
-    #[serial_test::serial(env_vars)]
-    fn test_is_ci_environment_recognises_conventions() {
-        // SAFETY: test-only env var manipulation, gated by #[serial].
-        unsafe { std::env::remove_var("CI") };
-        assert!(!is_ci_environment(), "unset CI → false");
-
-        unsafe { std::env::set_var("CI", "") };
-        assert!(!is_ci_environment(), "empty CI → false");
-
-        unsafe { std::env::set_var("CI", "false") };
-        assert!(!is_ci_environment(), "CI=false → false");
-
-        unsafe { std::env::set_var("CI", "0") };
-        assert!(!is_ci_environment(), "CI=0 → false");
-
-        unsafe { std::env::set_var("CI", "true") };
-        assert!(is_ci_environment(), "CI=true → true");
-
-        unsafe { std::env::set_var("CI", "1") };
-        assert!(is_ci_environment(), "CI=1 → true");
-
-        // Cleanup.
-        unsafe { std::env::remove_var("CI") };
+    fn test_is_ci_value_recognises_conventions() {
+        assert!(!is_ci_value(None), "unset CI → false");
+        assert!(!is_ci_value(Some("")), "empty CI → false");
+        assert!(!is_ci_value(Some("false")), "CI=false → false");
+        assert!(!is_ci_value(Some("0")), "CI=0 → false");
+        assert!(is_ci_value(Some("true")), "CI=true → true");
+        assert!(is_ci_value(Some("1")), "CI=1 → true");
     }
 
     #[test]

@@ -55,9 +55,17 @@ pub fn run(args: &TestArgs) -> i32 {
             }
             eprintln!("==============================================================");
             // Distinct from a failed gate (exit 1): 2 == "nothing ran".
-            if args.strict { 2 } else { 0 }
+            if args.strict {
+                2
+            } else {
+                0
+            }
         }
-        Ok(GateOutcome::Completed { results, passed, coverage }) => {
+        Ok(GateOutcome::Completed {
+            results,
+            passed,
+            coverage,
+        }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };
                 println!(

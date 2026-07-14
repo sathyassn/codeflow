@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::pattern::is_path_or_glob_targeted;
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 fn indirect_write_cmds_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -232,47 +232,37 @@ mod tests {
 
     #[test]
     fn test_cp_to_protected_path() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("cp malicious.sh .claude/settings.json"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cp malicious.sh .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_cp_to_tmp_claude_allowed() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("cp file.txt /tmp/claude/test"))
-                .is_none()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cp file.txt /tmp/claude/test"))
+            .is_none());
     }
 
     #[test]
     fn test_dd_to_protected() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("dd if=evil of=.claude/settings.json"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("dd if=evil of=.claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_piped_tee_protected() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("echo test | tee .claude/settings.json"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("echo test | tee .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_interpreter_write() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("python3 -c 'open(\".claude/settings.json\",\"w\")'"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("python3 -c 'open(\".claude/settings.json\",\"w\")'"))
+            .is_some());
     }
 
     #[test]
@@ -285,20 +275,16 @@ mod tests {
     #[test]
     fn test_glob_question_mark_bypass() {
         // Use ? to match a protected path character.
-        assert!(
-            FileOpsModule
-                .check(&ctx("cp malicious.sh .claude/settings.jso?"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cp malicious.sh .claude/settings.jso?"))
+            .is_some());
     }
 
     #[test]
     fn test_glob_star_bypass() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("cp malicious.sh .claude/settings*"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cp malicious.sh .claude/settings*"))
+            .is_some());
     }
 
     #[test]
@@ -310,97 +296,79 @@ mod tests {
     #[test]
     fn test_glob_no_pattern_allowed() {
         // Write command without glob pattern.
-        assert!(
-            FileOpsModule
-                .check(&ctx("cp safe.txt /tmp/output.txt"))
-                .is_none()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cp safe.txt /tmp/output.txt"))
+            .is_none());
     }
 
     // -- dd command tests --
 
     #[test]
     fn test_dd_safe_no_protected_path() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("dd if=/dev/zero of=/tmp/test bs=1M count=1"))
-                .is_none()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("dd if=/dev/zero of=/tmp/test bs=1M count=1"))
+            .is_none());
     }
 
     // -- Piped tee tests --
 
     #[test]
     fn test_piped_tee_safe() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("echo test | tee /tmp/output.txt"))
-                .is_none()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("echo test | tee /tmp/output.txt"))
+            .is_none());
     }
 
     // -- cat append tests --
 
     #[test]
     fn test_cat_append_to_protected() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("cat malicious.sh >> .claude/settings.json"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cat malicious.sh >> .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_cat_append_safe() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("cat file.txt >> /tmp/output.txt"))
-                .is_none()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cat file.txt >> /tmp/output.txt"))
+            .is_none());
     }
 
     // -- Interpreter tests for other languages --
 
     #[test]
     fn test_interpreter_perl_write() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("perl -e 'open(F, \">.claude/settings.json\")'"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("perl -e 'open(F, \">.claude/settings.json\")'"))
+            .is_some());
     }
 
     #[test]
     fn test_interpreter_ruby_write() {
-        assert!(
-            FileOpsModule
-                .check(&ctx(
-                    "ruby -e 'File.write(\".codeflow/policy.json\", \"evil\")'"
-                ))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx(
+                "ruby -e 'File.write(\".codeflow/policy.json\", \"evil\")'"
+            ))
+            .is_some());
     }
 
     #[test]
     fn test_interpreter_node_write() {
-        assert!(
-            FileOpsModule
-                .check(&ctx(
-                    "node -e 'require(\"fs\").writeFileSync(\".codeflow/config/test\", \"x\")'"
-                ))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx(
+                "node -e 'require(\"fs\").writeFileSync(\".codeflow/config/test\", \"x\")'"
+            ))
+            .is_some());
     }
 
     // -- tmp/claude exclusion --
 
     #[test]
     fn test_tmp_claude_redirect_allowed() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("cp file.txt >/tmp/claude/output"))
-                .is_none()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("cp file.txt >/tmp/claude/output"))
+            .is_none());
     }
 
     #[test]
@@ -419,20 +387,16 @@ mod tests {
 
     #[test]
     fn test_rsync_to_protected() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("rsync -a source/ .claude/settings.json"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("rsync -a source/ .claude/settings.json"))
+            .is_some());
     }
 
     #[test]
     fn test_scp_to_protected() {
-        assert!(
-            FileOpsModule
-                .check(&ctx("scp evil.txt .claude/settings.json"))
-                .is_some()
-        );
+        assert!(FileOpsModule
+            .check(&ctx("scp evil.txt .claude/settings.json"))
+            .is_some());
     }
 
     // -- Empty protected paths --

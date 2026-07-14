@@ -156,12 +156,18 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.privilege_escalation");
         assert_eq!(v[0].level, PolicyLevel::Warn);
-        assert!(!any_blocking(&v), "privilege escalation must not block by default");
+        assert!(
+            !any_blocking(&v),
+            "privilege escalation must not block by default"
+        );
     }
 
     #[test]
     fn test_privilege_can_be_hardened_to_block() {
-        let v = evaluate("sudo rm file", &levels(PolicyLevel::Block, PolicyLevel::Block));
+        let v = evaluate(
+            "sudo rm file",
+            &levels(PolicyLevel::Block, PolicyLevel::Block),
+        );
         assert_eq!(v[0].rule, "security.privilege_escalation");
         assert_eq!(v[0].level, PolicyLevel::Block);
         assert!(any_blocking(&v));
@@ -195,7 +201,10 @@ mod tests {
             "npm run build",
             "chmod +x ./script.sh",
         ] {
-            assert!(evaluate(cmd, &SecuritySection::default()).is_empty(), "{cmd}");
+            assert!(
+                evaluate(cmd, &SecuritySection::default()).is_empty(),
+                "{cmd}"
+            );
         }
     }
 }

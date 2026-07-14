@@ -5,8 +5,8 @@
 //! messages, and suite names.
 
 use super::{
-    CanonicalTestReport, CtrfResults, CtrfStatus, CtrfSummary, CtrfTest, CtrfTool,
     junit::{JunitReport, JunitTestStatus},
+    CanonicalTestReport, CtrfResults, CtrfStatus, CtrfSummary, CtrfTest, CtrfTool,
 };
 
 impl From<JunitReport> for CanonicalTestReport {

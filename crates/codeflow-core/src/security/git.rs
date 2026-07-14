@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::pattern::get_flags_portion;
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 // Section 1: Git hook bypass patterns.
 fn git_no_verify_re() -> &'static Regex {
@@ -420,20 +420,16 @@ mod tests {
 
     #[test]
     fn test_no_verify() {
-        assert!(
-            GitModule
-                .check(&ctx("git commit --no-verify -m 'test'"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git commit --no-verify -m 'test'"))
+            .is_some());
     }
 
     #[test]
     fn test_git_level_no_verify() {
-        assert!(
-            GitModule
-                .check(&ctx("git --no-verify commit -m 'test'"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git --no-verify commit -m 'test'"))
+            .is_some());
     }
 
     #[test]
@@ -452,29 +448,23 @@ mod tests {
 
     #[test]
     fn test_force_push_non_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git push --force", "feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git push --force", "feat/test"))
+            .is_none());
     }
 
     #[test]
     fn test_force_with_lease_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git push --force-with-lease", "main"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git push --force-with-lease", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_hooks_path_manipulation() {
-        assert!(
-            GitModule
-                .check(&ctx("git config core.hooksPath /tmp"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git config core.hooksPath /tmp"))
+            .is_some());
     }
 
     #[test]
@@ -484,11 +474,9 @@ mod tests {
 
     #[test]
     fn test_git_hooks_redirect() {
-        assert!(
-            GitModule
-                .check(&ctx("echo '#!/bin/sh' > .git/hooks/pre-commit"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("echo '#!/bin/sh' > .git/hooks/pre-commit"))
+            .is_some());
     }
 
     #[test]
@@ -498,29 +486,23 @@ mod tests {
 
     #[test]
     fn test_merge_on_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git merge feat/branch", "main"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git merge feat/branch", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_merge_on_feature() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git merge main", "feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git merge main", "feat/test"))
+            .is_none());
     }
 
     #[test]
     fn test_chained_checkout_merge_protected() {
-        assert!(
-            GitModule
-                .check(&ctx("git checkout main && git merge feat/test"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git checkout main && git merge feat/test"))
+            .is_some());
     }
 
     #[test]
@@ -548,58 +530,46 @@ mod tests {
 
     #[test]
     fn test_force_push_short_f_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git push -f", "main"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git push -f", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_force_push_short_f_non_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git push -f", "feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git push -f", "feat/test"))
+            .is_none());
     }
 
     // -- Hook path manipulation: more patterns --
 
     #[test]
     fn test_git_c_hooks_path() {
-        assert!(
-            GitModule
-                .check(&ctx("git -c core.hooksPath=/dev/null commit"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git -c core.hooksPath=/dev/null commit"))
+            .is_some());
     }
 
     #[test]
     fn test_git_unset_hooks_path() {
-        assert!(
-            GitModule
-                .check(&ctx("git config --unset core.hooksPath"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git config --unset core.hooksPath"))
+            .is_some());
     }
 
     #[test]
     fn test_git_hooks_path_env() {
-        assert!(
-            GitModule
-                .check(&ctx("GIT_HOOKS_PATH=/tmp git commit"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("GIT_HOOKS_PATH=/tmp git commit"))
+            .is_some());
     }
 
     #[test]
     fn test_skip_hooks_env() {
-        assert!(
-            GitModule
-                .check(&ctx("SKIP_HOOKS=1 git commit -m 'test'"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("SKIP_HOOKS=1 git commit -m 'test'"))
+            .is_some());
     }
 
     #[test]
@@ -609,96 +579,76 @@ mod tests {
 
     #[test]
     fn test_pre_commit_allow_no_config() {
-        assert!(
-            GitModule
-                .check(&ctx("PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit"))
+            .is_some());
     }
 
     // -- Protected branch operations: cherry-pick, rebase, reset --
 
     #[test]
     fn test_cherry_pick_on_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git cherry-pick abc123", "main"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git cherry-pick abc123", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_cherry_pick_on_feature() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git cherry-pick abc123", "feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git cherry-pick abc123", "feat/test"))
+            .is_none());
     }
 
     #[test]
     fn test_rebase_on_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git rebase feat/branch", "main"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git rebase feat/branch", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_rebase_on_feature() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git rebase main", "feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git rebase main", "feat/test"))
+            .is_none());
     }
 
     #[test]
     fn test_reset_on_protected() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git reset --hard HEAD~1", "main"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git reset --hard HEAD~1", "main"))
+            .is_some());
     }
 
     #[test]
     fn test_reset_on_feature() {
-        assert!(
-            GitModule
-                .check(&ctx_on_branch("git reset --hard HEAD~1", "feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx_on_branch("git reset --hard HEAD~1", "feat/test"))
+            .is_none());
     }
 
     // -- Chained switch+merge --
 
     #[test]
     fn test_chained_switch_merge_protected() {
-        assert!(
-            GitModule
-                .check(&ctx("git switch main && git merge feat/test"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git switch main && git merge feat/test"))
+            .is_some());
     }
 
     #[test]
     fn test_chained_switch_merge_non_protected() {
-        assert!(
-            GitModule
-                .check(&ctx("git switch feat/dev && git merge feat/test"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx("git switch feat/dev && git merge feat/test"))
+            .is_none());
     }
 
     #[test]
     fn test_chained_checkout_merge_non_protected() {
-        assert!(
-            GitModule
-                .check(&ctx("git checkout feat/dev && git merge main"))
-                .is_none()
-        );
+        assert!(GitModule
+            .check(&ctx("git checkout feat/dev && git merge main"))
+            .is_none());
     }
 
     // -- Commit -n combined flags --
@@ -722,10 +672,8 @@ mod tests {
 
     #[test]
     fn test_merge_no_verify() {
-        assert!(
-            GitModule
-                .check(&ctx("git merge --no-verify feat/test"))
-                .is_some()
-        );
+        assert!(GitModule
+            .check(&ctx("git merge --no-verify feat/test"))
+            .is_some());
     }
 }

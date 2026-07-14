@@ -77,7 +77,11 @@ fn policy_explain_renders_every_key_path() {
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout);
     for spec in schema() {
-        assert!(stdout.contains(spec.path), "explain must list {}", spec.path);
+        assert!(
+            stdout.contains(spec.path),
+            "explain must list {}",
+            spec.path
+        );
     }
     assert!(stdout.contains("off | warn | allow | block"), "{stdout}");
     // The allow≈off trap is stated once, in the legend.
@@ -136,9 +140,15 @@ fn policy_show_flags_invalid_values_and_exits_one() {
     assert_eq!(out.status.code(), Some(1), "an invalid file must exit 1");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stdout.contains("INVALID  git.commit_ticket_required"), "{stdout}");
+    assert!(
+        stdout.contains("INVALID  git.commit_ticket_required"),
+        "{stdout}"
+    );
     // The whole-file fallback is stated loudly: one bad value defaults EVERY key.
-    assert!(stdout.contains("built-in defaults for EVERY key"), "{stdout}");
+    assert!(
+        stdout.contains("built-in defaults for EVERY key"),
+        "{stdout}"
+    );
     assert!(stderr.contains("off, warn, allow, block"), "{stderr}");
 }
 

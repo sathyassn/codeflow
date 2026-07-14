@@ -40,8 +40,8 @@ pub struct SessionRecord {
 /// Returns [`HookError`] when `root` is not in a git repository or the
 /// ledger append fails. Callers treat errors as warnings (exit 0).
 pub fn record(root: &Path, payload_json: &str) -> Result<PathBuf, HookError> {
-    let payload: serde_json::Value = serde_json::from_str(payload_json.trim())
-        .unwrap_or(serde_json::Value::Null);
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json.trim()).unwrap_or(serde_json::Value::Null);
     let info = RepoInfo::discover(root)
         .ok_or_else(|| HookError::Config("not inside a git repository".to_string()))?;
     let summary = build(&info, &payload);
@@ -222,7 +222,10 @@ mod tests {
         let payload = r#"{"session_id":"abc123","reason":"clear","hook_event_name":"SessionEnd"}"#;
 
         let path = record(dir.path(), payload).unwrap();
-        assert!(path.ends_with("sessions/sessions-ses-abc123.jsonl"), "{path:?}");
+        assert!(
+            path.ends_with("sessions/sessions-ses-abc123.jsonl"),
+            "{path:?}"
+        );
         // Lands under the repo's shared state dir (canonicalize: macOS /var symlink).
         assert!(
             path.canonicalize()

@@ -38,7 +38,7 @@ itself a blocker finding — return changes_requested.
 
 Return exactly this structure:
 
-```
+```text
 verdict: approved | changes_requested
 
 criteria:

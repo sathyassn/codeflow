@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Gate parity guard (Option B sync-guard).
 
-codeflow's own CI keeps a raw `rust (test + clippy)` job that runs cargo
+codeflow's own CI keeps a raw `rust (format + test + clippy)` job that runs cargo
 directly — an independent referee that catches a bug in codeflow's own test
 runner. That independence is worth a duplicate command list, but a duplicate can
 drift: the exact failure where CI ran clippy and the local gate did not.
 
 This guard makes drift fail LOUDLY instead of silently. It asserts that the
-cargo commands in the CI `rust` job exactly equal the `full`-mode cargo commands
-in `.codeflow/test-config.json` (what local `codeflow test` and the CI
+Rust verification commands in the CI `rust` job exactly equal the `full`-mode
+commands in `.codeflow/test-config.json` (what local `codeflow test` and the CI
 `codeflow gates` job run). It runs as a `codeflow test` target, so it fires both
 locally and in CI.
 
-Scope note: only the `rust` job is compared. Other jobs (coverage llvm-cov,
-docs) run different tooling by design and are out of scope here.
+Scope note: only the `rust` job is compared. Other jobs (coverage llvm-cov and
+doc-graph validation) run different tooling by design and are out of scope here.
 """
 
 import json
@@ -30,18 +30,22 @@ def norm(cmd: str) -> str:
     return " ".join(cmd.split())
 
 
-def local_cargo_commands() -> set[str]:
+def is_rust_verification_command(cmd: str) -> bool:
+    return cmd.startswith("cargo ") or cmd.startswith('RUSTDOCFLAGS="-D warnings" cargo ')
+
+
+def local_rust_commands() -> set[str]:
     cfg = json.loads(CONFIG.read_text())
     out = set()
     for target in cfg.get("targets", []):
         cmd = target.get("modes", {}).get("full", {}).get("command", "")
-        if cmd.startswith("cargo "):
+        if is_rust_verification_command(cmd):
             out.add(norm(cmd))
     return out
 
 
-def ci_rust_job_cargo_commands() -> set[str]:
-    """cargo `run:` commands inside the `rust:` job block only."""
+def ci_rust_job_commands() -> set[str]:
+    """Rust verification `run:` commands inside the `rust:` job block only."""
     out = set()
     in_rust = False
     for line in WORKFLOW.read_text().splitlines():
@@ -50,15 +54,15 @@ def ci_rust_job_cargo_commands() -> set[str]:
             in_rust = job.group(1) == "rust"
             continue
         if in_rust:
-            run = re.match(r"^\s*run:\s*(cargo .+?)\s*$", line)
-            if run:
+            run = re.match(r"^\s*run:\s*(.+?)\s*$", line)
+            if run and is_rust_verification_command(run.group(1)):
                 out.add(norm(run.group(1)))
     return out
 
 
 def main() -> int:
-    local = local_cargo_commands()
-    ci = ci_rust_job_cargo_commands()
+    local = local_rust_commands()
+    ci = ci_rust_job_commands()
     if not ci:
         print("gate-parity: could not find the CI `rust` job cargo commands — "
               "the workflow layout changed; update this guard.", file=sys.stderr)

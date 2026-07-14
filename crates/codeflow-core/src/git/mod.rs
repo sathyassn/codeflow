@@ -6,5 +6,5 @@
 pub mod ci;
 pub mod conflict;
 
-pub use ci::{CiOutcome, CiWaitConfig, CiWaitError, wait_for_ci_green};
-pub use conflict::{ConflictResult, RebaseResult, attempt_rebase, check_merge_conflicts};
+pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
+pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};

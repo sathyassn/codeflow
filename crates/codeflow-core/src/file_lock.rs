@@ -12,8 +12,8 @@ use std::fs;
 use std::path::Path;
 
 use fs2::FileExt;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::{CheckContext, SecurityModule, Verdict, block};
+use super::{block, CheckContext, SecurityModule, Verdict};
 
 /// Substring patterns that always block.
 const DANGEROUS_SUBSTRINGS: &[&str] =
@@ -15,8 +15,7 @@ const DANGEROUS_SUBSTRINGS: &[&str] =
 
 /// System directories whose recursive deletion is catastrophic.
 const SYSTEM_DIRS: &[&str] = &[
-    "etc", "var", "usr", "bin", "sbin", "boot", "lib", "lib64", "opt", "root", "sys", "proc",
-    "dev",
+    "etc", "var", "usr", "bin", "sbin", "boot", "lib", "lib64", "opt", "root", "sys", "proc", "dev",
 ];
 
 /// Split a command line into simple-command segments so an `rm` after `;`,
@@ -35,7 +34,9 @@ fn command_segments(cmd: &str) -> Vec<&str> {
 /// so ordinary strings like `git commit -m "rm -rf / fix"` — where the token is
 /// `"rm`, which does not basename to `rm` — are never misread as a command.
 fn unquote_unescape(tok: &str) -> String {
-    tok.chars().filter(|&c| c != '"' && c != '\'' && c != '\\').collect()
+    tok.chars()
+        .filter(|&c| c != '"' && c != '\'' && c != '\\')
+        .collect()
 }
 
 /// Normalize a path operand so filesystem-equivalent spellings reduce to their
@@ -393,8 +394,8 @@ mod tests {
             "rm -rf ///",
             "rm -rf //etc",
             "rm -rf /./etc",
-            "rm -rf /usr/..",   // == /
-            "rm -rf /tmp/..",   // == /
+            "rm -rf /usr/..", // == /
+            "rm -rf /tmp/..", // == /
             "rm -rf /var/../etc",
             "rm -rf \"/\"",
             "rm -rf '/'",
@@ -416,9 +417,9 @@ mod tests {
             "rm -r /tmp/scratch",
             "rm -rf target",
             "rm -rf node_modules",
-            "rm -f /etc/hosts.bak",       // not recursive
-            "rm -rf /home/user/proj/..",  // == /home/user, not protected
-            "rm -rf ./scratch/..",        // relative, not protected
+            "rm -f /etc/hosts.bak",      // not recursive
+            "rm -rf /home/user/proj/..", // == /home/user, not protected
+            "rm -rf ./scratch/..",       // relative, not protected
         ] {
             assert!(
                 DangerousModule.check(&ctx(cmd)).is_none(),
@@ -452,29 +453,23 @@ mod tests {
     // rare echo) beats failing open (miss a real `rm -rf /`).
     #[test]
     fn test_bare_rm_in_string_is_conservatively_blocked() {
-        assert!(
-            DangerousModule
-                .check(&ctx("echo 'do not run rm -rf /'"))
-                .is_some()
-        );
+        assert!(DangerousModule
+            .check(&ctx("echo 'do not run rm -rf /'"))
+            .is_some());
     }
 
     #[test]
     fn test_dd_dev_zero() {
-        assert!(
-            DangerousModule
-                .check(&ctx("dd if=/dev/zero of=file"))
-                .is_some()
-        );
+        assert!(DangerousModule
+            .check(&ctx("dd if=/dev/zero of=file"))
+            .is_some());
     }
 
     #[test]
     fn test_dd_disk() {
-        assert!(
-            DangerousModule
-                .check(&ctx("dd if=image of=/dev/sda"))
-                .is_some()
-        );
+        assert!(DangerousModule
+            .check(&ctx("dd if=image of=/dev/sda"))
+            .is_some());
     }
 
     #[test]
@@ -494,11 +489,9 @@ mod tests {
 
     #[test]
     fn test_chown_r_root() {
-        assert!(
-            DangerousModule
-                .check(&ctx("chown -R root:root /"))
-                .is_some()
-        );
+        assert!(DangerousModule
+            .check(&ctx("chown -R root:root /"))
+            .is_some());
     }
 
     #[test]
@@ -518,10 +511,8 @@ mod tests {
 
     #[test]
     fn test_safe_chmod() {
-        assert!(
-            DangerousModule
-                .check(&ctx("chmod 755 ./script.sh"))
-                .is_none()
-        );
+        assert!(DangerousModule
+            .check(&ctx("chmod 755 ./script.sh"))
+            .is_none());
     }
 }

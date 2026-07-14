@@ -30,7 +30,7 @@ alignment) break the correlated blindspot. codeflow already ships the split
   `/codex:adversarial-review`. Where no interactive second-vendor lane is
   available (an unattended pipeline run; headless execution is prohibited,
   ADR-0018), this lens degrades to a same-model adversarial pass, recorded as a
-  finding — the deterministic scanner floor still binds regardless.
+  finding — the deterministic scanner floor still runs regardless.
 
 Union both lenses' findings and dedup by (location, class). A finding one vendor
 raised and the other cleared is **escalated to the human at merge, never
@@ -98,7 +98,7 @@ injection, is Critical regardless of the numeric score.
 
 Emit exactly this schema so results merge, dedup, and gate mechanically:
 
-```
+```text
 SecurityFinding {
   id
   class:       { owasp: "A05:2025", owasp_llm?: "LLM01", cwe: "CWE-89" }
@@ -135,13 +135,26 @@ choice.
 - Medium warns and must be triaged — accepted only with a recorded justification.
 - Low / Info are advisory.
 
-Split by determinism, because a flaky hard gate creates pressure to bypass:
+How this verdict meets CI — the honest, shipped posture (ADR-0016 update
+2026-07-11). Do not assume a hard, non-overridable severity floor or a required
+findings artifact; neither ships today.
 
-- DETERMINISTIC High+ (SCA CVEs, detected secrets, Semgrep criticals) hard-block
-  CI, non-overridably — the same status as `secret_scan: "block"`.
-- MODEL-reasoned findings warn locally, force pipeline rework, and require a
-  clean structured artifact (present, no unresolved High+) for CI to pass; the
-  human merger remains the backstop.
+- **Secrets are the one never-relaxed hard block.** A detected secret — gitleaks
+  in CI and the pre-commit `scan.rs` — fails unconditionally, not even relaxed
+  during bootstrap grace. That is the only floor that always binds.
+- **The dependency / SCA advisory is policy-gated, not a fixed High+ floor.** The
+  shipped `security-review` CI job runs `osv-scanner scan -r .` with **no severity
+  filter**, so any advisory (or scan error) triggers the gated outcome, and its
+  level is read from `.codeflow/policy.json`: it fails CI only when `git.security_review`
+  or `git.dep_audit` is `block`; the shipped default is `warn` (reported, not
+  failed), and both can be `off`. There is no non-overridable High+ hard block and
+  no per-stack/Semgrep floor yet — those are future work alongside the per-stack
+  scanner table.
+- **Model-reasoned findings warn and force pipeline rework — CI checks no artifact.**
+  Your verdict drives the local pipeline gate's bounded rework, but no CI check
+  requires a committed structured-findings artifact (it was not built). Your
+  structured output is consumed by the pipeline gate and by the human merger, who
+  is the backstop for the judgment a machine cannot adjudicate.
 
 ## Rules
 

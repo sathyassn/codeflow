@@ -12,13 +12,17 @@ use std::path::PathBuf;
 /// Every `codeflow hook` subcommand codeflow ships. A command naming anything
 /// else is a typo caught here. (Codex wires a subset — it has no `SessionEnd`
 /// event, so `session-summary` is not expected, but it stays a *known* name.)
-const KNOWN_HOOKS: [&str; 4] = ["git-guard", "exec-guard", "session-orient", "session-summary"];
+const KNOWN_HOOKS: [&str; 4] = [
+    "git-guard",
+    "exec-guard",
+    "session-orient",
+    "session-summary",
+];
 
 fn hooks_json() -> serde_json::Value {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/codex/hooks.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/codex/hooks.json");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("codex hooks.json is not valid JSON: {e}"))
 }
@@ -82,7 +86,9 @@ fn pretooluse_binds_git_and_exec_guard_on_bash() {
     collect_hook_commands(&pre, &mut commands);
     for hook in ["git-guard", "exec-guard"] {
         assert!(
-            commands.iter().any(|c| c == &format!("codeflow hook {hook}")),
+            commands
+                .iter()
+                .any(|c| c == &format!("codeflow hook {hook}")),
             "PreToolUse: {hook} not wired"
         );
     }

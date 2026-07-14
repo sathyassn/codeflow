@@ -90,7 +90,10 @@ pub fn update(
         .as_deref()
         .unwrap_or(root)
         .file_name()
-        .map_or_else(|| "project".to_string(), |n| n.to_string_lossy().to_string());
+        .map_or_else(
+            || "project".to_string(),
+            |n| n.to_string_lossy().to_string(),
+        );
     let ctx = build_context(
         &project,
         &state.product_one_liner,
@@ -123,7 +126,15 @@ pub fn update(
             continue;
         }
         update_entry(
-            source, root, entry, &ctx, &state, opts, &mut installed, &mut report, &mut diffs,
+            source,
+            root,
+            entry,
+            &ctx,
+            &state,
+            opts,
+            &mut installed,
+            &mut report,
+            &mut diffs,
         )?;
     }
 
@@ -141,7 +152,9 @@ pub fn update(
             out.push_str(&diffs);
         }
         write_file(path, out.as_bytes())?;
-        report.notes.push(format!("diff written to {}", path.display()));
+        report
+            .notes
+            .push(format!("diff written to {}", path.display()));
     }
 
     Ok(report)
@@ -361,8 +374,10 @@ fn update_entry(
                         report.file_with_notes(
                             &entry.dest,
                             Action::Changed,
-                            vec!["managed block regenerated; content outside markers untouched"
-                                .to_string()],
+                            vec![
+                                "managed block regenerated; content outside markers untouched"
+                                    .to_string(),
+                            ],
                         );
                     }
                     BlockOutcome::Appended => {
@@ -422,12 +437,18 @@ fn sync_user_owned_json(
         std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
     let mut user: serde_json::Value = serde_json::from_str(&current_text)?;
     let new_default: serde_json::Value = serde_json::from_str(rendered)?;
-    let old_default: Option<serde_json::Value> = Baseline::read(root, &entry.dest)
-        .and_then(|t| serde_json::from_str(&t).ok());
+    let old_default: Option<serde_json::Value> =
+        Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
 
     let mut added: Vec<String> = vec![];
     if old_default.is_some() {
-        add_new_keys(&mut user, old_default.as_ref(), &new_default, "", &mut added);
+        add_new_keys(
+            &mut user,
+            old_default.as_ref(),
+            &new_default,
+            "",
+            &mut added,
+        );
     }
 
     // Refresh the shipped-default baseline and record either way.
@@ -450,7 +471,8 @@ fn sync_user_owned_json(
     // keys were added and the user has not customized it past the default.
     let mut notes: Vec<String> = added.iter().map(|k| format!("added key {k}")).collect();
     if let (Some(user_sv), Some(new_sv)) = (
-        user.get("schema_version").and_then(serde_json::Value::as_u64),
+        user.get("schema_version")
+            .and_then(serde_json::Value::as_u64),
         new_default
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -587,7 +609,9 @@ fn prune_orphans(
             report.file_with_notes(
                 &dest,
                 Action::KeptUserModified,
-                vec!["no longer shipped; your modified copy kept and no longer managed".to_string()],
+                vec![
+                    "no longer shipped; your modified copy kept and no longer managed".to_string(),
+                ],
             );
             continue;
         }
@@ -635,10 +659,8 @@ mod tests {
 
     #[test]
     fn new_keys_added_deletions_respected_values_kept() {
-        let mut user: serde_json::Value = serde_json::from_str(
-            r#"{"schema_version":1,"git":{"commit_format":"warn"}}"#,
-        )
-        .unwrap();
+        let mut user: serde_json::Value =
+            serde_json::from_str(r#"{"schema_version":1,"git":{"commit_format":"warn"}}"#).unwrap();
         let old: serde_json::Value = serde_json::from_str(
             r#"{"schema_version":1,"git":{"commit_format":"block","secret_scan":"block"}}"#,
         )
@@ -650,7 +672,10 @@ mod tests {
         let mut added = vec![];
         add_new_keys(&mut user, Some(&old), &new, "", &mut added);
 
-        assert_eq!(added, vec!["git.push_signed".to_string(), "recall".to_string()]);
+        assert_eq!(
+            added,
+            vec!["git.push_signed".to_string(), "recall".to_string()]
+        );
         assert_eq!(user["git"]["commit_format"], "warn", "user value kept");
         assert!(
             user["git"].get("secret_scan").is_none(),

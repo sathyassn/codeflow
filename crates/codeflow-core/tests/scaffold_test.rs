@@ -121,7 +121,11 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
     };
 
     write("scaffold-manifest.toml", MANIFEST.trim_start());
-    let rules = if v2 { "rules v2 for {{PROJECT_NAME}}\nextra rule" } else { "rules v1 for {{PROJECT_NAME}}" };
+    let rules = if v2 {
+        "rules v2 for {{PROJECT_NAME}}\nextra rule"
+    } else {
+        "rules v1 for {{PROJECT_NAME}}"
+    };
     write(
         "AGENTS.md.tmpl",
         &format!(
@@ -243,8 +247,7 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 
 fn read(root: &Path, rel: &str) -> String {
-    std::fs::read_to_string(root.join(rel))
-        .unwrap_or_else(|e| panic!("read {rel}: {e}"))
+    std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
 fn action_of(report: &Report, dest: &str) -> Action {
@@ -252,8 +255,12 @@ fn action_of(report: &Report, dest: &str) -> Action {
         .files
         .iter()
         .find(|f| f.dest == dest)
-        .unwrap_or_else(|| panic!("no report entry for {dest}; have {:?}",
-            report.files.iter().map(|f| &f.dest).collect::<Vec<_>>()))
+        .unwrap_or_else(|| {
+            panic!(
+                "no report entry for {dest}; have {:?}",
+                report.files.iter().map(|f| &f.dest).collect::<Vec<_>>()
+            )
+        })
         .action
 }
 
@@ -302,13 +309,19 @@ fn fresh_init_empty_dir_bootstrap_grace() {
     assert!(product.contains("# proj"));
     assert!(product.contains("stack: unset"));
     assert!(product.contains("areas: core"));
-    assert!(product.contains("{{PRODUCT_PURPOSE}}"), "unknown placeholder survives");
+    assert!(
+        product.contains("{{PRODUCT_PURPOSE}}"),
+        "unknown placeholder survives"
+    );
     assert!(root.join(".codeflow/manifest.json").exists());
     assert!(root.join(".codeflow/.baseline/AGENTS.md").exists());
     assert!(root.join(".claude/settings.json").exists());
 
     // Hook wiring + exec bit.
-    assert_eq!(git(&root, &["config", "core.hooksPath"]), ".codeflow/git-hooks");
+    assert_eq!(
+        git(&root, &["config", "core.hooksPath"]),
+        ".codeflow/git-hooks"
+    );
     assert!(project_toml.contains("git_hooks = \"wired\""));
     #[cfg(unix)]
     {
@@ -321,10 +334,16 @@ fn fresh_init_empty_dir_bootstrap_grace() {
     }
 
     // Missing asset: skipped + warned, init still succeeded.
-    assert_eq!(action_of(&report, ".claude/agents/cf-reviewer.md"), Action::MissingAsset);
+    assert_eq!(
+        action_of(&report, ".claude/agents/cf-reviewer.md"),
+        Action::MissingAsset
+    );
     assert!(report.warnings.iter().any(|w| w.contains("cf-reviewer")));
     assert_eq!(action_of(&report, "AGENTS.md"), Action::Created);
-    assert_eq!(action_of(&report, ".github/workflows/codeflow-ci.yml"), Action::Created);
+    assert_eq!(
+        action_of(&report, ".github/workflows/codeflow-ci.yml"),
+        Action::Created
+    );
 }
 
 #[test]
@@ -343,7 +362,10 @@ fn fresh_init_leaves_clean_committable_tree() {
 
     // Nothing left uncommitted or untracked after a fresh init.
     let status = git(&root, &["status", "--porcelain"]);
-    assert!(status.is_empty(), "working tree not clean after init:\n{status}");
+    assert!(
+        status.is_empty(),
+        "working tree not clean after init:\n{status}"
+    );
 
     // The committed project.toml already carries the final wired + armed record,
     // so the working copy matches HEAD and a checkout/clone never resurrects a
@@ -364,7 +386,10 @@ fn init_minimal_tier_subset_enforces_full_policy() {
     assert!(root.join("AGENTS.md").exists());
     assert!(root.join(".gitignore").exists());
     assert!(root.join(".codeflow/git-hooks/pre-commit").exists());
-    assert!(!root.join(".claude/settings.json").exists(), "standard-only");
+    assert!(
+        !root.join(".claude/settings.json").exists(),
+        "standard-only"
+    );
     assert!(!root.join("docs/product.md").exists(), "standard-only");
     assert!(!root.join("project-management").exists(), "full-only");
 
@@ -378,7 +403,10 @@ fn init_minimal_tier_subset_enforces_full_policy() {
     // The fixture policy ships commit_format + secret_scan as block; the old
     // softening would have flipped commit_format to warn. Both stay block, so
     // minimal now enforces git discipline exactly like the other tiers.
-    assert_eq!(policy["git"]["commit_format"], "block", "enforced, not softened to warn");
+    assert_eq!(
+        policy["git"]["commit_format"], "block",
+        "enforced, not softened to warn"
+    );
     assert_eq!(policy["git"]["secret_scan"], "block", "never softened");
     assert!(read(&root, ".codeflow/project.toml").contains("tier = \"minimal\""));
 }
@@ -396,8 +424,14 @@ fn tier_upgrade_is_additive() {
 
     let report = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.0.0")).unwrap();
     assert_eq!(action_of(&report, "AGENTS.md"), Action::Unchanged);
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Created);
-    assert_eq!(action_of(&report, ".codeflow/git-hooks/pre-commit"), Action::Unchanged);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Created
+    );
+    assert_eq!(
+        action_of(&report, ".codeflow/git-hooks/pre-commit"),
+        Action::Unchanged
+    );
     assert!(read(&root, "AGENTS.md").contains("My own rules."));
     assert!(read(&root, ".codeflow/project.toml").contains("tier = \"standard\""));
 
@@ -432,7 +466,11 @@ fn full_tier_init_after_standard_reports_pm_templates_created() {
         .iter()
         .find(|f| f.dest == "project-management/templates/epic.md")
         .expect("pm template reported");
-    assert_eq!(epic.action, Action::Created, "did not pre-exist: must be created");
+    assert_eq!(
+        epic.action,
+        Action::Created,
+        "did not pre-exist: must be created"
+    );
     assert!(
         !epic.notes.iter().any(|n| n.contains("adopted")),
         "a freshly installed file must never be reported as adopted"
@@ -457,7 +495,11 @@ fn rerun_after_interrupted_init_reports_created_not_adopted() {
         .unwrap()
         .remove(".claude/workflows/develop.md")
         .expect("record existed");
-    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 
     let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
     let file = report
@@ -476,7 +518,10 @@ fn rerun_after_interrupted_init_reports_created_not_adopted() {
     );
     // The record is restored: a third run is a plain unchanged.
     let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Unchanged);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Unchanged
+    );
 }
 
 #[test]
@@ -496,7 +541,11 @@ fn init_adopts_genuinely_preexisting_identical_file_as_unchanged() {
         .iter()
         .find(|f| f.dest == ".claude/workflows/develop.md")
         .unwrap();
-    assert_eq!(file.action, Action::Unchanged, "pre-existing file: unchanged");
+    assert_eq!(
+        file.action,
+        Action::Unchanged,
+        "pre-existing file: unchanged"
+    );
     assert!(
         file.notes.iter().any(|n| n.contains("adopted as managed")),
         "adoption is reported, never silent"
@@ -511,7 +560,11 @@ fn init_into_existing_repo_is_nondestructive() {
 
     // A lived-in repo: commits, AGENTS.md, settings.json, husky, gitignore.
     git(&root, &["init", "--quiet"]);
-    std::fs::write(root.join("AGENTS.md"), "# My agents\n\ncustom instructions\n").unwrap();
+    std::fs::write(
+        root.join("AGENTS.md"),
+        "# My agents\n\ncustom instructions\n",
+    )
+    .unwrap();
     std::fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
     std::fs::create_dir_all(root.join(".claude")).unwrap();
     std::fs::write(
@@ -530,7 +583,15 @@ fn init_into_existing_repo_is_nondestructive() {
     git(&root, &["add", "-A"]);
     git(
         &root,
-        &["-c", "user.name=u", "-c", "user.email=u@x", "commit", "-qm", "chore: seed"],
+        &[
+            "-c",
+            "user.name=u",
+            "-c",
+            "user.email=u@x",
+            "commit",
+            "-qm",
+            "chore: seed",
+        ],
     );
 
     let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
@@ -554,20 +615,30 @@ fn init_into_existing_repo_is_nondestructive() {
     let settings: serde_json::Value =
         serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
     assert_eq!(settings["model"], "opus");
-    assert_eq!(settings["permissions"]["defaultMode"], "plan", "user value preserved");
+    assert_eq!(
+        settings["permissions"]["defaultMode"], "plan",
+        "user value preserved"
+    );
     let deny = settings["permissions"]["deny"].as_array().unwrap();
     assert!(deny.iter().any(|d| d == "Read(secrets/**)"));
     assert!(deny.iter().any(|d| d == "Read(**/.env)"));
-    let hooks = settings["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
+    let hooks = settings["hooks"]["PreToolUse"][0]["hooks"]
+        .as_array()
+        .unwrap();
     assert!(hooks.iter().any(|h| h["command"] == "./my-guard.sh"));
-    assert!(hooks.iter().any(|h| h["command"] == "codeflow hook git-guard"));
+    assert!(hooks
+        .iter()
+        .any(|h| h["command"] == "codeflow hook git-guard"));
     let merge_notes = &report
         .files
         .iter()
         .find(|f| f.dest == ".claude/settings.json")
         .unwrap()
         .notes;
-    assert!(merge_notes.iter().any(|n| n.contains("git-guard")), "merge report printed");
+    assert!(
+        merge_notes.iter().any(|n| n.contains("git-guard")),
+        "merge report printed"
+    );
 
     // husky: hooks left alone, recorded unwired, instructions printed.
     assert_eq!(git(&root, &["config", "core.hooksPath"]), "");
@@ -589,7 +660,11 @@ fn init_is_idempotent() {
     let agents_before = read(&root, "AGENTS.md");
     let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
 
-    assert_eq!(report.count(Action::Created), 0, "second run creates nothing");
+    assert_eq!(
+        report.count(Action::Created),
+        0,
+        "second run creates nothing"
+    );
     assert_eq!(report.count(Action::Changed), 0);
     assert_eq!(read(&root, "AGENTS.md"), agents_before);
     assert!(report.count(Action::Unchanged) > 0);
@@ -623,7 +698,10 @@ fn init_notes_codex_posture_when_codex_layer_present() {
         note.contains("permission preset"),
         "scopes the Claude Code preset: {note}"
     );
-    assert!(note.contains("`/hooks`"), "points at the one-time trust step: {note}");
+    assert!(
+        note.contains("`/hooks`"),
+        "points at the one-time trust step: {note}"
+    );
 }
 
 #[test]
@@ -649,13 +727,19 @@ fn init_force_overwrites_unmanaged_file() {
     std::fs::write(root.join(".claude/workflows/develop.md"), "mine\n").unwrap();
 
     let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Skipped);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Skipped
+    );
     assert_eq!(read(&root, ".claude/workflows/develop.md"), "mine\n");
 
     let mut forced = opts(None, "2.0.0");
     forced.force = true;
     let report = scaffold::init(&assets, &root, &forced).unwrap();
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Forced);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Forced
+    );
     assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V1);
 }
 
@@ -707,7 +791,10 @@ fn update_replaces_unmodified_managed_files() {
     let (_a2, assets_v2) = fixture_assets(true);
     let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
 
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Changed);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Changed
+    );
     assert_eq!(
         report.count(Action::Removed),
         0,
@@ -730,15 +817,22 @@ fn update_three_way_merges_user_modified_file() {
     let _v1 = init_v1(&root);
 
     // User edits the tail; upstream v2 edits the head. Disjoint = clean merge.
-    let mine = read(&root, ".claude/workflows/develop.md").replace("step eight", "step eight (mine)");
+    let mine =
+        read(&root, ".claude/workflows/develop.md").replace("step eight", "step eight (mine)");
     std::fs::write(root.join(".claude/workflows/develop.md"), &mine).unwrap();
 
     let (_a2, assets_v2) = fixture_assets(true);
     let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
 
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Merged);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Merged
+    );
     let merged = read(&root, ".claude/workflows/develop.md");
-    assert!(merged.contains("step one (improved)"), "upstream change applied");
+    assert!(
+        merged.contains("step one (improved)"),
+        "upstream change applied"
+    );
     assert!(merged.contains("step eight (mine)"), "user change kept");
     assert!(!root.join(".claude/workflows/develop.md.new").exists());
 }
@@ -760,7 +854,10 @@ fn update_twice_preserves_merged_user_edits() {
     let (_a2, assets_v2) = fixture_assets(true);
     // First update: clean 3-way merge (upstream head change + user tail edit).
     let r1 = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
-    assert_eq!(action_of(&r1, ".claude/workflows/develop.md"), Action::Merged);
+    assert_eq!(
+        action_of(&r1, ".claude/workflows/develop.md"),
+        Action::Merged
+    );
     let after1 = read(&root, ".claude/workflows/develop.md");
     assert!(after1.contains("step eight (mine)") && after1.contains("step one (improved)"));
 
@@ -788,9 +885,16 @@ fn update_conflict_writes_dot_new_and_never_clobbers() {
     let (_a2, assets_v2) = fixture_assets(true);
     let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
 
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Conflicted);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Conflicted
+    );
     assert!(report.has_conflicts());
-    assert_eq!(read(&root, ".claude/workflows/develop.md"), mine, "file untouched");
+    assert_eq!(
+        read(&root, ".claude/workflows/develop.md"),
+        mine,
+        "file untouched"
+    );
     assert_eq!(read(&root, ".claude/workflows/develop.md.new"), DEVELOP_V2);
     let notes = &report
         .files
@@ -816,7 +920,8 @@ fn update_prunes_orphaned_unmodified_managed_file() {
 
     let (a2, _) = fixture_assets(true);
     drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
-    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
 
     assert_eq!(
         action_of(&report, ".claude/workflows/develop.md"),
@@ -853,7 +958,8 @@ fn update_prunes_already_deleted_managed_orphan() {
 
     let (a2, _) = fixture_assets(true);
     drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
-    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
 
     assert_eq!(
         action_of(&report, ".claude/workflows/develop.md"),
@@ -878,11 +984,16 @@ fn update_keeps_user_modified_managed_orphan_unmanaged() {
     isolate_git();
     let (_p, root) = project_dir();
     let _v1 = init_v1(&root);
-    std::fs::write(root.join(".claude/workflows/develop.md"), "my own workflow\n").unwrap();
+    std::fs::write(
+        root.join(".claude/workflows/develop.md"),
+        "my own workflow\n",
+    )
+    .unwrap();
 
     let (a2, _) = fixture_assets(true);
     drop_manifest_entry(a2.path(), ".claude/workflows/develop.md");
-    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
 
     assert_eq!(
         action_of(&report, ".claude/workflows/develop.md"),
@@ -910,10 +1021,14 @@ fn update_never_deletes_user_owned_orphan() {
 
     let (a2, _) = fixture_assets(true);
     drop_manifest_entry(a2.path(), "docs/product.md");
-    let report = scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
 
     assert_eq!(action_of(&report, "docs/product.md"), Action::Skipped);
-    assert!(root.join("docs/product.md").exists(), "user-owned file kept");
+    assert!(
+        root.join("docs/product.md").exists(),
+        "user-owned file kept"
+    );
     assert!(
         !read(&root, ".codeflow/manifest.json").contains("docs/product.md"),
         "no longer managed"
@@ -1004,14 +1119,18 @@ fn update_settings_merge_preserves_foreign_keys() {
     assert_eq!(after["model"], "opus");
     let hooks = after["hooks"]["PreToolUse"][0]["hooks"].as_array().unwrap();
     assert!(hooks.iter().any(|h| h["command"] == "./mine.sh"));
-    assert!(hooks.iter().any(|h| h["command"] == "codeflow hook git-guard"));
+    assert!(hooks
+        .iter()
+        .any(|h| h["command"] == "codeflow hook git-guard"));
     assert_eq!(
-        after["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        "codeflow hook session-orient",
+        after["hooks"]["SessionStart"][0]["hooks"][0]["command"], "codeflow hook session-orient",
         "new v2 hook arrived"
     );
     let deny = after["permissions"]["deny"].as_array().unwrap();
-    assert!(deny.iter().any(|d| d == "Read(**/*.pem)"), "new v2 deny rule arrived");
+    assert!(
+        deny.iter().any(|d| d == "Read(**/*.pem)"),
+        "new v2 deny rule arrived"
+    );
 }
 
 #[test]
@@ -1024,7 +1143,10 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
     let mut policy: serde_json::Value =
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
     policy["git"]["commit_format"] = "warn".into();
-    policy["git"].as_object_mut().unwrap().remove("test_gate_on_push");
+    policy["git"]
+        .as_object_mut()
+        .unwrap()
+        .remove("test_gate_on_push");
     std::fs::write(
         root.join(".codeflow/policy.json"),
         serde_json::to_string_pretty(&policy).unwrap(),
@@ -1033,11 +1155,17 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
 
     let (_a2, assets_v2) = fixture_assets(true);
     let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
-    assert_eq!(action_of(&report, ".codeflow/policy.json"), Action::KeysAdded);
+    assert_eq!(
+        action_of(&report, ".codeflow/policy.json"),
+        Action::KeysAdded
+    );
 
     let after: serde_json::Value =
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-    assert_eq!(after["git"]["commit_format"], "warn", "user value never mutated");
+    assert_eq!(
+        after["git"]["commit_format"], "warn",
+        "user value never mutated"
+    );
     assert!(
         after["git"].get("test_gate_on_push").is_none(),
         "user deletion respected"
@@ -1067,7 +1195,10 @@ fn update_reinstalls_missing_managed_file() {
         &update_opts("2.0.0"),
     )
     .unwrap();
-    assert_eq!(action_of(&report, ".claude/workflows/develop.md"), Action::Added);
+    assert_eq!(
+        action_of(&report, ".claude/workflows/develop.md"),
+        Action::Added
+    );
     assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V1);
 }
 
@@ -1111,7 +1242,10 @@ fn update_ignore_glob_keeps_deleted_managed_file_deleted() {
     );
     // The user-owned opt-out round-trips through update's project.toml rewrite.
     let toml = read(&root, ".codeflow/project.toml");
-    assert!(toml.contains("[scaffold]") && toml.contains(".claude/**"), "opt-out preserved");
+    assert!(
+        toml.contains("[scaffold]") && toml.contains(".claude/**"),
+        "opt-out preserved"
+    );
 }
 
 #[test]
@@ -1148,7 +1282,11 @@ fn update_ignore_glob_does_not_prune_ignored_orphan() {
     let report =
         scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
 
-    assert_eq!(report.count(Action::Removed), 0, "ignored orphan not pruned");
+    assert_eq!(
+        report.count(Action::Removed),
+        0,
+        "ignored orphan not pruned"
+    );
     assert!(
         root.join(".claude/workflows/develop.md").exists(),
         "ignored orphan file kept on disk"

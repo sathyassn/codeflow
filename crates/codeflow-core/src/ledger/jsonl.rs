@@ -521,5 +521,4 @@ mod tests {
         assert_eq!(parsed["old_status"], "todo");
         assert_eq!(parsed["new_status"], "in_progress");
     }
-
 }

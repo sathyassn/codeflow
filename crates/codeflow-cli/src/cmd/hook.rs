@@ -105,9 +105,14 @@ fn git_guard(stdin: &str) -> i32 {
 /// branch cannot be read — the guard then falls back to the session branch.
 fn resolve_dir_branch(cwd: &std::path::Path, dir: &str) -> Option<String> {
     let p = std::path::Path::new(dir);
-    let abs = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    };
     let start = if abs.file_name().is_some_and(|n| n == ".git") {
-        abs.parent().map_or(abs.clone(), std::path::Path::to_path_buf)
+        abs.parent()
+            .map_or(abs.clone(), std::path::Path::to_path_buf)
     } else {
         abs
     };
@@ -181,10 +186,7 @@ fn session_summary(stdin: &str) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     match session_summary::record(&super::project_root(&cwd), stdin) {
         Ok(path) => {
-            eprintln!(
-                "codeflow session-summary: recorded to {}",
-                path.display()
-            );
+            eprintln!("codeflow session-summary: recorded to {}", path.display());
             0
         }
         Err(e) => {

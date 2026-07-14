@@ -192,7 +192,10 @@ mod tests {
         let source = DirSourceForTest(root);
         let manifest = ScaffoldManifest::load(&source).expect("shipped manifest loads");
         assert_eq!(manifest.schema_version, 1);
-        assert!(manifest.entries.len() >= 20, "expected a populated manifest");
+        assert!(
+            manifest.entries.len() >= 20,
+            "expected a populated manifest"
+        );
         // AGENTS.md is present at every tier: exactly one entry applies per tier
         // (two entries, one dest, selected by tier — the tier-honest split), and
         // the minimal tier gets the trimmed template.

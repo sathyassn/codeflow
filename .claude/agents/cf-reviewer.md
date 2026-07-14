@@ -23,7 +23,10 @@ itself a blocker finding — return changes_requested.
    one sentence on how it is satisfied. No evidence means not verified.
 4. Run the mechanical gates and capture their output:
    - `codeflow test`
-   - `codeflow validate --docs` (plain `codeflow validate` below full tier)
+   - `codeflow validate --docs` (the docs spine ships from standard tier up, and
+     `--docs` is tier-graceful — it skips any absent layer with a note, so run it
+     wherever `docs/` is installed; plain `codeflow validate` only at minimal
+     tier, which ships no docs spine)
 5. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when
    an ADR declares architecture impact, spec frozen at ship); commit subjects
@@ -35,7 +38,7 @@ itself a blocker finding — return changes_requested.
 
 Return exactly this structure:
 
-```
+```text
 verdict: approved | changes_requested
 
 criteria:

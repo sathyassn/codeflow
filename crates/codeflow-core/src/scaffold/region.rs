@@ -76,7 +76,12 @@ pub enum BlockOutcome {
 pub fn upsert_block(existing: &str, block: &str, format: RegionFormat) -> (String, BlockOutcome) {
     let lines: Vec<&str> = existing.lines().collect();
     let begin = lines.iter().position(|l| is_begin(l, format));
-    let end = begin.and_then(|b| lines[b..].iter().position(|l| is_end(l, format)).map(|e| e + b));
+    let end = begin.and_then(|b| {
+        lines[b..]
+            .iter()
+            .position(|l| is_end(l, format))
+            .map(|e| e + b)
+    });
 
     if let (Some(b), Some(e)) = (begin, end) {
         let current = lines[b..=e].join("\n");
@@ -129,7 +134,11 @@ fn block_interior(block: &str, format: RegionFormat) -> Vec<&str> {
     let Some(b) = lines.iter().position(|l| is_begin(l, format)) else {
         return Vec::new();
     };
-    let Some(e) = lines[b..].iter().position(|l| is_end(l, format)).map(|e| e + b) else {
+    let Some(e) = lines[b..]
+        .iter()
+        .position(|l| is_end(l, format))
+        .map(|e| e + b)
+    else {
         return Vec::new();
     };
     if e > b + 1 {
@@ -170,7 +179,10 @@ mod tests {
     #[test]
     fn extracts_block_inclusive_of_markers() {
         let doc = format!("# Title\n\n{BLOCK_V1}\n\ntail\n");
-        assert_eq!(extract_block(&doc, RegionFormat::Markdown).unwrap(), BLOCK_V1);
+        assert_eq!(
+            extract_block(&doc, RegionFormat::Markdown).unwrap(),
+            BLOCK_V1
+        );
     }
 
     #[test]
@@ -240,7 +252,10 @@ mod tests {
 
         let (out, outcome) = upsert_block(&dest, &block, RegionFormat::Markdown);
         assert_eq!(outcome, BlockOutcome::Replaced);
-        assert!(out.contains("# Project header"), "leading content preserved");
+        assert!(
+            out.contains("# Project header"),
+            "leading content preserved"
+        );
         assert!(
             out.contains("## My own section") && out.contains("keep me"),
             "trailing project content preserved:\n{out}"

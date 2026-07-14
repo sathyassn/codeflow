@@ -500,10 +500,7 @@ mod tests {
     #[test]
     fn template_path_is_correct() {
         let path = template_path(Path::new("/templates"), "minimal.json").unwrap();
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/templates/minimal.json")
-        );
+        assert_eq!(path, std::path::PathBuf::from("/templates/minimal.json"));
     }
 
     #[test]
@@ -557,7 +554,12 @@ mod tests {
     #[test]
     fn run_template_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_template(dir.path(), &assets_template_dir(), "nonexistent.json", false);
+        let result = run_template(
+            dir.path(),
+            &assets_template_dir(),
+            "nonexistent.json",
+            false,
+        );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Template not found"), "got: {err}");
@@ -566,7 +568,12 @@ mod tests {
     #[test]
     fn run_template_rejects_traversal() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_template(dir.path(), &assets_template_dir(), "../../etc/passwd", false);
+        let result = run_template(
+            dir.path(),
+            &assets_template_dir(),
+            "../../etc/passwd",
+            false,
+        );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Template not found"), "got: {err}");

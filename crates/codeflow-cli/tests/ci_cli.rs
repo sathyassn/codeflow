@@ -76,7 +76,15 @@ fn ci_with_body(dir: &Path, body: &str) -> Output {
     run_in(
         dir,
         &[
-            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x", "--pr-body", body,
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--pr-body",
+            body,
         ],
     )
 }
@@ -93,7 +101,9 @@ fn ci_absent_pr_body_skips_structure_check() {
     repo_with_range(dir.path(), "code");
     let out = run_in(
         dir.path(),
-        &["ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x"],
+        &[
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ],
     );
     assert_eq!(out.status.code(), Some(0));
     let all = format!(
@@ -102,7 +112,10 @@ fn ci_absent_pr_body_skips_structure_check() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(!all.contains("pr_sections"), "{all}");
-    assert!(!all.contains("PR-body"), "the summary must not claim a check that never ran: {all}");
+    assert!(
+        !all.contains("PR-body"),
+        "the summary must not claim a check that never ran: {all}"
+    );
 }
 
 #[test]
@@ -135,8 +148,15 @@ fn ci_empty_section_reported_as_present_but_empty() {
 fn ci_docs_only_range_does_not_require_code_sections() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "docs");
-    let out = ci_with_body(dir.path(), "## Summary\n\n- docs\n\n## Changes\n\n- reword a guide\n");
-    assert_eq!(out.status.code(), Some(0), "docs-only range must not require Testing");
+    let out = ci_with_body(
+        dir.path(),
+        "## Summary\n\n- docs\n\n## Changes\n\n- reword a guide\n",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "docs-only range must not require Testing"
+    );
 }
 
 #[test]
@@ -151,7 +171,11 @@ fn ci_warn_level_structure_reports_and_proceeds() {
     )
     .unwrap();
     let out = ci_with_body(dir.path(), "## Changes\n\n- one change\n");
-    assert_eq!(out.status.code(), Some(0), "warn-level structure must not fail CI");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "warn-level structure must not fail CI"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.pr_sections"), "{stderr}");
     assert!(stderr.contains("warning"), "{stderr}");
@@ -163,7 +187,11 @@ fn ci_template_remnants_warn_but_pass() {
     repo_with_range(dir.path(), "code");
     let body = format!("{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- CAP-\n");
     let out = ci_with_body(dir.path(), &body);
-    assert_eq!(out.status.code(), Some(0), "remnants alone must never fail CI");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "remnants alone must never fail CI"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("template remnant"), "{stderr}");
     assert!(stderr.contains("paste-your-output"), "{stderr}");
@@ -178,5 +206,8 @@ fn ci_full_body_on_code_range_is_clean() {
     let out = ci_with_body(dir.path(), FULL_BODY);
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("PR-body"), "the summary names the check that ran: {stdout}");
+    assert!(
+        stdout.contains("PR-body"),
+        "the summary names the check that ran: {stdout}"
+    );
 }

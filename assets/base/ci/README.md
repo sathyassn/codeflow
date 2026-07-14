@@ -12,7 +12,7 @@ way inline shell regex did (ADR-0017).
 Every file in this directory is therefore a **thin wrapper**: install the
 `codeflow` binary, then run
 
-```
+```text
 codeflow ci && codeflow test --strict && codeflow validate --docs
 ```
 

@@ -46,7 +46,12 @@ pub fn detect_hook_manager(root: &Path) -> Option<HookManager> {
     if root.join(".husky").is_dir() {
         return Some(HookManager::Husky);
     }
-    for f in ["lefthook.yml", ".lefthook.yml", "lefthook.toml", ".lefthook.toml"] {
+    for f in [
+        "lefthook.yml",
+        ".lefthook.yml",
+        "lefthook.toml",
+        ".lefthook.toml",
+    ] {
         if root.join(f).exists() {
             return Some(HookManager::Lefthook);
         }

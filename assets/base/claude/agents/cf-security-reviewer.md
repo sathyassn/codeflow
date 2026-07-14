@@ -98,7 +98,7 @@ injection, is Critical regardless of the numeric score.
 
 Emit exactly this schema so results merge, dedup, and gate mechanically:
 
-```
+```text
 SecurityFinding {
   id
   class:       { owasp: "A05:2025", owasp_llm?: "LLM01", cwe: "CWE-89" }

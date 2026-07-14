@@ -34,9 +34,10 @@ pub fn gather_answers(root: &Path) -> std::io::Result<InitAnswers> {
 
 /// [`gather_answers`] over any reader — the testable core.
 fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result<InitAnswers> {
-    let name = root
-        .file_name()
-        .map_or_else(|| "project".to_string(), |n| n.to_string_lossy().to_string());
+    let name = root.file_name().map_or_else(
+        || "project".to_string(),
+        |n| n.to_string_lossy().to_string(),
+    );
 
     let one_liner = ask(input, "Product one-liner (what is this project?)", &name)?;
     let areas = ask(input, "Areas (comma-separated)", "core")?;
@@ -77,7 +78,10 @@ mod tests {
     #[test]
     fn piped_answers_fill_all_three_questions() {
         let answers = gather("a discipline layer\nengine, scaffold, docs\nacceptEdits\n");
-        assert_eq!(answers.product_one_liner.as_deref(), Some("a discipline layer"));
+        assert_eq!(
+            answers.product_one_liner.as_deref(),
+            Some("a discipline layer")
+        );
         assert_eq!(
             answers.areas,
             Some(vec![
@@ -110,7 +114,10 @@ mod tests {
     #[test]
     fn unknown_preset_is_reasked_until_valid() {
         let answers = gather("p\ncore\nyolo\nbypassPermissions\n");
-        assert_eq!(answers.permission_preset.as_deref(), Some("bypassPermissions"));
+        assert_eq!(
+            answers.permission_preset.as_deref(),
+            Some("bypassPermissions")
+        );
     }
 
     #[test]

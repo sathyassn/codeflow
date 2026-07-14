@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::Path;
 
-use super::Event;
 use super::files;
+use super::Event;
 use super::LedgerError;
 
 /// Read all events for a single ledger type (base + fragments), sorted by timestamp.
