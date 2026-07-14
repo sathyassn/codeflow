@@ -20,8 +20,7 @@ use thiserror::Error;
 use crate::error::GitError;
 use crate::file_lock::{PathLock, lock_path_exclusive};
 use crate::git::conflict::{RebaseResult, attempt_rebase};
-use crate::security::SecurityPolicy;
-use crate::security::git::is_on_protected_branch;
+use crate::hooks::policy::Policy;
 use crate::testing::error::TestingError;
 use crate::testing::gate::{GateOutcome, run_gate};
 
@@ -173,8 +172,10 @@ pub fn integrate(
         return Err(IntegrateError::DirtyTree { files: dirty });
     }
 
-    let policy = SecurityPolicy::load(&repo_root.join(".codeflow/policy.json"));
-    let target_protected = is_on_protected_branch(target, &policy);
+    // Canonical policy (git.protected_branches with glob support), not the
+    // obsolete flat SecurityPolicy — so a custom protected target is honored.
+    let (policy, _) = Policy::load_effective(repo_root);
+    let target_protected = policy.git.branch_is_protected(target);
 
     let original = repo
         .head()
@@ -200,22 +201,32 @@ pub fn integrate(
     // Stage 3: test gate (full mode).
     let test_gate = run_test_stage(repo_root, &original)?;
 
-    // Stage 4: fast-forward merge under the gate-context token.
-    checkout(repo_root, target)?;
-    let merge = Command::new("git")
-        .args(["merge", "--ff-only", branch])
+    // Stage 4: fast-forward the target ref WITHOUT checking it out. The mandated
+    // worktree doctrine keeps a protected target checked out at the repo root, so
+    // a second `git checkout <target>` in a task worktree is refused by git.
+    // `update-ref` advances the ref in place — compare-and-swap against the
+    // pre-rebase oid (safe under concurrency), with the gate token set so the
+    // reference-transaction hook admits this sanctioned landing.
+    let branch_tip = resolve_branch(&repo, branch)?;
+    let update = Command::new("git")
+        .args([
+            "update-ref",
+            &format!("refs/heads/{target}"),
+            &branch_tip.to_string(),
+            &target_oid.to_string(),
+        ])
         .env(GATE_TOKEN_ENV, ulid::Ulid::new().to_string())
         .current_dir(repo_root)
         .output()
         .map_err(|e| IntegrateError::MergeFailed {
             target: target.to_string(),
-            message: format!("failed to run git merge: {e}"),
+            message: format!("failed to run git update-ref: {e}"),
         })?;
-    if !merge.status.success() {
+    if !update.status.success() {
         restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
             target: target.to_string(),
-            message: String::from_utf8_lossy(&merge.stderr).trim().to_string(),
+            message: String::from_utf8_lossy(&update.stderr).trim().to_string(),
         });
     }
 
@@ -224,12 +235,11 @@ pub fn integrate(
     let new_target_oid = resolve_branch(&repo, target)?;
     let commits_landed = count_commits(&repo, target_oid, new_target_oid);
 
-    let final_checkout = if original == target {
-        target.to_string()
-    } else {
-        restore_checkout(repo_root, &original);
-        original
-    };
+    // HEAD is still on `branch` (Stage 2). Return the caller to their original
+    // checkout; when that is the now-advanced target (integrate run from the
+    // target's own worktree), this updates its working tree to the landed tip.
+    restore_checkout(repo_root, &original);
+    let final_checkout = original;
 
     Ok(IntegrateOutcome {
         branch: branch.to_string(),
@@ -457,6 +467,42 @@ mod tests {
         let report = outcome.to_string();
         assert!(report.contains("integrated 'feat/x' into 'main'"));
         assert!(report.contains("test gate: passed"));
+    }
+
+    // codex round-2 (CF-11): the mandated topology keeps `main` checked out at
+    // the repo root and does feature work in a linked worktree. The old
+    // checkout-based merge could not land here — git refuses a second checkout
+    // of `main` — so integrate was unusable as documented. `update-ref` lands the
+    // fast-forward in place without touching the root worktree's checkout.
+    #[test]
+    fn lands_from_a_linked_worktree_while_target_checked_out_at_root() {
+        let dir = repo_with_feature_branch(); // main @ root, feat/x exists
+        let wt = tempfile::tempdir().unwrap();
+        let wt_path = wt.path().join("feat");
+        git(
+            dir.path(),
+            &["worktree", "add", wt_path.to_str().unwrap(), "feat/x"],
+        );
+
+        let before = branch_oid(dir.path(), "main");
+        let outcome =
+            integrate(&wt_path, "feat/x", "main").expect("integrate from a linked worktree lands");
+        let after = branch_oid(dir.path(), "main");
+
+        assert_ne!(before, after, "main must advance");
+        assert_eq!(
+            after,
+            branch_oid(dir.path(), "feat/x"),
+            "main == feat/x tip (fast-forward)"
+        );
+        assert_eq!(outcome.commits_landed, 1);
+        // The root worktree is never checked out away from main by integrate.
+        let root_head = String::from_utf8_lossy(
+            &git(dir.path(), &["symbolic-ref", "--short", "HEAD"]).stdout,
+        )
+        .trim()
+        .to_string();
+        assert_eq!(root_head, "main", "root worktree stays on main");
     }
 
     #[test]
