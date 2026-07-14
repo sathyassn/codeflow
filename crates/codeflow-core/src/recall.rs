@@ -192,9 +192,7 @@ fn md_files_in(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| {
-            p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
-        })
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")))
         .collect();
     files.sort();
     files
@@ -232,7 +230,9 @@ fn md_files_under(dir: &Path) -> Vec<PathBuf> {
                     pending.push((path, depth + 1));
                 }
             } else if metadata.is_file()
-                && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+                && path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("md"))
             {
                 files.push(path);
             }
@@ -247,7 +247,10 @@ fn rel_to(root: &Path, path: &Path) -> String {
 }
 
 fn display_rel_to(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root).unwrap_or(path).to_string_lossy().into_owned()
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(unix)]
@@ -311,7 +314,10 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
         let ledger_dir = state.join("ledger");
         for (types, kind) in [
             (
-                &[crate::ledger::files::WORK_GRAPH, crate::ledger::files::CONFIG][..],
+                &[
+                    crate::ledger::files::WORK_GRAPH,
+                    crate::ledger::files::CONFIG,
+                ][..],
                 "ledger",
             ),
             (
@@ -837,8 +843,13 @@ mod tests {
         assert_eq!(plan.title, "Charter");
 
         // Scope decision term reaches docs/product.md as its own kind.
-        let product_hit =
-            recall(&db, &targets, "D18 orchestration", &RecallOptions::default()).unwrap();
+        let product_hit = recall(
+            &db,
+            &targets,
+            "D18 orchestration",
+            &RecallOptions::default(),
+        )
+        .unwrap();
         let product = product_hit
             .results
             .iter()
@@ -919,7 +930,12 @@ mod tests {
         assert_eq!(second.stats.files_skipped, 1);
 
         // Changed content (size differs) → re-indexed and findable.
-        write_adr(repo.path(), "ADR-0001-a.md", "First", "alpha topic plus quokka detail");
+        write_adr(
+            repo.path(),
+            "ADR-0001-a.md",
+            "First",
+            "alpha topic plus quokka detail",
+        );
         let third = recall(&db, &targets, "quokka", &RecallOptions::default()).unwrap();
         assert_eq!(third.stats.files_indexed, 1);
         assert_eq!(third.results.len(), 1);
@@ -1072,7 +1088,10 @@ mod tests {
         let db = home.path().join("recall.db");
         let report = recall(
             &db,
-            &[target("proj-a", repo_a.path()), target("proj-b", repo_b.path())],
+            &[
+                target("proj-a", repo_a.path()),
+                target("proj-b", repo_b.path()),
+            ],
             "why did we choose SQLite FTS5 for recall",
             &RecallOptions::default(),
         )

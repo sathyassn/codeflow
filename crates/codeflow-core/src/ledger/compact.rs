@@ -354,9 +354,8 @@ fn read_events_from_file(path: &Path, events: &mut Vec<Event>) -> Result<(), Led
         if trimmed.is_empty() {
             continue;
         }
-        let event = serde_json::from_str::<Event>(trimmed).map_err(|e| {
-            LedgerError::Corrupt(format!("{}:{}: {e}", path.display(), i + 1))
-        })?;
+        let event = serde_json::from_str::<Event>(trimmed)
+            .map_err(|e| LedgerError::Corrupt(format!("{}:{}: {e}", path.display(), i + 1)))?;
         events.push(event);
     }
     Ok(())
@@ -587,7 +586,10 @@ mod tests {
         lock.lock_exclusive().unwrap();
 
         let result = compact_ledger_type(ledger_dir, "work-graph", None).unwrap();
-        assert_eq!(result.merged_count, 0, "compaction defers under a held lock");
+        assert_eq!(
+            result.merged_count, 0,
+            "compaction defers under a held lock"
+        );
         assert!(frag.exists(), "fragment untouched while deferred");
         drop(lock);
     }

@@ -672,7 +672,7 @@ mod tests {
                     "format": "lcov",
                     "path": "target/llvm-cov/lcov.info",
                     "rules": [
-                        {"scope": "changed_files", "minimum": 85}
+                        {"scope": "global", "minimum": 85}
                     ],
                     "exceptions": [{
                         "file": "core/src/autorun/worker.rs",
@@ -696,7 +696,7 @@ mod tests {
         let cov = t.coverage.as_ref().unwrap();
         assert_eq!(cov.format, CoverageFormat::Lcov);
         assert_eq!(cov.rules.len(), 1);
-        assert_eq!(cov.rules[0].scope, CoverageScope::ChangedFiles);
+        assert_eq!(cov.rules[0].scope, CoverageScope::Global);
         assert_eq!(cov.rules[0].minimum, 85);
         assert_eq!(cov.exceptions.len(), 1);
     }

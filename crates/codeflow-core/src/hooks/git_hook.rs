@@ -674,15 +674,18 @@ pub fn pre_push(
             report.violations.push(Violation::new(
                 "git.branch_naming",
                 policy.branch_naming,
+                format!("branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"),
                 format!(
-                    "branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"
+                    "rename with a sanctioned prefix: {}",
+                    policy.branch_prefixes.join(" ")
                 ),
-                format!("rename with a sanctioned prefix: {}", policy.branch_prefixes.join(" ")),
             ));
         }
     }
 
-    let pushes_branches = refs.iter().any(|r| r.remote_branch().is_some() && !r.is_delete());
+    let pushes_branches = refs
+        .iter()
+        .any(|r| r.remote_branch().is_some() && !r.is_delete());
     if pushes_branches && policy.test_gate_on_push.is_active() {
         run_test_gate(root, policy, &mut report);
     }
@@ -730,11 +733,14 @@ fn run_test_gate(root: &Path, policy: &GitPolicy, report: &mut StageReport) {
         Ok(GateOutcome::NoTargets { reason }) => {
             report.notes.push(format!("test gate skipped: {reason}"));
         }
-        Ok(GateOutcome::Completed { results, passed, .. }) => {
+        Ok(GateOutcome::Completed {
+            results, passed, ..
+        }) => {
             if passed {
-                report
-                    .notes
-                    .push(format!("quick test gate passed ({} target(s))", results.len()));
+                report.notes.push(format!(
+                    "quick test gate passed ({} target(s))",
+                    results.len()
+                ));
             } else {
                 let failed: Vec<String> = results
                     .iter()
@@ -751,9 +757,9 @@ fn run_test_gate(root: &Path, policy: &GitPolicy, report: &mut StageReport) {
             }
         }
         Err(e) => {
-            report
-                .notes
-                .push(format!("test gate skipped: test-config.json unreadable: {e}"));
+            report.notes.push(format!(
+                "test gate skipped: test-config.json unreadable: {e}"
+            ));
         }
     }
 }
@@ -885,12 +891,10 @@ mod tests {
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "DB_PASSWORD=hunter2hunter2\n");
         let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.secret_scan" && v.message.contains(".env"))
-        );
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.secret_scan" && v.message.contains(".env")));
     }
 
     #[test]
@@ -909,7 +913,10 @@ mod tests {
                 .any(|v| v.rule == "git.secret_scan"),
             "adding a dotenv file still blocks"
         );
-        git(dir.path(), &["commit", "-m", "chore: pre-adoption env file"]);
+        git(
+            dir.path(),
+            &["commit", "-m", "chore: pre-adoption env file"],
+        );
         git(dir.path(), &["rm", ".env"]);
         let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
         assert!(
@@ -976,7 +983,8 @@ mod tests {
         let report = commit_msg(
             &GitPolicy::default(),
             "feat: new api\n\nBREAKING CHANGE: removes the old one\n",
-        false);
+            false,
+        );
         assert!(report.violations.is_empty());
     }
 
@@ -986,13 +994,12 @@ mod tests {
         let report = commit_msg(
             &GitPolicy::default(),
             "feat: new api\n\nbreaking change: removes the old one\n",
-        false);
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.commit_format")
+            false,
         );
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_format"));
     }
 
     #[test]
@@ -1007,23 +1014,19 @@ mod tests {
         // AC #13: attribution trailer blocked at commit-msg.
         let msg = "feat: x\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n";
         let report = commit_msg(&GitPolicy::default(), msg, false);
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.ai_attribution")
-        );
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.ai_attribution"));
     }
 
     #[test]
     fn test_commit_msg_emoji_blocked() {
         let report = commit_msg(&GitPolicy::default(), "feat: ship \u{1F680}\n", false);
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.commit_emoji")
-        );
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_emoji"));
     }
 
     #[test]
@@ -1094,7 +1097,10 @@ mod tests {
         ] {
             let report = commit_msg(&GitPolicy::default(), msg, false);
             assert!(
-                report.violations.iter().any(|v| v.rule == "git.commit_body"),
+                report
+                    .violations
+                    .iter()
+                    .any(|v| v.rule == "git.commit_body"),
                 "{msg:?} should block by default"
             );
         }
@@ -1107,7 +1113,11 @@ mod tests {
             commit_footer_tokens: vec!["Refs".into()],
             ..GitPolicy::default()
         };
-        let report = commit_msg(&policy, "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n", false);
+        let report = commit_msg(
+            &policy,
+            "feat: add a thing\n\n- do it\n\nRefs: PROJ-142\n",
+            false,
+        );
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1122,15 +1132,25 @@ mod tests {
         let msg = "feat: x\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>\n";
         let report = commit_msg(&policy, msg, false);
         assert!(
-            report.violations.iter().any(|v| v.rule == "git.ai_attribution"),
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.ai_attribution"),
             "AI co-author must block via attribution"
         );
         assert!(
-            !report.violations.iter().any(|v| v.rule == "git.commit_body"),
+            !report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.commit_body"),
             "the opted-in trailer token must not trip the body-shape check"
         );
         // A human co-author with the token opted in clears both checks.
-        let human = commit_msg(&policy, "feat: x\n\nCo-authored-by: Ada <ada@example.com>\n", false);
+        let human = commit_msg(
+            &policy,
+            "feat: x\n\nCo-authored-by: Ada <ada@example.com>\n",
+            false,
+        );
         assert!(human.violations.is_empty(), "{:?}", human.violations);
     }
 
@@ -1140,7 +1160,10 @@ mod tests {
         // (human or AI alike) before attribution even matters.
         let msg = "feat: x\n\nCo-authored-by: Ada Lovelace <ada@example.com>\n";
         let report = commit_msg(&GitPolicy::default(), msg, false);
-        assert!(report.violations.iter().any(|v| v.rule == "git.commit_body"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_body"));
     }
 
     #[test]
@@ -1170,7 +1193,11 @@ mod tests {
             .expect("a missing-required-footer violation");
         assert_eq!(v.level, PolicyLevel::Block);
         // Present (the required token is implicitly allowed) → clean.
-        let ok = commit_msg(&policy, "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>\n", false);
+        let ok = commit_msg(
+            &policy,
+            "feat: x\n\n- do it\n\nSigned-off-by: Ada <ada@example.com>\n",
+            false,
+        );
         assert!(ok.violations.is_empty(), "{:?}", ok.violations);
     }
 
@@ -1179,7 +1206,10 @@ mod tests {
         // Default: no ticket keys configured → no commit_ticket finding at all,
         // and a stray `Refs:` blocks on shape (not opted in).
         let plain = commit_msg(&GitPolicy::default(), "feat: x\n\n- just a bullet\n", false);
-        assert!(!plain.violations.iter().any(|v| v.rule == "git.commit_ticket"));
+        assert!(!plain
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_ticket"));
     }
 
     #[test]
@@ -1192,7 +1222,10 @@ mod tests {
         let present = commit_msg(&policy, "feat: x\n\n- do it\n\nRefs: PROJ-1\n", false);
         assert!(present.violations.is_empty(), "{:?}", present.violations);
         let absent = commit_msg(&policy, "feat: x\n\n- do it\n", false);
-        assert!(!absent.violations.iter().any(|v| v.rule == "git.commit_ticket"));
+        assert!(!absent
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.commit_ticket"));
     }
 
     #[test]
@@ -1243,46 +1276,73 @@ mod tests {
         let files = vec!["src/api/routes.rs".to_string()];
         // A `!` subject marker suppresses the nudge...
         let bang = commit_msg_with_files(&watch_policy(), "feat!: drop a route\n", &files, false);
-        assert!(!bang.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+        assert!(!bang
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.breaking_watch_paths"));
         // ...and so does a BREAKING CHANGE footer.
         let footer = commit_msg_with_files(
             &watch_policy(),
             "feat: drop a route\n\nBREAKING CHANGE: the /old route is gone\n",
             &files,
-        false);
-        assert!(!footer.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+            false,
+        );
+        assert!(!footer
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
     #[test]
     fn test_watch_paths_untouched_does_not_warn() {
         let files = vec!["README.md".to_string(), "src/util/log.rs".to_string()];
-        let report = commit_msg_with_files(&watch_policy(), "docs: tidy the readme\n", &files, false);
-        assert!(!report.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+        let report =
+            commit_msg_with_files(&watch_policy(), "docs: tidy the readme\n", &files, false);
+        assert!(!report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
     #[test]
     fn test_watch_paths_empty_default_is_noop() {
         // The shipped default (no watched globs) never warns, even on any file.
         let files = vec!["src/api/routes.rs".to_string()];
-        let report = commit_msg_with_files(&GitPolicy::default(), "feat: tweak a route\n", &files, false);
-        assert!(!report.violations.iter().any(|v| v.rule == "git.breaking_watch_paths"));
+        let report = commit_msg_with_files(
+            &GitPolicy::default(),
+            "feat: tweak a route\n",
+            &files,
+            false,
+        );
+        assert!(!report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.breaking_watch_paths"));
     }
 
     #[test]
     fn test_commit_msg_ignores_comment_lines() {
         let msg = "feat: x\n# Co-Authored-By: Claude <noreply@anthropic.com>\n";
-        assert!(commit_msg(&GitPolicy::default(), msg, false).violations.is_empty());
+        assert!(commit_msg(&GitPolicy::default(), msg, false)
+            .violations
+            .is_empty());
     }
 
     #[test]
     fn test_commit_msg_ignores_scissors_section() {
         let msg = "feat: x\n# ------------------------ >8 ------------------------\ndiff: Generated with Claude\n";
-        assert!(commit_msg(&GitPolicy::default(), msg, false).violations.is_empty());
+        assert!(commit_msg(&GitPolicy::default(), msg, false)
+            .violations
+            .is_empty());
     }
 
     #[test]
     fn test_commit_msg_merge_subject_exempt_from_format() {
-        let report = commit_msg(&GitPolicy::default(), "Merge branch 'main' into feat/x\n", true);
+        let report = commit_msg(
+            &GitPolicy::default(),
+            "Merge branch 'main' into feat/x\n",
+            true,
+        );
         assert!(report.violations.is_empty());
     }
 
@@ -1360,8 +1420,12 @@ mod tests {
     #[test]
     fn test_ref_line_touches_local_branch() {
         assert!(ref_line_touches_local_branch("aaa bbb refs/heads/main"));
-        assert!(ref_line_touches_local_branch("aaa bbb refs/heads/release/2.0"));
-        assert!(!ref_line_touches_local_branch("aaa bbb refs/remotes/origin/main"));
+        assert!(ref_line_touches_local_branch(
+            "aaa bbb refs/heads/release/2.0"
+        ));
+        assert!(!ref_line_touches_local_branch(
+            "aaa bbb refs/remotes/origin/main"
+        ));
         assert!(!ref_line_touches_local_branch("aaa bbb refs/tags/v1"));
         assert!(!ref_line_touches_local_branch("aaa bbb HEAD"));
         assert!(!ref_line_touches_local_branch("garbage line"));
@@ -1369,7 +1433,10 @@ mod tests {
 
     /// Point `refs/remotes/origin/<branch>` at `oid` (a simulated fetched head).
     fn set_origin_ref(dir: &Path, branch: &str, oid: &str) {
-        git(dir, &["update-ref", &format!("refs/remotes/origin/{branch}"), oid]);
+        git(
+            dir,
+            &["update-ref", &format!("refs/remotes/origin/{branch}"), oid],
+        );
     }
 
     const ZERO40: &str = "0000000000000000000000000000000000000000";
@@ -1423,9 +1490,15 @@ mod tests {
         git(dir.path(), &["commit", "-m", "feat: x"]);
         let new = rev_parse(dir.path(), "HEAD");
         git(dir.path(), &["remote", "add", "upstream", "."]);
-        git(dir.path(), &["update-ref", "refs/remotes/upstream/main", &new]);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/upstream/main", &new],
+        );
         git(dir.path(), &["config", "branch.main.remote", "upstream"]);
-        git(dir.path(), &["config", "branch.main.merge", "refs/heads/main"]);
+        git(
+            dir.path(),
+            &["config", "branch.main.merge", "refs/heads/main"],
+        );
         let stdin = format!("{ZERO40} {new} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
@@ -1813,7 +1886,12 @@ mod tests {
             force_push_unprotected: PolicyLevel::Block,
             ..GitPolicy::default()
         };
-        let refs = [pref("refs/heads/feat/x", &c2_prime, "refs/heads/feat/x", &c2)];
+        let refs = [pref(
+            "refs/heads/feat/x",
+            &c2_prime,
+            "refs/heads/feat/x",
+            &c2,
+        )];
         let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
         let forced: Vec<_> = report
             .violations
@@ -1989,5 +2067,4 @@ mod tests {
         let real = commit_msg(&GitPolicy::default(), "Merge branch 'main'\n", true);
         assert!(real.violations.is_empty(), "real merge stays exempt");
     }
-
 }

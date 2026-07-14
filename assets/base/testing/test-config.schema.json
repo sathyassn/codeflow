@@ -214,7 +214,7 @@
       "properties": {
         "scope": {
           "type": "string",
-          "enum": ["per_file", "per_package", "per_module", "changed_files", "global"],
+          "enum": ["per_file", "per_package", "per_module", "global"],
           "description": "Coverage evaluation scope."
         },
         "include": {

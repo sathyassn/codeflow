@@ -67,7 +67,10 @@ pub fn run(args: &GitHookArgs) -> i32 {
     let token = super::integrate_token_present();
 
     let (plane, result) = match args.stage {
-        StageName::PreCommit => ("pre-commit", git_hook::pre_commit(&root, &policy.git, token)),
+        StageName::PreCommit => (
+            "pre-commit",
+            git_hook::pre_commit(&root, &policy.git, token),
+        ),
         StageName::CommitMsg => ("commit-msg", commit_msg(&root, &policy, &args.args)),
         StageName::PreMergeCommit => (
             "pre-merge-commit",
@@ -93,7 +96,10 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 }
             };
             let refs = git_hook::parse_push_refs(&stdin);
-            ("pre-push", git_hook::pre_push(&root, &policy.git, &refs, token))
+            (
+                "pre-push",
+                git_hook::pre_push(&root, &policy.git, &refs, token),
+            )
         }
     };
 
@@ -136,9 +142,12 @@ fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
         .human_authorization
         .authorizes_override(super::human_override_present());
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
-        Ok(report) => {
-            super::render_outcome("reference-transaction", &report.violations, &report.notes, 1)
-        }
+        Ok(report) => super::render_outcome(
+            "reference-transaction",
+            &report.violations,
+            &report.notes,
+            1,
+        ),
         Err(e) => {
             eprintln!("codeflow reference-transaction: warning: {e} — check skipped");
             0

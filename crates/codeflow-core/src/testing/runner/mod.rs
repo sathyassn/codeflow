@@ -414,7 +414,9 @@ fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandl
         let mut chunk = [0_u8; 8192];
         let mut truncated = false;
         loop {
-            let Ok(read) = pipe.read(&mut chunk) else { break };
+            let Ok(read) = pipe.read(&mut chunk) else {
+                break;
+            };
             if read == 0 {
                 break;
             }
@@ -434,9 +436,7 @@ fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandl
 
 /// Join a reader thread, yielding its captured bytes (empty if absent or the
 /// thread panicked — capture is best-effort and never masks the run result).
-fn join_reader(
-    handle: Option<std::thread::JoinHandle<CapturedOutput>>,
-) -> CapturedOutput {
+fn join_reader(handle: Option<std::thread::JoinHandle<CapturedOutput>>) -> CapturedOutput {
     handle
         .and_then(|h| h.join().ok())
         .unwrap_or(CapturedOutput {

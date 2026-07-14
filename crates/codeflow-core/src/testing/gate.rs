@@ -185,8 +185,10 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
     // summarize it. A missed threshold fails the gate verdict below; a run with
     // no coverage data is informational only.
     let coverage = if effective_mode == "full" {
-        let ok_runs: Vec<TargetRunResult> =
-            raw.iter().filter_map(|r| r.as_ref().ok().cloned()).collect();
+        let ok_runs: Vec<TargetRunResult> = raw
+            .iter()
+            .filter_map(|r| r.as_ref().ok().cloned())
+            .collect();
         collect_coverage_reports(&targets, &ok_runs)
     } else {
         Vec::new()
@@ -408,32 +410,54 @@ fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
 mod tests {
     fn cov(failed: usize) -> CoverageReport {
         CoverageReport {
-            target: "t".into(), overall_percent: Some(80.0),
-            thresholds_passed: 0, thresholds_failed: failed,
-            exceptions_applied: 0, failing_files: vec![], note: None,
+            target: "t".into(),
+            overall_percent: Some(80.0),
+            thresholds_passed: 0,
+            thresholds_failed: failed,
+            exceptions_applied: 0,
+            failing_files: vec![],
+            note: None,
             data_missing: false,
         }
     }
     fn cov_missing() -> CoverageReport {
         CoverageReport {
-            target: "t".into(), overall_percent: None,
-            thresholds_passed: 0, thresholds_failed: 0,
-            exceptions_applied: 0, failing_files: vec![],
-            note: Some("no coverage data collected".into()), data_missing: true,
+            target: "t".into(),
+            overall_percent: None,
+            thresholds_passed: 0,
+            thresholds_failed: 0,
+            exceptions_applied: 0,
+            failing_files: vec![],
+            note: Some("no coverage data collected".into()),
+            data_missing: true,
         }
     }
     fn ok_result() -> GateTargetResult {
         GateTargetResult {
-            name: "t".into(), exit_code: 0, duration_ms: 1,
-            stdout: String::new(), stderr: String::new(), error: None, report: None,
+            name: "t".into(),
+            exit_code: 0,
+            duration_ms: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: None,
+            report: None,
         }
     }
     #[test]
     fn test_coverage_threshold_fails_gate() {
         // codex pre-flip review: a missed coverage threshold must fail the gate.
-        assert!(gate_verdict(&[ok_result()], &[cov(0)]), "tests pass, coverage ok");
-        assert!(!gate_verdict(&[ok_result()], &[cov(1)]), "missed threshold fails");
-        assert!(gate_verdict(&[ok_result()], &[]), "no coverage config still passes");
+        assert!(
+            gate_verdict(&[ok_result()], &[cov(0)]),
+            "tests pass, coverage ok"
+        );
+        assert!(
+            !gate_verdict(&[ok_result()], &[cov(1)]),
+            "missed threshold fails"
+        );
+        assert!(
+            gate_verdict(&[ok_result()], &[]),
+            "no coverage config still passes"
+        );
     }
 
     // codex round-2: an enforcing coverage config whose artifact is missing/
@@ -478,9 +502,7 @@ mod tests {
 
     #[test]
     fn no_targets_allows_proceed() {
-        let outcome = GateOutcome::NoTargets {
-            reason: "x".into(),
-        };
+        let outcome = GateOutcome::NoTargets { reason: "x".into() };
         assert!(outcome.allows_proceed());
     }
 
@@ -491,7 +513,9 @@ mod tests {
 
         let outcome = run_gate(dir.path(), "full").unwrap();
         match outcome {
-            GateOutcome::Completed { results, passed, .. } => {
+            GateOutcome::Completed {
+                results, passed, ..
+            } => {
                 assert!(passed);
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].name, "ok");
@@ -509,7 +533,9 @@ mod tests {
         let outcome = run_gate(dir.path(), "full").unwrap();
         assert!(!outcome.allows_proceed());
         match outcome {
-            GateOutcome::Completed { results, passed, .. } => {
+            GateOutcome::Completed {
+                results, passed, ..
+            } => {
                 assert!(!passed);
                 assert_eq!(results[0].exit_code, 3);
             }
@@ -554,7 +580,11 @@ mod tests {
                 assert_eq!(rep.passed, 1);
                 assert_eq!(rep.failed, 1);
                 assert_eq!(rep.failures.len(), 1);
-                assert!(rep.failures[0].id.contains("test_bad"), "{:?}", rep.failures[0]);
+                assert!(
+                    rep.failures[0].id.contains("test_bad"),
+                    "{:?}",
+                    rep.failures[0]
+                );
                 assert_eq!(rep.failures[0].location.as_deref(), Some("src/lib.rs:42"));
             }
             GateOutcome::NoTargets { reason } => panic!("expected run, got NoTargets: {reason}"),
@@ -634,7 +664,9 @@ mod tests {
 
         let outcome = run_gate(dir.path(), "quick").unwrap();
         match outcome {
-            GateOutcome::Completed { results, passed, .. } => {
+            GateOutcome::Completed {
+                results, passed, ..
+            } => {
                 assert!(passed, "quick must run the essential command set");
                 assert_eq!(results.len(), 1);
                 assert!(results[0].passed());

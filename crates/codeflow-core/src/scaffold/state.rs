@@ -143,26 +143,31 @@ impl ScaffoldConfig {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(ScaffoldError::io(&path, e)),
         };
-        let table: toml::Table = toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-            what: PROJECT_TOML.to_string(),
-            detail: e.to_string(),
-        })?;
+        let table: toml::Table =
+            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?;
         let ignore = match table.get("scaffold") {
             None => Vec::new(),
             Some(value) => {
-                let section = value.as_table().ok_or_else(|| ScaffoldError::InvalidState {
-                    what: PROJECT_TOML.to_string(),
-                    detail: "scaffold: expected a table".to_string(),
-                })?;
+                let section = value
+                    .as_table()
+                    .ok_or_else(|| ScaffoldError::InvalidState {
+                        what: PROJECT_TOML.to_string(),
+                        detail: "scaffold: expected a table".to_string(),
+                    })?;
                 match section.get("ignore") {
                     None => Vec::new(),
                     Some(value) => {
-                        let entries = value.as_array().ok_or_else(|| {
-                            ScaffoldError::InvalidState {
-                                what: PROJECT_TOML.to_string(),
-                                detail: "scaffold.ignore: expected an array of strings".to_string(),
-                            }
-                        })?;
+                        let entries =
+                            value
+                                .as_array()
+                                .ok_or_else(|| ScaffoldError::InvalidState {
+                                    what: PROJECT_TOML.to_string(),
+                                    detail: "scaffold.ignore: expected an array of strings"
+                                        .to_string(),
+                                })?;
                         entries
                             .iter()
                             .enumerate()
@@ -246,9 +251,7 @@ impl InstalledManifest {
         let path = Self::path(root);
         match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text).map_err(ScaffoldError::from),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Self::new(scaffold_version))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new(scaffold_version)),
             Err(e) => Err(ScaffoldError::io(&path, e)),
         }
     }
@@ -304,10 +307,16 @@ impl Baseline {
 /// Creates parent directories and atomically writes `bytes` to `path`.
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
     let parent = path.parent().ok_or_else(|| {
-        ScaffoldError::io(path, std::io::Error::other("destination has no parent directory"))
+        ScaffoldError::io(
+            path,
+            std::io::Error::other("destination has no parent directory"),
+        )
     })?;
     std::fs::create_dir_all(parent).map_err(|e| ScaffoldError::io(parent, e))?;
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("file");
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
     let temp_path = parent.join(format!(".{file_name}.{}.tmp", ulid::Ulid::new()));
 
     let result = (|| {
@@ -365,7 +374,11 @@ pub(crate) fn guard_beneath_root(root: &Path, rel: &Path) -> Result<PathBuf, Sca
             Component::Normal(seg) => cur.push(seg),
             // Absolute / `..` / prefix components can only escape; `root.join`
             // would resolve them away from the tree. Refuse rather than trust.
-            _ => return Err(ScaffoldError::UnsafeSymlink { path: rel.to_path_buf() }),
+            _ => {
+                return Err(ScaffoldError::UnsafeSymlink {
+                    path: rel.to_path_buf(),
+                })
+            }
         }
         match std::fs::symlink_metadata(&cur) {
             Ok(meta) if meta.file_type().is_symlink() => {
@@ -391,7 +404,11 @@ pub(crate) fn read_beneath_root(root: &Path, rel: &str) -> Result<Option<String>
 
 /// Repo-relative write that refuses to follow a symlink (leaf or ancestor),
 /// creating parent directories as needed.
-pub(crate) fn write_beneath_root(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), ScaffoldError> {
+pub(crate) fn write_beneath_root(
+    root: &Path,
+    rel: &str,
+    bytes: &[u8],
+) -> Result<(), ScaffoldError> {
     let path = guard_beneath_root(root, Path::new(rel))?;
     write_file(&path, bytes)
 }
@@ -475,14 +492,23 @@ mod tests {
             ],
         };
         assert!(cfg.is_ignored(".codex/config.toml"));
-        assert!(cfg.is_ignored(".codex/agents/foo.md"), "** spans path segments");
+        assert!(
+            cfg.is_ignored(".codex/agents/foo.md"),
+            "** spans path segments"
+        );
         assert!(cfg.is_ignored(".github/workflows/ci.yml"));
-        assert!(cfg.is_ignored(".claude/settings.json"), "exact path matches");
+        assert!(
+            cfg.is_ignored(".claude/settings.json"),
+            "exact path matches"
+        );
         assert!(
             !cfg.is_ignored(".github/workflows/nested/ci.yml"),
             "* stays within a single path segment"
         );
-        assert!(!cfg.is_ignored(".claude/workflows/develop.md"), "unrelated path kept");
+        assert!(
+            !cfg.is_ignored(".claude/workflows/develop.md"),
+            "unrelated path kept"
+        );
 
         assert!(
             !ScaffoldConfig::default().is_ignored(".codex/config.toml"),
@@ -500,13 +526,22 @@ mod tests {
         )
         .unwrap();
         let cfg = ScaffoldConfig::load(root).unwrap();
-        assert_eq!(cfg.ignore, vec![".codex/**".to_string(), ".github/**".to_string()]);
+        assert_eq!(
+            cfg.ignore,
+            vec![".codex/**".to_string(), ".github/**".to_string()]
+        );
 
         // Missing file and absent section both yield an empty (no-op) config.
         let empty = tempfile::tempdir().unwrap();
-        assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
+        assert!(ScaffoldConfig::load(empty.path())
+            .unwrap()
+            .ignore
+            .is_empty());
         write_file(&ProjectState::path(empty.path()), b"schema_version = 1\n").unwrap();
-        assert!(ScaffoldConfig::load(empty.path()).unwrap().ignore.is_empty());
+        assert!(ScaffoldConfig::load(empty.path())
+            .unwrap()
+            .ignore
+            .is_empty());
     }
 
     #[test]

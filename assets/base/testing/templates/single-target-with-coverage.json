@@ -29,10 +29,6 @@
           {
             "scope": "per_file",
             "minimum": 85
-          },
-          {
-            "scope": "changed_files",
-            "minimum": 85
           }
         ],
         "exceptions": [

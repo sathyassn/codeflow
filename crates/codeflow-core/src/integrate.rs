@@ -18,11 +18,11 @@ use std::process::Command;
 use thiserror::Error;
 
 use crate::error::GitError;
-use crate::file_lock::{PathLock, lock_path_exclusive};
-use crate::git::conflict::{RebaseResult, attempt_rebase};
+use crate::file_lock::{lock_path_exclusive, PathLock};
+use crate::git::conflict::{attempt_rebase, RebaseResult};
 use crate::hooks::policy::Policy;
 use crate::testing::error::TestingError;
-use crate::testing::gate::{GateOutcome, run_gate};
+use crate::testing::gate::{run_gate, GateOutcome};
 
 /// Environment variable carrying the gate-context token during the
 /// integrate merge. The git hooks and git-guard (workstream f-hooks) check
@@ -302,7 +302,9 @@ pub fn integrate(
 fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
     match run_gate(repo_root, "full") {
         Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
-        Ok(GateOutcome::Completed { results, passed, .. }) => {
+        Ok(GateOutcome::Completed {
+            results, passed, ..
+        }) => {
             if passed {
                 return Ok(TestGateSummary::Passed {
                     targets: results.into_iter().map(|r| r.name).collect(),
@@ -344,9 +346,9 @@ fn resolve_branch(repo: &git2::Repository, name: &str) -> Result<git2::Oid, Inte
             IntegrateError::Preflight(format!("branch '{name}' not found in this repository"))
         })
         .and_then(|b| {
-            b.get().target().ok_or_else(|| {
-                IntegrateError::Preflight(format!("branch '{name}' has no commit"))
-            })
+            b.get()
+                .target()
+                .ok_or_else(|| IntegrateError::Preflight(format!("branch '{name}' has no commit")))
         })
 }
 
@@ -438,15 +440,15 @@ fn refresh_target_worktrees(
         return warnings;
     }
 
-    let current = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
+    let current = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
     for record in String::from_utf8_lossy(&output.stdout).split("\n\n") {
         let path = record
             .lines()
             .find_map(|line| line.strip_prefix("worktree "))
             .map(PathBuf::from);
-        let branch = record
-            .lines()
-            .find_map(|line| line.strip_prefix("branch "));
+        let branch = record.lines().find_map(|line| line.strip_prefix("branch "));
         if branch != Some(&format!("refs/heads/{target}")) {
             continue;
         }
@@ -658,11 +660,10 @@ mod tests {
         );
         assert_eq!(outcome.commits_landed, 1);
         // The root worktree is never checked out away from main by integrate.
-        let root_head = String::from_utf8_lossy(
-            &git(dir.path(), &["symbolic-ref", "--short", "HEAD"]).stdout,
-        )
-        .trim()
-        .to_string();
+        let root_head =
+            String::from_utf8_lossy(&git(dir.path(), &["symbolic-ref", "--short", "HEAD"]).stdout)
+                .trim()
+                .to_string();
         assert_eq!(root_head, "main", "root worktree stays on main");
         assert_eq!(
             fs::read_to_string(dir.path().join("feature.txt")).unwrap(),
@@ -684,7 +685,10 @@ mod tests {
 
         let outcome = integrate(dir.path(), "feat/x", "main")
             .expect("the landed ref is a partial success, not a failed integration");
-        assert_eq!(branch_oid(dir.path(), "main"), branch_oid(dir.path(), "feat/x"));
+        assert_eq!(
+            branch_oid(dir.path(), "main"),
+            branch_oid(dir.path(), "feat/x")
+        );
         assert!(
             outcome
                 .warnings
@@ -736,7 +740,12 @@ mod tests {
         git(dir.path(), &["init", "-b", "main"]);
         commit_file(dir.path(), "file.txt", "base\n", "chore: initial commit");
         git(dir.path(), &["checkout", "-b", "feat/x"]);
-        commit_file(dir.path(), "file.txt", "branch change\n", "feat: branch edit");
+        commit_file(
+            dir.path(),
+            "file.txt",
+            "branch change\n",
+            "feat: branch edit",
+        );
         git(dir.path(), &["checkout", "main"]);
         commit_file(dir.path(), "file.txt", "main change\n", "fix: main edit");
 
