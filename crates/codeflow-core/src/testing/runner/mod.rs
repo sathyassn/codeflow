@@ -23,6 +23,10 @@ const TIMEOUT_EXIT_CODE: i32 = 124;
 /// Polling interval while waiting for a target command to finish.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Maximum retained bytes for each child output stream. Readers keep the tail
+/// so the most recent failure context survives noisy commands.
+const OUTPUT_CAPTURE_LIMIT: usize = 1024 * 1024;
+
 /// Result of running a single target's test command.
 #[derive(Debug, Clone)]
 pub struct TargetRunResult {
@@ -30,6 +34,8 @@ pub struct TargetRunResult {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
     pub duration_ms: u64,
     pub report_path: Option<PathBuf>,
     pub coverage_path: Option<PathBuf>,
@@ -88,6 +94,8 @@ pub fn run_target(
         exit_code,
         stdout: outcome.stdout,
         stderr,
+        stdout_truncated: outcome.stdout_truncated,
+        stderr_truncated: outcome.stderr_truncated,
         duration_ms,
         report_path,
         coverage_path,
@@ -291,6 +299,8 @@ struct CommandOutcome {
     stdout: String,
     stderr: String,
     timed_out: bool,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
 }
 
 fn spawn_command(
@@ -382,25 +392,66 @@ fn spawn_command(
 
     Ok(CommandOutcome {
         exit_code: status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        stdout: render_capture(&stdout),
+        stderr: render_capture(&stderr),
         timed_out,
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
     })
 }
 
-/// Spawn a thread that drains a child pipe to EOF, returning the raw bytes.
-fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
+struct CapturedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+/// Spawn a thread that drains a child pipe to EOF while retaining a bounded
+/// tail. Draining continues after the cap so the child cannot block on a full
+/// pipe.
+fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<CapturedOutput> {
     std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        buf
+        let mut retained = Vec::with_capacity(OUTPUT_CAPTURE_LIMIT);
+        let mut chunk = [0_u8; 8192];
+        let mut truncated = false;
+        loop {
+            let Ok(read) = pipe.read(&mut chunk) else { break };
+            if read == 0 {
+                break;
+            }
+            retained.extend_from_slice(&chunk[..read]);
+            if retained.len() > OUTPUT_CAPTURE_LIMIT {
+                let excess = retained.len() - OUTPUT_CAPTURE_LIMIT;
+                retained.drain(..excess);
+                truncated = true;
+            }
+        }
+        CapturedOutput {
+            bytes: retained,
+            truncated,
+        }
     })
 }
 
 /// Join a reader thread, yielding its captured bytes (empty if absent or the
 /// thread panicked — capture is best-effort and never masks the run result).
-fn join_reader(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default()
+fn join_reader(
+    handle: Option<std::thread::JoinHandle<CapturedOutput>>,
+) -> CapturedOutput {
+    handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or(CapturedOutput {
+            bytes: Vec::new(),
+            truncated: false,
+        })
+}
+
+fn render_capture(capture: &CapturedOutput) -> String {
+    let content = String::from_utf8_lossy(&capture.bytes);
+    if capture.truncated {
+        format!("[codeflow test] output truncated; retained last {OUTPUT_CAPTURE_LIMIT} bytes\n{content}")
+    } else {
+        content.into_owned()
+    }
 }
 
 /// Validate an environment variable key.
@@ -496,6 +547,23 @@ mod tests {
         assert_eq!(result.target_name, "test");
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("hello"));
+    }
+
+    #[test]
+    fn test_run_target_caps_output_and_flags_truncation() {
+        let target = make_target(
+            "noisy",
+            "yes x | head -c 1100000; yes e | head -c 1100000 >&2",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_target(&target, "full", dir.path()).unwrap();
+
+        assert!(result.stdout_truncated);
+        assert!(result.stderr_truncated);
+        assert!(result.stdout.contains("output truncated"));
+        assert!(result.stderr.contains("output truncated"));
+        assert!(result.stdout.len() < 1_050_000);
+        assert!(result.stderr.len() < 1_050_000);
     }
 
     #[test]
