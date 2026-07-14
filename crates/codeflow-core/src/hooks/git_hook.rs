@@ -63,14 +63,19 @@ pub fn pre_commit(
     }
 
     if policy.secret_scan.is_active() {
-        scan_staged(&repo, policy, &mut report);
+        scan_staged(&repo, policy, &mut report, false);
     }
 
     Ok(report)
 }
 
 /// Scan the staged diff (index vs HEAD) for .env files and secret content.
-fn scan_staged(repo: &Repository, policy: &GitPolicy, report: &mut StageReport) {
+fn scan_staged(
+    repo: &Repository,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+    abort_traversal_for_test: bool,
+) {
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
     let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), None, None) else {
         report
@@ -102,11 +107,14 @@ fn scan_staged(repo: &Repository, policy: &GitPolicy, report: &mut StageReport) 
     }
 
     let mut hits: Vec<scan::SecretHit> = Vec::new();
-    let _ = diff.foreach(
+    let traversal = diff.foreach(
         &mut |_, _| true,
         None,
         None,
         Some(&mut |delta, _hunk, line| {
+            if abort_traversal_for_test {
+                return false;
+            }
             if line.origin() == '+' {
                 let content = String::from_utf8_lossy(line.content());
                 if let Some(pattern) = scan::scan_line(&content) {
@@ -124,6 +132,15 @@ fn scan_staged(repo: &Repository, policy: &GitPolicy, report: &mut StageReport) 
             true
         }),
     );
+    if let Err(error) = traversal {
+        report.violations.push(Violation::new(
+            "git.secret_scan",
+            policy.secret_scan,
+            format!("staged secret scan incomplete: {error}"),
+            "retry the commit after the staged diff can be scanned completely".to_string(),
+        ));
+        return;
+    }
     for hit in hits {
         report.violations.push(Violation::new(
             "git.secret_scan",
@@ -801,6 +818,24 @@ mod tests {
         stage(dir.path(), "src/lib.rs", "pub fn hello() {}\n");
         let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_secret_scan_traversal_error_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "src/lib.rs", "pub fn changed() {}\n");
+        let repo = Repository::open(dir.path()).unwrap();
+        let policy = GitPolicy::default();
+        let mut report = StageReport::default();
+
+        scan_staged(&repo, &policy, &mut report, true);
+
+        assert!(report.violations.iter().any(|violation| {
+            violation.rule == "git.secret_scan"
+                && violation.message.contains("scan incomplete")
+                && violation.level == PolicyLevel::Block
+        }));
     }
 
     #[test]

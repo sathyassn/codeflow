@@ -85,8 +85,13 @@ pub fn run(args: &GitHookArgs) -> i32 {
         ),
         StageName::ReferenceTransaction => unreachable!("handled above"),
         StageName::PrePush => {
-            let mut stdin = String::new();
-            let _ = std::io::stdin().read_to_string(&mut stdin);
+            let stdin = match read_hook_input(std::io::stdin(), "pre-push") {
+                Ok(stdin) => stdin,
+                Err(note) => {
+                    eprintln!("{note}");
+                    String::new()
+                }
+            };
             let refs = git_hook::parse_push_refs(&stdin);
             ("pre-push", git_hook::pre_push(&root, &policy.git, &refs, token))
         }
@@ -111,10 +116,13 @@ fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
     if args.first().map(String::as_str) != Some("prepared") {
         return 0;
     }
-    let mut stdin = String::new();
-    if std::io::stdin().read_to_string(&mut stdin).is_err() {
-        return 0;
-    }
+    let stdin = match read_hook_input(std::io::stdin(), "reference-transaction") {
+        Ok(stdin) => stdin,
+        Err(note) => {
+            eprintln!("{note}");
+            return 0;
+        }
+    };
     // Fast path: no local-branch update in this transaction (e.g. a fetch that
     // only moved remote-tracking refs) — allow without loading policy.
     if !stdin.lines().any(git_hook::ref_line_touches_local_branch) {
@@ -134,6 +142,39 @@ fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
         Err(e) => {
             eprintln!("codeflow reference-transaction: warning: {e} — check skipped");
             0
+        }
+    }
+}
+
+fn read_hook_input(mut reader: impl Read, stage: &str) -> Result<String, String> {
+    let mut input = String::new();
+    reader.read_to_string(&mut input).map_err(|error| {
+        format!(
+            "codeflow {stage}: warning: could not read hook stdin ({error}) — \
+             ref checks degraded; server-side CI remains authoritative"
+        )
+    })?;
+    Ok(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("stdin unavailable"))
+        }
+    }
+
+    #[test]
+    fn stdin_failure_note_names_degraded_stage() {
+        for stage in ["pre-push", "reference-transaction"] {
+            let note = read_hook_input(FailingReader, stage).unwrap_err();
+            assert!(note.contains(stage), "{note}");
+            assert!(note.contains("ref checks degraded"), "{note}");
         }
     }
 }
