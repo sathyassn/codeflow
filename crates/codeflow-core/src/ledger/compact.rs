@@ -120,15 +120,17 @@ pub fn compact_ledger_type(
     }
     fs::rename(&tmp_path, &base_path)?;
 
-    // Delete merged fragments.
+    // Delete merged fragments. The sidecar `.jsonl.lock` files are left in
+    // place on purpose: unlinking a lock while a flock is held on that inode
+    // splits the lock namespace — a writer holding the old inode and a writer
+    // that creates a new inode at the same path would no longer be mutually
+    // exclusive. Lock files are empty and few (one per session), so keeping
+    // them is cheap and correct.
     let mut deleted_files = Vec::new();
     for frag_path in &fragments {
         if fs::remove_file(frag_path).is_ok() {
             deleted_files.push(frag_path.clone());
         }
-        // Also remove lock file for the fragment.
-        let frag_lock = frag_path.with_extension("jsonl.lock");
-        let _ = fs::remove_file(&frag_lock);
     }
 
     let merged_count = deleted_files.len();
@@ -567,5 +569,28 @@ mod tests {
         assert_eq!(result.merged_count, 0, "compaction defers under a held lock");
         assert!(frag.exists(), "fragment untouched while deferred");
         drop(lock);
+    }
+
+    // codex round-4: unlinking a held lock splits the lock namespace — the
+    // sidecar `.jsonl.lock` must survive compaction even as its fragment is merged.
+    #[test]
+    fn test_compaction_keeps_sidecar_lock_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger_dir = dir.path();
+        setup_sessions_with_end(ledger_dir, "ses-done");
+        let wg_dir = ledger_dir.join("work-graph");
+        fs::create_dir_all(&wg_dir).unwrap();
+        let frag = wg_dir.join("work-graph-ses-done.jsonl");
+        write_line(
+            &frag,
+            r#"{"event":"task_created","timestamp":"2026-01-01T00:00:00Z","session_id":"ses-done"}"#,
+        );
+        let frag_lock = frag.with_extension("jsonl.lock");
+        fs::write(&frag_lock, b"").unwrap();
+
+        let result = compact_ledger_type(ledger_dir, "work-graph", None).unwrap();
+        assert_eq!(result.merged_count, 1);
+        assert!(!frag.exists(), "fragment is merged and removed");
+        assert!(frag_lock.exists(), "sidecar lock must not be unlinked");
     }
 }
