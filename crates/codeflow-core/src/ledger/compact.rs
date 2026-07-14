@@ -119,6 +119,7 @@ pub fn compact_ledger_type(
         f.sync_all()?;
     }
     fs::rename(&tmp_path, &base_path)?;
+    sync_directory(&subdir)?;
 
     // Delete merged fragments. The sidecar `.jsonl.lock` files are left in
     // place on purpose: unlinking a lock while a flock is held on that inode
@@ -132,6 +133,7 @@ pub fn compact_ledger_type(
             deleted_files.push(frag_path.clone());
         }
     }
+    sync_directory(&subdir)?;
 
     let merged_count = deleted_files.len();
 
@@ -151,6 +153,19 @@ pub fn compact_ledger_type(
             current_session_id,
         ),
     })
+}
+
+fn sync_directory(path: &Path) -> Result<(), LedgerError> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    #[cfg(test)]
+    DIRECTORY_SYNC_COUNT.with(|count| count.set(count.get() + 1));
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static DIRECTORY_SYNC_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Compact all ledger types.
@@ -382,6 +397,7 @@ mod tests {
 
     #[test]
     fn test_compact_merges_completed_fragment() {
+        DIRECTORY_SYNC_COUNT.with(|count| count.set(0));
         let dir = tempfile::tempdir().unwrap();
         let ledger_dir = dir.path();
 
@@ -417,6 +433,11 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("task_created"));
         assert!(lines[1].contains("task_status_changed"));
+        assert_eq!(
+            DIRECTORY_SYNC_COUNT.with(std::cell::Cell::get),
+            2,
+            "directory must sync after rename and after fragment deletion"
+        );
     }
 
     #[test]
