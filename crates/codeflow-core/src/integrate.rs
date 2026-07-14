@@ -102,6 +102,8 @@ pub struct IntegrateOutcome {
     pub test_gate: TestGateSummary,
     /// Branch checked out when integrate finished.
     pub final_checkout: String,
+    /// Non-fatal partial-success conditions that need human attention.
+    pub warnings: Vec<String>,
 }
 
 impl std::fmt::Display for IntegrateOutcome {
@@ -136,7 +138,11 @@ impl std::fmt::Display for IntegrateOutcome {
                 writeln!(f, "  test gate: passed ({})", targets.join(", "))?;
             }
         }
-        write!(f, "  checkout:  {}", self.final_checkout)
+        writeln!(f, "  checkout:  {}", self.final_checkout)?;
+        for warning in &self.warnings {
+            writeln!(f, "  WARNING:   {warning}")?;
+        }
+        Ok(())
     }
 }
 
@@ -189,7 +195,7 @@ pub fn integrate(
     match attempt_rebase(repo_root, target)? {
         RebaseResult::Success => {}
         RebaseResult::ConflictAborted { conflicting_files } => {
-            restore_checkout(repo_root, &original);
+            let _ = restore_checkout(repo_root, &original);
             return Err(IntegrateError::RebaseConflict {
                 branch: branch.to_string(),
                 target: target.to_string(),
@@ -210,7 +216,7 @@ pub fn integrate(
     // target must be an ancestor of it (a real fast-forward), before we advance.
     let current_tip = resolve_branch(&repo, branch)?;
     if current_tip != tested_oid {
-        restore_checkout(repo_root, &original);
+        let _ = restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
             target: target.to_string(),
             message: format!(
@@ -226,7 +232,7 @@ pub fn integrate(
             .graph_descendant_of(tested_oid, target_oid)
             .unwrap_or(false);
     if !is_fast_forward {
-        restore_checkout(repo_root, &original);
+        let _ = restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
             target: target.to_string(),
             message: format!(
@@ -256,7 +262,7 @@ pub fn integrate(
             message: format!("failed to run git update-ref: {e}"),
         })?;
     if !update.status.success() {
-        restore_checkout(repo_root, &original);
+        let _ = restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
             target: target.to_string(),
             message: String::from_utf8_lossy(&update.stderr).trim().to_string(),
@@ -271,8 +277,13 @@ pub fn integrate(
     // HEAD is still on `branch` (Stage 2). Return the caller to their original
     // checkout; when that is the now-advanced target (integrate run from the
     // target's own worktree), this updates its working tree to the landed tip.
-    restore_checkout(repo_root, &original);
-    let final_checkout = original;
+    let mut warnings = refresh_target_worktrees(repo_root, target, target_oid, tested_oid);
+    if let Err(message) = restore_checkout(repo_root, &original) {
+        warnings.push(format!(
+            "target ref advanced, but checkout restoration failed: {message}"
+        ));
+    }
+    let final_checkout = current_checkout(repo_root).unwrap_or(original);
 
     Ok(IntegrateOutcome {
         branch: branch.to_string(),
@@ -283,6 +294,7 @@ pub fn integrate(
         commits_landed,
         test_gate,
         final_checkout,
+        warnings,
     })
 }
 
@@ -296,7 +308,7 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
                     targets: results.into_iter().map(|r| r.name).collect(),
                 });
             }
-            restore_checkout(repo_root, original);
+            let _ = restore_checkout(repo_root, original);
             let summary = results
                 .iter()
                 .map(|r| {
@@ -315,7 +327,7 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
             Err(IntegrateError::TestGateFailed { summary })
         }
         Err(e) => {
-            restore_checkout(repo_root, original);
+            let _ = restore_checkout(repo_root, original);
             Err(IntegrateError::Testing(e))
         }
     }
@@ -378,13 +390,129 @@ fn checkout(repo_root: &Path, name: &str) -> Result<(), IntegrateError> {
     }
 }
 
-/// Best-effort restore of the original checkout on failure paths; the
-/// integrate verdict (the error) matters more than the final HEAD.
-fn restore_checkout(repo_root: &Path, name: &str) {
-    let _ = Command::new("git")
+fn restore_checkout(repo_root: &Path, name: &str) -> Result<(), String> {
+    let output = Command::new("git")
         .args(["checkout", name])
         .current_dir(repo_root)
-        .output();
+        .output()
+        .map_err(|e| format!("failed to run git checkout: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn current_checkout(repo_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn refresh_target_worktrees(
+    repo_root: &Path,
+    target: &str,
+    old_target_oid: git2::Oid,
+    tested_oid: git2::Oid,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Ok(output) = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+    else {
+        warnings.push("could not enumerate linked worktrees after landing".to_string());
+        return warnings;
+    };
+    if !output.status.success() {
+        warnings.push(format!(
+            "could not enumerate linked worktrees after landing: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+        return warnings;
+    }
+
+    let current = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
+    for record in String::from_utf8_lossy(&output.stdout).split("\n\n") {
+        let path = record
+            .lines()
+            .find_map(|line| line.strip_prefix("worktree "))
+            .map(PathBuf::from);
+        let branch = record
+            .lines()
+            .find_map(|line| line.strip_prefix("branch "));
+        if branch != Some(&format!("refs/heads/{target}")) {
+            continue;
+        }
+        let Some(path) = path else { continue };
+        if path.canonicalize().unwrap_or_else(|_| path.clone()) == current {
+            continue;
+        }
+        match worktree_clean_at(&path, old_target_oid) {
+            Ok(true) => {
+                let reset = Command::new("git")
+                    .args([
+                        "-C",
+                        path.to_string_lossy().as_ref(),
+                        "reset",
+                        "--hard",
+                        &tested_oid.to_string(),
+                    ])
+                    .output();
+                if !reset.as_ref().is_ok_and(|result| result.status.success()) {
+                    warnings.push(format!(
+                        "target worktree '{}' could not be refreshed to the landed tip",
+                        path.display()
+                    ));
+                }
+            }
+            Ok(false) => warnings.push(format!(
+                "target worktree '{}' has local changes and was not refreshed",
+                path.display()
+            )),
+            _ => warnings.push(format!(
+                "target worktree '{}' could not be checked before refresh",
+                path.display()
+            )),
+        }
+    }
+    warnings
+}
+
+fn worktree_clean_at(path: &Path, old_target_oid: git2::Oid) -> Result<bool, ()> {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .map_err(|_| ())
+    };
+    let unstaged = git(&["diff-files", "--quiet"])?;
+    let staged = git(&[
+        "diff-index",
+        "--cached",
+        "--quiet",
+        &old_target_oid.to_string(),
+        "--",
+    ])?;
+    let untracked = git(&["ls-files", "--others", "--exclude-standard"])?;
+    if !unstaged.status.success() && unstaged.status.code() != Some(1) {
+        return Err(());
+    }
+    if !staged.status.success() && staged.status.code() != Some(1) {
+        return Err(());
+    }
+    if !untracked.status.success() {
+        return Err(());
+    }
+    Ok(unstaged.status.success() && staged.status.success() && untracked.stdout.is_empty())
 }
 
 fn short_id(repo: &git2::Repository, oid: git2::Oid) -> String {
@@ -536,6 +664,35 @@ mod tests {
         .trim()
         .to_string();
         assert_eq!(root_head, "main", "root worktree stays on main");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("feature.txt")).unwrap(),
+            "feature\n",
+            "target worktree files must match the landed tree"
+        );
+        let status = git(dir.path(), &["status", "--porcelain"]);
+        assert!(status.stdout.is_empty(), "target worktree must be clean");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    }
+
+    #[test]
+    fn successful_ref_update_warns_when_checkout_restore_fails() {
+        let dir = repo_with_feature_branch();
+        write_test_config(
+            dir.path(),
+            "mkdir -p .git/hooks; printf '#!/bin/sh\\nexit 1\\n' > .git/hooks/post-checkout; chmod +x .git/hooks/post-checkout",
+        );
+
+        let outcome = integrate(dir.path(), "feat/x", "main")
+            .expect("the landed ref is a partial success, not a failed integration");
+        assert_eq!(branch_oid(dir.path(), "main"), branch_oid(dir.path(), "feat/x"));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("checkout restoration failed")),
+            "warnings: {:?}",
+            outcome.warnings
+        );
     }
 
     // codex round-3: if the branch moves during the test gate, the tested tip is
