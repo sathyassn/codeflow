@@ -160,8 +160,10 @@ pub fn runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
 
 #[derive(Debug, Clone)]
 struct SourceFile {
-    /// Path relative to the repo root (display + cursor key).
+    /// Reversibly encoded path relative to the repo root (cursor identity).
     rel: String,
+    /// Lossy human-readable path used only for titles and returned results.
+    display: String,
     abs: PathBuf,
     kind: &'static str,
 }
@@ -201,30 +203,104 @@ fn md_files_in(dir: &Path) -> Vec<PathBuf> {
 /// Recursively collect markdown files under `dir` (sorted). Plan docs nest
 /// (`docs/plan/v2/…`), so a flat read would miss the charter and its siblings.
 fn md_files_under(dir: &Path) -> Vec<PathBuf> {
+    const MAX_DEPTH: usize = 64;
+    const MAX_ENTRIES: usize = 10_000;
     let mut files = Vec::new();
-    md_files_under_inner(dir, &mut files);
+    let mut pending = vec![(dir.to_path_buf(), 0_usize)];
+    let mut visited = 0_usize;
+    while let Some((current, depth)) = pending.pop() {
+        if depth > MAX_DEPTH || visited >= MAX_ENTRIES {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            if visited >= MAX_ENTRIES {
+                break;
+            }
+            visited += 1;
+            let path = entry.path();
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                if depth < MAX_DEPTH {
+                    pending.push((path, depth + 1));
+                }
+            } else if metadata.is_file()
+                && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+            {
+                files.push(path);
+            }
+        }
+    }
     files.sort();
     files
 }
 
-fn md_files_under_inner(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for path in entries.filter_map(Result::ok).map(|e| e.path()) {
-        if path.is_dir() {
-            md_files_under_inner(&path, out);
-        } else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
-            out.push(path);
-        }
-    }
+fn rel_to(root: &Path, path: &Path) -> String {
+    encode_path(path.strip_prefix(root).unwrap_or(path))
 }
 
-fn rel_to(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+fn display_rel_to(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root).unwrap_or(path).to_string_lossy().into_owned()
+}
+
+#[cfg(unix)]
+fn encode_path(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut encoded = String::new();
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'-' | b'_') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+#[cfg(unix)]
+fn display_encoded_path(encoded: &str) -> String {
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = &encoded[index + 1..index + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                decoded.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+#[cfg(not(unix))]
+fn display_encoded_path(encoded: &str) -> String {
+    encoded.replace("%25", "%")
+}
+
+#[cfg(not(unix))]
+fn encode_path(path: &Path) -> String {
+    path.to_string_lossy().replace('%', "%25")
+}
+
+fn source_file(root: &Path, abs: PathBuf, kind: &'static str) -> SourceFile {
+    SourceFile {
+        rel: rel_to(root, &abs),
+        display: display_rel_to(root, &abs),
+        abs,
+        kind,
+    }
 }
 
 /// Enumerate all indexable source files for a repo.
@@ -248,22 +324,14 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
         ] {
             for ty in types {
                 for abs in jsonl_files_in(&ledger_dir.join(ty)) {
-                    sources.push(SourceFile {
-                        rel: rel_to(root, &abs),
-                        abs,
-                        kind,
-                    });
+                    sources.push(source_file(root, abs, kind));
                 }
             }
         }
     }
 
     for abs in md_files_in(&root.join("docs/decisions")) {
-        sources.push(SourceFile {
-            rel: rel_to(root, &abs),
-            abs,
-            kind: "adr",
-        });
+        sources.push(source_file(root, abs, "adr"));
     }
 
     for sub in ["epics", "tasks"] {
@@ -271,21 +339,13 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
         // (`epics/EPC-001/EPC-001.md`, `epics/EPC-001/tasks/TSK-*.md`), so a
         // flat read misses dogfooded epics/tasks entirely.
         for abs in md_files_under(&root.join("project-management").join(sub)) {
-            sources.push(SourceFile {
-                rel: rel_to(root, &abs),
-                abs,
-                kind: "pm",
-            });
+            sources.push(source_file(root, abs, "pm"));
         }
     }
 
     let caps = root.join("docs/capabilities.md");
     if caps.is_file() {
-        sources.push(SourceFile {
-            rel: rel_to(root, &caps),
-            abs: caps,
-            kind: "capability",
-        });
+        sources.push(source_file(root, caps, "capability"));
     }
 
     // Product WHYs: the human-owned charter of purpose/scope/non-goals plus the
@@ -293,19 +353,11 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
     // un-findable via recall while technical whys (ADRs, capabilities) are.
     let product = root.join("docs/product.md");
     if product.is_file() {
-        sources.push(SourceFile {
-            rel: rel_to(root, &product),
-            abs: product,
-            kind: "product",
-        });
+        sources.push(source_file(root, product, "product"));
     }
 
     for abs in md_files_under(&root.join("docs/plan")) {
-        sources.push(SourceFile {
-            rel: rel_to(root, &abs),
-            abs,
-            kind: "plan",
-        });
+        sources.push(source_file(root, abs, "plan"));
     }
 
     sources
@@ -390,9 +442,9 @@ fn index_file(conn: &Connection, repo_key: &str, src: &SourceFile) -> Result<(),
             insert.execute((repo_key, src.kind, &src.rel, &title, line))?;
         }
     } else {
-        let stem = Path::new(&src.rel)
+        let stem = Path::new(&src.display)
             .file_stem()
-            .map_or_else(|| src.rel.clone(), |s| s.to_string_lossy().into_owned());
+            .map_or_else(|| src.display.clone(), |s| s.to_string_lossy().into_owned());
         let title = markdown_title(&content, &stem);
         insert.execute((repo_key, src.kind, &src.rel, &title, &content))?;
     }
@@ -407,7 +459,7 @@ fn sync_repo(
     stats: &mut SyncStats,
     notes: &mut Vec<String>,
 ) -> Result<(), RecallError> {
-    let repo_key = target.root.to_string_lossy().into_owned();
+    let repo_key = encode_path(&target.root);
     let sources = collect_sources(&target.root);
 
     // Stale cursor cleanup: drop rows for files that no longer exist.
@@ -527,7 +579,7 @@ pub fn recall(
             ));
             continue;
         }
-        let repo_key = target.root.to_string_lossy().into_owned();
+        let repo_key = encode_path(&target.root);
         if options.rebuild {
             conn.execute("DELETE FROM docs WHERE repo = ?1", [&repo_key])?;
             conn.execute("DELETE FROM cursors WHERE repo = ?1", [&repo_key])?;
@@ -571,12 +623,12 @@ pub fn recall(
             let (repo_key, kind, path, title, snippet) = row?;
             let repo = targets
                 .iter()
-                .find(|t| t.root.to_string_lossy() == repo_key)
+                .find(|t| encode_path(&t.root) == repo_key)
                 .map_or(repo_key, |t| t.name.clone());
             results.push(RecallResult {
                 repo,
                 kind,
-                path,
+                path: display_encoded_path(&path),
                 title,
                 snippet,
             });
@@ -677,6 +729,34 @@ mod tests {
     fn test_runtime_state_dir_absent() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(runtime_state_dir(dir.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn markdown_walk_skips_directory_symlink_cycles() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("docs/plan/v2");
+        fs::create_dir_all(&plan).unwrap();
+        fs::write(plan.join("charter.md"), "# Charter\n").unwrap();
+        symlink(dir.path().join("docs/plan"), plan.join("cycle")).unwrap();
+
+        let files = md_files_under(&dir.path().join("docs/plan"));
+        assert_eq!(files, vec![plan.join("charter.md")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_identity_distinguishes_non_utf8_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let first = Path::new(OsStr::from_bytes(b"docs/a\x80.md"));
+        let second = Path::new(OsStr::from_bytes(b"docs/a\x81.md"));
+        let first_key = encode_path(first);
+        let second_key = encode_path(second);
+        assert_ne!(first_key, second_key);
+        assert_eq!(first_key, "docs/a%80.md");
+        assert_eq!(second_key, "docs/a%81.md");
     }
 
     #[test]
