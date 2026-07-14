@@ -41,7 +41,7 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001]
 adrs: [ADR-0011, ADR-0019]
 ```
@@ -54,7 +54,10 @@ user-owned schema-versioned files only gain new keys with defaults. It also
 installs any manifest entry that is in-tier but missing on disk — so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
-refreshed. Never clobbers, never silently skips.
+refreshed. Managed files, baselines, and state use synced same-directory atomic
+replacement; state reads fail on non-absence errors, and malformed
+`[scaffold].ignore` values identify their key or index. Never clobbers, never
+silently skips.
 
 ## CAP-003 — git-policy-gates
 
@@ -99,6 +102,9 @@ effective values and their source; and a present-but-invalid file fails
 loudly — naming each offending key, its value, and the valid set — at the
 commit-msg hook, `codeflow ci`, and `codeflow validate`, instead of silently
 reverting every key to the built-in defaults.
+Secret scanning fails closed if libgit2 cannot traverse the complete staged
+diff. Hook stdin read failures remain advisory but print an explicit degraded
+ref-check warning instead of passing silently.
 
 ## CAP-004 — test-gate
 
@@ -109,7 +115,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
 epics: [EPC-001]
-adrs: []
+adrs: [ADR-0021]
 ```
 
 `codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
@@ -119,7 +125,9 @@ detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
 `--strict` escalates that no-op to a non-zero exit for scripted/unattended callers
 (CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
 stack it is a real gate, wired into pre-push via the `test_gate_on_push` policy and
-re-run in CI.
+re-run in CI. File and aggregate coverage thresholds all contribute to the gate
+verdict; `changed_files` rules are rejected until an explicit comparison base is
+available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
 
 ## CAP-005 — integrate
 
@@ -142,7 +150,9 @@ stage succeeds. The sequence runs under a gate-context token the git hooks and
 git-guard verify, so the protected ref advances only through integrate or a
 human-merged PR — a raw `git merge` or manual ref move stays blocked. A human
 retains the local override path (`CODEFLOW_HUMAN_OVERRIDE=1`), an env the
-git-guard never honors for an agent.
+git-guard never honors for an agent. After landing, clean linked worktrees that
+have the target checked out are reset to the tested tip; dirty worktrees and a
+failed checkout restoration are reported as partial-success warnings.
 
 ## CAP-006 — recall-registry
 
@@ -161,6 +171,9 @@ session summaries, ADRs, epics, capabilities — via bundled SQLite FTS5, with
 coverage gaps disclosed. The cross-repo view comes from
 `~/.codeflow/registry.json`, a flock'd registry upserted on every command run;
 a lazy view at query time, not a daemon.
+Recursive source discovery skips directory symlinks and obeys depth/count
+budgets. Reversible path encoding supplies index identity, while lossy text is
+reserved for display.
 
 ## CAP-007 — orient-session-summary
 

@@ -43,6 +43,12 @@ Core modules grouped by responsibility:
   generated status views, the test-gate engine, path flock, and pruned error
   types.
 
+The test gate evaluates file and aggregate coverage rules through one verdict.
+`changed_files` rules are rejected at config load because standalone test runs
+have no explicit comparison base (ADR-0021); silently evaluating an empty set is
+not a supported degradation. Child stdout and stderr are drained into bounded
+tail buffers, with truncation recorded on each target result.
+
 Enforcement is spread across four planes: git client hooks, the in-session
 PreToolUse (Bash) guards, and remote branch protection read one config
 (`.codeflow/policy.json`); the scaffolded CI runs the same git standards through
@@ -89,6 +95,10 @@ Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite
 FTS5 is a rebuildable cache — no database-as-authority, no embeddings. Core
 reads through a `RecordStore` trait with a `MarkdownStore` implementation.
+Recall walks source trees without following directory symlinks and applies
+depth/count budgets; encoded path bytes are index identity while lossy paths are
+display-only. Ledger compaction syncs the directory after installing the merged
+base and again after deleting fragments so crash ordering preserves the base.
 
 ### scaffold — `assets/`
 
