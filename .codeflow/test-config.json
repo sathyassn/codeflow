@@ -34,6 +34,19 @@
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         }
       }
+    },
+    {
+      "name": "gate-parity",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 scripts/gate-parity.py"
+        },
+        "full": {
+          "command": "python3 scripts/gate-parity.py"
+        }
+      }
     }
   ]
 }
