@@ -139,3 +139,11 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   in-session guards are an interactive-Codex safeguard and headless Codex leans
   on the git-hook plane. agy deferred (dialect differs, macOS reliability open)
   with a manual experimental snippet in cf-delegate.
+- §4.4 caps corrected (2026-07-13): the Day-1 "all §4.4 caps respected" note above
+  recorded that day's counts, but later decisions grew the corpus past the original
+  caps — `AGENTS.md.tmpl` 256 lines (>250), `CLAUDE.md.tmpl` 32 (>15),
+  `CLAUDE.minimal.md.tmpl` 19 (>15), and `cf-security-reviewer` 170, a second agent
+  added by ADR-0016 that the original single-agent count did not cover. The charter
+  §4.4 superseding note (2026-07-13) updates the caps to this shipped reality
+  (`AGENTS.md` ≤270 / 32KiB, `CLAUDE.md` ≤35, minimal ≤160/≤20, `cf-security-reviewer`
+  ≤180); `cf-reviewer` (64) and `cf-method` (231) stay within their unchanged caps.

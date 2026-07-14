@@ -95,12 +95,14 @@ reads through a `RecordStore` trait with a `MarkdownStore` implementation.
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
 engine manages it by three ownership classes (charter §4.3): **fully-managed**
-files (agents, skills, commands, hook shims, CI) refresh by hash and 3-way
-merge from `.codeflow/.baseline/`; **managed-region** files (AGENTS.md markers,
-settings.json codeflow-prefixed keys) touch only their region; **user-owned,
-schema-versioned** files (policy.json, all `docs/`) only gain new keys with
-defaults, never mutating user values. `scaffold-manifest.toml` is the update
-contract.
+files (agents, skills, hook shims, CI) refresh by hash and 3-way merge from
+`.codeflow/.baseline/`; **managed-region** files (AGENTS.md markers,
+settings.json codeflow-prefixed keys) touch only their region; and **user-owned**
+files, which split by how `update` treats them — schema-versioned config
+(`policy.json`, `project.toml`) *additively gains* new keys with their defaults,
+reported and never mutating a value you set, while the write-once doc seeds (all
+of `docs/`) are seeded once at init and never touched again — yours to edit and
+own. `scaffold-manifest.toml` is the update contract.
 
 ### docs — `docs/`
 

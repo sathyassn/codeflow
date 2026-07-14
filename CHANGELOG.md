@@ -8,14 +8,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Security: three enforcement-bypass fixes from the pre-release review.**
+- **Security: four enforcement-bypass fixes from the pre-release review.**
   The destructive-command guard now tokenizes `rm` instead of pattern-matching,
   so `rm -r -f /`, `rm --recursive --force /`, `rm -rf -- /`, and `rm -rf $HOME`
   are blocked, not just the exact `rm -rf` spelling. The commit-standard merge
   exemption keys off a real merge (`MERGE_HEAD`), not the subject text, so a
   one-parent commit named `Merge ...` is fully checked. `codeflow update` rejects
   a manifest `dest` that is absolute or escapes the repo with `..`, closing an
-  arbitrary out-of-repo file deletion via a tampered manifest.
+  arbitrary out-of-repo file deletion via a tampered manifest. The pre-commit
+  secret scan classifies each assignment by its own value, so a placeholder word
+  in a comment no longer suppresses the first live quoted credential later on the
+  line. Residual, tracked before any public release: a second-pass review flagged
+  further edge-case hardening — additional destructive-command spellings and
+  shell wrappers, symlink traversal during scaffold writes, and coverage-exception
+  handling — and the accepted softer posture of the security-review CI job (policy
+  `git.security_review`/`git.dep_audit` gated, warn by default, no non-overridable
+  High+ floor or structured-findings artifact; ADR-0016). Only `secret_scan`
+  carries the never-relaxed status.
 - **Coverage thresholds now fail the test gate.** A configured per-file
   coverage threshold that a measured file misses fails `codeflow test --mode
   full` and the integrate gate, instead of being collected and silently

@@ -66,7 +66,7 @@ greenfield/brownfield paths, tiers, ownership model, and the daily flow.
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
 | `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
 | `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`) |
-| `git-hook` | Git client hook target the `.git/hooks` shims exec |
+| `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate (configured targets or runtime stack detection); `test setup` detects the stack and writes `.codeflow/test-config.json` |
 | `validate` | Validate `.codeflow/policy.json` (loudly) + record frontmatter; `--docs` adds the doc-graph lint |

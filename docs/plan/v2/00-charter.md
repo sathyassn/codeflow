@@ -141,6 +141,25 @@ v1's corpus (8 agents, 14 commands, 7 skills, 1,790-line CLAUDE.md ≈ 135K toke
 
 Always-loaded budget: AGENTS.md + orient digest ≈ **≤3K tokens** (v1: ~15.5K).
 
+> **Superseding note (2026-07-13) — caps updated to shipped reality.** The table
+> above is the original plan of record; the caps below supersede it, updated to
+> what the corpus actually ships after the later decisions that grew it. Line
+> counts are honest current measurements, not aspirations; the discipline (an
+> artifact earns its tokens, added only on proven need) is unchanged.
+>
+> | Artifact | Original cap | Superseding cap | Shipped now | Why it grew |
+> |---|---|---|---|---|
+> | Agent defs | 1 — `cf-reviewer` ≤80 | 2 — `cf-reviewer` ≤80, `cf-security-reviewer` ≤180 | 64 / 170 | ADR-0016 added the security / red-team reviewer as a second agent (dual-vendor, seven-axis checklist). |
+> | AGENTS.md (standard) | ≤250 lines; 32KiB hard | ≤270 lines; 32KiB hard | 256 lines, ~16.2KiB | ADR-0019 (enforcement floor), ADR-0020 (restored commit standard), and the two added working principles. Well under the 32KiB hard cap. |
+> | AGENTS.md (minimal) | — | ≤160 lines | 144 lines | The minimal-tier contract shipped by ADR-0019. |
+> | CLAUDE.md (standard) | ≤15 lines | ≤35 lines | 32 lines | Carries the workflow/skill-ladder and delegation addenda beyond `@AGENTS.md`. |
+> | CLAUDE.md (minimal) | — | ≤20 lines | 19 lines | The lean minimal-tier variant (ADR-0019). |
+> | Commands | 3 — `/cf-plan` etc. ≤40 | superseded — commands merged into skills (v2.1.0); see §4.4 skills row | — | Claude merged custom commands into skills; codeflow ships `cf-*` skills only. |
+>
+> The `cf-method` skill (≤300 lines) is unchanged and within cap (231 lines).
+> These replacement caps are the ones to enforce mechanically; the original row
+> values remain only as the historical record.
+
 ### 4.5 Responsibility split
 
 **Binary owns:** all mechanics (gates, tests, validation, recall, views) — a binary upgrade improves every repo with no re-scaffold, because hooks call `codeflow` from PATH. **`codeflow update` owns:** managed scaffold files, per the classes above. **The consuming project owns:** all content — code, docs, policy values, customized workflows, epics/tasks, AGENTS.md outside the markers. Nothing depends on a human remembering to maintain anything; capture is automatic, views are generated, integrity is linted in CI.
