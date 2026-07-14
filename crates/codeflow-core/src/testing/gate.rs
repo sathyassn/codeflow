@@ -751,6 +751,37 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_coverage_scopes_fail_the_gate() {
+        for scope in ["global", "per_package", "per_module"] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("cov.lcov"),
+                "SF:src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n",
+            )
+            .unwrap();
+            write_config(
+                dir.path(),
+                &format!(
+                    r#"[{{"name": "cov", "runner": "custom",
+                        "modes": {{"full": {{"command": "exit 0"}}}},
+                        "coverage": {{"format": "lcov", "path": "cov.lcov",
+                        "rules": [{{"scope": "{scope}", "minimum": 85}}]}}}}]"#
+                ),
+            );
+
+            let outcome = run_gate(dir.path(), "full").unwrap();
+            let GateOutcome::Completed {
+                passed, coverage, ..
+            } = outcome
+            else {
+                panic!("expected completed gate for {scope}");
+            };
+            assert!(!passed, "{scope} shortfall must fail the gate");
+            assert_eq!(coverage[0].thresholds_failed, 1, "scope {scope}");
+        }
+    }
+
+    #[test]
     fn quick_mode_collects_no_coverage() {
         // Coverage is a full-mode concern; quick(->essential) runs skip it.
         let dir = tempfile::tempdir().unwrap();

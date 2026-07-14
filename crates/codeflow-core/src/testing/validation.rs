@@ -119,12 +119,25 @@ pub fn evaluate_target_thresholds(
         return Vec::new();
     };
 
-    threshold::evaluate_file_thresholds(
+    let mut results = threshold::evaluate_file_thresholds(
         &cov_config.rules,
         file_coverages,
         changed_files,
         &cov_config.exceptions,
-    )
+    );
+    results.extend(
+        threshold::evaluate_aggregate_thresholds(&cov_config.rules, file_coverages)
+            .into_iter()
+            .map(|aggregate| threshold::ThresholdResult {
+                file: format!("<{:?}>", aggregate.scope).to_lowercase(),
+                coverage_percent: aggregate.coverage_percent,
+                threshold: aggregate.threshold,
+                pass: aggregate.pass,
+                rule_scope: aggregate.scope,
+                exception_applied: false,
+            }),
+    );
+    results
 }
 
 /// Normalise `changed_files` (project-root-relative per `git diff`) to the

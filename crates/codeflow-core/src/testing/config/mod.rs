@@ -465,6 +465,21 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
         if !seen_names.insert(&target.name) {
             return Err(TestingError::DuplicateTarget(target.name.clone()));
         }
+        if target.coverage.as_ref().is_some_and(|coverage| {
+            coverage
+                .rules
+                .iter()
+                .any(|rule| rule.scope == CoverageScope::ChangedFiles)
+        }) {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{}': coverage scope 'changed_files' requires a comparison base, \
+                     but standalone codeflow test has none",
+                    target.name
+                ),
+            });
+        }
     }
 
     Ok(config)
@@ -487,6 +502,30 @@ pub fn write_test_config(path: &Path, config: &TestConfig) -> Result<(), Testing
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_files_scope_requires_comparison_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "schema_version":"1.0",
+              "targets":[{
+                "name":"unit","runner":"custom",
+                "modes":{"full":{"command":"true"}},
+                "coverage":{"format":"lcov","path":"lcov.info","rules":[
+                  {"scope":"changed_files","minimum":80}
+                ]}
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        let error = load_test_config(&path).unwrap_err().to_string();
+        assert!(error.contains("changed_files"), "{error}");
+        assert!(error.contains("comparison base"), "{error}");
+    }
 
     fn write_config(dir: &Path, content: &str) -> std::path::PathBuf {
         let path = dir.join("test-config.json");
