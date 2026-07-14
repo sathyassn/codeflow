@@ -35,7 +35,7 @@ jobs:
       - name: Install codeflow
         run: |
           # PLACEHOLDER: replace with the release installer once published, e.g.
-          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
           #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
           echo "::error::codeflow install step is an unwired PLACEHOLDER — the test/validate gates below fail RED until you replace this with the real installer. The perimeter is intentionally not armed."
 
@@ -146,7 +146,7 @@ jobs:
       - name: Install codeflow
         run: |
           # PLACEHOLDER: replace with the release installer once published, e.g.
-          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
           #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
           echo "::error::codeflow install step is an unwired PLACEHOLDER — the commit-standards gate below fails RED until you replace this with the real installer. The perimeter is intentionally not armed."
 

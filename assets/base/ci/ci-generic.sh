@@ -31,7 +31,7 @@ HEAD="${2:-${HEAD:-}}"
 if ! command -v codeflow >/dev/null 2>&1; then
   # A missing binary is an unarmed perimeter, not a pass — fail RED. Install the
   # codeflow binary onto PATH before this runs, e.g.:
-  #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+  #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
   #   export PATH="$HOME/.codeflow/bin:$PATH"
   echo "codeflow not installed — install the binary onto PATH first (failing red)." >&2
   exit 1

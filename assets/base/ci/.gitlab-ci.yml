@@ -36,7 +36,7 @@ codeflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
     # PLACEHOLDER: install the codeflow binary onto PATH, e.g.
-    #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-installer.sh | sh
+    #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
     #   export PATH="$HOME/.codeflow/bin:$PATH"
     # Until wired, the gate fails RED — a missing binary is an unarmed
     # perimeter, not a pass (do NOT "fix" the red by skipping).
