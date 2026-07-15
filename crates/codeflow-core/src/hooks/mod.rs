@@ -6,6 +6,7 @@
 //! | `exec-guard` | `PreToolUse` (Bash) | [`exec_guard`] |
 //! | `session-orient` | `SessionStart` | [`orient`] |
 //! | `session-summary` | `SessionEnd` | [`session_summary`] |
+//! | `delegate-turn` | `Stop` / `StopFailure` | [`delegate_turn`] |
 //! | git-hook shims | pre-commit / commit-msg / pre-merge-commit / reference-transaction / pre-push | [`git_hook`] |
 //!
 //! The two `PreToolUse` guards share a lenient payload contract (`tool_name`,
@@ -24,6 +25,7 @@
 //! Every blocking message names the violated policy rule and the sanctioned
 //! path (charter §6.2).
 
+pub mod delegate_turn;
 pub mod exec_guard;
 pub mod git_guard;
 pub mod git_hook;

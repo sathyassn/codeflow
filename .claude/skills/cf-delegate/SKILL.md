@@ -1,6 +1,6 @@
 ---
 name: cf-delegate
-description: When and how to consult or delegate to the other vendor's coding CLI under its own subscription auth — read-only second opinions versus full task handoffs, the interactive-only transport lanes (ADR-0018), the edit-access doctrine, and the guardrails. Use when you want an independent second opinion, a specialty pass, or genuinely parallel work handed to a harness of a vendor you are not.
+description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, deterministic reverse-lane completion, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (ADR-0023).
 ---
 
 # cf-delegate — cross-vendor consult and delegate
@@ -35,7 +35,7 @@ Match the tool to the work; most work is *neither*.
 When unsure, consult before you delegate: a read-only opinion is cheap and
 reversible; an edit handoff is neither.
 
-## Transport — interactive-only, one lane per direction (ADR-0018)
+## Transport — interactive-only, one lane per direction (ADR-0023)
 
 ```text
 Claude Code ──codex-plugin-cc plugin──▶ codex
@@ -48,8 +48,9 @@ codex ──tmux-driven interactive claude CLI──▶ claude
   browser tools on codex-cli 0.144.1, 2026-07-11), a resumable thread, and
   in-band approvals.
 - **codex → claude: the interactive `claude` CLI driven via tmux, only**
-  (pattern below). A live round-trip has not been verified here —
-  verify-on-install with one scoped read-only consult before relying on it.
+  (pattern below). The account and interactive response must be verified with a
+  scoped TTY canary; verify the full tmux + completion-signal round trip on
+  install and whenever the Claude CLI or hook configuration changes.
 
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
@@ -72,7 +73,10 @@ lane, and degrade legibly when it is not.
   `/reload-plugins` → `/codex:setup`) and codex is authenticated
   (`codex login status` — exit 0 + "Logged in using ChatGPT"; the same signal
   `codeflow doctor` reports as the `delegates` check).
-- **From codex:** `claude` on PATH and `tmux` present.
+- **From codex:** `claude` on PATH, `tmux` present, `claude mcp list`
+  succeeds, and a short interactive TTY canary gets an authenticated response.
+  Do not infer authentication from a status subcommand when it conflicts with
+  a working interactive session.
 
 If the other vendor's CLI is missing, do the work yourself and **say so** —
 loudly, never as a silent substitution of your own vendor. If it is present
@@ -98,30 +102,65 @@ yourself (see Guardrails).
 
 ## Lane 2 — from codex, tmux-driving the interactive claude CLI
 
-The pattern, compactly:
+The transport pattern, compactly:
 
 ```sh
-tmux new-session -d -s delegate -x 220 -y 50 'claude'
+tmux new-session -d -s delegate -x 220 -y 50 -c /path/to/worktree 'claude --permission-mode plan --settings /path/to/task-settings.json'
 tmux send-keys -t delegate -l 'Review src/foo.rs for correctness. Cite line numbers. Read and reason only - edit nothing. End with VERDICT: approved|changes_requested.'
 tmux send-keys -t delegate Enter
-# poll until the output stabilizes, then read it:
+# The task-scoped Stop/StopFailure hooks signal completion. Read the pane only
+# for bounded diagnostics or to collect interactive output after that signal.
 tmux capture-pane -p -J -t delegate -S -200
 ```
 
-- **Turn detection:** poll `capture-pane` and compare consecutive captures
-  (hash them); the turn is done when the pane stops changing and the input
-  prompt is back. Bound the wait with a timeout; on expiry capture the pane
-  for diagnosis, then `kill-session`.
-- **Read-only is posture, not enforcement:** the interactive TUI has no
-  sandbox flag, so a consult's read-only contract lives in the prompt ("read
-  and reason only; edit nothing"). Say that plainly when you report — the lane
-  cannot mechanically prevent an edit; the git-hook plane and review still
-  catch what matters.
-- **Edit handoff:** start the session with the worktree as its working
-  directory (`tmux new-session -d -s delegate -c /path/to/worktree 'claude'`)
-  so edits and commits land where the gates guard them.
+- **Turn detection:** use a task-scoped Claude `Stop` hook as the primary
+  completion signal and a `StopFailure` hook as the failure signal. Give the
+  run a unique id and owner-only status path; on `Stop`, persist the hook
+  input's `last_assistant_message` with the run id and signal the matching
+  `tmux wait-for` channel. On `StopFailure`, persist only the structured
+  error type/message needed for diagnosis and signal failure. Bound every wait
+  with a timeout and clean up the task session. Claude's hook contract fires
+  `Stop` once after a completed turn and explicitly provides
+  `last_assistant_message`; do not scrape the transcript or treat a visually
+  stable pane as proof of completion. See
+  <https://code.claude.com/docs/en/hooks#stop> and
+  <https://code.claude.com/docs/en/hooks#stopfailure>.
+  Use the shipped [turn-completion adapter](resources/claude-turn-completion.md)
+  for the exact settings, launch, wait, result-validation, and cleanup
+  contract; do not improvise a different parser or signal protocol.
+- **Pane access:** capture only the dedicated task pane, after the completion
+  signal or on bounded failure diagnosis. Never enumerate or capture unrelated
+  tmux sessions; they may contain secrets or other users' work.
+- **Read-only has layered enforcement:** launch consults with
+  `--permission-mode plan`, which current Claude Code documents as read-only
+  exploration, and keep "read and reason only; edit nothing" in the prompt.
+  Add Claude's OS sandbox with `sandbox.failIfUnavailable: true` where the
+  instance requires a hard Bash filesystem/network boundary. Verify the
+  worktree diff after the consult; permissions, sandbox, prompt, and review are
+  complementary—not interchangeable. See
+  <https://code.claude.com/docs/en/permission-modes> and
+  <https://code.claude.com/docs/en/sandboxing>.
+  Plan mode may finish its reasoning by opening an `AskUserQuestion` or
+  `ExitPlanMode` dialog instead of ending the turn. That is interactive input,
+  not completion: answer it in the dedicated pane, then keep waiting for the
+  terminal hook. A bounded diagnostic capture is allowed for this purpose.
+- **Edit handoff:** start a separate session without plan mode, with the
+  worktree as its working directory (`tmux new-session -d -s delegate -c
+  /path/to/worktree 'claude --settings /path/to/task-settings.json'`) so edits
+  and commits land where the gates guard them. Never reuse a consult session as
+  an implicit write grant.
+- **Test-running review:** a final reviewer that must execute tests or UI tools
+  also needs a separate normal-permission interactive session, because plan
+  mode is for pure analysis. This does **not** grant edit authority: approve
+  only scoped verification actions, say "edit no source files," and require a
+  clean before/after worktree-diff comparison. If a fix is needed, return it to
+  the Codex implementer.
 - **Multiline prompts:** `set-buffer` + `paste-buffer -p`, then a separate
   `send-keys Enter`.
+- **Interactive prompts:** permissions, plan exit, ambiguity, and other user
+  questions are handled in the same dedicated session. They never authorize a
+  write silently, and a visible question never substitutes for the terminal
+  hook result.
 - **Follow-ups:** the pane keeps its context — send the next prompt to the
   same session.
 
@@ -149,7 +188,7 @@ not a merge — a human lands it.
 Google's Antigravity `agy` was a degraded, opt-in read-only tier. Its only
 documented drive shape is headless one-shot CLI invocation (non-TTY stdout
 drops the final response, so automation had to read a transcript file) — a
-shape ADR-0018 prohibits outright. There is no verified interactive lane to
+shape ADR-0023 prohibits outright. There is no verified interactive lane to
 it, so `agy` is **not** a delegate tier; if the user names it, say the
 transport rule rules it out. Like any tool that touches the repo, `agy`
 remains bound by the harness-agnostic git-hook plane and CI.

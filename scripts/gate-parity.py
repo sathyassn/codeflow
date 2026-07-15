@@ -31,7 +31,10 @@ def norm(cmd: str) -> str:
 
 
 def is_rust_verification_command(cmd: str) -> bool:
-    return cmd.startswith("cargo ") or cmd.startswith('RUSTDOCFLAGS="-D warnings" cargo ')
+    return (
+        cmd.startswith("cargo ")
+        and not cmd.startswith("cargo llvm-cov ")
+    ) or cmd.startswith('RUSTDOCFLAGS="-D warnings" cargo ')
 
 
 def local_rust_commands() -> set[str]:

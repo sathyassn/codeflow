@@ -25,11 +25,13 @@ alignment) break the correlated blindspot. codeflow already ships the split
   foothold; find a flow from an untrusted source to a dangerous sink; try to
   exfiltrate a secret or PII, bypass an authz check, or inject a command, query,
   or prompt. Every finding needs a concrete trigger.* The second vendor is
-  reached through the ADR-0018 interactive lane — the interactive
-  `/cf-model-orchestrator` duo drives it via the codex-plugin-cc
-  `/codex:adversarial-review`. Where no interactive second-vendor lane is
+  reached through the ADR-0023 host-appropriate interactive lane: a Claude
+  Code host uses the official plugin's `/codex:adversarial-review`; a Codex
+  host performs its attacker pass in the current native session while Claude
+  reviews through the task-scoped interactive CLI lane. Where no interactive
+  second-vendor lane is
   available (an unattended pipeline run; headless execution is prohibited,
-  ADR-0018), this lens degrades to a same-model adversarial pass, recorded as a
+  ADR-0023), this lens degrades to a same-model adversarial pass, recorded as a
   finding — the deterministic scanner floor still runs regardless.
 
 Union both lenses' findings and dedup by (location, class). A finding one vendor
@@ -124,9 +126,11 @@ SecurityVerdict {
 
 **Set** your `verdict` from the block rule below — derived from the findings'
 severity and confidence enums, never from prose. The pipeline gate branches on
-that `verdict`: the structured reasoning informs the verdict you set, and the
-pipeline's `{verdict, findings: string[]}` schema is a deliberate rework-compat
-choice.
+that `verdict`. The pipeline adapter requires a non-empty `attack_log` and uses
+`findings: string[]` for rework compatibility; encode every structured finding
+as one evidence-rich string carrying its class, severity, confidence, location,
+and trigger. The standalone reviewer retains the full `SecurityFinding[]`
+shape above.
 
 - BLOCK when any finding has severity in {critical, high} AND confidence in
   {confirmed, likely}.

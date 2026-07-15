@@ -14,13 +14,14 @@
 
 ## Workflows
 
-- `/cf-model-orchestrator` (the Claude+codex duo) is the **default for all dev
-  work**; it silently degrades to solo `/cf-develop`, which runs the same
-  build → review → verify loop inline. The pipeline
-  (`.claude/workflows/pipeline.workflow.js`) composes the same stages for batch,
-  parallel, or unattended runs.
+- `/cf-model-orchestrator` is the host-neutral Claude+Codex default for all
+  non-trivial dev work. In this Claude host, use the official Codex plugin;
+  Claude leads design/final review and Codex implements/first-verifies. A
+  missing seat degrades legibly to solo `/cf-develop`. The unattended pipeline
+  is explicitly single-vendor and never substitutes for the interactive duo.
 - Pick the fitting skill first, then match weight to work: trivial → just do it;
-  a feature or change → `/cf-model-orchestrator` (the duo default; solo
+  a feature or change → `/cf-model-orchestrator` from research/planning onward
+  (the duo default; solo
   `/cf-develop` when the duo is unavailable); a batch/parallel or multi-task
   epic → the pipeline preset or the integration-branch flow; nothing fits →
   author a custom ad-hoc workflow. Full ladder in the `cf-method` skill.

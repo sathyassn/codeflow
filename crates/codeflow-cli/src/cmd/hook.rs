@@ -1,4 +1,4 @@
-//! `codeflow hook <git-guard|exec-guard|session-orient|session-summary>` — the
+//! `codeflow hook <git-guard|exec-guard|session-orient|session-summary|delegate-turn>` — the
 //! Claude layer hooks, wired by the settings presets (charter §3.3).
 //!
 //! Exit-code contract:
@@ -10,11 +10,16 @@
 //! - `session-orient`: digest on stdout, always 0.
 //! - `session-summary`: always 0 — a failed summary must never fail the
 //!   session (warn on stderr instead).
+//! - `delegate-turn`: 0 only after an owner-only terminal result is written
+//!   and its task-scoped tmux waiter is signalled; otherwise 1.
 
 use std::io::Read;
+use std::path::PathBuf;
 
 use clap::Args;
-use codeflow_core::hooks::{exec_guard, git_guard, orient, policy::Policy, session_summary};
+use codeflow_core::hooks::{
+    delegate_turn, exec_guard, git_guard, orient, policy::Policy, session_summary,
+};
 
 /// Which Claude-layer hook to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -28,6 +33,8 @@ pub enum HookName {
     SessionOrient,
     /// `SessionEnd`: append the session record to the ledger.
     SessionSummary,
+    /// `Stop` / `StopFailure`: persist and signal one interactive delegate turn.
+    DelegateTurn,
 }
 
 #[derive(Debug, Args)]
@@ -35,6 +42,12 @@ pub struct HookArgs {
     /// Hook to run (reads the Claude Code hook payload from stdin).
     #[arg(value_enum)]
     pub name: HookName,
+    /// Unique task id for `delegate-turn` (1-64 safe ASCII characters).
+    #[arg(long, value_name = "ID")]
+    pub run_id: Option<String>,
+    /// Absolute owner-only result path for `delegate-turn`.
+    #[arg(long, value_name = "FILE")]
+    pub result: Option<PathBuf>,
 }
 
 /// Run the hook; returns the process exit code.
@@ -54,6 +67,26 @@ pub fn run(args: &HookArgs) -> i32 {
             0
         }
         HookName::SessionSummary => session_summary(&stdin),
+        HookName::DelegateTurn => delegate_turn(args, &stdin),
+    }
+}
+
+fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
+    let Some(run_id) = args.run_id.clone() else {
+        eprintln!("codeflow delegate-turn: --run-id is required");
+        return 1;
+    };
+    let Some(result) = args.result.clone() else {
+        eprintln!("codeflow delegate-turn: --result is required");
+        return 1;
+    };
+    let config = delegate_turn::TurnConfig { run_id, result };
+    match delegate_turn::record_and_signal(&config, stdin) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("codeflow delegate-turn: {error}");
+            1
+        }
     }
 }
 

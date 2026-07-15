@@ -217,7 +217,9 @@ provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
 `codeflow doctor` runs eleven health checks — hooks, Claude wiring, codex wiring, config,
 permissions, network, delegates, repo integrity, CI perimeter, managed-region
-drift, and test config — so degradation is always visible, never silent.
+drift, and test config. The delegates check now inspects both directions:
+Codex auth/MCP, Claude plugin/MCP, and tmux; it explicitly leaves live
+interactive account/tool canaries to the harness (ADR-0023).
 
 ## CAP-009 — cross-vendor-delegation
 
@@ -226,25 +228,30 @@ id: CAP-009
 name: cross-vendor-delegation
 area: scaffold
 status: shipped
-verified_by: ["cargo test doctor::tests::test_check_delegates", "live: codex-plugin-cc MCP + resumable thread verified 2026-07-11, codex-cli 0.144.1 (ADR-0018)"]
+verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "docs/verification/host-neutral-duo-canary-2026-07-15.md"]
 epics: []
-adrs: [ADR-0005, ADR-0018]
+adrs: [ADR-0005, ADR-0018, ADR-0023]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth, with CodeFlow's gates
 judging the output author-agnostically (ADR-0005). Transport is
-interactive-only per ADR-0018, one lane per direction: from Claude Code the
+interactive-only per ADR-0023, one lane per direction: from Claude Code the
 official `codex-plugin-cc` plugin (wrapping the codex app-server); from codex
-the interactive `claude` CLI driven via tmux. Headless task execution
+the interactive `claude` CLI driven via task-scoped tmux, with Stop and
+StopFailure hook completion rather than pane stability. The
+`codeflow hook delegate-turn` adapter validates a unique run and private path,
+writes immutable `0600` terminal evidence, and signals only its scoped waiter;
+exact retries recover signalling without rewriting. Headless task execution
 (`codex exec`, `claude -p`) is prohibited; the earlier headless tier and the
 Antigravity `agy` delegate tier (headless-only) are retired. It ships as the
 `cf-delegate` and `cf-consult` skills (mirrored to `.agents/skills`), and an
-optional `consult` pipeline stage — plus one deterministic `delegates` doctor
-check; delegates edit only inside a worktree on a feature branch, so
+optional single-vendor `consult` pipeline stage — plus one deterministic
+`delegates` doctor check for both lanes; delegates edit only inside a worktree
+on a feature branch, so
 pre-commit, commit-msg, the test gate, and the independent review pass
-constrain them exactly as they do the orchestrating harness. No engine
-orchestration code is added.
+constrain them exactly as they do the orchestrating harness. No engine model
+router is added; the binary owns only the deterministic terminal adapter.
 
 ## CAP-010 — duo-model-orchestration
 
@@ -253,34 +260,32 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_check_delegates"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015, ADR-0018]
+adrs: [ADR-0015, ADR-0018, ADR-0023]
 ```
 
-`/cf-model-orchestrator` is the **default for all dev work** — any feature,
-change, fix, or doc change with acceptance criteria runs as a Claude+codex duo
-(operator policy; this reverses the earlier stakes-gated design). Claude plans
-with explicit acceptance criteria, codex (through the official `codex-plugin-cc`
-plugin — the only sanctioned lane, ADR-0018) reviews the plan then executes and
-first-tests it including UI-driven e2e, Claude does the final verification
-grading every criterion, and the two iterate a bounded fix loop — each model
-reviews the other's work. Ships as the `cf-model-orchestrator` skill (mirrored
-across `.claude/skills`, `.agents/skills`, and the `assets/base` source) and a
-`duo` pipeline preset with a `plan-align` convergence gate. Driven from a Claude
-Code seat only; it silently degrades to solo `/cf-develop` (with `cf-reviewer`
-as the independent pass) when either half of the duo is unavailable at flow
-start — the symmetric seat gate, ADR-0018 — never blocking or prompting for
-auth; only a conversational answer or pure question skips the duo. No engine
-orchestration code is added, and the authoritative gate stays server-side CI
-plus a human-merged PR (ADR-0006).
+`/cf-model-orchestrator` is the host-neutral default for non-trivial dev work.
+Both seats independently research, analyze, and plan from an immutable brief;
+Claude leads design and final independent review, while Codex implements and
+first-verifies regardless of which harness hosts. The coordinator reconciles a
+versioned plan and detailed tasks that both approve before implementation.
 
-Verification note: the `verified_by` checks assert only manifest wiring (the
-skill and its mirrors are present) and delegate presence — they do not assert
-the default-duo / solo-fallback semantics, which live as a prose contract kept
-in sync across AGENTS.md, CLAUDE.md, this entry, and the orchestrator skill.
-That cross-surface claim is a known semantic-drift risk; a parity assertion over
-the entry-point mapping is the sanctioned way to close it (not yet wired).
+Claude Code reaches Codex through the official plugin. Codex App/interactive
+CLI reaches Claude through an interactive task-scoped tmux session. A capable
+other host, including Hermes, may coordinate only if it preserves both native
+sessions and their tools. The shared quality resource requires reproducible
+evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
+coverage floor where measurable (90% normal target), security review, and
+bounded rework. Missing seats degrade legibly to solo; mid-run failure blocks
+and escalates.
+
+The unattended Claude workflow is explicitly single-vendor and rejects the old
+`duo` preset semantics. Manifest parity tests pin byte mirrors, while
+`orchestration_contract.rs` pins the documented role, host, evidence, coverage,
+UI, and reverse-lane contract markers. Runtime adapter behavior is exercised by
+the CAP-009 hook unit and CLI tests. No engine model router is added;
+deterministic gates and the human-merged PR remain authoritative.
 
 ## CAP-011 — security-redteam-review
 
@@ -328,9 +333,9 @@ adrs: []
 (or a `codeflow update` that ships new defaults to decide), it runs a
 flow-aware tool preflight — verifying the tools needed by each flow the
 project actually uses (git and the harness for every flow; the `codex-plugin-cc`
-plugin, codex, and its MCP servers for the duo flow; tmux only where a codex
-seat consults claude — the reverse consult lane, not the duo itself; the
-stack's test toolchain) —
+plugin, codex, and its MCP servers for a Claude-hosted duo; Claude CLI/MCP,
+tmux, and the completion-hook canary for a Codex-hosted duo or reverse consult;
+the stack's test toolchain) —
 then fills the project-owned artifacts still sitting at template defaults
 (`docs/product.md`, the AGENTS.md/CLAUDE.md project sections, policy.json gate
 levels, model pins). Analysis-then-propose: one prioritized report first, then

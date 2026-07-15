@@ -253,17 +253,20 @@ schemas) move fast on both sides; the release checklist
 
 ## Delegation quickstart (optional)
 
-Cross-vendor consult and delegation is opt-in (ADR-0005; transport per
-ADR-0018 — interactive-only, one lane per direction). One-time setup: run
-`codex login` on your own ChatGPT subscription — codeflow never automates auth.
-`codeflow doctor` reports the `delegates` check.
+Cross-vendor consult and delegation is opt-in (ADR-0005; transport refined by
+ADR-0023—interactive-only, one lane per direction). One-time setup: authenticate
+Codex manually, enable `codex@openai-codex` in Claude Code, and install the
+Claude CLI plus tmux for the reverse lane. Codeflow never automates auth.
+`codeflow doctor` reports inspectable prerequisites; retain a scoped
+interactive canary in each direction.
 
 - `/cf-consult` gets an independent, read-only second opinion from the vendor
   the session is *not* — from Claude Code through the official
   `codex-plugin-cc` plugin (`/codex:review`); from Codex by driving the
-  interactive `claude` CLI in tmux — and makes you synthesize it against your
+  interactive `claude` CLI in a task-scoped tmux session with Stop/StopFailure
+  hook completion—and makes you synthesize it against your
   own analysis (never paste its reply as fact). Headless `codex exec` /
-  `claude -p` are not sanctioned delegation transports (ADR-0018).
+  `claude -p` are not sanctioned delegation transports (ADR-0023).
 - A full edit handoff (`cf-delegate`; from Claude Code, `/codex:rescue`) runs
   only inside a worktree on a feature branch, where the delegate's commits pass
   the same gates and independent review as yours — enforcement is
@@ -301,11 +304,12 @@ interactive-only (consult/delegate/duo never shell out to `codex exec`), so a
 headless Codex run happens only when a user starts one — and the git-hook
 plane + CI still bind it.
 
-A Codex-primary session gets the reverse consult lane, not the duo: it consults
-Claude by driving the interactive `claude` CLI in tmux (`cf-delegate`, Lane 2),
-while the duo develop flow is driven from Claude Code through the
-`codex-plugin-cc` plugin and degrades to solo from any other seat
-(`cf-model-orchestrator`).
+A Codex-primary session can host the full duo, not only a consult. Codex
+coordinates and implements in its current App/interactive CLI session while
+Claude, reached through a task-scoped interactive tmux session, leads design and
+performs the final independent review. From a Claude Code host, the same fixed
+roles run through the official Codex plugin. Both seats independently research
+and plan before approving the same versioned contract (ADR-0023).
 
 Google's Antigravity `agy` is **not** bound automatically (its hook dialect
 differs and its macOS reliability is unresolved); the cf-delegate skill carries

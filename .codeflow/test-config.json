@@ -62,6 +62,16 @@
       }
     },
     {
+      "name": "rust-coverage",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "cargo llvm-cov --workspace --summary-only --fail-under-lines 90"
+        }
+      }
+    },
+    {
       "name": "gate-parity",
       "enabled": true,
       "runner": "custom",

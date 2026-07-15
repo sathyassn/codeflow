@@ -8,7 +8,7 @@ description: Get an independent second opinion from another vendor's CLI (read-o
 You are getting a second opinion, not handing off work. Load the `cf-delegate`
 skill for the consult doctrine and lane details. Consult is read-only: the
 delegate reads and reasons, never edits. Transport is interactive-only, one
-lane per direction (ADR-0018) — never headless (`codex exec`, `claude -p`).
+lane per direction (ADR-0023)—never headless (`codex exec`, `claude -p`).
 
 The delegate is a vendor you are **not**. Consulting your own vendor is
 self-review with extra steps, not an outside opinion — never label it
@@ -23,13 +23,19 @@ independent.
      plugin: `/codex:review` is the diff/design read (read-only;
      `/codex:adversarial-review` for the security lens). Preflight: the
      `/codex:*` commands exist and `codex login status` exits 0.
-   - **From codex → claude**, by driving the interactive `claude` CLI in tmux:
-     `tmux new-session -d -s consult 'claude'`, `send-keys -l` the framed
-     prompt (then a separate `send-keys Enter`), and poll `capture-pane -p`
-     until the output stabilizes — two identical captures a few seconds apart
-     with the input prompt back. The interactive TUI has **no sandbox flag**:
-     read-only is by instruction ("read and reason only; edit nothing") —
-     posture, not enforcement. Preflight: `claude` on PATH and `tmux` present.
+   - **From codex → claude**, by driving the interactive `claude` CLI in a
+     dedicated, worktree-scoped tmux session. Use task-scoped Claude `Stop` and
+     `StopFailure` hooks as the completion/failure signals; consume
+     `last_assistant_message` from the Stop input. Use `capture-pane` only for
+     the dedicated task pane after completion or bounded diagnosis—never as a
+     stability heuristic and never against unrelated sessions. Launch the
+     consult with `claude --permission-mode plan` and keep "read and reason
+     only; edit nothing" in the prompt; enable Claude's OS sandbox with
+     `sandbox.failIfUnavailable: true` where a hard Bash boundary is required,
+     then verify the worktree diff. Preflight: `claude` and `tmux` are present,
+     `claude mcp list` succeeds, and a scoped interactive canary returns an
+     authenticated response. See
+     <https://code.claude.com/docs/en/permission-modes>.
 3. The named vendor's CLI missing, the plugin surface absent, or auth failing
    → tell the user the remedy (`codex login`; install the plugin from a Claude
    Code session; install `claude`/`tmux`) and **stop, loudly** — never

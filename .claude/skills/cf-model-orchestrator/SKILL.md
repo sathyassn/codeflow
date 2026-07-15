@@ -1,160 +1,178 @@
 ---
 name: cf-model-orchestrator
-description: Run planned dev work as the Claude+codex duo — the DEFAULT for all dev work, not a high-stakes exception. Claude orchestrates (plans, analyses, designs, final-reviews); codex cross-reviews the plan, executes it, and runs first tests — each model reviews the other's work, every time. Use whenever about to build a feature, change, fix, or doc change that has acceptance criteria — however small; only a conversational answer or pure question needs no duo. Duo is driven from Claude Code through the official codex-plugin-cc plugin (ADR-0018); it silently degrades to solo /cf-develop (cf-reviewer as the independent pass) ONLY when either half is missing — this session is not Claude Code, the plugin surface is absent, or codex is missing/unauthenticated — never blocks or prompts for auth.
+description: Coordinate the default Claude+Codex development duo from either Claude Code or Codex. Both models independently research, analyze, and plan; Claude leads design and final independent review; Codex implements and first-verifies; the host reconciles a versioned dual-approved plan and evidence ledger. Use for planned feature, fix, refactor, or documentation work with acceptance criteria. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
-# cf-model-orchestrator — the duo, by default
+# cf-model-orchestrator — host-neutral development duo
 
-The duo — codex as a second, independently-trained model beside the
-`cf-reviewer` subagent — is the **default for all dev work**: each model reviews
-the other's work, every time (operator policy; this reverses the earlier
-stakes-gated design). This axis is **orthogonal** to the weight ladder in
-`cf-method` (how *much* process): it sets *who reviews*. Solo — the independent
-review pass alone — is not a choice but the **degradation path** when the duo is
-genuinely unavailable. It never replaces `/cf-develop`; solo **is** `/cf-develop`.
+Use the duo for all non-trivial development work with acceptance criteria.
+Harness choice changes the transport and coordinator, not the roles or quality
+bar. A conversational answer or pure question needs no duo.
 
-## Preflight: duo available?
+Read [resources/quality-contract.md](resources/quality-contract.md) before
+planning. It is the shared, harness-neutral contract for plans, evidence,
+testing, coverage, UI validation, security, and final review. Harness-specific
+agents are adapters to that contract, not alternate sources of truth.
 
-1. The work must already have acceptance criteria (from an epic, task, spec, or
-   the prompt). None stated → run the clarity gate in `cf-plan` first; never
-   build against a guess.
-2. **Seat gate.** This duo is driven **from Claude Code** — the drive lane is
-   a Claude Code plugin (ADR-0018). If this session is not Claude Code, duo is
-   unavailable from this seat → **silently run solo `/cf-develop`** with the
-   harness-native independent review (a separate read-only review pass;
-   self-review is not review), and note it once in your report.
-3. **Preflight both halves** (the codex check is the same signal as
-   `cf-delegate` and `codeflow doctor` delegates):
+## Invariants
 
-   - **The plugin surface:** the `/codex:*` commands exist — `/codex:setup`
-     verifies the wiring.
-   - **codex auth:**
+- **Host coordinates.** The model running in the user's active harness owns the
+  brief, task ledger, bounded reconciliation, durable evidence, and escalation.
+- **Both think independently.** Claude and Codex research, analyze, identify
+  risks, and draft a plan in parallel before seeing the other's conclusions.
+- **Claude leads design.** Claude proposes the primary design and, unless the
+  brief already fixes a clear direction, compares 2–3 viable options. Codex
+  challenges feasibility, operability, security, and implementation detail.
+- **Codex implements.** Once both approve the same versioned plan, Codex owns
+  the implementation and first verification regardless of which harness hosts.
+- **Claude final-reviews.** Claude independently reviews the diff, design
+  conformance, security posture, and test evidence, and reruns relevant tests.
+- **Evidence outranks agreement.** A model claim, consensus, or approval never
+  substitutes for a source, file:line, command result, rendered UI observation,
+  or other reproducible evidence.
+- **Native interactive sessions only.** Each model runs in its own vendor
+  harness with its configured tools and MCP servers. Never use `codex exec`,
+  `claude -p` / `--print`, or another headless peer invocation.
+- **Bounded loops.** Plan reconciliation and post-review rework are each bounded
+  to at most two rounds. Unresolved disagreement or a red deterministic gate
+  stops for the human; no model talks it green.
 
-     ```sh
-     codex login status   # exit 0 + "Logged in using ChatGPT" → codex half ready
-     ```
+## Seat and transport matrix
 
-   Either half missing (no plugin surface; `codex` missing from PATH or
-   non-zero exit) → **duo is unavailable. Silently run solo `/cf-develop`**
-   with `cf-reviewer` as the independent pass, and note it once in your
-   report. Never prompt for `codex login` or a plugin install, never nag — duo
-   was never promised.
-4. Both halves available → **duo, always**. There is no stakes bar: a feature,
-   a fix, a docs change, a small edit — all dev work runs the duo, because the
-   cross-model review of each other's work is the point, not a premium added
-   for blast radius. The only non-duo dev path is the degradation of steps
-   2–3; the only non-duo work is a conversational answer or pure question.
+Detect capabilities, not model identity.
 
-## The duo loop
+| Active host | Peer lane | Coordinator | Fixed role binding |
+|---|---|---|---|
+| Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Claude design/final review; Codex implementation/first verification |
+| Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Claude design/final review; Codex implementation/first verification |
+| Other harness, including Hermes | Only if it can attach to both sanctioned native interactive lanes and preserve their tools, sessions, and approvals | Other host | Same fixed Claude/Codex roles |
 
-Claude is the **primary orchestrator** — it plans, analyses, designs, and drives
-the loop. Codex is the **independent second model** — it reviews the plan, then
-executes it. The roles are fixed: two independently-trained models guard the work
-at the two points self-review is weakest — the plan and the final verify.
+The desktop applications are not general automation endpoints for each other.
+Claude Code reaches Codex through the official plugin/app-server integration.
+Codex reaches Claude through the interactive Claude Code CLI; use tmux to keep
+that TTY session durable and resumable. Do not automate either desktop GUI as a
+peer protocol.
 
-1. **Plan (Claude).** Produce a plan with detailed epics/tasks and **acceptance
-   criteria that cover the happy path *and* the edge/error cases** — on the
-   capability→epic→spec→task spine (`cf-plan`, `cf-method`). The ACs are the
-   contract both models sign at plan-align and the rubric at verify.
-2. **Plan-align (codex reviews — or plans in parallel and cross-verifies).**
-   Hand codex the plan; it critiques it against the ACs, or writes its own and
-   you reconcile. Iterate to agreement, **bounded to ≤2 rounds** — no agreement
-   → stop and ask the human. Never launder a disagreement into a default.
-3. **Execute + first test (codex).** Codex implements the agreed plan on a
-   correctly prefixed feature branch in a worktree, and runs the **first round of
-   testing, including Playwright-driven UI e2e** through its MCP tool set.
-4. **Final verify + review (Claude).** Do the final testing and review yourself.
-   **Grade every acceptance criterion** (happy and edge) with file:line or
-   command evidence, plus the general test/review requirements, the
-   project-specific requirements, and the CI requirements. Spawn `cf-reviewer`
-   for the independent read-only pass.
-5. **Fix loop.** Feed findings back; codex reworks. Bounded (share the
-   `cf-develop`/pipeline rework budget). **All criteria and all gates green is a
-   MUST before any push or PR** — no model talks a red gate green.
+A non-Claude/Codex host may coordinate only when it can prove both seats and
+their tool access. Otherwise run the harness-native solo flow and report which
+seat or lane was absent. Never simulate a missing vendor with another instance
+of the host model.
 
-## Models
+## Preflight
 
-Principle: **each side runs its vendor's latest frontier model at high reasoning
-effort** — the cross-vendor, cross-training independence is the whole point, so
-never quietly drop either to a cheaper tier. Current pins (as of 2026-07-12;
-re-verify at each codex upgrade via the harness-parity canary so they cannot rot
-silently):
+1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
+   non-goals. If any are missing, run the `cf-plan` clarity gate first.
+2. Identify the active host and required lane from the matrix.
+3. Verify command and tool readiness:
+   - Codex: `codex` is present, `codex login status` succeeds, and
+     `codex mcp list` shows the tools required by the task.
+   - Claude: `claude` and `tmux` are present and `claude mcp list`
+     succeeds. Verify account access with a short **interactive** Claude canary;
+     do not treat a status subcommand as authoritative when it contradicts a
+     working authenticated TTY.
+   - Claude-host lane: the `codex@openai-codex` plugin is enabled and
+     `/codex:setup` succeeds.
+   - Codex-host lane: start Claude in a dedicated tmux session rooted at the
+     worktree and complete one scoped interactive canary.
+4. Verify task-specific tools before promising their evidence: test toolchain,
+   security scanners, Playwright/browser tools for web UI, and Computer Use or
+   a surface-specific driver for native/mobile/desktop UI.
+5. Record the selected models and reasoning levels as run evidence. Choose the
+   strongest supported model available for each seat; do not hard-code
+   fast-aging model names into this skill.
 
-- **Claude** = Fable 5, `high` (or `xhigh`) effort.
-- **Codex** = `gpt-5.6-sol` at `xhigh` — set the pin in `.codex/config.toml`:
-  `model = "gpt-5.6-sol"`, `model_reasoning_effort = "xhigh"`. `xhigh` is
-  the top tier the OpenAI API honors on a ChatGPT-OAuth account (verified
-  2026-07-12: the API rejects anything above it, and codex's own `max` /
-  `ultra` enum values give no measurable reasoning beyond `xhigh` there).
-  Don't raise the pin past `xhigh` expecting deeper reasoning without
-  first confirming the endpoint honors it.
+An absent seat at preflight degrades legibly to the harness-native solo
+`/cf-develop` flow with a separate read-only review pass. A mid-run failure
+gets a bounded retry, diagnosis, and human escalation—never a silent downgrade.
 
-## Driving codex
+## Workflow
 
-Drive codex through the official **`codex-plugin-cc`** — the OpenAI-maintained
-Claude Code plugin that wraps the codex app-server, so it gives codex's full
-tool set (including the Playwright MCP for UI e2e), resumable sessions, and
-code-answered approvals — without a hand-rolled driver to keep in step with the
-experimental app-server API (OpenAI owns that churn). It is the **only lane**:
-ADR-0018 prohibits headless `codex exec`, direct app-server driving, and
-tmux-driving codex, in the duo as everywhere else. Install once:
-`/plugin marketplace add openai/codex-plugin-cc` → `/plugin install
-codex@openai-codex` → `/reload-plugins` → `/codex:setup` (needs `codex login`).
-Use its commands for the duo:
+### 1. Independent discovery in parallel
 
-- `/codex:review` + `/codex:adversarial-review` — the plan cross-verify and the
-  cross-vendor security red-team (both read-only).
-- `/codex:rescue` — delegate execution and the first round of testing.
-- `/codex:transfer` — a persistent codex thread (`codex resume <id>`) for the
-  multi-round back-and-forth.
+Give both seats the same immutable brief and repository scope. Before exchanging
+conclusions, each seat independently returns:
 
-**Tool access — verified.** Against codex-cli 0.144.1, a delegated `/codex:rescue`
-task reports codex's **full MCP tool set** — the `playwright` MCP present with its
-24 browser tools (`browser_navigate`, `browser_click`, `browser_snapshot`, …),
-alongside codex's other MCP servers — in a resumable multi-turn thread, **not a
-headless one-shot**; the sandbox is read-only for a diagnostic and opens to
-workspace-write for a fix. Re-confirm on a new codex/plugin version, or if your
-own `~/.codex` MCP config differs, by delegating one browser e2e. If a delegated
-task genuinely can't reach the browser MCP, fix the MCP wiring (`codex mcp
-list`; cf-customize Part A carries the Playwright config block) and re-delegate
-— there is no alternate transport (ADR-0018), so a duo that cannot reach its
-tools is a mid-flow failure, not a cue to improvise a driver.
+- relevant source and documentation evidence;
+- assumptions explicitly verified or still unresolved;
+- edge/error/security cases;
+- an implementation plan and test strategy;
+- risks to compatibility, data, UX, and operations.
 
-## Security — mandatory, cross-vendor
+The host records both outputs without collapsing disagreements.
 
-A duo run **must** include a cross-vendor security / red-team pass before any push
-or PR: the pipeline `security` stage, driven by the `cf-security-reviewer` agent
-(`.claude/agents/cf-security-reviewer.md`, ADR-0016). Both
-models review for the vuln classes; the **joint verdict gates push/PR**, while the
-deterministic `codeflow test` / `codeflow validate` gate stays authoritative — a
-model verdict never turns a red deterministic gate green. The agent owns the
-checklist, schema, and blocking rule — do not redesign them here; require the
-pass and defer to it.
+### 2. Design and plan settlement
 
-## Degradation — never give up, but never lie
+Claude supplies the design options and recommendation. When the brief already
+dictates one clear design direction, record that constraint and why option
+exploration was waived. Codex reviews the design for implementation feasibility,
+failure modes, security, testing, and maintainability.
 
-Two failures, two responses — and the absent case is symmetric, either half:
+The host reconciles the two drafts into **Plan v1** using the plan contract in
+the quality resource. Both seats review exactly that version. Amendments create
+v2, v3, and so on; approval of an older version does not carry forward.
+Convergence is bounded to two reconciliation rounds. If both do not explicitly
+approve the same version, stop for the human.
 
-- **Absent at the start** (this session is not Claude Code; the plugin surface
-  is missing; codex not on PATH; or `codex login status` non-zero): duo was
-  never promised → **silently degrade to solo `/cf-develop`**, note it once,
-  carry on. In Claude Code the independent pass is the `cf-reviewer` subagent;
-  in any other harness it is a separate read-only review pass — self-review is
-  not review, and a duo you cannot drive from this seat is not simulated by
-  consulting your own vendor.
-- **Mid-flow failure** (a wedged turn, a failed MCP precheck, a crashed session,
-  a 401 mid-run): **diagnose, retry within bounds, and escalate to the human** —
-  never silently abandon the run, and never quietly finish solo as if the duo
-  pass had happened.
+### 3. Detailed tasking
 
-## Durability — push the working branch
+After dual approval, the host expands the agreed plan into ordered tasks with:
 
-If a remote is configured, **push the working branch after each committed logical
-unit** so work survives a machine failure: `-u` on the first push;
-`git push --force-with-lease` (never bare `--force`) when history was rewritten.
-This is **backup only** — it never merges and never bypasses a gate (the
-pre-commit `secret_scan` gate still protects pushed content). No remote → no-op.
+- owner and dependencies;
+- files/interfaces expected to change;
+- happy-path and edge/error acceptance criteria;
+- unit, integration, end-to-end, UI, coverage, and security evidence required;
+- rollback or recovery considerations where relevant.
 
-Report completion with the plan-align outcome, the graded criteria (each with
-evidence), the security verdict, and the gate output. Hand off to `cf-ship` to
-land it — a human merges the PR.
+Claude reviews design fidelity; Codex reviews executability. Both approve the
+task breakdown before implementation begins.
+
+### 4. Codex implementation and first verification
+
+Codex works in the scoped feature worktree, implements the approved tasks, and
+keeps the evidence ledger current. It runs formatting, static checks, unit and
+integration tests, relevant end-to-end tests, coverage, dependency/security
+checks, and UI-driven checks required by the quality contract.
+
+For a Claude host, use the official plugin:
+
+- `/codex:review` or `/codex:adversarial-review` for read-only critiques;
+- `/codex:rescue` for implementation and first verification;
+- `/codex:transfer` for a persistent task visible in Codex App/TUI.
+
+For a Codex host, implementation stays in the current Codex worktree and
+session; the Claude tmux session remains the design/review peer.
+
+### 5. Claude independent final review
+
+Claude reviews the actual diff rather than the implementation summary. It
+reruns relevant tests, grades every acceptance criterion with evidence, checks
+design conformance and UX/UI behavior, and performs the independent security
+pass. In Claude Code, `cf-reviewer` and `cf-security-reviewer` may deepen the
+pass; they do not replace Claude's cross-vendor review of Codex's work.
+
+From a Codex host, this test-running review uses a separate interactive Claude
+session with normal in-band permissions, not plan mode: plan mode is for pure
+read-only analysis and may prevent the Bash/UI actions needed for verification.
+Grant only the scoped test and inspection actions, explicitly prohibit source
+edits, and require the worktree diff to remain unchanged after review. This is
+verification authority, not an implementation handoff.
+
+Any confirmed issue returns to Codex. Rework is bounded to two rounds and
+requires fresh evidence. A deterministic failure or unverified criterion blocks
+completion.
+
+### 6. Joint closeout
+
+Both seats approve the final diff and evidence ledger. The host reports:
+
+- final plan version and both approvals;
+- design option chosen (or the recorded waiver);
+- acceptance criteria with reproducible evidence;
+- exact test, coverage, security, and UI results;
+- any explicit N/A with reason;
+- residual risks or unresolved assumptions;
+- the interactive transport used and session/canary evidence.
+
+Only then hand off to `cf-ship`. If a remote exists, push committed logical
+units for durability, but never use a backup push to imply review or merge
+approval.

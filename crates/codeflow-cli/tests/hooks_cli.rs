@@ -105,6 +105,106 @@ fn json_string(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// codeflow hook delegate-turn
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg(unix)]
+fn delegate_turn_persists_once_and_signals_scoped_tmux_channel() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let tmux = bin.join("tmux");
+    std::fs::write(
+        &tmux,
+        "#!/bin/sh\n[ \"$1\" = wait-for ] && [ \"$2\" = -S ] && [ \"$3\" = codeflow-delegate-review-42 ]\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let result = dir.path().join("result.json");
+    let payload = r#"{"hook_event_name":"Stop","session_id":"session-1","last_assistant_message":"VERDICT: approved"}"#;
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "delegate-turn", "--run-id", "review-42", "--result"])
+            .arg(&result)
+            .env("PATH", &bin)
+            .current_dir(dir.path()),
+        payload,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
+    assert_eq!(saved["run_id"], "review-42");
+    assert_eq!(saved["status"], "completed");
+    assert_eq!(saved["last_assistant_message"], "VERDICT: approved");
+    assert_eq!(
+        std::fs::metadata(&result).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let retry = run_with_stdin(
+        codeflow()
+            .args(["hook", "delegate-turn", "--run-id", "review-42", "--result"])
+            .arg(&result)
+            .env("PATH", &bin)
+            .current_dir(dir.path()),
+        payload,
+    );
+    assert_eq!(retry.status.code(), Some(0));
+
+    let conflicting = run_with_stdin(
+        codeflow()
+            .args(["hook", "delegate-turn", "--run-id", "review-42", "--result"])
+            .arg(&result)
+            .env("PATH", &bin)
+            .current_dir(dir.path()),
+        r#"{"hook_event_name":"Stop","session_id":"session-1","last_assistant_message":"different"}"#,
+    );
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&conflicting.stderr).contains("different terminal evidence"));
+}
+
+#[test]
+fn delegate_turn_rejects_missing_and_unsafe_arguments() {
+    let missing = run_with_stdin(
+        codeflow().args(["hook", "delegate-turn"]),
+        r#"{"hook_event_name":"Stop","last_assistant_message":"done"}"#,
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("--run-id is required"));
+
+    let missing_result = run_with_stdin(
+        codeflow().args(["hook", "delegate-turn", "--run-id", "review-42"]),
+        r#"{"hook_event_name":"Stop","last_assistant_message":"done"}"#,
+    );
+    assert_eq!(missing_result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&missing_result.stderr).contains("--result is required"));
+
+    let unsafe_id = run_with_stdin(
+        codeflow().args([
+            "hook",
+            "delegate-turn",
+            "--run-id",
+            "bad/channel",
+            "--result",
+            "/private/result.json",
+        ]),
+        r#"{"hook_event_name":"Stop","last_assistant_message":"done"}"#,
+    );
+    assert_eq!(unsafe_id.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&unsafe_id.stderr).contains("run id must be"));
+}
+
+// ---------------------------------------------------------------------------
 // codeflow hook git-guard
 // ---------------------------------------------------------------------------
 

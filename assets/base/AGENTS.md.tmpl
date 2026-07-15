@@ -47,7 +47,7 @@ conversational answer needs no skill.
 | Intent | Use |
 |---|---|
 | Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
-| Build planned work | `/cf-model-orchestrator` — the Claude+codex duo is the **default for all dev work**: codex cross-reviews the plan, executes, and first-tests; Claude orchestrates and final-reviews — each model reviews the other's work. Needs Claude Code as the orchestrating seat plus an authenticated codex; silently degrades to solo `/cf-develop` when either half is unavailable |
+| Plan and build non-trivial work | `/cf-model-orchestrator` — the host-neutral Claude+Codex duo is the default: both independently research/analyze/plan; Claude leads design and final review; Codex implements and first-verifies. Claude Code hosts through the official Codex plugin; Codex hosts through interactive Claude CLI + tmux. Missing seats degrade legibly to solo `/cf-develop` |
 | Build planned work when the duo is unavailable | `/cf-develop` — the solo fallback: build → independent review (`cf-reviewer`) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |

@@ -27,11 +27,19 @@ itself a blocker finding — return changes_requested.
      `--docs` is tier-graceful — it skips any absent layer with a note, so run it
      wherever `docs/` is installed; plain `codeflow validate` only at minimal
      tier, which ships no docs spine)
-5. Check discipline: tests accompany the change; required doc mutations are in
+   - the project's coverage command; require at least 80% aggregate
+     production-code line coverage where supported and target 90%+, while
+     honoring any stronger repository gate (CodeFlow itself enforces 90%)
+5. For a user-facing change, exercise the rendered product with Playwright (web)
+   or Computer Use/a surface-specific driver (native/mobile/desktop). Check the
+   approved design, loading/empty/error/success states, relevant sizes,
+   accessibility, and runtime/console errors. Record UI evidence; otherwise
+   record `UI: N/A — no user-facing surface changed`.
+6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when
    an ADR declares architecture impact, spec frozen at ship); commit subjects
    follow `type(scope): description` with no AI attribution and no emoji.
-6. Look beyond the criteria: regressions and edge cases in changed code paths,
+7. Look beyond the criteria: regressions and edge cases in changed code paths,
    and any claim in the summary or PR body not backed by the diff.
 
 ## Verdict format
@@ -49,6 +57,8 @@ criteria:
 gates:
   - codeflow test: pass | fail | unavailable — <summary line>
   - codeflow validate: pass | fail | unavailable — <summary line>
+  - coverage: <percent> | unavailable — <command and scope>
+  - UI: pass | fail | N/A — <driver and observed evidence>
 
 findings:
   - severity: blocker | major | minor

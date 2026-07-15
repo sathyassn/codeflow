@@ -8,6 +8,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The Claude+Codex duo is host-neutral and evidence-gated (ADR-0023).**
+  Claude Code hosts through the official Codex plugin; Codex App/interactive
+  CLI hosts through a task-scoped interactive Claude CLI in tmux. Both models
+  independently research/analyze/plan, Claude leads design and final review,
+  and Codex implements and first-verifies regardless of the host. A versioned
+  dual-approved plan, reproducible evidence ledger, scenario-first tests, an
+  80% coverage floor/90% target where measurable, UI-driven validation, and
+  independent security review now form one shared quality contract.
+- **Reverse-lane completion no longer relies on terminal stability.**
+  Task-scoped Claude Stop/StopFailure hooks and `last_assistant_message` are
+  the protocol signal. The new `codeflow hook delegate-turn` handler writes an
+  owner-only terminal result exactly once, permits an exact retry to re-signal,
+  rejects conflicting evidence, and releases only the matching tmux waiter;
+  pane capture is limited to the dedicated task session after completion or
+  bounded diagnosis. Doctor now checks both directions' inspectable
+  prerequisites while requiring retained interactive canaries.
+- **Batch automation no longer implies cross-vendor assurance.** The seeded
+  Claude workflow replaces its misleading `duo` preset with an explicitly
+  `single-vendor-assurance` preset and rejects old duo/plan-align semantics.
+- **Codeflow's full local gate now enforces 90% aggregate line coverage.**
+  `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` runs as a
+  full-mode target, matching the independent CI coverage threshold.
 - **Security: four enforcement-bypass fixes from the pre-release review.**
   The destructive-command guard now tokenizes `rm` instead of pattern-matching,
   so `rm -r -f /`, `rm --recursive --force /`, `rm -rf -- /`, and `rm -rf $HOME`
@@ -42,15 +64,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ("tests pass" as prose is a claim, not evidence). Every section is short
   one-line bullets — no paragraph-walls. The rule ships in the template, the
   AGENTS contracts (full and minimal), and `cf-ship`.
-- **The Claude+codex duo is the default for all dev work** (operator policy;
-  reverses the stakes-gated design). `cf-model-orchestrator` now runs for any
-  feature, change, fix, or doc change with acceptance criteria — codex
-  cross-reviews the plan, executes, and first-tests; Claude orchestrates and
-  final-reviews; each model reviews the other's work. Solo `/cf-develop` is
-  the degradation path only, when the duo is unavailable (seat/plugin/auth).
-  `cf-plan` names the duo as the default execution skill; `cf-method` and the
-  scaffolded AGENTS.md entry-point table match. The codex pin stays
-  `gpt-5.6-sol` at `xhigh` (the verified API ceiling on ChatGPT OAuth).
 - **Enforcement is the floor; the tiers scale project-management (ADR-0019).**
   The `--minimal` tier now installs the complete four-plane enforcement floor,
   not just the pre-commit secret scan: the `commit-msg`, `pre-push`,

@@ -28,9 +28,10 @@ Core modules grouped by responsibility:
   ownership classes below; sourced from the rust-embed asset provider.
 - **Enforcement** (`hooks/`, `security/`, `git/`, `integrate.rs`, `remote.rs`):
   the `git-guard` and `exec-guard` PreToolUse handlers and git-client hook
-  stages, the secret scanner, git conflict detection + CI wait, the flock-guarded
-  `integrate` primitive with its gate-context token, and the GitHub
-  remote-protect adapter.
+  stages, the owner-only `delegate-turn` Stop/StopFailure completion adapter,
+  the secret scanner, git conflict detection + CI wait, the flock-guarded
+  `integrate` primitive with its gate-context token, and the GitHub remote-
+  protect adapter.
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity
@@ -39,7 +40,9 @@ Core modules grouped by responsibility:
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
   `error.rs`): the doctor check table (11 checks — hooks, claude, codex, config,
   permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift,
-  test-config), structured settings merge,
+  test-config), including bidirectional delegate readiness (Codex auth/MCP,
+  Claude plugin/MCP, and tmux prerequisites; live interactive canaries remain
+  outside the binary), structured settings merge,
   generated status views, the test-gate engine, path flock, and pruned error
   types.
 
@@ -48,6 +51,8 @@ The test gate evaluates file and aggregate coverage rules through one verdict.
 have no explicit comparison base (ADR-0021); silently evaluating an empty set is
 not a supported degradation. Child stdout and stderr are drained into bounded
 tail buffers, with truncation recorded on each target result.
+Codeflow's own full local gate additionally runs `cargo llvm-cov` with a 90%
+aggregate line floor, matching the independent CI coverage job.
 
 Enforcement is spread across four planes: git client hooks, the in-session
 PreToolUse (Bash) guards, and remote branch protection read one config
@@ -101,6 +106,14 @@ display-only. Ledger compaction syncs the directory after installing the merged
 base and again after deleting fragments so crash ordering preserves the base.
 
 ### scaffold — `assets/`
+
+`cf-model-orchestrator` is a harness-neutral contract with two
+vendor-maintained/native adapters: Claude Code reaches Codex through the
+official plugin/app-server integration, while Codex reaches an interactive
+Claude CLI through a task-scoped tmux session. Fixed model roles, the versioned
+plan/evidence contract, and quality gates live in the shared skill resource;
+harness-specific reviewer agents only deepen that contract. The binary checks
+inspectable readiness but never routes model turns (ADR-0023).
 
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the

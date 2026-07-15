@@ -3,7 +3,7 @@ id: ADR-0018
 title: interactive-only cross-model transport — one lane per direction
 date: 2026-07-11
 status: accepted
-superseded_by: null
+superseded_by: ADR-0023
 architecture_impact: none — the rule rebinds existing skill doctrine (cf-consult, cf-delegate, cf-model-orchestrator, cf-customize) and deletes one skill resource; no engine module or boundary moves
 ---
 

@@ -15,11 +15,11 @@ inputs and verification of outputs, and lets the harness supply the middle.
 
 ## Users
 
-Solo, AI-assisted developers first — someone running Claude Code (or Codex,
-Cursor) who wants git, secret, and test discipline plus a durable why-record
-without standing up a framework. Built for the actual first user, not a
-speculative team (charter D18); multi-user and cross-harness support are
-consumed-native or deferred, never the design center.
+Solo, AI-assisted developers first—someone running Claude Code, Codex, or
+another capable host who wants git, secret, and test discipline plus a durable
+why-record without standing up a framework. Cross-harness development is a
+scaffold design center when it composes vendor-native interactive sessions;
+multi-user coordination remains deferred.
 
 ## Scope
 
@@ -34,16 +34,20 @@ consumed-native or deferred, never the design center.
   enforcement floor is the same at every tier and the tiers scale only the
   project-management on top (ADR-0019) — the binary validating every shape so
   growth is mechanical.
+- Host-neutral skill contracts for a Claude+Codex development duo: parallel
+  independent planning, fixed design/implementation/review roles, versioned
+  dual approval, and evidence-based verification through each vendor's native
+  interactive harness (ADR-0023).
 
 ## Non-goals
 
 <!-- The most load-bearing section in this file. Things this project will NOT
      do, stated explicitly so planning can be checked against them. -->
 
-- **Not a harness, agent framework, or orchestrator.** No model router, no
-  daemon, no autorun. Claude Code's native primitives — subagents, workflows,
-  worktrees, tasks, memory, sandbox, permissions — are consumed, never
-  reimplemented (charter §1).
+- **Not a runtime harness, agent framework, or model router.** No daemon or
+  autorun. Vendor-native sessions, plugins, tools, worktrees, tasks, memory,
+  sandbox, and permissions are composed at the process boundary, never
+  reimplemented (charter §1; ADR-0023).
 - **Not a process-enforcement engine.** No phase ordering, role boundaries, or
   review-before-X sequencing in code; gates exist only where a mistake is
   irreversible or invisible (charter §6.6).

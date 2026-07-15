@@ -59,9 +59,17 @@ git push -u origin chore/release   # then open the PR
     the installed Codex no longer recognizes.
   - The Claude settings/hook schema (`.claude/settings.json`) still matches
     what the installed Claude Code expects.
+  - The host-neutral duo contract test passes, and both native interactive
+    lanes complete a scoped canary with the task's required MCP tools:
+    Claude Code → Codex through the enabled official plugin, and Codex →
+    Claude through task-scoped tmux with Stop/StopFailure hook completion.
+    Record versions, exact commands, and observed tool access. Do not accept
+    auth status output in place of a working interactive session.
+  - `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
+    locally; CI billing/availability never substitutes for this evidence.
 
-  Update the harness versions recorded in ADR-0008/ADR-0013/ADR-0014 and
-  docs/adoption.md's cross-harness section if anything drifted.
+  Record new verification in a current ADR/release note and update
+  docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
 - After merge, tag the release; the tag drives cargo-dist:
 
   ```sh

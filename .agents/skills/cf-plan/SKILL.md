@@ -17,7 +17,13 @@ You are planning work, not building it.
    questions until you can. Never assume.
 4. Check the request against `product.md` non-goals; surface conflicts instead
    of planning around them.
-5. Draft on a `plan/` branch, matching artifact to work weight. An **epic** (in
+5. For duo-capable work, invoke `cf-model-orchestrator` **now**, at independent
+   research/analysis/planning—not only after a host-written plan exists. Give
+   both seats the same immutable brief; let the orchestrator settle the
+   versioned dual-approved plan and detailed task breakdown, then pause before
+   implementation for the required approval. If a required seat is unavailable,
+   record the legible solo degradation and continue with this planning flow.
+6. Draft on a `plan/` branch, matching artifact to work weight. An **epic** (in
    `project-management/epics/`) is warranted only for a body of work that is >1
    PR, >1 session, or spans multiple capabilities; anything smaller is a single
    task with acceptance criteria and no epic — an epic never gates a single
@@ -26,10 +32,10 @@ You are planning work, not building it.
    schema change, boundary change). For a multi-task epic, propose the
    integration-branch flow, `integration/<epic-id>-<slug>` (see cf-method,
    "Managing a body of work").
-6. Name the execution skill in the plan — `/cf-model-orchestrator` (the
-   Claude+codex duo, each model reviewing the other's work) is the **default
-   for all dev work**; solo `/cf-develop` appears in a plan only as the noted
-   fallback for when the duo is unavailable. Naming it now makes the build
-   path a reviewed choice, not an in-flight default.
-7. Run `codeflow validate`, then present the plan for approval. Do not start
+7. Record the execution contract — `/cf-model-orchestrator` is the default for
+   all dev work, with Claude as design lead/final reviewer and Codex as
+   implementer/first verifier regardless of the host. Solo `/cf-develop`
+   appears only as the noted fallback when a required interactive seat is
+   unavailable.
+8. Run `codeflow validate`, then present the plan for approval. Do not start
    building — that is `cf-develop`.

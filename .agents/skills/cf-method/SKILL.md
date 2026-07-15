@@ -18,19 +18,24 @@ subagent in Claude Code; a separate read-only interactive review pass on any
 other harness, never headless (cf-develop carries the same branch) — review is
 a stage, not a courtesy, and self-review is not review. Selecting the execution
 skill is itself a planning decision, orthogonal to weight: the rungs below set
-how much *process*; *who reviews* is set too — the duo (codex as a second,
-independently-trained model beside the independent pass, each reviewing the
-other's work) is the **default for all dev work**; solo is only the
-degradation when the duo is unavailable (`cf-model-orchestrator`). Make the
-weight call in `cf-plan`, not mid-build.
+how much *process*. The duo is the default for all dev work and is host-neutral:
+both models independently research/analyze/plan; Claude leads design and final
+review; Codex implements and first-verifies; the active harness coordinates.
+Solo is only the legible degradation when a required interactive seat is
+unavailable (`cf-model-orchestrator`). Make the weight call in `cf-plan`, not
+mid-build.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Inline `/cf-develop` loop** for interactive work — the default path:
-  build → independent review → verify, with bounded rework.
+- **Interactive `/cf-model-orchestrator` loop** for duo-capable work — the
+  default path: parallel discovery → versioned dual-approved plan → Codex build
+  and first verification → independent Claude review, with bounded rework.
+- **Inline `/cf-develop` loop** for the solo fallback: build → independent
+  review → verify, with bounded rework.
 - **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`, Claude Code) for
-  unattended, batch, or parallel fan-out runs — the same build/review/verify
-  stages, composed from a named preset. (Workflows are a Claude-Code runtime;
-  on another harness this rung is unavailable — escalate by other means.)
+  unattended, batch, or parallel fan-out runs. Its assurance preset is
+  explicitly single-vendor; it never claims the interactive duo's dual approval.
+  (Workflows are a Claude-Code runtime; on another harness this rung is
+  unavailable—use that harness's native task composition.)
 - **Custom ad-hoc workflow** (Claude Code) when no preset fits — for genuinely
   novel orchestration (a one-off audit sweep, a migration), not a shortcut around
   the review stage. Presets are defaults, not constraints.

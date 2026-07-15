@@ -1,6 +1,6 @@
 ---
 name: cf-customize
-description: Walk a codeflow-scaffolded project and tailor it to the project — verify the tools its flows need (git and the harness for every flow; for the duo flow the codex-plugin-cc plugin, codex, and its MCP servers; tmux where a codex seat consults claude; the stack's test toolchain) and offer to install or fix what is missing, then fill the project-owned specifics that `codeflow init` leaves generic — docs/product.md, the AGENTS.md/CLAUDE.md project sections, policy.json gate levels, and model pins. Analysis-then-propose — a prioritized report first, then applied interactively on a working branch through a PR. Use after `codeflow init`, or any time the codeflow surface needs tailoring or a `codeflow update` brought new defaults to decide. Never auto-installs a tool and never auto-runs itself — it offers, you confirm.
+description: Tailor a Codeflow scaffold to its project. Verify the core harness and test tools plus both interactive duo lanes—Claude Code to Codex through the official plugin, and Codex to Claude through tmux—along with task-specific MCP/UI tools. Then propose project-owned docs, policy, workflow, and model-selection changes. Use after init or when an update brings defaults to decide. Analyze before editing; never auto-install tools.
 ---
 
 # cf-customize — tailor a scaffolded project to itself
@@ -34,43 +34,32 @@ artifacts still sitting at template defaults.
 First decide **which flows this project uses**, then verify each flow's tools:
 
 - **Solo** (`/cf-develop`) — always in play.
-- **Duo** (`/cf-model-orchestrator`) — when codex is configured (a `.codex/`
-  starter is present, or the orchestrator skill is in the set). The duo is
-  driven **from Claude Code** through the `codex-plugin-cc` plugin (ADR-0018);
-  from any other harness it is unavailable, so verify its tooling *for* the
-  Claude Code seat rather than for this session.
-- **Batch** — the pipeline preset; needs the core tools plus whatever stages it
-  composes (often the duo stages).
+- **Duo** (`/cf-model-orchestrator`) — host-neutral when both native
+  interactive seats are available: Claude Code → Codex through the official
+  plugin, or Codex → Claude through interactive Claude CLI + tmux (ADR-0023).
+- **Batch** — the pipeline preset; single-vendor by design, even when its
+  assurance stages resemble parts of the duo.
 
 Then verify and **offer** remediation — never install silently.
 
-- **Core (every flow).** git, the `codeflow` binary, and the harness (`claude` /
-  `codex`). Read these off **`codeflow doctor`** rather than reinventing them: its
-  `claude` check is harness presence, its `delegates` check is codex presence +
-  authentication. Lean on that output.
+- **Core (every flow).** git, the `codeflow` binary, the active harness, and the
+  stack test toolchain. Read inspectable health from **`codeflow doctor`**; its
+  `delegates` check covers both CLIs, Codex auth/MCP, the Claude plugin/MCP, and
+  tmux. Retain live interactive canaries because status commands cannot prove a
+  native TTY session and its tools work.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
-  - **codex driver** — the official **`codex-plugin-cc`** plugin is the **only
-    lane** for driving codex from Claude Code (ADR-0018: it wraps the
-    app-server, is OpenAI-maintained, and spares a hand-rolled driver; headless
-    `codex exec`, direct app-server driving, and tmux-driving codex are all
-    prohibited). Check whether it is installed; if not, see the remediation
-    rule — the fix runs only from a Claude Code session.
-  - **Installed + authenticated** — `codex login status` (exit 0 +
-    "Logged in using ChatGPT"; the same signal doctor's `delegates` reports).
-  - **Healthy** — `codex doctor` (it diagnoses installation, config, auth, and
-    runtime health; flag a damaged state DB or any issue it reports), and
-    `codex --version` against the codex-cli version the plugin lane's MCP
-    access was last verified on (0.144.1, in the orchestrator's "Tool access —
-    verified" note) so that verification cannot rot.
-  - **Required MCP servers READY** — `codex mcp list` (configured servers +
-    status). For the duo's UI e2e, **Playwright** must be present *with tools*
-    — confirm by delegating one browser e2e through the plugin, per the
-    orchestrator's verify note. `computer-use` is optional and desktop-only; it
-    is not needed — Playwright covers web e2e.
-  - **tmux** — needed only for the **codex → claude lane** (a codex seat
-    consulting claude by driving the interactive `claude` CLI — see
-    `cf-delegate`). It is not a duo driver: the duo runs from Claude Code
-    through the plugin, and tmux-driving codex is prohibited (ADR-0018).
+  - **Claude-host lane** — `codex login status`, `codex mcp list`, the enabled
+    `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
+    plugin is the only sanctioned Claude → Codex transport; never use headless
+    `codex exec`, a hand-rolled app-server driver, or tmux-driving Codex.
+  - **Codex-host lane** — `claude`, `tmux`, and `claude mcp list`, followed by
+    an authenticated interactive TTY canary and a task-scoped tmux round trip
+    using Stop/StopFailure hook completion. Never use `claude -p` or pane
+    stability as the work protocol.
+  - **Task tools** — Playwright or an equivalent browser driver for web UI;
+    Computer Use or a surface-specific driver for native/mobile/desktop UI;
+    the project's format, lint, test, coverage, and security tools. Prove tool
+    access through the actual peer lane, not only by listing configuration.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
@@ -87,8 +76,9 @@ or outward action. The fixes:
   Code slash commands — if this session is another harness, do **not** offer
   them; report the gap for the user to fix from a Claude Code session.
 - codex present but unauthenticated → `codex login`
-- codex behind the pinned version → `codex update`
-- tmux absent (and the project has codex seats that consult claude) →
+- outdated Codex or Claude CLI → present the vendor-supported update command
+  after checking current release guidance; never rely on a version pinned here
+- tmux absent →
   `brew install tmux` (or the platform's package manager)
 - Playwright MCP absent → add a block to `~/.codex/config.toml`, then confirm it
   reads READY with `codex mcp list`:
@@ -99,11 +89,9 @@ or outward action. The fixes:
   args = ["-y", "@playwright/mcp@latest"]
   ```
 
-If a tool is simply absent and the user declines the fix, **degrade legibly** —
-name what the project loses. The duo flow already falls back to solo `/cf-develop`
-silently when either half is missing — a non-Claude-Code seat, the plugin
-surface, or codex itself (`cf-model-orchestrator`'s degradation); say so, so
-declining is an informed choice, not a surprise.
+If a tool is absent and the user declines the fix, **degrade legibly**—name the
+missing lane/evidence and use solo `/cf-develop`. Never label the run duo or
+quietly replace the missing vendor with another instance of the host model.
 
 ## Part B — project-artifact customization
 
@@ -130,12 +118,13 @@ draft and confirm.
   every commit; (c) any other trailer a workflow needs → add it to
   `commit_footer_tokens` to allow it. Leave every list empty for the strict
   default — an agent fills any slot you open, so open only what you mean.
-- **`.claude/workflows/pipeline.workflow.js`** — per-stage models and whether to
-  default to the duo preset. It is user-owned; `codeflow update` never touches it.
-- **`.codex/config.toml`** — model pins and MCP servers (adding Playwright for duo
-  e2e is the concrete gap surfaced in Part A).
-- **`cf-model-orchestrator` model pins** — Claude Fable 5 / codex `gpt-5.6-sol`,
-  if the project runs the duo flow (see the orchestrator's Models section).
+- **`.claude/workflows/pipeline.workflow.js`** — per-stage model selection and
+  the honest single-vendor assurance preset. It is user-owned; `codeflow update`
+  never touches it.
+- **Harness model/MCP config** — choose the strongest supported model and high
+  reasoning available to each seat, and configure the MCP/UI tools the project
+  needs. Record selected versions as run evidence; keep fast-aging model names
+  out of shared skills and doctrine.
 
 For each: propose the change, get the user's content, write it, commit in a
 scoped unit, and push for durability. `codeflow validate` and `codeflow doctor`

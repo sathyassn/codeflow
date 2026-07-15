@@ -494,49 +494,98 @@ fn check_network(opts: &Options) -> CheckResult {
     }
 }
 
-/// Cross-vendor delegation readiness (ADR-0005). Optional by design, so a
-/// missing or unauthenticated delegate warns — never fails. `codex` is the
-/// only sanctioned delegate transport is interactive (ADR-0018): the
-/// codex-plugin-cc plugin from Claude Code. `agy` is reported informationally
-/// only — it is not a delegate tier (headless-only; retired per ADR-0018).
+/// Bidirectional cross-vendor delegation readiness (ADR-0023). Optional by
+/// design, so a missing prerequisite warns — never fails. The Claude-host lane
+/// uses the official codex plugin; the Codex-host lane uses an interactive
+/// Claude CLI in tmux. This check verifies inspectable prerequisites only:
+/// live account/tool access still requires an interactive canary in each lane.
+/// `agy` is informational because it has no sanctioned interactive lane.
 fn check_delegates(opts: &Options) -> CheckResult {
     let start = Instant::now();
 
-    // `agy` presence is informational; codex authentication decides pass/warn.
     let agy_note = if opts.do_look_path("agy").is_ok() {
-        "; agy present (not a delegate tier — retired per ADR-0018; git hooks + CI still bind it)"
+        "; agy present (not a delegate tier — no sanctioned interactive lane)"
     } else {
         ""
     };
 
-    let Ok(codex_bin) = opts.do_look_path("codex") else {
-        return CheckResult {
-            name: "delegates".into(),
-            status: Status::Warn,
-            message: format!(
-                "codex not found in PATH — cross-vendor delegation unavailable (optional){agy_note}"
-            ),
-            duration: start.elapsed(),
-        };
-    };
+    let mut gaps = Vec::new();
 
-    // `codex login status` exits 0 only when subscription-authenticated.
-    match opts.do_exec(&codex_bin, &["login", "status"]) {
-        Ok(_) => CheckResult {
+    match opts.do_look_path("codex") {
+        Ok(codex_bin) => {
+            if opts.do_exec(&codex_bin, &["login", "status"]).is_err() {
+                gaps.push("Codex auth unavailable (run `codex login`)".to_string());
+            }
+            if opts.do_exec(&codex_bin, &["mcp", "list"]).is_err() {
+                gaps.push("Codex MCP inventory unavailable (run `codex mcp list`)".to_string());
+            }
+        }
+        Err(_) => gaps.push("codex missing from PATH".to_string()),
+    }
+
+    match opts.do_look_path("claude") {
+        Ok(claude_bin) => {
+            if opts.do_exec(&claude_bin, &["mcp", "list"]).is_err() {
+                gaps.push("Claude MCP inventory unavailable (run `claude mcp list`)".to_string());
+            }
+
+            match opts.do_exec(&claude_bin, &["plugin", "list", "--json"]) {
+                Ok(json) if codex_plugin_enabled(&json) => {}
+                Ok(_) => gaps.push(
+                    "codex@openai-codex plugin not enabled (install it in Claude Code and run /codex:setup)"
+                        .to_string(),
+                ),
+                Err(_) => gaps.push(
+                    "Claude plugin inventory unavailable (run `claude plugin list --json`)"
+                        .to_string(),
+                ),
+            }
+        }
+        Err(_) => gaps.push("claude missing from PATH".to_string()),
+    }
+
+    if opts.do_look_path("tmux").is_err() {
+        gaps.push("tmux missing from PATH".to_string());
+    }
+
+    if gaps.is_empty() {
+        CheckResult {
             name: "delegates".into(),
             status: Status::Pass,
-            message: format!("codex: subscription-authenticated{agy_note}"),
+            message: format!(
+                "bidirectional prerequisites present (Codex auth/MCP + Claude plugin/MCP + tmux); retain live interactive canaries for both lanes{agy_note}"
+            ),
             duration: start.elapsed(),
-        },
-        Err(_) => CheckResult {
+        }
+    } else {
+        CheckResult {
             name: "delegates".into(),
             status: Status::Warn,
             message: format!(
-                "codex present but not authenticated — run `codex login` to enable delegation{agy_note}"
+                "cross-vendor delegation is partially unavailable (optional): {}. Verify Claude auth with an interactive TTY canary; status output alone is not authoritative{agy_note}",
+                gaps.join("; ")
             ),
             duration: start.elapsed(),
-        },
+        }
     }
+}
+
+fn codex_plugin_enabled(json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|value| {
+            value.as_array().map(|plugins| {
+                plugins.iter().any(|plugin| {
+                    plugin.get("id").and_then(serde_json::Value::as_str)
+                        == Some("codex@openai-codex")
+                        && plugin
+                            .get("enabled")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                })
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Repository structural integrity (ADR-0007). Two failure signatures, both
@@ -1222,56 +1271,109 @@ mod tests {
     }
 
     #[test]
-    fn test_check_delegates_codex_authenticated_passes() {
+    fn test_check_delegates_bidirectional_prerequisites_pass() {
         let mut opts = test_opts();
-        opts.look_path = Some(|name| {
-            if name == "codex" {
-                Ok("/usr/local/bin/codex".into())
+        opts.look_path = Some(|name| match name {
+            "codex" => Ok("/usr/local/bin/codex".into()),
+            "claude" => Ok("/usr/local/bin/claude".into()),
+            "tmux" => Ok("/usr/local/bin/tmux".into()),
+            _ => Err("not found".into()),
+        });
+        opts.exec_command = Some(|_, args| {
+            if args == ["plugin", "list", "--json"] {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":true}]"#.into())
             } else {
-                Err("not found".into())
+                Ok("ready".into())
             }
         });
-        opts.exec_command = Some(|_, _| Ok("Logged in using ChatGPT".into()));
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Pass);
         assert!(
-            result.message.contains("subscription-authenticated"),
+            result.message.contains("bidirectional prerequisites"),
             "got: {}",
             result.message
         );
+        assert!(result.message.contains("interactive canaries"));
     }
 
     #[test]
-    fn test_check_delegates_codex_missing_warns_not_fails() {
-        // test_opts look_path always errs → codex absent. Optional, so warn.
+    fn test_check_delegates_all_tools_missing_warns_not_fails() {
+        // Optional capability: absence is explicit but never a doctor failure.
         let opts = test_opts();
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Warn);
         assert!(
-            result.message.contains("optional"),
+            result.message.contains("codex missing"),
+            "got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("claude missing"),
+            "got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("tmux missing"),
             "got: {}",
             result.message
         );
     }
 
     #[test]
-    fn test_check_delegates_codex_present_unauthenticated_warns_with_remedy() {
+    fn test_check_delegates_reports_auth_mcp_and_plugin_gaps() {
         let mut opts = test_opts();
-        opts.look_path = Some(|name| {
-            if name == "codex" {
-                Ok("/usr/local/bin/codex".into())
+        opts.look_path = Some(|name| match name {
+            "codex" => Ok("/usr/local/bin/codex".into()),
+            "claude" => Ok("/usr/local/bin/claude".into()),
+            "tmux" => Ok("/usr/local/bin/tmux".into()),
+            _ => Err("not found".into()),
+        });
+        opts.exec_command = Some(|cmd, args| {
+            if cmd.contains("claude") && args == ["plugin", "list", "--json"] {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":false}]"#.into())
             } else {
-                Err("not found".into())
+                Err("not ready".into())
             }
         });
-        // exec_command errs → `codex login status` nonzero → unauthenticated.
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Warn);
         assert!(
             result.message.contains("codex login"),
-            "remedy line: {}",
+            "got: {}",
             result.message
         );
+        assert!(
+            result.message.contains("Codex MCP"),
+            "got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("Claude MCP"),
+            "got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("plugin not enabled"),
+            "got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("interactive TTY"),
+            "got: {}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn test_codex_plugin_enabled_requires_exact_enabled_plugin() {
+        assert!(codex_plugin_enabled(
+            r#"[{"id":"codex@openai-codex","enabled":true}]"#
+        ));
+        assert!(!codex_plugin_enabled(
+            r#"[{"id":"codex@openai-codex","enabled":false}]"#
+        ));
+        assert!(!codex_plugin_enabled(r#"[{"id":"other","enabled":true}]"#));
+        assert!(!codex_plugin_enabled("not-json"));
     }
 
     #[test]
@@ -1279,10 +1381,18 @@ mod tests {
         let mut opts = test_opts();
         opts.look_path = Some(|name| match name {
             "codex" => Ok("/usr/local/bin/codex".into()),
+            "claude" => Ok("/usr/local/bin/claude".into()),
+            "tmux" => Ok("/usr/local/bin/tmux".into()),
             "agy" => Ok("/usr/local/bin/agy".into()),
             _ => Err("not found".into()),
         });
-        opts.exec_command = Some(|_, _| Ok("Logged in".into()));
+        opts.exec_command = Some(|_, args| {
+            if args == ["plugin", "list", "--json"] {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":true}]"#.into())
+            } else {
+                Ok("ready".into())
+            }
+        });
         let result = check_delegates(&opts);
         assert_eq!(result.status, Status::Pass);
         assert!(
