@@ -852,6 +852,71 @@ fn update_replaces_unmodified_managed_files() {
 }
 
 #[test]
+fn update_keeps_existing_user_owned_baseline_stable_after_root_rename() {
+    isolate_git();
+    let (project, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    let live_before = read(&root, "docs/product.md");
+    let baseline_before = read(&root, ".codeflow/.baseline/docs/product.md");
+    let manifest_before: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+    let hash_before = manifest_before["files"]["docs/product.md"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let renamed_root = project.path().join("linked-worktree-name");
+    std::fs::rename(&root, &renamed_root).unwrap();
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &renamed_root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, "docs/product.md"), Action::Skipped);
+    assert_eq!(read(&renamed_root, "docs/product.md"), live_before);
+    assert_eq!(
+        read(&renamed_root, ".codeflow/.baseline/docs/product.md"),
+        baseline_before,
+        "a linked worktree name must not rewrite a write-once doc baseline"
+    );
+    let manifest_after: serde_json::Value =
+        serde_json::from_str(&read(&renamed_root, ".codeflow/manifest.json")).unwrap();
+    assert_eq!(
+        manifest_after["files"]["docs/product.md"]["sha256"].as_str(),
+        Some(hash_before.as_str()),
+        "a linked worktree name must not rewrite the installed snapshot hash"
+    );
+}
+
+#[test]
+fn update_restores_a_missing_user_owned_baseline_without_touching_the_live_file() {
+    isolate_git();
+    let (_project, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    let live_before = read(&root, "docs/product.md");
+    let baseline_before = read(&root, ".codeflow/.baseline/docs/product.md");
+    std::fs::remove_file(root.join(".codeflow/.baseline/docs/product.md")).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, "docs/product.md"), Action::Skipped);
+    assert_eq!(read(&root, "docs/product.md"), live_before);
+    assert_eq!(
+        read(&root, ".codeflow/.baseline/docs/product.md"),
+        baseline_before,
+        "a missing write-once baseline should self-heal from the current scaffold"
+    );
+    let notes = &report
+        .files
+        .iter()
+        .find(|file| file.dest == "docs/product.md")
+        .unwrap()
+        .notes;
+    assert!(notes.iter().any(|note| note.contains("baseline restored")));
+}
+
+#[test]
 fn update_three_way_merges_user_modified_file() {
     isolate_git();
     let (_p, root) = project_dir();

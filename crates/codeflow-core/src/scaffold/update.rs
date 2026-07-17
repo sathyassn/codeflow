@@ -406,13 +406,20 @@ fn update_entry(
             if is_json {
                 sync_user_owned_json(root, entry, &rendered, installed, report, diffs)?;
             } else {
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Skipped,
-                    vec!["user-owned: never mutated by update".to_string()],
-                );
-                Baseline::write(root, &entry.dest, &rendered)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                let mut notes = vec!["user-owned: never mutated by update".to_string()];
+                let is_new_entry = !installed.files.contains_key(&entry.dest);
+                let baseline_missing = Baseline::read(root, &entry.dest).is_none();
+                if is_new_entry || baseline_missing {
+                    Baseline::write(root, &entry.dest, &rendered)?;
+                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    notes.push(if is_new_entry {
+                        "existing file adopted into the installed manifest".to_string()
+                    } else {
+                        "missing shipped baseline restored without changing the live file"
+                            .to_string()
+                    });
+                }
+                report.file_with_notes(&entry.dest, Action::Skipped, notes);
             }
         }
     }

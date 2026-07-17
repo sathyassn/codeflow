@@ -11,7 +11,7 @@
     ".agents/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "5f8284e126f5872c74643fcba5255d49cfb22963f28e45b2d51a70f6c2c3659a",
+      "sha256": "d9be0ad6b7fb6289510bec67b0f6f13602c1868e1e4c0593d924e149a9240832",
       "exec": false
     },
     ".agents/skills/cf-delegate/SKILL.md": {
@@ -41,7 +41,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "01eb7a536579ce5e3d4c3b74b33554753ec3d56cd5cf7bfd381105dec06bd645",
+      "sha256": "05d110bc0e6cc0a364813ecbb0eefb5913f5a0b74404a61704ad632fcf70e54d",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -83,7 +83,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "9656cfa18366786abfae860f45de2af141652724a3b7990c583407ffaaa12dca",
+      "sha256": "62dfc805b28bd2a8f43155d28db435ba8af19361af35d0a17b072cd9b68ddf92",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -95,7 +95,7 @@
     ".claude/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "5f8284e126f5872c74643fcba5255d49cfb22963f28e45b2d51a70f6c2c3659a",
+      "sha256": "d9be0ad6b7fb6289510bec67b0f6f13602c1868e1e4c0593d924e149a9240832",
       "exec": false
     },
     ".claude/skills/cf-delegate/SKILL.md": {
@@ -125,7 +125,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "01eb7a536579ce5e3d4c3b74b33554753ec3d56cd5cf7bfd381105dec06bd645",
+      "sha256": "05d110bc0e6cc0a364813ecbb0eefb5913f5a0b74404a61704ad632fcf70e54d",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -197,7 +197,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "4234a1b004e3f92608ed27eae854a36a29a2300bfe5e2347dfcfb8bc90e98ff5",
+      "sha256": "ce8974ebb3a19e7a12a0e115721149fc0d5f48d6c01ea837bb50dfd2acad8d95",
       "exec": false
     },
     ".codex/hooks.json": {

@@ -4,7 +4,9 @@
 # profile below is the OS-enforced boundary: normal work has workspace write
 # access, broad public-network access, and loopback access for local UI testing,
 # while sensitive files, private-network destinations, privileged operations,
-# and destructive escalations remain guarded.
+# and destructive escalations remain guarded. Eligible escalation prompts go
+# to Codex's reviewer subagent. Select `user` in the project or launch override
+# where policy requires a human decision; managed requirements can enforce it.
 
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
@@ -13,6 +15,11 @@ default_permissions = "cf-guard"
 
 [features]
 hooks = true
+
+# Keep Codex's built-in case-insensitive KEY/SECRET/TOKEN environment scrub
+# active for every shell command even if the upstream default changes.
+[shell_environment_policy]
+ignore_default_excludes = false
 
 [permissions.cf-guard]
 extends = ":workspace"
@@ -29,16 +36,27 @@ glob_scan_max_depth = 6
 "~/.netrc" = "deny"
 "~/.kube/**" = "deny"
 "~/.cargo/credentials*" = "deny"
+"~/.codex/auth.json" = "deny"
 
 [permissions.cf-guard.filesystem.":workspace_roots"]
 "**/.env" = "deny"
 "**/.env.*" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/*.p12" = "deny"
+"**/*.pfx" = "deny"
+"**/.netrc" = "deny"
+"**/id_rsa*" = "deny"
+"**/id_ed25519*" = "deny"
 
 # Allow research, dependency resolution, and external tool APIs on public
 # hosts. Keep private/link-local destinations and arbitrary Unix sockets closed;
 # exact loopback exceptions support local dev servers and browser/UI tests.
 [permissions.cf-guard.network]
 enabled = true
+# Use the full subprocess-network proxy so public research, package managers,
+# and authenticated tool APIs are not constrained by the limited proxy mode.
+# The domain rules and private-network boundary below still constrain targets.
 mode = "full"
 allow_local_binding = false
 allow_upstream_proxy = false

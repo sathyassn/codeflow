@@ -54,6 +54,11 @@ fn autonomy_and_automatic_review_are_enabled() {
     assert_eq!(cfg["approvals_reviewer"].as_str(), Some("auto_review"));
     assert_eq!(cfg["web_search"].as_str(), Some("live"));
     assert_eq!(cfg["features"]["hooks"].as_bool(), Some(true));
+    assert_eq!(
+        cfg["shell_environment_policy"]["ignore_default_excludes"].as_bool(),
+        Some(false),
+        "the built-in KEY/SECRET/TOKEN environment scrub must stay enabled"
+    );
 }
 
 #[test]
@@ -61,7 +66,11 @@ fn network_allows_public_research_and_exact_loopback_only() {
     let cfg = shipped_config();
     let network = cf_guard(&cfg, "network");
     assert_eq!(network["enabled"].as_bool(), Some(true));
-    assert_eq!(network["mode"].as_str(), Some("full"));
+    assert_eq!(
+        network["mode"].as_str(),
+        Some("full"),
+        "full subprocess access for public research and tool traffic is intentional"
+    );
     assert_eq!(network["allow_local_binding"].as_bool(), Some(false));
     assert_eq!(network["allow_upstream_proxy"].as_bool(), Some(false));
     for key in [
@@ -88,14 +97,30 @@ fn cf_guard_denies_pure_secret_stores_and_workspace_env_files() {
     let cfg = shipped_config();
     let fs = cf_guard(&cfg, "filesystem");
     assert_eq!(fs["glob_scan_max_depth"].as_integer(), Some(6));
-    for key in ["~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.netrc"] {
+    for key in [
+        "~/.ssh/**",
+        "~/.aws/**",
+        "~/.gnupg/**",
+        "~/.netrc",
+        "~/.codex/auth.json",
+    ] {
         assert_eq!(fs[key].as_str(), Some("deny"), "missing deny for {key}");
     }
 
     let workspace = fs[":workspace_roots"]
         .as_table()
         .expect("workspace-relative filesystem table exists");
-    for key in ["**/.env", "**/.env.*"] {
+    for key in [
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/*.key",
+        "**/*.p12",
+        "**/*.pfx",
+        "**/.netrc",
+        "**/id_rsa*",
+        "**/id_ed25519*",
+    ] {
         assert_eq!(
             workspace[key].as_str(),
             Some("deny"),

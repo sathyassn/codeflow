@@ -242,9 +242,59 @@ fn ask_arrays_gate_escalation_and_publish() {
         "Bash(git reset --hard *)",
         "Bash(git clean *)",
         "Bash(git checkout -- .)",
+        "Bash(git checkout -- *)",
+        "Bash(git checkout .)",
+        "Bash(git checkout * -- *)",
+        "Bash(git checkout -f)",
+        "Bash(git checkout -f *)",
+        "Bash(git checkout --force)",
+        "Bash(git checkout --force *)",
+        "Bash(git checkout -B *)",
+        "Bash(git switch -C *)",
+        "Bash(git switch --force-create *)",
+        "Bash(git switch -f)",
+        "Bash(git switch -f *)",
+        "Bash(git switch --force)",
+        "Bash(git switch --force *)",
+        "Bash(git switch --discard-changes)",
+        "Bash(git switch --discard-changes *)",
         "Bash(git restore .)",
+        "Bash(git restore *)",
+        "Bash(git stash drop)",
         "Bash(git stash drop *)",
         "Bash(git stash clear)",
+        "Bash(git push --force)",
+        "Bash(git push --force *)",
+        "Bash(git push -f)",
+        "Bash(git push -f *)",
+        "Bash(git push * --force)",
+        "Bash(git push * --force *)",
+        "Bash(git push * -f)",
+        "Bash(git push * -f *)",
+        "Bash(git push --delete *)",
+        "Bash(git push * --delete *)",
+        "Bash(git push -d *)",
+        "Bash(git push * -d *)",
+        "Bash(git push +*)",
+        "Bash(git push * +*)",
+        "Bash(git push --mirror *)",
+        "Bash(git push * --mirror *)",
+        "Bash(git push --prune *)",
+        "Bash(git push * --prune *)",
+        "Bash(git branch -d *)",
+        "Bash(git branch -D *)",
+        "Bash(git branch --delete *)",
+        "Bash(git branch --delete --force *)",
+        "Bash(git branch --force --delete *)",
+        "Bash(git branch -d -f *)",
+        "Bash(git branch -f -d *)",
+        "Bash(git branch -f *)",
+        "Bash(git branch --force *)",
+        "Bash(git branch -M *)",
+        "Bash(git branch -m -f *)",
+        "Bash(git branch -m --force *)",
+        "Bash(git branch --move -f *)",
+        "Bash(git branch --move --force *)",
         "Bash(cargo publish *)",
         "Bash(npm publish *)",
         "Bash(gh release *)",
@@ -258,6 +308,16 @@ fn ask_arrays_gate_escalation_and_publish() {
                 "{name}: ask missing {entry:?}"
             );
         }
+        assert!(
+            !perm_array(&load(&name), "allow")
+                .iter()
+                .any(|entry| entry.starts_with("Bash(git restore")),
+            "{name}: git restore must not remain in allow; ask rules take precedence"
+        );
+        assert!(
+            !ask.iter().any(|entry| entry == "Bash(git push * :*)"),
+            "{name}: a rule ending in :* is parsed as a legacy literal-prefix rule"
+        );
         // rm -rf on / and ~ is asked in some form.
         assert!(
             ask.iter()
@@ -269,6 +329,33 @@ fn ask_arrays_gate_escalation_and_publish() {
                 .any(|a| a.starts_with("Bash(rm -") && a.contains('~')),
             "{name}: ask missing an rm -rf ~ rule"
         );
+    }
+}
+
+#[test]
+fn sandbox_removes_raw_model_and_cloud_credentials_from_bash() {
+    let expected = [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ];
+
+    for name in preset_files() {
+        let value = load(&name);
+        let env_vars = value["sandbox"]["credentials"]["envVars"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: sandbox.credentials.envVars missing"));
+        for variable in expected {
+            assert!(
+                env_vars.iter().any(|entry| {
+                    entry["name"].as_str() == Some(variable)
+                        && entry["mode"].as_str() == Some("deny")
+                }),
+                "{name}: {variable} must be denied to sandboxed Bash"
+            );
+        }
     }
 }
 

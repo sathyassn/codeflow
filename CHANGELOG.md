@@ -8,6 +8,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Harness settings now close the remaining credential and destructive-action
+  gaps (ADR-0026).** Codex explicitly selects full public subprocess networking,
+  denies high-confidence workspace key/certificate files plus its raw auth
+  store to sandboxed subprocesses, and pins the built-in secret-bearing
+  environment filter. Claude removes raw Anthropic, OpenAI, and AWS credentials
+  from sandboxed Bash and asks before restore, common checkout-discard,
+  force-push, flag-based remote-delete, prune/mirror, forced local-branch
+  reset/move, and delete forms.
+  Protected-branch hooks remain the backstop for deletion-refspec syntax that
+  Claude's permission grammar cannot safely express. Public research, brokered
+  tools/MCPs, Auto-at-CLI scope, and loopback UI testing remain available.
+  Codex's automatic reviewer is a reviewer subagent, so consumers that require
+  a human for every sandbox escalation must select `user` in the project or
+  launch override and enforce it through managed requirements where available.
+- **Linked worktrees no longer rewrite write-once document baselines.** Existing
+  non-JSON user-owned files now keep their original shipped baseline and
+  manifest hash, so a different worktree directory name cannot create unrelated
+  scaffold drift. A missing baseline still self-heals from the current scaffold
+  without touching the live file; newly adopted files and schema-versioned JSON
+  keep their existing update behavior.
 - **The Claude+Codex duo is host-neutral and evidence-gated (ADR-0023).**
   Claude Code hosts through the official Codex plugin; Codex App/interactive
   CLI hosts through a task-scoped interactive Claude CLI in tmux. Both models

@@ -170,7 +170,7 @@ These are enabled in runtime settings as well as described in the skills
   without a legacy `sandbox_mode` override. It enables live search and broad
   public egress, grants exact loopback for local verification, keeps private
   destinations and arbitrary Unix sockets closed, and sends eligible
-  `on-request` escalations through automatic safety review.
+  `on-request` escalations through reviewer-subagent safety review.
 - A settings file cannot install or authenticate every task-specific tool.
   `/cf-customize` inventories and canaries authoritative-doc research, GitHub,
   the stack format/lint/test/coverage/security toolchain, browser/Playwright,
@@ -181,6 +181,20 @@ These are enabled in runtime settings as well as described in the skills
   is permitted for autonomous tool use only after `/cf-customize` proves secure
   keychain or credential-helper storage; on a keyring-less inline-credential
   host it adds a file deny until a broker is configured.
+- The shipped Claude sandbox removes the exact Anthropic, OpenAI, and AWS raw
+  credentials named in ADR-0026 from Bash without stripping credentials from
+  every hook or stdio MCP. When a project needs a raw GitHub, npm, Cargo, or
+  provider token, prefer a broker/keychain; otherwise configure Claude's
+  user/managed credential mask with TLS termination and exact `injectHosts`.
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` is a user/managed hardening option only
+  after proving the project's hooks and stdio MCPs do not require those
+  provider credentials.
+- Codex `auto_review` sends eligible escalation prompts to its reviewer
+  subagent. It preserves autonomy but does not make profile denies absolute:
+  an approved request can cross the sandbox boundary. Set
+  `approvals_reviewer = "user"` in the project or launch override when
+  organizational policy requires a human decision, and constrain allowed
+  reviewers in managed requirements where available.
 
 `docs/product.md` always describes the consuming project's purpose, users,
 scope, and non-goals—not the CodeFlow CLI. `docs/architecture.md` describes how
@@ -348,6 +362,9 @@ comes from two layers, and it helps to be precise about which does what.
   `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with a
   guarded workspace permission profile, broad public network, live search,
   `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"`.
+  The latter sends eligible prompts to a reviewer subagent, not a human; select
+  `user` in the project or launch override when policy requires a human approval
+  boundary, and enforce the allowed reviewer through managed requirements.
   The config intentionally contains no legacy `sandbox_mode`, because that
   would shadow the named profile. Codex's hook payload is byte-compatible with
   Claude's, so the same binaries run unchanged.

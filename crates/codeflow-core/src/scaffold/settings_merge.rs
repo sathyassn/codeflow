@@ -396,4 +396,37 @@ mod tests {
             .iter()
             .any(|line| line.contains("preserved user value for sandbox.enabled")));
     }
+
+    #[test]
+    fn new_ask_rule_reaches_consumers_with_a_stale_allow_entry() {
+        let user = r#"{
+            "permissions": {
+                "allow": ["Bash(git restore *)"]
+            }
+        }"#;
+        let incoming = r#"{
+            "permissions": {
+                "allow": [],
+                "ask": ["Bash(git restore *)"]
+            }
+        }"#;
+
+        let mut report = vec![];
+        let merged = merge_settings(user, incoming, &mut report).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+
+        assert!(value["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry == "Bash(git restore *)"));
+        assert!(value["permissions"]["ask"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry == "Bash(git restore *)"));
+        assert!(report
+            .iter()
+            .any(|line| line.contains("added permissions.ask")));
+    }
 }

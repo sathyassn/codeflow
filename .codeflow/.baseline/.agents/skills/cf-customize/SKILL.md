@@ -54,7 +54,8 @@ Then verify and **offer** remediation — never install silently.
     `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
     plugin is the only sanctioned Claude → Codex transport; never use headless
     `codex exec`, a hand-rolled app-server driver, or tmux-driving Codex.
-  - **Codex-host lane** — `claude`, `tmux`, and `claude mcp list`, followed by
+  - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
+    environment-variable denies), `tmux`, and `claude mcp list`, followed by
     an authenticated interactive Fable-class/xhigh TTY canary in auto mode and
     `autoMode.classifyAllShell: true` supplied through `--settings`, plus a
     task-scoped tmux round trip using Stop/StopFailure hook completion. Never
@@ -67,14 +68,21 @@ Then verify and **offer** remediation — never install silently.
       auto-approved, unsandboxed escape disabled, wildcard public-domain egress
       present for dependency/tool subprocesses, common private/link-local
       destinations denied, destructive/privileged operations asked or
-      classified, and secret reads denied. Claude ignores project
+      classified, secret reads denied, and the shipped raw Anthropic/OpenAI/AWS
+      variables absent from sandboxed Bash. Claude ignores project
       `defaultMode: auto` and `autoMode`, so offer the user-level setting or
       select auto plus `classifyAllShell` through CLI `--settings`, then prove
       both with a live canary.
     - `.codex/config.toml`: `default_permissions` selects the guarded workspace
       profile, no legacy `sandbox_mode` shadows it, public network and live web
       search are enabled, and `on-request` approvals route eligible requests to
-      `auto_review`.
+      the `auto_review` reviewer subagent. Explain that approved escalations can
+      cross the sandbox deny boundary; offer `approvals_reviewer = "user"` in
+      the project or launch override when policy requires a human for every
+      request, and verify managed reviewer constraints. Confirm the profile
+      denies workspace key/certificate files and `~/.codex/auth.json`, and that
+      `ignore_default_excludes = false` keeps
+      Codex's built-in secret-bearing environment filter active.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; Playwright or an equivalent browser driver
@@ -121,7 +129,11 @@ or outward action. The fixes:
   authentication. For Claude CLI subprocesses that require an environment
   token, offer user/CLI-level credential masking with an exact `injectHosts`
   list; project settings cannot safely configure masking. Never put a secret
-  value in repository settings, prompts, logs, or an allow rule.
+  value in repository settings, prompts, logs, or an allow rule. Offer
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` only at user/managed scope and only after
+  proving the project's hooks and stdio MCPs do not require provider
+  credentials; it strips those credentials from all three subprocess classes,
+  not only arbitrary Bash.
 - GitHub CLI or Docker needs its config → verify, without printing credential
   values, that `gh` uses secure keychain storage and Docker uses a credential
   helper/`credsStore` before treating those config files as non-secret. On a

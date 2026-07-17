@@ -124,7 +124,9 @@ of the host model.
      auto and `classifyAllShell` at CLI/user scope and canary the effective mode.
    - Codex: the named permission profile is active without a competing legacy
      `sandbox_mode`, public network and live search are enabled, approvals use
-     `on-request`, and eligible escalations route to automatic review.
+     `on-request`, and eligible escalations route to a reviewer subagent. If
+     policy requires a human for every escalation, select `user` in the project
+     or launch override and verify the managed reviewer constraint when present.
 5. Verify task-specific capabilities before promising their evidence: live web
    research and authoritative docs; GitHub/source control; the stack format,
    lint, test, coverage, dependency, and security tools; Playwright/browser for

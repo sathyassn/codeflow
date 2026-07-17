@@ -9,7 +9,6 @@
       "Bash(git commit *)",
       "Bash(git checkout *)",
       "Bash(git switch *)",
-      "Bash(git restore *)",
       "Bash(git stash *)",
       "Bash(git branch *)",
       "Bash(git branch)",
@@ -77,9 +76,59 @@
       "Bash(git reset --hard *)",
       "Bash(git clean *)",
       "Bash(git checkout -- .)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .)",
+      "Bash(git checkout * -- *)",
+      "Bash(git checkout -f)",
+      "Bash(git checkout -f *)",
+      "Bash(git checkout --force)",
+      "Bash(git checkout --force *)",
+      "Bash(git checkout -B *)",
+      "Bash(git switch -C *)",
+      "Bash(git switch --force-create *)",
+      "Bash(git switch -f)",
+      "Bash(git switch -f *)",
+      "Bash(git switch --force)",
+      "Bash(git switch --force *)",
+      "Bash(git switch --discard-changes)",
+      "Bash(git switch --discard-changes *)",
       "Bash(git restore .)",
+      "Bash(git restore *)",
+      "Bash(git stash drop)",
       "Bash(git stash drop *)",
       "Bash(git stash clear)",
+      "Bash(git push --force)",
+      "Bash(git push --force *)",
+      "Bash(git push -f)",
+      "Bash(git push -f *)",
+      "Bash(git push * --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push --delete *)",
+      "Bash(git push * --delete *)",
+      "Bash(git push -d *)",
+      "Bash(git push * -d *)",
+      "Bash(git push +*)",
+      "Bash(git push * +*)",
+      "Bash(git push --mirror *)",
+      "Bash(git push * --mirror *)",
+      "Bash(git push --prune *)",
+      "Bash(git push * --prune *)",
+      "Bash(git branch -d *)",
+      "Bash(git branch -D *)",
+      "Bash(git branch --delete *)",
+      "Bash(git branch --delete --force *)",
+      "Bash(git branch --force --delete *)",
+      "Bash(git branch -d -f *)",
+      "Bash(git branch -f -d *)",
+      "Bash(git branch -f *)",
+      "Bash(git branch --force *)",
+      "Bash(git branch -M *)",
+      "Bash(git branch -m -f *)",
+      "Bash(git branch -m --force *)",
+      "Bash(git branch --move -f *)",
+      "Bash(git branch --move --force *)",
       "Bash(cargo publish *)",
       "Bash(npm publish *)",
       "Bash(gh release *)",
@@ -110,6 +159,30 @@
     "failIfUnavailable": true,
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
+    "credentials": {
+      "envVars": [
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "mode": "deny"
+        },
+        {
+          "name": "ANTHROPIC_AUTH_TOKEN",
+          "mode": "deny"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "mode": "deny"
+        },
+        {
+          "name": "AWS_SECRET_ACCESS_KEY",
+          "mode": "deny"
+        },
+        {
+          "name": "AWS_SESSION_TOKEN",
+          "mode": "deny"
+        }
+      ]
+    },
     "network": {
       "allowedDomains": [
         "*"

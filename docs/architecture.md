@@ -87,14 +87,20 @@ through a byte-compatible PreToolUse payload, for an interactive Codex session i
 PreToolUse hooks, so headless Codex relies on the git-hook plane). Codex credential
 *reads* are guarded too — not only the Bash guards: a `cf-guard` permission profile
 in `.codex/config.toml` (selected via `default_permissions`, extending `:workspace`)
-denies the home-dir secret stores (`~/.ssh`, `~/.aws`, `.env`, …) at the OS-sandbox
+denies the home-dir secret stores and high-confidence workspace key material
+(`~/.ssh`, `~/.aws`, `.env`, `*.key`, `*.p12`, …) at the OS-sandbox
 layer, so unlike the PreToolUse guards it holds even in headless `codex exec`
 (ADR-0014); the `gh`/`docker` tool-token stores are deliberately left readable so
 those tools can read their own tokens. The profile is the only sandbox
 configuration—legacy `sandbox_mode` would shadow it—and also enables broad
 public egress, exact loopback for local UI tests, and live search. Private
 destinations and arbitrary Unix sockets stay closed; `on-request` escalations
-route to automatic review (ADR-0025). Beyond the
+route to a reviewer subagent (or a human when the project/launch setting selects
+`approvals_reviewer = "user"`), and the shell keeps Codex's default
+`KEY`/`SECRET`/`TOKEN` environment scrub (ADR-0025, ADR-0026). Claude's
+sandbox removes the raw Anthropic, OpenAI, and AWS credentials named in
+ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
+available. Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
 the same orientation digest Claude gets. PR-content checks (attribution/emoji,
@@ -125,14 +131,16 @@ deepen that contract (ADR-0023, ADR-0024).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,
-web access, local port binding, destructive asks, and secret denies. The
+web access, local port binding, asks for common high-risk source-control forms,
+protected-branch hook backstops for grammar gaps, file
+secret denies, and exact raw model/cloud environment-variable denies. The
 interactive Codex→Claude launch supplies Fable/xhigh, auto mode, and
 `classifyAllShell` through CLI settings because Claude intentionally ignores
 classifier policy from a repository. Codex's project config selects the guarded
 workspace profile, public egress/live search, and auto-reviewed escalations.
 `cf-customize` verifies the effective modes, tools, authentication paths, and
 live canaries; the binary neither mutates global settings nor authenticates
-services (ADR-0025).
+services (ADR-0025, ADR-0026).
 
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the

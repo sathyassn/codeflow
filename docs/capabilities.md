@@ -19,7 +19,7 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
 epics: [EPC-001]
-adrs: [ADR-0019, ADR-0025]
+adrs: [ADR-0019, ADR-0025, ADR-0026]
 ```
 
 `codeflow init [--minimal|--standard|--full] [--yes]` lays the discipline
@@ -36,6 +36,15 @@ per-file report. Standard/full reports close with `/cf-customize`, pointing at
 the consuming project's product, architecture, agent context, harness settings,
 and tools; minimal does not advertise an uninstalled method skill. Re-running
 at a higher tier is an additive upgrade.
+
+The harness starters are executable policy, not prompt-only guidance. Codex
+ships one current-schema guarded permission profile with public research,
+loopback UI testing, reviewer-subagent escalation review, workspace key-file
+denies, and the default secret-bearing environment filter pinned on. Claude
+ships a fail-closed sandbox, public web/tool access, raw model/cloud credential
+removal for sandboxed Bash, and ask rules for destructive source-control
+operations; project `acceptEdits` remains the ordinary fallback because
+repository-scoped Auto is intentionally ignored (ADR-0025, ADR-0026).
 
 ## CAP-002 — scaffold-update
 
