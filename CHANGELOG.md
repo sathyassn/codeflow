@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+> **Next release: `v3.0.0` (MAJOR).** Test configurations that use the
+> unsupported `changed_files` coverage scope must migrate to `per_file`,
+> `overall`, or another supported scope. That explicit contract break requires
+> a major bump from `v2.1.0`; the feature additions below do not reduce it to a
+> minor release.
+
 ### Changed
 
 - **Harness settings now close the remaining credential and destructive-action
@@ -181,6 +187,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **CI verifies security-tool downloads before executing them.** The shipped
+  workflow and CodeFlow's own perimeter pin the official SHA-256 digests for
+  Gitleaks and OSV-Scanner, fail closed on a mismatch, and retain the exact
+  release versions already validated by the repository.
+- **Auto-detected test configs now run with each stack's declared baseline
+  tools.** Rust no longer assumes a project-defined nextest `full` profile;
+  Node, Go, and Python no longer silently require optional report or coverage
+  plugins that detection did not prove were installed. Generated targets use
+  conservative native commands and leave richer reports and coverage to
+  project customization. The empty-stack message also stops recommending an
+  unimplemented `--add-target` flag, and coverage output now states honestly
+  that configured thresholds affect the gate verdict.
 - **Dependency advisories and maintenance debt.** `anyhow`, `git2`, and
   `quick-xml` move to versions that clear the active RustSec advisories; the
   unmaintained `serde_yaml` parser is replaced by the maintained

@@ -25,7 +25,7 @@ binary from <https://github.com/orhun/git-cliff/releases>).
 git switch -c chore/release main
 
 # 2. Compute the next version from the conventional commits since the last tag:
-NEXT=$(git cliff --bumped-version)        # e.g. v2.2.0
+NEXT=$(git cliff --bumped-version)        # current history resolves to v3.0.0
 echo "$NEXT"
 
 # 3. Bump the single workspace version (both crates inherit it):

@@ -28,7 +28,7 @@ install), use `gh`:
 ```sh
 # platform: aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
 A=codeflow-cli-aarch64-apple-darwin
-gh release download v2.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
+gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
 tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
 install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 ```
