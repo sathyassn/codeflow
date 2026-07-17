@@ -65,6 +65,11 @@ non-trivial task enters `/cf-model-orchestrator`. See
 [docs/adoption.md](docs/adoption.md) for the greenfield/brownfield paths, tiers,
 ownership model, autonomy posture, and daily flow.
 
+When a production model, harness, permission profile, or material instruction
+changes, `/cf-evaluate-model` provides a separate native-interactive
+qualification flow over reproducible disposable fixtures. It is not part of
+ordinary task execution and adds no model-running CLI command.
+
 ## Commands
 
 | Command | What it does |

@@ -142,6 +142,18 @@ workspace profile, public egress/live search, and auto-reviewed escalations.
 live canaries; the binary neither mutates global settings nor authenticates
 services (ADR-0025, ADR-0026).
 
+`cf-evaluate-model` is the deliberate maintenance path for a new model, harness,
+permission profile, or material instruction revision (ADR-0027). Stable hard
+requirements link canonical source markers to behavioral regression/capability
+cases. A standard-library tool validates that traceability, materializes exact
+overlays into fresh one-commit disposable repositories, removes grader material
+before the subject session starts, keeps case identity and evaluator state
+outside an opaque neutral subject path, recomputes expected-versus-observed
+outcomes, compares a candidate with a pinned baseline, and cleans only an
+explicitly marked run root. Subject trials remain supervised native interactive
+Codex or Claude sessions with their configured tools; no engine model router,
+headless peer runner, CI model call, or general-purpose cleanup command is added.
+
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
 engine manages it by three ownership classes (charter §4.3): **fully-managed**

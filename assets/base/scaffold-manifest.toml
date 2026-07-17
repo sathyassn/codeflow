@@ -312,6 +312,45 @@ dest = ".claude/skills/cf-model-orchestrator/resources/quality-contract.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# Deliberate model/harness qualification: native interactive trials over
+# disposable, reproducibly materialized fixtures. This is a maintenance skill,
+# not a runtime model router or a generic cleanup command.
+[[entry]]
+src = "agents/skills/cf-evaluate-model/SKILL.md"
+dest = ".claude/skills/cf-evaluate-model/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/protocol.md"
+dest = ".claude/skills/cf-evaluate-model/resources/protocol.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/requirements.json"
+dest = ".claude/skills/cf-evaluate-model/resources/requirements.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/cases.json"
+dest = ".claude/skills/cf-evaluate-model/resources/cases.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/fixtures.json"
+dest = ".claude/skills/cf-evaluate-model/resources/fixtures.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/eval_kit.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/eval_kit.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # cf-customize: the post-init customization walk-through (tool preflight +
 # project-artifact tailoring). A single SKILL.md, no resources.
 [[entry]]
@@ -382,6 +421,42 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/quality-contract.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/quality-contract.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/SKILL.md"
+dest = ".agents/skills/cf-evaluate-model/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/protocol.md"
+dest = ".agents/skills/cf-evaluate-model/resources/protocol.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/requirements.json"
+dest = ".agents/skills/cf-evaluate-model/resources/requirements.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/cases.json"
+dest = ".agents/skills/cf-evaluate-model/resources/cases.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/fixtures.json"
+dest = ".agents/skills/cf-evaluate-model/resources/fixtures.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/eval_kit.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/eval_kit.py"
 ownership = "managed"
 tiers = ["standard", "full"]
 

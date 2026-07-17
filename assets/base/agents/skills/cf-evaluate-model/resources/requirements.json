@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "requirements_version": "2026-07-17",
+  "requirements": [
+    {
+      "id": "CF-MM-001",
+      "level": "hard",
+      "statement": "Every non-trivial repository task starts with the Claude+Codex orchestrator when both seats are available.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Every non-trivial repository task **must begin with**", "supporting flows, not"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Use the duo for every non-trivial repository task."]}
+      ]
+    },
+    {
+      "id": "CF-MM-002",
+      "level": "hard",
+      "statement": "Claude and Codex independently research, analyze risks, and draft complete plans from the same immutable brief before either sees the other conclusion.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["draft a plan in parallel before seeing the other's conclusions", "an implementation plan and test strategy", "reconciles the two drafts"]}
+      ]
+    },
+    {
+      "id": "CF-MM-003",
+      "level": "hard",
+      "statement": "Claude compares two or three designs unless the brief fixes one direction; Codex challenges feasibility, failure modes, security, testing, and maintainability.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["brief already fixes a clear direction", "2–3 viable options", "failure modes, security, testing, and maintainability"]}
+      ]
+    },
+    {
+      "id": "CF-MM-004",
+      "level": "hard",
+      "statement": "Both seats approve the exact plan and task version; any change invalidates both approvals.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["A changed plan invalidates both approvals", "CLAUDE_APPROVAL:", "CODEX_APPROVAL:"]}
+      ]
+    },
+    {
+      "id": "CF-MM-005",
+      "level": "hard",
+      "statement": "Codex implements and first-verifies the approved work regardless of the host harness.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Codex implements.**", "Codex implementation and first verification"]}
+      ]
+    },
+    {
+      "id": "CF-MM-006",
+      "level": "hard",
+      "statement": "Claude independently reviews the integrated diff, reruns relevant tests, checks design and security, and owns the final verdict.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Claude final-reviews.**", "Claude owns the final verdict", "reviews the actual integrated diff"]}
+      ]
+    },
+    {
+      "id": "CF-MM-007",
+      "level": "hard",
+      "statement": "Fable-class xhigh owns Claude judgment; Opus-class workers may operate mechanistic UI/MCP tools but never settle the judgment.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["latest available Fable-class Claude", "current Opus-class subagents", "Fable interprets their evidence"]}
+      ]
+    },
+    {
+      "id": "CF-MM-008",
+      "level": "hard",
+      "statement": "Peer work uses native interactive vendor sessions with configured tools and MCPs, never headless model execution.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Native interactive sessions only", "Never use `codex exec`", "`claude -p`"]}
+      ]
+    },
+    {
+      "id": "CF-MM-009",
+      "level": "hard",
+      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly and blocks rather than silently continuing.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["degrades legibly", "mid-run failure", "never a silent downgrade"]}
+      ]
+    },
+    {
+      "id": "CF-QA-001",
+      "level": "hard",
+      "statement": "Where line coverage is supported, aggregate production coverage has a hard 80 percent floor and a normal 90 percent target; a weaker repository setting cannot undercut it.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["hard floor of **80%**", "normal target is **90% or higher**", "may enforce a stronger floor"]}
+      ]
+    },
+    {
+      "id": "CF-QA-002",
+      "level": "hard",
+      "statement": "Verification covers relevant unit, integration, end-to-end, security, and rendered UI behavior; unavailable or not applicable are never reported as passes.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["end-to-end tests", "Playwright", "Computer Use", "Tool unavailability is a blocker or declared limitation, not a pass"]}
+      ]
+    },
+    {
+      "id": "CF-SEC-001",
+      "level": "hard",
+      "statement": "Security review unions a Claude defender and Codex attacker lens, preserves divergence, and blocks loss of a required second vendor.",
+      "sources": [
+        {"path": ".claude/agents/cf-security-reviewer.md", "markers": ["Defender lens — Claude", "Attacker lens — a second vendor", "Cross-vendor divergence escalates", "severity high / confidence confirmed"]}
+      ]
+    },
+    {
+      "id": "CF-GOV-001",
+      "level": "hard",
+      "statement": "Evidence outranks agreement and fabricated or unverifiable claims are defects.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Unverifiable or fabricated claims are defects", "Every claim needs evidence"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Evidence outranks agreement"]}
+      ]
+    },
+    {
+      "id": "CF-GOV-002",
+      "level": "hard",
+      "statement": "Missing product intent, public contracts, security boundaries, or irreversible choices block for clarification; local reversible details follow repository evidence without inventing requirements.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Ambiguous input is a blocker: ask, never assume", "Treat an unclear requirement, API, or fact as a stop-and-verify"]}
+      ]
+    },
+    {
+      "id": "CF-GOV-003",
+      "level": "hard",
+      "statement": "Destructive protected-branch actions, guard bypasses, and raw secret handling remain prohibited while public research and brokered tools stay available.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Never set override envs", "never stage credentials", "fix the cause — never bypass"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["public network and live search are enabled", "raw tokens never enter prompts"]}
+      ]
+    },
+    {
+      "id": "CF-PAR-001",
+      "level": "hard",
+      "statement": "Parallel work is bounded by host resources, has one owner/branch/worktree per task, serializes shared contracts and integration, and verifies the combined diff.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["bounded concurrency cap", "one owner, branch, and worktree", "serialize each landing"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["HOST_RESOURCE_BUDGET:", "one writer, branch, and worktree"]}
+      ]
+    },
+    {
+      "id": "CF-REF-001",
+      "level": "hard",
+      "statement": "Work consults product scope and capabilities before building and uses architecture, ADRs, and recall for rationale rather than inventing it.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["check `docs/capabilities.md`", "skim the most recent ADRs", "codeflow recall"]}
+      ]
+    },
+    {
+      "id": "CF-OUT-001",
+      "level": "hard",
+      "statement": "Outputs are audience-shaped, evidence-backed, explicit about limitations and N/A, and preserve material disagreement.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Shape the deliverable", "never cut key information to condense"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["records both outputs without collapsing disagreements", "any explicit N/A with reason"]}
+      ]
+    },
+    {
+      "id": "CF-SHIP-001",
+      "level": "hard",
+      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Protected branches", "merged by a human"]}
+      ]
+    },
+    {
+      "id": "CF-EVAL-001",
+      "level": "hard",
+      "statement": "Token efficiency is evaluated as reliable contract adherence per loaded token and never authorizes removal or weakening of a semantic duty.",
+      "sources": [
+        {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["Token consciousness means reliable adherence per loaded token", "never authorizes deleting a duty"]}
+      ]
+    }
+  ]
+}

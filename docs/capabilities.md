@@ -382,3 +382,40 @@ silently changes global harness settings. `codeflow init` prints the next step,
 and doctor keeps a nudge visible while scaffold sentinels remain. Ships as the
 `cf-customize` skill, mirrored across
 `.claude/skills`, `.agents/skills`, and the `assets/base` scaffold source.
+
+## CAP-013 — model-binding-evaluation
+
+```yaml
+id: CAP-013
+name: model-binding-evaluation
+area: scaffold
+status: shipped
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs"]
+epics: []
+adrs: [ADR-0027]
+```
+
+`/cf-evaluate-model` qualifies a new model/version, native harness release,
+permission profile, or material CodeFlow instruction change as the complete
+system users will run. The standard/full managed skill carries stable hard
+requirement IDs, source-marker traceability, balanced regression/capability
+cases, exact fixture overlays, a native-interactive run protocol, and a
+standard-library tool for deterministic validation, materialization, scoring,
+baseline comparison, and fail-closed cleanup.
+
+Canary mode runs selected regressions once while maintaining the corpus. Full
+qualification runs every case three times and is required for promotion. Each
+trial uses a fresh one-commit disposable repository; the materializer removes
+the evaluation skill and expected answers, keeps evaluator state outside the
+subject tree, and gives the subject an opaque path with a neutral repository
+name before rebuilding fixture history. The model runs only in a supervised
+native interactive Codex App/CLI or Claude Code session with the actual
+tools/MCPs being qualified. Results retain model, effort, harness, settings,
+permissions, tools, network and resource budgets; status is recomputed from
+expected versus observed signals and evidence.
+
+Promotion requires no hard regression from the pinned baseline, resolved
+validity and grader findings, complete full-suite evidence, and explicit human
+approval. Token/latency improvements are diagnostics and never compensate for
+lost behavior. The feature adds no CLI subcommand, model runtime, headless peer
+execution, CI model call, or generic cleanup surface (ADR-0027).

@@ -2,8 +2,10 @@
 
 <!-- WHAT layer: the registry of what the system does. The agent's index —
      consult it before building anything ("does this exist? what does it
-     touch?"). Updated in the same PR that ships the work; at full tier a FEAT
-     epic cannot close without its entry (codeflow validate blocks).
+     touch?"). Updated in the same PR that ships the work. `codeflow validate
+     --docs` checks record shape, shipped-entry evidence, and links among the
+     capability/epic/ADR layers that are present; same-PR completeness remains
+     a workflow and review responsibility.
 
      One entry per user-meaningful capability. Statuses:
      planned → building → shipped → deprecated (deprecate, never delete).
@@ -20,7 +22,7 @@
      name: <name>
      area: <area from project.toml areas[]>
      status: planned          # planned | building | shipped | deprecated
-     verified_by: []          # test tags proving it works
+     verified_by: []          # named tests or evidence; required when shipped
      epics: []                # EPC-### that built or changed it
      adrs: []                 # ADR ids that shaped it
      ```

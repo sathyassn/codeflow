@@ -220,6 +220,24 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         agents.contains("codeflow:managed:end"),
         "AGENTS.md lost its end marker"
     );
+    let eval_script = root.join(".agents/skills/cf-evaluate-model/scripts/eval_kit.py");
+    assert!(eval_script.is_file(), "full init omitted cf-evaluate-model");
+    let suite = Command::new("python3")
+        .arg("-B")
+        .arg(&eval_script)
+        .arg("validate-suite")
+        .arg("--project-root")
+        .arg(&root)
+        .current_dir(&root)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("installed model-evaluation suite runs");
+    assert!(
+        suite.status.success(),
+        "installed model-evaluation suite is invalid:\n{}\n{}",
+        String::from_utf8_lossy(&suite.stdout),
+        String::from_utf8_lossy(&suite.stderr)
+    );
 
     let product = read(&root, "docs/product.md");
     assert!(

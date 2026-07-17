@@ -49,6 +49,7 @@ it as non-trivial.
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
+| Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
 | Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `task new` |
 

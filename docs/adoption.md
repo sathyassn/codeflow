@@ -253,6 +253,19 @@ run concurrent writers in one worktree or rebase the shared integration branch.
 `main` stays human-merge-only throughout — the integration branch is never a
 backdoor to it. See cf-method's "Managing a body of work" for the full procedure.
 
+## Model and harness upgrades
+
+Do not promote a new production model, harness release, permission profile, or
+material instruction rewrite from a single successful task. Run
+`/cf-evaluate-model` from the orchestrated maintenance flow: validate the
+requirement/case traceability, materialize fresh disposable fixtures, exercise
+the candidate through its native interactive harness with the real tools/MCPs,
+run the full three-trial suite, independently grade retained evidence, and
+compare it with the pinned baseline. A hard semantic regression blocks even
+when the candidate is faster or uses fewer tokens. Preserve the result and
+review evidence, then use the skill's marker+run-ID-gated cleanup for fixtures;
+never use it against the consuming project itself (ADR-0027).
+
 ## Enforcement planes — who catches what
 
 One policy (`.codeflow/policy.json`), four planes — and all four install from

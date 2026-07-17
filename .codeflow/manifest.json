@@ -32,6 +32,42 @@
       "sha256": "cd8e7f235737c46130e80d7d60d5c323b397dce0a83b7984d916cb6921a7b0d5",
       "exec": false
     },
+    ".agents/skills/cf-evaluate-model/SKILL.md": {
+      "src": "agents/skills/cf-evaluate-model/SKILL.md",
+      "ownership": "managed",
+      "sha256": "b10409cb4969bc08f49d5f1838856f4ff6bc9d4e2fb3c42dd6608f9230485c55",
+      "exec": false
+    },
+    ".agents/skills/cf-evaluate-model/resources/cases.json": {
+      "src": "agents/skills/cf-evaluate-model/resources/cases.json",
+      "ownership": "managed",
+      "sha256": "4b4bd62f5e42f1b5cc108bf3f6dc9c31230170b62427c9a31d8f95524a4ad400",
+      "exec": false
+    },
+    ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
+      "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
+      "ownership": "managed",
+      "sha256": "90079b945ee8e0c3e56a16ea65b34e5a8353c44770c7dbe687917625c0136d48",
+      "exec": false
+    },
+    ".agents/skills/cf-evaluate-model/resources/protocol.md": {
+      "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
+      "ownership": "managed",
+      "sha256": "63663b13983fe5a98dbfa08fb00d9144e16692bcd2e2e724a13a021566317ab3",
+      "exec": false
+    },
+    ".agents/skills/cf-evaluate-model/resources/requirements.json": {
+      "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
+      "ownership": "managed",
+      "sha256": "3bb189d61fa46d4f471b1c38ba6c9a3f4014b30b63c97bbfd06a46194133009a",
+      "exec": false
+    },
+    ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
+      "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
+      "ownership": "managed",
+      "sha256": "26fe0aaa1a964395ccf47120adc27dfe67459254fc1b8038415d1b7c9f867f2e",
+      "exec": false
+    },
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
@@ -114,6 +150,42 @@
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
       "sha256": "cd8e7f235737c46130e80d7d60d5c323b397dce0a83b7984d916cb6921a7b0d5",
+      "exec": false
+    },
+    ".claude/skills/cf-evaluate-model/SKILL.md": {
+      "src": "agents/skills/cf-evaluate-model/SKILL.md",
+      "ownership": "managed",
+      "sha256": "b10409cb4969bc08f49d5f1838856f4ff6bc9d4e2fb3c42dd6608f9230485c55",
+      "exec": false
+    },
+    ".claude/skills/cf-evaluate-model/resources/cases.json": {
+      "src": "agents/skills/cf-evaluate-model/resources/cases.json",
+      "ownership": "managed",
+      "sha256": "4b4bd62f5e42f1b5cc108bf3f6dc9c31230170b62427c9a31d8f95524a4ad400",
+      "exec": false
+    },
+    ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
+      "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
+      "ownership": "managed",
+      "sha256": "90079b945ee8e0c3e56a16ea65b34e5a8353c44770c7dbe687917625c0136d48",
+      "exec": false
+    },
+    ".claude/skills/cf-evaluate-model/resources/protocol.md": {
+      "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
+      "ownership": "managed",
+      "sha256": "63663b13983fe5a98dbfa08fb00d9144e16692bcd2e2e724a13a021566317ab3",
+      "exec": false
+    },
+    ".claude/skills/cf-evaluate-model/resources/requirements.json": {
+      "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
+      "ownership": "managed",
+      "sha256": "3bb189d61fa46d4f471b1c38ba6c9a3f4014b30b63c97bbfd06a46194133009a",
+      "exec": false
+    },
+    ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
+      "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
+      "ownership": "managed",
+      "sha256": "26fe0aaa1a964395ccf47120adc27dfe67459254fc1b8038415d1b7c9f867f2e",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
@@ -227,7 +299,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "c281c01857e756045405fc85704d913b73868e9b01be293598d14282691813d5",
+      "sha256": "453c26564f388118294292f5cb35b41d41372d7ffa1c5fa7c2db68f60944f35e",
       "exec": false
     },
     "CLAUDE.md": {

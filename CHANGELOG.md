@@ -123,6 +123,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Native-interactive model/harness qualification (ADR-0027).** Standard/full
+  scaffolds gain `/cf-evaluate-model`: stable requirement-to-source-to-case
+  traceability, balanced regression/capability cases, exact disposable fixture
+  materialization, expected-versus-observed scoring, repeated full trials,
+  baseline comparison, and marker+run-ID-gated cleanup. Subject models remain in
+  supervised native Codex or Claude sessions with their actual tools; no
+  headless model runner, CLI subcommand, CI model call, hard token-deletion
+  budget, or generic cleanup surface is introduced.
+
 - **A lazy PR body now fails CI mechanically.** When `codeflow ci` is given a
   PR/MR body, it checks the body's structure against three new `git` policy
   keys: `pr_sections` (level, default `block`) governs the check;

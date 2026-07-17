@@ -83,6 +83,19 @@
           "command": "python3 scripts/gate-parity.py"
         }
       }
+    },
+    {
+      "name": "model-eval-kit",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B -m unittest evals/model-artifacts/test_eval_kit.py"
+        },
+        "full": {
+          "command": "python3 -B -m unittest evals/model-artifacts/test_eval_kit.py"
+        }
+      }
     }
   ]
 }
