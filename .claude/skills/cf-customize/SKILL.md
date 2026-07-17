@@ -38,7 +38,7 @@ solo is a preflight-proven degradation, not an equivalent preference:
 - **Solo** (`/cf-develop`) — always in play.
 - **Duo** (`/cf-model-orchestrator`) — host-neutral when both native
   interactive seats are available: Claude Code → Codex through the official
-  plugin, or Codex → Claude through interactive Claude CLI + tmux (ADR-0023).
+  plugin, or Codex → Claude through interactive Claude CLI + tmux (CodeFlow ADR-0023).
 - **Batch** — the pipeline preset; single-vendor by design, even when its
   assurance stages resemble parts of the duo.
 

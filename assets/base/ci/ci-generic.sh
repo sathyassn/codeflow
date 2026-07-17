@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# codeflow CI — a PORTABLE snippet (ADR-0017). The checks live in the `codeflow`
+# codeflow CI — a PORTABLE snippet (CodeFlow ADR-0017). The checks live in the `codeflow`
 # binary (single source of truth, no drift from the git hooks or the Claude
 # git-guard). Run or source this from any CI, a git pre-receive hook, or a
 # Makefile target — anywhere without a first-class codeflow template.

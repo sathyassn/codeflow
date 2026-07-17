@@ -7,7 +7,7 @@ breaking-change footer, branch naming, and (when a PR/MR body is provided)
 the PR-body structure — reusing the exact same functions the
 git-client hooks and the Claude git-guard use. That makes the binary the
 **single source of truth**: the CI plane can no longer drift from the hooks the
-way inline shell regex did (ADR-0017).
+way inline shell regex did (CodeFlow ADR-0017).
 
 Every file in this directory is therefore a **thin wrapper**: install the
 `codeflow` binary, then run
@@ -56,7 +56,7 @@ absent; that hands branch protection a job that ran nothing.
 `codeflow ci` is the **portable, host-agnostic** verification plane. The
 separate **remote branch-protection** plane (`codeflow remote`) stays
 host-API-specific because branch protection is configured through each host's
-API — see ADR-0017.
+API — see CodeFlow ADR-0017.
 
 ## Optional external add-ons
 

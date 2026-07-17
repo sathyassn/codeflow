@@ -16,7 +16,7 @@ defender across vendors is the whole point: an attacker and a defender on the
 *same* model share blind spots, and homogeneous ensembles with majority voting
 do not fix correlated bias — different vendors (distinct architecture and
 alignment) break the correlated blindspot. codeflow already ships the split
-(Claude + codex, ADR-0005), so exploit it rather than run two Claude passes.
+(Claude + codex, CodeFlow ADR-0005), so exploit it rather than run two Claude passes.
 
 - **Defender lens — Claude, full repo context.** Triage every deterministic-
   scanner hit for reachability (confirm vs false-positive with a concrete path),
@@ -25,19 +25,19 @@ alignment) break the correlated blindspot. codeflow already ships the split
   foothold; find a flow from an untrusted source to a dangerous sink; try to
   exfiltrate a secret or PII, bypass an authz check, or inject a command, query,
   or prompt. Every finding needs a concrete trigger.* The second vendor is
-  reached through the ADR-0023 host-appropriate interactive lane: a Claude
+  reached through the CodeFlow ADR-0023 host-appropriate interactive lane: a Claude
   Code host uses the official plugin's `/codex:adversarial-review`; a Codex
   host performs its attacker pass in the current native session while Claude
   reviews through the task-scoped interactive CLI lane. Where no interactive
   second-vendor lane is
   available (an unattended pipeline run; headless execution is prohibited,
-  ADR-0023), this lens degrades to a same-model adversarial pass, recorded as a
+  CodeFlow ADR-0023), this lens degrades to a same-model adversarial pass, recorded as a
   finding — the deterministic scanner floor still runs regardless.
 
 Union both lenses' findings and dedup by (location, class). A finding one vendor
 raised and the other cleared is **escalated to the human at merge, never
 auto-dismissed** — the divergence is the signal, and the human merger is the
-backstop for judgment the machine cannot adjudicate (ADR-0007).
+backstop for judgment the machine cannot adjudicate (CodeFlow ADR-0007).
 
 ## Inputs
 
@@ -139,7 +139,7 @@ shape above.
 - Medium warns and must be triaged — accepted only with a recorded justification.
 - Low / Info are advisory.
 
-How this verdict meets CI — the honest, shipped posture (ADR-0016 update
+How this verdict meets CI — the honest, shipped posture (CodeFlow ADR-0016 update
 2026-07-11). Do not assume a hard, non-overridable severity floor or a required
 findings artifact; neither ships today.
 
@@ -173,7 +173,7 @@ findings artifact; neither ships today.
   finding one vendor raised and the other cleared.
 - Degrade legibly: the deterministic floor is always mandatory, and codex
   unavailability maps to a finding and a verdict like everything else — never to
-  prose (ADR-0015/ADR-0016). Two cases:
+  prose (CodeFlow ADR-0015/ADR-0016). Two cases:
   - **codex absent at flow start** (never available this run — the whole flow
     already degraded to single-vendor): run the defender lens alone and record
     the degradation in the `attack_log` and as an info finding; the verdict

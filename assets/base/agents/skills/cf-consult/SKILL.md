@@ -8,7 +8,7 @@ description: Get an independent second opinion from another vendor's CLI (read-o
 You are getting a second opinion, not handing off work. Load the `cf-delegate`
 skill for the consult doctrine and lane details. Consult is read-only: the
 delegate reads and reasons, never edits. Transport is interactive-only, one
-lane per direction (ADR-0023)—never headless (`codex exec`, `claude -p`).
+lane per direction (CodeFlow ADR-0023)—never headless (`codex exec`, `claude -p`).
 
 The delegate is a vendor you are **not**. Consulting your own vendor is
 self-review with extra steps, not an outside opinion — never label it

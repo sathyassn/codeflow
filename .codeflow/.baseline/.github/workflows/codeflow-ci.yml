@@ -12,7 +12,8 @@
 # nothing. The secret-scan and security-review jobs work out of the box
 # (external pinned tools); the commit-standards job now runs the same
 # `codeflow ci` binary as the gates, so it shares the Install-codeflow step and
-# fails RED until that step is wired (ADR-0017 — one source of truth, no drift).
+# fails RED until that step is wired (CodeFlow ADR-0017 — one source of truth,
+# no drift).
 name: codeflow-ci
 
 on:
@@ -83,7 +84,8 @@ jobs:
           fetch-depth: 0
 
       # Dependency / supply-chain audit — the deterministic floor the
-      # cf-security-reviewer red-team layers on (ADR-0016; OWASP A03:2025). Pinned
+      # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
+      # A03:2025). Pinned
       # osv-scanner is stack-agnostic: it reads every lockfile ecosystem
       # (Cargo.lock, package-lock.json, requirements.txt, go.mod, …), so this one
       # job is the universal floor. Add stack-specific scanners (cargo audit,
@@ -155,7 +157,8 @@ jobs:
       # the git-client hooks and the Claude git-guard, reading .codeflow/policy.json
       # for the level of each (block/warn/off), plus the PR-body structure check
       # (git.pr_sections: required sections present and non-empty, test evidence
-      # when the range touches code). No inline regex to drift (ADR-0017).
+      # when the range touches code). No inline regex to drift
+      # (CodeFlow ADR-0017).
       # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated into
       # the script), so an untrusted body cannot inject shell.
       - name: codeflow ci (commit + branch + PR-body standards)

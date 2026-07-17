@@ -88,7 +88,8 @@ jobs:
           fetch-depth: 0
 
       # Dependency / supply-chain audit — the deterministic floor the
-      # cf-security-reviewer red-team layers on (ADR-0016; OWASP A03:2025). Pinned
+      # cf-security-reviewer red-team layers on (CodeFlow ADR-0016; OWASP
+      # A03:2025). Pinned
       # osv-scanner reads every lockfile ecosystem (here Cargo.lock), so it is the
       # stack-agnostic floor. Enforcement reads two .codeflow/policy.json keys:
       # `git.security_review` (umbrella gate for the whole security-review job) and
@@ -140,7 +141,8 @@ jobs:
 
       # Dogfood: this repo IS codeflow, so it runs the SAME `codeflow ci` binary
       # the shipped template runs — one source of truth with the git-client hooks
-      # and the Claude git-guard, no inline regex to drift (ADR-0017). It builds
+      # and the Claude git-guard, no inline regex to drift (CodeFlow ADR-0017).
+      # It builds
       # from source (as the gates job does) rather than the release installer a
       # consumer project would use.
       - name: Install Rust (rust-toolchain.toml)

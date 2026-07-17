@@ -69,10 +69,10 @@ Four planes enforce the git standards, defense in depth: git hooks, the `git-gua
 PreToolUse hook, and remote branch protection each read `.codeflow/policy.json`, and
 the scaffolded CI runs the same commit-format, attribution, emoji, and branch
 checks through the `codeflow ci` binary — one source of truth with the hooks, no
-inline drift (ADR-0017). The PreToolUse plane is per-harness: Claude Code
+inline drift (CodeFlow ADR-0017). The PreToolUse plane is per-harness: Claude Code
 always; interactive codex after the one-time `/hooks` trust; a harness with no
 hooks engine not at all — and since headless task execution is prohibited
-outright (ADR-0018), that last case is the whole gap. The local planes are fast
+outright (CodeFlow ADR-0018), that last case is the whole gap. The local planes are fast
 in-session feedback; CI and remote branch protection are the authoritative,
 server-enforced perimeter — the real boundary (why the split matters:
 cf-method, "Why the git boundary is remote"). The rules, compressed:

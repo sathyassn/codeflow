@@ -1,6 +1,6 @@
 ---
 name: cf-delegate
-description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, deterministic reverse-lane completion, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (ADR-0023).
+description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, deterministic reverse-lane completion, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023).
 ---
 
 # cf-delegate — cross-vendor consult and delegate
@@ -35,7 +35,7 @@ Match the tool to the work; most work is *neither*.
 When unsure, consult before you delegate: a read-only opinion is cheap and
 reversible; an edit handoff is neither.
 
-## Transport — interactive-only, one lane per direction (ADR-0023)
+## Transport — interactive-only, one lane per direction (CodeFlow ADR-0023)
 
 ```text
 Claude Code ──codex-plugin-cc plugin──▶ codex
@@ -188,7 +188,7 @@ not a merge — a human lands it.
 Google's Antigravity `agy` was a degraded, opt-in read-only tier. Its only
 documented drive shape is headless one-shot CLI invocation (non-TTY stdout
 drops the final response, so automation had to read a transcript file) — a
-shape ADR-0023 prohibits outright. There is no verified interactive lane to
+shape CodeFlow ADR-0023 prohibits outright. There is no verified interactive lane to
 it, so `agy` is **not** a delegate tier; if the user names it, say the
 transport rule rules it out. Like any tool that touches the repo, `agy`
 remains bound by the harness-agnostic git-hook plane and CI.

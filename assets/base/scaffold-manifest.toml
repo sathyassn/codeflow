@@ -58,7 +58,7 @@
 #   MANAGEMENT machinery is opinionated and scales with the project. Nobody wants
 #   B without A; many want A without B (doc-sets, config repos, small tools). So
 #   the tiers are a clean superset — minimal ⊂ standard ⊂ full — split on that
-#   seam (ADR-0019):
+#   seam (CodeFlow ADR-0019):
 #
 #     - minimal  = the COMPLETE four-plane enforcement floor: all five git-hook
 #                  shims (pre-commit, commit-msg, pre-push, pre-merge-commit,
@@ -178,7 +178,7 @@ tiers = ["minimal", "standard", "full"]
 exec = true
 
 # --- Claude settings presets (exactly one applies, chosen at init) -----------
-# Part of the enforcement floor (ADR-0019): .claude/settings.json wires the
+# Part of the enforcement floor (CodeFlow ADR-0019): .claude/settings.json wires the
 # in-session git-guard/exec-guard PreToolUse hooks and the orient/summary session
 # hooks, so it ships from --minimal up. The three presets stay disjoint-selected
 # by the permission preset chosen at init; only one lands.
@@ -207,7 +207,7 @@ region = "json"
 tiers = ["minimal", "standard", "full"]
 preset = "bypassPermissions"
 
-# --- Codex starter (harness parity, ADR-0008) --------------------------------
+# --- Codex starter (harness parity, CodeFlow ADR-0008) ------------------------
 # The same `codeflow hook git-guard` / `codeflow hook exec-guard` binaries bind
 # Codex via .codex/hooks.json (byte-compatible PreToolUse payload); config.toml
 # enables the hooks engine and sets workspace autonomy. One-time trust via
@@ -227,8 +227,9 @@ ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 9 skills, 1 workflow;
-#     cf-stack is the agent-led stack setup (ADR-0003); cf-delegate + cf-consult
-#     are the cross-vendor delegation capability (ADR-0005), added when the
+#     cf-stack is the agent-led stack setup (CodeFlow ADR-0003); cf-delegate +
+#     cf-consult are the cross-vendor delegation capability (CodeFlow ADR-0005),
+#     added when the
 #     process-boundary consult pattern proved out — not speculatively)
 
 [[entry]]
@@ -390,7 +391,7 @@ dest = ".agents/skills/cf-customize/SKILL.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
-# The pipeline workflow is user-owned by design (ADR-0004): seeded once,
+# The pipeline workflow is user-owned by design (CodeFlow ADR-0004): seeded once,
 # never update-managed — consumers own and adapt their copy.
 [[entry]]
 src = "claude/workflows/pipeline.workflow.js"

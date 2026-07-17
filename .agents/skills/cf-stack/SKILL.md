@@ -6,7 +6,7 @@ description: Set up or extend the project's stack — test config, lint config, 
 # cf-stack — configure stack mechanics
 
 You are configuring stack mechanics, not building features. Stack setup is
-judgment work, so it is yours, not the CLI's (ADR-0003): you read the project
+judgment work, so it is yours, not the CLI's (CodeFlow ADR-0003): you read the project
 and decide; `codeflow` verifies the result deterministically.
 
 1. Detect the stack: manifests (Cargo.toml, package.json, pyproject.toml,

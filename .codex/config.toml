@@ -1,4 +1,4 @@
-# Codex config for a CodeFlow-managed repository (ADR-0008).
+# Codex config for a CodeFlow-managed repository (CodeFlow ADR-0008).
 #
 # Project hooks provide session guidance and fast feedback. The named permission
 # profile below is the OS-enforced boundary: normal work has workspace write

@@ -1,4 +1,4 @@
-# codeflow CI for GitLab — a THIN WRAPPER (ADR-0017). The checks themselves
+# codeflow CI for GitLab — a THIN WRAPPER (CodeFlow ADR-0017). The checks themselves
 # live in the `codeflow` binary (single source of truth, no drift from the git
 # hooks or the Claude git-guard):
 #   codeflow ci             — verify the MR commit range + branch name against

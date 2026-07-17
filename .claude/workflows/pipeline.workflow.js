@@ -2,7 +2,7 @@
 //
 // USER-OWNED: adapt freely — `codeflow update` never touches this file. It is
 // seeded once as a reference implementation, never update-managed: sequencing
-// frameworks rot, so this copy is yours to reshape per project (ADR-0004).
+// frameworks rot, so this copy is yours to reshape per project (CodeFlow ADR-0004).
 //
 // When to use: unattended or batch runs, parallel fan-out, or when a preset is
 // named explicitly. The interactive default is /cf-model-orchestrator when
@@ -21,9 +21,9 @@
 //                         (solo). PRESETS['single-vendor-assurance'] adds a
 //                         plan audit and security pass while stating its reduced
 //                         assurance. Genuine duo work is interactive-only
-//                         (ADR-0023).
+//                         (CodeFlow ADR-0023).
 //                         'consult' is an optional independent second read
-//                         (single-vendor; ADR-0023); off unless named.
+//                         (single-vendor; CodeFlow ADR-0023); off unless named.
 //   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
 //                         stage defaults to 'inherit' (the caller's model).
 //   maxRework  number?    total build-attempt budget shared by all gate back-edges
@@ -36,7 +36,7 @@
 // subagent; `opts.schema` yields parsed structured output. Branch only on
 // schema enums and exit codes, never on prose. Mechanics (stages-as-data,
 // per-stage model, schema verdicts, bounded rework) validated live in run
-// wf_74f22cff-d1a; see docs/decisions/ADR-0004-composable-pipeline.md.
+// wf_74f22cff-d1a; see CodeFlow ADR-0004.
 
 export const meta = {
   name: 'pipeline',
@@ -75,13 +75,13 @@ const MAX_REWORK = A.maxRework ?? 3;
 // Named presets. This Claude workflow can run fresh-context Claude agents but
 // cannot reach either native interactive peer lane. The assurance preset is
 // therefore honestly single-vendor; the real duo runs interactively through
-// /cf-model-orchestrator (ADR-0023).
+// /cf-model-orchestrator (CodeFlow ADR-0023).
 const PRESETS = {
   default: ['build', 'review', 'verify'],
   'single-vendor-assurance': ['plan-audit', 'build', 'security', 'review', 'verify'],
 };
 if (A.preset === 'duo' || A.stages?.includes('plan-align')) {
-  throw new Error('pipeline: genuine duo work requires the interactive /cf-model-orchestrator flow; batch duo is unsupported (ADR-0023)');
+  throw new Error('pipeline: genuine duo work requires the interactive /cf-model-orchestrator flow; batch duo is unsupported (CodeFlow ADR-0023)');
 }
 if (A.preset && !Object.prototype.hasOwnProperty.call(PRESETS, A.preset)) {
   throw new Error(`pipeline: unknown preset '${A.preset}'; known: ${Object.keys(PRESETS).join(', ')}`);
@@ -179,7 +179,7 @@ const STAGES = {
       `Acceptance criteria to ratify:\n${CRITERIA}`,
       ctx.analysis && `Analysis findings:\n${ctx.analysis}`,
       ctx.spec && `Draft spec:\n${ctx.spec}`,
-      'Draft the plan and acceptance criteria, then run an adversarial fresh-context self-critique over every assumption and edge/error case. Record clearly that cross-vendor convergence was not run; the interactive /cf-model-orchestrator flow is required for dual approval (ADR-0023).',
+      'Draft the plan and acceptance criteria, then run an adversarial fresh-context self-critique over every assumption and edge/error case. Record clearly that cross-vendor convergence was not run; the interactive /cf-model-orchestrator flow is required for dual approval (CodeFlow ADR-0023).',
       'Return approved only with a pinned, testable plan + acceptance-criteria contract in `contract`; otherwise return changes_requested with one finding per unresolved defect.',
     ].filter(Boolean).join('\n\n'),
     apply: (out) => {
@@ -205,7 +205,7 @@ const STAGES = {
     apply: (out) => { ctx.buildSummary = typeof out === 'string' ? out : JSON.stringify(out); },
   },
   security: gate('security',
-    'Run the adversarial red-team. A genuine dual-vendor attacker/defender pass belongs to the INTERACTIVE /cf-model-orchestrator flow through its host-appropriate native lane (ADR-0023). This unattended workflow cannot reach either lane, so run the red-team SINGLE-VENDOR — use separate defender and assume-breach attacker contexts — and record that the cross-vendor lens was not run. Deterministic scanners retain their configured authority: secret findings always block, while dependency/SCA findings follow the project\'s security_review and dep_audit policy. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface, tagged to the project\'s current OWASP/CWE baselines. Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence). Consume deterministic scanner output as evidence; never let a model verdict override a red scanner. For a genuine cross-vendor red-team, run the interactive duo.',
+    'Run the adversarial red-team. A genuine dual-vendor attacker/defender pass belongs to the INTERACTIVE /cf-model-orchestrator flow through its host-appropriate native lane (CodeFlow ADR-0023). This unattended workflow cannot reach either lane, so run the red-team SINGLE-VENDOR — use separate defender and assume-breach attacker contexts — and record that the cross-vendor lens was not run. Deterministic scanners retain their configured authority: secret findings always block, while dependency/SCA findings follow the project\'s security_review and dep_audit policy. Evidence-required: every finding needs a concrete untrusted-source-to-sink trigger, and approved is legal only with an attack_log of the assume-breach attempts actually made. Cover secret/PII exposure, injection (command/SQL/path/template/prompt), authz gaps, vulnerable/malicious deps, general vuln classes, and the agent code\'s own prompt-injection surface, tagged to the project\'s current OWASP/CWE baselines. Emit findings in the SecurityFinding/SecurityVerdict schema (class, severity, CVSS, evidence, confidence). Consume deterministic scanner output as evidence; never let a model verdict override a red scanner. For a genuine cross-vendor red-team, run the interactive duo.',
     {
       schema: SECURITY_VERDICT,
       role: 'Role (.claude/agents/cf-security-reviewer.md): load the cf-security-reviewer agent as the reviewer for this stage — it owns the deep seven-axis checklist. Independent evaluator, read-only on code — never fix anything; every claim in the verdict needs evidence.',
@@ -217,7 +217,7 @@ const STAGES = {
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
   // Optional independent-review consult: a fresh-context second read of the built
   // diff against the criteria. Genuine cross-vendor consult is interactive-only
-  // (ADR-0023; the cf-consult skill), so this unattended stage runs single-vendor.
+  // (CodeFlow ADR-0023; the cf-consult skill), so this unattended stage runs single-vendor.
   // kind 'gate' so its verdict shares the one rework budget with review; off
   // unless 'consult' is in the preset.
   consult: {
@@ -228,7 +228,7 @@ const STAGES = {
       `Independent fresh-context consult on the latest build for: ${TASK}`, WHERE,
       `Acceptance criteria:\n${CRITERIA}`,
       `Builder summary:\n${ctx.buildSummary || '(not captured)'}`,
-      'Genuine cross-vendor consult is interactive-only (the cf-consult skill, ADR-0023); this unattended stage cannot reach that lane, so perform a rigorous independent second read yourself in this fresh context.',
+      'Genuine cross-vendor consult is interactive-only (the cf-consult skill, CodeFlow ADR-0023); this unattended stage cannot reach that lane, so perform a rigorous independent second read yourself in this fresh context.',
       'Review the built diff against the criteria, cite file:line, and challenge the builder summary rather than trusting it — verify each point against the actual diff.',
       "Return verdict 'changes_requested' ONLY for substantive defects you can confirm; otherwise 'approved'. One finding string per issue.",
     ].filter(Boolean).join('\n\n'),
