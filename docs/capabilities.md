@@ -285,7 +285,10 @@ repository task: research, analysis, planning, design, implementation,
 debugging, security, substantive documentation, review, or verification. It
 selects the smallest complete outcome mode, so research/planning-only work
 settles an evidenced artifact and stops before implementation.
-Both seats independently research, analyze, and plan from an immutable brief;
+Both seats independently research, analyze risks, and draft complete plans from
+the same immutable brief before either sees the other's conclusions. This is an
+anti-anchoring requirement: Codex must not be reduced to critiquing a plan
+Claude has already supplied. After both drafts exist,
 Claude leads design and final independent review, while Codex implements and
 first-verifies regardless of which harness hosts. The coordinator reconciles a
 versioned plan and detailed tasks that both approve before implementation.
@@ -309,10 +312,11 @@ Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
 
 The unattended Claude workflow is explicitly single-vendor and rejects the old
 `duo` preset semantics. Manifest parity tests pin byte mirrors, while
-`orchestration_contract.rs` pins the documented role, host, evidence, coverage,
-UI, and reverse-lane contract markers. Runtime adapter behavior is exercised by
-the CAP-009 hook unit and CLI tests. No engine model router is added;
-deterministic gates and the human-merged PR remain authoritative.
+`orchestration_contract.rs` pins the two-draft anti-anchoring rule, design and
+review roles, hard coverage floor, security lenses, always-loaded reasoning
+duties, host, UI, and reverse-lane contract markers. Runtime adapter behavior
+is exercised by the CAP-009 hook unit and CLI tests. No engine model router is
+added; deterministic gates and the human-merged PR remain authoritative.
 
 ## CAP-011 — security-redteam-review
 

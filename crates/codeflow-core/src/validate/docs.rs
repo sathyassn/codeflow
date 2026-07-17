@@ -1,7 +1,9 @@
 //! Referential-integrity lint over the doc graph (`validate --docs`).
 //!
-//! Charter §5 maintenance matrix: dangling links/IDs/test-tags fail loud,
-//! in CI and at pre-push. Checks:
+//! Charter §5 maintenance matrix: malformed records and dangling graph IDs
+//! fail loud in CI and at pre-push. `verified_by` must be nonempty for shipped
+//! capabilities; the validator does not infer whether a named test tag exists.
+//! Checks:
 //!
 //! * capability `epics[]` resolve to `project-management/epics/` files
 //! * capability `adrs[]` resolve to `docs/decisions/` ADR files

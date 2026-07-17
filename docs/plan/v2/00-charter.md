@@ -117,7 +117,7 @@ myproject/
 |---|---|---|
 | `--minimal` | AGENTS.md + secret-scan pre-commit + gitignore. Branch policy at warn. | Throwaways. Blocking policy on a scratch repo trains bypassing. |
 | `--standard` (default) | + full git gates, settings presets, agents/skills/workflows/commands, docs/ (product, architecture, capabilities, ADRs), test gate, recall capture, CI template | Real projects |
-| `--full` | + project-management/ (epics, tasks, specs, format IDs, validate gates incl. capability hard-gate) | Projects where work outlives sessions |
+| `--full` | + project-management/ (epics, tasks, specs, format IDs, PM graph validation, and capability/epic/ADR link checks) | Projects where work outlives sessions |
 
 Tier is recorded in `project.toml`; re-running init at a higher tier is an **idempotent additive upgrade**. Downgrade = stop managing, never delete.
 
@@ -181,7 +181,14 @@ TRACE   ledger + session summaries + recall                     continuous      
 
 **The spine: traceability by ID, downward.** Capability → epics that built it → ADRs/specs consumed → PRs → ledger. "Why does the system do X this way" is answerable by following frontmatter links or `codeflow recall`, never by reading all code.
 
-**Capability registry.** Each entry: `id (CAP-###), name, area, status, verified_by (test tags), epics[], adrs[]` + one paragraph. It is the agent's index of the system — the develop workflow consults it before building ("does this exist? what does it touch?"). **Gate:** at `--full`, a FEAT epic cannot close without creating/updating a capability entry (`validate` blocks); at `--standard`, doctor warns.
+**Capability registry.** Each entry: `id (CAP-###), name, area, status,
+verified_by (test evidence), epics[], adrs[]` + one paragraph. It is the agent's
+index of the system — the develop workflow consults it before building ("does
+this exist? what does it touch?"). `validate --docs` checks registry shape,
+requires nonempty `verified_by` evidence on shipped capabilities, and checks
+reciprocal links among capability/epic/ADR layers that are present. Same-PR
+capability updates are workflow and review doctrine; there is no implemented
+epic-close command or separate doctor scope gate.
 
 **ADRs.** Yes, emphatically: append-only (cannot rot), written at the moment of decision (when context is loaded — the cheapest "why" capture), and the best-value reading for a fresh agent session. Lightweight format: context / decision / consequences / architecture-impact / status. Workflows *prompt* at Tier-3 decision points (new dependency, schema change, boundary change) — not one-per-task; ADR over-production is its own swamp. The `architecture-impact` field is the trigger for updating architecture.md in the same ship PR.
 
@@ -193,15 +200,15 @@ TRACE   ledger + session summaries + recall                     continuous      
 
 | Artifact | Maintainer | Trigger | Rot prevention |
 |---|---|---|---|
-| product.md | Human (agent proposes only) | Rarely | Small + stable; doctor flags epics whose scope violates non-goals |
-| AGENTS.md | codeflow (managed block) + human | Update / as needed | 32KiB cap enforced by doctor |
-| capabilities | Agent via ship workflow | Epic completion — same PR | validate gate (--full) / doctor warn (--standard) |
+| product.md | Human (agent proposes only) | Rarely | Small + stable; scope/non-goal review is a workflow responsibility, not an implemented doctor check |
+| AGENTS.md | codeflow (managed block) + human | Update / as needed | Harness limits are documented and scaffold tests protect required clauses; doctor does not enforce a 32KiB cap |
+| capabilities | Agent via ship workflow | Epic completion — same PR | `validate --docs` checks registry shape and cross-links when the docs spine exists |
 | ADRs | Agent drafts, human accepts in PR | Tier-3 decision points | Append-only; only `superseded-by:` |
-| architecture | Agent via ship workflow | ADR with architecture-impact | Impact field is the trigger; docs-lint flags dangling module refs |
+| architecture | Agent via ship workflow | ADR with architecture-impact | Impact field is the workflow trigger; no module-reference linter is claimed |
 | specs | Agent via plan workflow | Frozen at epic completion | Historical by design |
 | epics/tasks | Agent via develop workflow | Continuous | Status generated live; frontmatter validated |
 | ledger/summaries | Binary (hooks) | Continuous | Append-only, zero ceremony |
-| Integrity | Binary: `validate --docs` | CI + pre-push | Dangling links/IDs/test-tags fail loud |
+| Integrity | Binary: `validate --docs` | CI + pre-push | Dangling capability/epic/ADR IDs, illegal statuses, malformed records, and missing `verified_by` evidence on shipped capabilities fail loud; test-tag existence is not inferred |
 
 ---
 
@@ -401,7 +408,7 @@ The repo **builds the product** (binary with embedded assets) and is merely its 
 | D7 | Protected branches and all git policy config-driven (`policy.json.git`, globbed), read by all planes | User-extendable (release/*, etc.); one source of truth |
 | D8 | Push + force-push + delete + hard-reset to protected blocked; force-push to non-protected allowed | Protect history where it matters; don't obstruct feature-branch rebasing |
 | D9 | Protected-branch merges only via PR or `integrate` (gate-context token) | Sanctioned paths both run the gates |
-| D10 | Knowledge model: 6 layers; capability registry gate at --full, warn at --standard | Traceability spine; rot prevention via same-PR updates |
+| D10 | Knowledge model: 6 layers; validate present capability/epic/ADR graph links and shipped-capability evidence | Traceability spine; same-PR updates remain workflow/review doctrine |
 | D11 | ADRs yes (append-only); specs frozen at ship | Can't rot; spec-rot fix |
 | D12 | spec-kit/BMAD: concepts mapped, machinery not adopted | Avoid second structure; keep validate/recall integration |
 | D13 | Tag + archive branch + reset commit + selective import (same repo, connected history) | Clean slate without cleanup-as-a-process; archive = the archive |

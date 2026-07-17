@@ -13,6 +13,10 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
+fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[test]
 fn orchestrator_is_host_neutral_with_fixed_roles() {
     let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
@@ -46,6 +50,139 @@ fn orchestrator_is_host_neutral_with_fixed_roles() {
         assert!(
             !skill.contains(stale_pin),
             "orchestrator must not hard-code model pin {stale_pin}"
+        );
+    }
+}
+
+#[test]
+fn independent_planning_cannot_degrade_to_plan_then_critique() {
+    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let agents = read("assets/base/AGENTS.md.tmpl");
+    let capabilities = read("docs/capabilities.md");
+    let normalized = normalize_whitespace(&skill);
+
+    for required in [
+        "Both models independently research, analyze, and plan",
+        "Claude and Codex research, analyze, identify risks, and draft a plan in parallel before seeing the other's conclusions.",
+        "Give both seats the same immutable brief and repository scope.",
+        "an implementation plan and test strategy;",
+        "The host reconciles the two drafts into **Plan v1**",
+        "Codex reviews the design for implementation feasibility, failure modes, security, testing, and maintainability.",
+    ] {
+        assert!(
+            normalized.contains(required),
+            "orchestrator lost the independent-plan contract: {required}"
+        );
+    }
+
+    for anchored_flow in [
+        "Codex supplies the implementation challenge",
+        "Codex critiques Claude's plan",
+        "Codex reviews Claude's plan instead of drafting",
+    ] {
+        assert!(
+            !normalized.contains(anchored_flow),
+            "orchestrator reintroduced a critique-only Codex seat: {anchored_flow}"
+        );
+    }
+
+    assert!(
+        normalize_whitespace(&agents).contains(
+            "both independently research/analyze/plan; Claude leads design and final review"
+        ),
+        "always-loaded AGENTS contract must expose independent planning"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains(
+            "Both seats independently research, analyze risks, and draft complete plans from the same immutable brief before either sees the other's conclusions"
+        ),
+        "CAP-010 must preserve the anti-anchoring contract"
+    );
+}
+
+#[test]
+fn design_review_and_security_roles_cannot_silently_drift() {
+    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let reviewer = read("assets/base/claude/agents/cf-reviewer.md");
+    let security = read("assets/base/claude/agents/cf-security-reviewer.md");
+    let quality =
+        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md");
+    let normalized = normalize_whitespace(&skill);
+
+    for required in [
+        "unless the brief already fixes a clear direction, compares 2–3 viable options",
+        "When the brief already dictates one clear design direction, record that constraint and why option exploration was waived.",
+        "Codex performs the first evidence pass and Claude owns the final verdict.",
+        "they do not replace Claude's cross-vendor review of Codex's work.",
+        "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
+    ] {
+        assert!(
+            normalized.contains(required),
+            "orchestrator lost a fixed design/review role: {required}"
+        );
+    }
+    assert!(
+        !normalized.contains("brief or local convention")
+            && !normalized.contains("brief or established convention"),
+        "local convention must not waive independent design options"
+    );
+
+    for required in [
+        "require at least 80% aggregate production-code line coverage",
+        "the approved design",
+        "Anything less is `changes_requested`.",
+    ] {
+        assert!(
+            normalize_whitespace(&reviewer).contains(required),
+            "reviewer lost a completion gate: {required}"
+        );
+    }
+
+    for required in [
+        "Defender lens — Claude",
+        "Attacker lens — a second vendor",
+        "custom or internal token shapes the regexes miss",
+        "IaC / CI YAML",
+        "CWE-79/89/78/94/77/22/1336",
+        "Cross-vendor divergence escalates to the human at merge",
+    ] {
+        assert!(
+            normalize_whitespace(&security).contains(required),
+            "security reviewer lost a mandatory adversarial axis: {required}"
+        );
+    }
+
+    for required in [
+        "A changed plan invalidates both approvals",
+        "hard floor of **80%**",
+        "normal target is **90% or higher**",
+        "failing or missing gate cannot be overridden by model consensus",
+    ] {
+        assert!(
+            normalize_whitespace(&quality).contains(required),
+            "quality contract lost a hard gate: {required}"
+        );
+    }
+}
+
+#[test]
+fn always_loaded_reasoning_and_output_contract_survives_refactors() {
+    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+
+    for required in [
+        "then the best current external sources",
+        "Steelman the rejected option before the decision stands",
+        "Think independently — not a yes-man.",
+        "Agreement without examination is a failure mode",
+        "Think in depth, not at the surface.",
+        "Decide by options and horizons.",
+        "Shape the deliverable.",
+        "check what it affects upstream and downstream",
+        "ADRs and the ledger are never edited",
+    ] {
+        assert!(
+            agents.contains(required),
+            "always-loaded contract lost a load-bearing duty: {required}"
         );
     }
 }
