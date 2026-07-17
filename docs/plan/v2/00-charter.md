@@ -63,16 +63,17 @@ codeflow orient                                       # the session-start digest
 
 **Never imported (dies with archive/v1):** pathflow/ entire, hooks/pre_tool_use+post_tool_use+task_completed+pipeline (the v1 enforcement organ), coordination/ (claims, loro, sync, merge_queue — `integrate` is written fresh against file_lock), transport/, autorun worker+orchestrator+stale, tui/, worktree lifecycle, interactive session manager, types/{phase,stage,sentinel}, the 29-subcommand CLI surface, SurrealDB-as-authority, the 135K-token instruction corpus.
 
-### 3.3 Hook surface — exactly four custom hooks
+### 3.3 Hook surface — five custom hook surfaces
 
 | Hook | Event | Purpose |
 |---|---|---|
 | `git-guard` | PreToolUse (Bash) | Intercept git operations that violate `policy.json.git` (see §6) — the commands git client hooks can't reach |
+| `exec-guard` | PreToolUse (Bash) | Intercept destructive and privileged commands under `policy.json.security` |
 | `session-orient` | SessionStart | Inject the generated ~30-line project digest |
 | `session-summary` | SessionEnd | Append session record (task, branch, decisions touched, PR) to the ledger — recall's zero-ceremony corpus |
-| git-hook shims | pre-commit / commit-msg / pre-push | Branch protection, secret scan, staged-.env, commit format (warn), test gate — all reading `policy.json` |
+| git-hook shims | pre-commit / commit-msg / pre-merge-commit / reference-transaction / pre-push | Branch protection, secret scan, staged-.env, commit format, local ref protection, test gate — all reading `policy.json` |
 
-Everything else in-session is **native settings**, shipped as presets: permission deny-read rules for secret file patterns (`**/.env*`, `**/*.pem`, `**/*credentials*`, …), sandbox network allowlist, statusline, worktree default, permission mode chosen at init (`default` / `acceptEdits` / `bypassPermissions`+sandbox). No protection-guard, edit-write-guard, webfetch-guard, gh-pr-guard, gate-check, team-guard, sentinel, or checkpoint code exists in v2.
+Everything else in-session is **native settings**, shipped as presets: permission deny-read rules for secret file patterns (`**/.env*`, `**/*.pem`, `**/*credentials*`, …), fail-closed sandbox and public-network policy, statusline, worktree default, permission mode chosen at init (`default` / `acceptEdits` / isolated-host-only `bypassPermissions`+sandbox), and Codex's separate guarded workspace/live-search/auto-review profile. Claude auto mode and classifier policy are selected at user or explicit CLI scope because shared project settings are intentionally ignored. No protection-guard, edit-write-guard, webfetch-guard, gh-pr-guard, gate-check, team-guard, sentinel, or checkpoint code exists in v2.
 
 ### 3.4 The session-orient digest — deliberately tiny
 

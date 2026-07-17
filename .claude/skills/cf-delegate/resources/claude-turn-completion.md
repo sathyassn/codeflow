@@ -10,11 +10,16 @@ plus one tmux wait-channel signal. It does not inspect transcripts or panes.
    or `-` (64 characters maximum).
 2. Create a new result directory outside the repository and set its mode to
    `0700`. Choose an absolute, not-yet-existing `result.json` below it.
-3. Create a task-only Claude settings file. Substitute the same absolute result
-   path and run id in both hook commands:
+3. Create a task-only Claude settings file. It enables auto-mode shell
+   classification and adds the completion hooks without replacing the native
+   project tools or MCP servers. Substitute the same absolute result path and
+   run id in both hook commands:
 
 ```json
 {
+  "autoMode": {
+    "classifyAllShell": true
+  },
   "hooks": {
     "Stop": [
       {
@@ -53,28 +58,32 @@ for the same result path is rejected.
 
 ## Launch and wait
 
-Launch the dedicated session in the intended worktree. For a pure read-only
-analysis consult, include plan permission mode:
+Launch the dedicated session in the intended worktree. Use the latest available
+Fable-class model at `xhigh` and auto permissions inside the effective
+fail-closed project sandbox:
 
 ```sh
 tmux new-session -d -s cf-review-42 -x 220 -y 50 -c /absolute/worktree \
-  'claude --permission-mode plan --settings /absolute/task-settings.json'
+  'claude --model fable --effort xhigh --permission-mode auto --settings /absolute/task-settings.json'
 tmux send-keys -t cf-review-42 -l \
-  'Review only the named scope. Edit nothing. Return evidence and VERDICT: approved|changes_requested. If plan mode requires an exit or question tool, use it and wait for my interactive response.'
+  'Review only the named scope. Edit nothing. Return evidence and VERDICT: approved|changes_requested.'
 tmux send-keys -t cf-review-42 Enter
 tmux wait-for codeflow-delegate-review-42
 ```
 
-For a final reviewer that must run tests or UI tools, omit plan mode and retain
-normal interactive permission prompts. Approve only the scoped verification
-actions, instruct Claude to edit no source files, and compare the worktree diff
-before and after. An edit-enabled handoff also omits plan mode, but it is a
-different session with explicit write authority; never infer that authority
-from the transport.
+Before launch, verify that the effective project settings enable the OS sandbox,
+set `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, disallow
+unsandboxed commands, allow the public-network and local-server access the task
+needs, and keep secret/private-network/destructive-action controls. Auto mode is
+not bypass mode; never use bypass mode on an ordinary host. A read-only consult
+must say "edit nothing" and compare the worktree state before and after. A
+final reviewer may run scoped tests or UI tools under the same boundary. An
+edit-enabled handoff is a different session with explicit write authority;
+never infer that authority from the transport.
 
 Apply a bounded timeout to the `tmux wait-for` process through the host
-harness. Plan mode can pause at an `AskUserQuestion` or `ExitPlanMode` dialog;
-if the terminal signal has not arrived within the bound, capture only this
+harness. Auto mode can pause for a classifier escalation or user question; if
+the terminal signal has not arrived within the bound, capture only this
 dedicated pane, answer the explicit dialog without broadening authority, and
 resume the bounded wait. A dialog is interactive input, never completion.
 

@@ -26,4 +26,6 @@ and decide; `codeflow` verifies the result deterministically.
    Keep it under ~15 lines.
 5. Verify deterministically and show the evidence: `codeflow test` (targets
    resolve and run), `codeflow doctor` (wiring healthy). Fix what fails before
-   reporting done; say what was not verified.
+   reporting done; say what was not verified. Commit the config in small units;
+   when a remote is configured, push the branch for durability — backup, not a
+   merge.

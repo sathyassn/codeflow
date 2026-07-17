@@ -11,7 +11,7 @@ use codeflow_core::scaffold::InitAnswers;
 /// Codex autonomy is a fixed per-repo posture in `.codex/config.toml`
 /// (ADR-0008) — the label says so, so a codex-primary user is not left
 /// believing this answer configured their harness.
-const PRESET_QUESTION: &str = "Claude Code permission preset (default | acceptEdits | bypassPermissions) — codex autonomy is configured in .codex/config.toml";
+const PRESET_QUESTION: &str = "Claude Code project preset (default | acceptEdits | bypassPermissions; bypass only for an externally isolated container/VM) — auto mode is selected at CLI/user scope, and codex autonomy lives in .codex/config.toml";
 
 fn ask(input: &mut impl BufRead, question: &str, default: &str) -> std::io::Result<String> {
     print!("{question} [{default}]: ");
@@ -124,7 +124,9 @@ mod tests {
     fn preset_question_is_claude_code_scoped() {
         // The preset writes .claude/settings.json only; the label must name
         // the harness it binds and point codex users at their real knob.
-        assert!(PRESET_QUESTION.starts_with("Claude Code permission preset"));
+        assert!(PRESET_QUESTION.starts_with("Claude Code project preset"));
+        assert!(PRESET_QUESTION.contains("auto mode is selected at CLI/user scope"));
+        assert!(PRESET_QUESTION.contains("externally isolated container/VM"));
         assert!(PRESET_QUESTION.contains(".codex/config.toml"));
     }
 

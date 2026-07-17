@@ -1,31 +1,51 @@
-<!-- codeflow:managed:begin scaffold=2.0.0-dev -->
+<!-- codeflow:managed:begin scaffold=2.1.0 -->
 @AGENTS.md
 
 ## Claude-specific notes
 
 - Session hooks are wired in `.claude/settings.json`: orient digest at
-  SessionStart, session summary at SessionEnd, git-guard before Bash. When a git
-  command is blocked, read the guard message — it names the violated policy rule
-  and the sanctioned path.
-- The permission preset and sandbox mode were chosen at init and live in
-  `.claude/settings.json`; change them there, not ad hoc.
+  SessionStart, session summary at SessionEnd, git-guard and exec-guard before
+  Bash. When a command is blocked, read the guard message — it names the
+  violated policy rule and the sanctioned path.
+- The project permission preset and fail-closed sandbox live in
+  `.claude/settings.json`: sandbox-contained Bash, public web research, and
+  local dev binding are enabled; unsandboxed retry is disabled. Claude ignores
+  repository requests for both auto mode and classifier policy, so select auto
+  in the active host (or user settings) and supply
+  `autoMode.classifyAllShell` at user/CLI scope. `/cf-customize` canaries the
+  effective mode; never claim the repo file enabled it.
 - The AGENTS.md git rules are **hook-enforced** here — the commit-msg hook and
   `git-guard` (wired in `.claude/settings.json`) block violations before they land, so
   fix the cause, never route around them. Full rules: AGENTS.md, "Git rules."
 
 ## Workflows
 
-- `/cf-develop` runs the build → review → verify loop inline; the pipeline
-  (`.claude/workflows/pipeline.workflow.js`) composes the same stages for batch,
-  parallel, or unattended runs.
-- Match weight to work: trivial → just do it; a feature or change → `/cf-develop`;
-  a batch/parallel or multi-task epic → the pipeline preset or the
-  integration-branch flow; nothing fits → author a custom ad-hoc workflow. Full
-  ladder in the `cf-method` skill.
-- Compose stages and models in config (`args.stages`, `args.models`, or a
-  `[workflows]` table in `.codeflow/project.toml`) — never hardcode them; the
-  pipeline file is user-owned and `codeflow update` never touches it.
+- `/cf-model-orchestrator` is the host-neutral Claude+Codex default for every
+  non-trivial repository task, including research, analysis, planning, design,
+  review, substantive docs, implementation, and verification. In this Claude
+  host, use the official Codex plugin; Claude leads design/final review and
+  Codex implements/first-verifies when implementation is in scope. A missing
+  seat degrades legibly only after preflight. The unattended pipeline is
+  explicitly single-vendor and never substitutes for the interactive duo.
+- Use the latest available Fable-class Claude model at xhigh effort for
+  reasoning, synthesis, design, coordination, and final review. It may delegate
+  mechanistic browser, Playwright, Computer Use, or MCP operation to current
+  Opus-class subagents, but Fable interprets their evidence and owns every
+  judgment. The Codex seat uses its strongest supported coding model at xhigh
+  for orchestration, implementation, and difficult verification; lower-effort
+  workers are optional only when that harness exposes safe per-worker routing.
+- Match stages and process weight to the outcome: trivial → just do it;
+  otherwise begin `/cf-model-orchestrator`. Research/planning-only work exits
+  after joint settlement; implementation continues through Codex build and
+  Claude final review. `/cf-plan` and `/cf-develop` are supporting/solo flows,
+  not alternate entry points. Full ladder in the `cf-method` skill.
+- Compose stages and models in config (`args.stages`, `args.models`) — never
+  hardcode them; the pipeline file is user-owned and `codeflow update` never
+  touches it.
 - **Stay lean by delegating** — the Claude mechanism for AGENTS.md's "Guard your
   context." Wide search → the `Explore` subagent; independent review → the
   `cf-reviewer` subagent; batch/parallel or novel orchestration → a workflow.
+  Parallel branches use separate worktrees, bounded fan-out based on host
+  memory/CPU, explicit file ownership, and serialized integration; do not trade
+  machine pressure or merge ambiguity for nominal concurrency.
 <!-- codeflow:managed:end -->

@@ -13,16 +13,32 @@ where a mistake is irreversible or invisible.
 ## Choosing process weight
 
 Match machinery to the work; escalate only when the lighter rung fails. Every
-rung that builds code carries an independent `cf-reviewer` pass — review is a
-stage, not a courtesy, and self-review is not review.
+rung that builds code carries an independent review pass — the `cf-reviewer`
+subagent in Claude Code; a separate read-only interactive review pass on any
+other harness, never headless (cf-develop carries the same branch) — review is
+a stage, not a courtesy, and self-review is not review. Selecting the stage set
+is itself an orchestration decision, orthogonal to weight: the rungs below set
+how much *process*. The duo is the default for every non-trivial repository task
+and is host-neutral: both models independently research/analyze/plan; Claude
+leads design and final review; Codex implements and first-verifies when
+implementation is in scope; the active harness coordinates. Solo is only the
+legible degradation when a required interactive seat is unavailable
+(`cf-model-orchestrator`). Research- or planning-only work stops after its
+jointly settled artifact. Make the weight call inside the orchestrator and
+materialize it with `cf-plan`, not mid-build.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Inline `/cf-develop` loop** for interactive work — the default path:
-  build → independent review → verify, with bounded rework.
+- **Interactive `/cf-model-orchestrator` loop** for non-trivial work — the
+  default path: parallel discovery → versioned dual-approved result; when edits
+  are in scope, continue through Codex build/first verification and independent
+  Claude review, with bounded rework.
+- **Inline `/cf-develop` loop** for the solo fallback: build → independent
+  review → verify, with bounded rework.
 - **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`, Claude Code) for
-  unattended, batch, or parallel fan-out runs — the same build/review/verify
-  stages, composed from a named preset. (Workflows are a Claude-Code runtime;
-  on another harness this rung is unavailable — escalate by other means.)
+  unattended, batch, or parallel fan-out runs. Its assurance preset is
+  explicitly single-vendor; it never claims the interactive duo's dual approval.
+  (Workflows are a Claude-Code runtime; on another harness this rung is
+  unavailable—use that harness's native task composition.)
 - **Custom ad-hoc workflow** (Claude Code) when no preset fits — for genuinely
   novel orchestration (a one-off audit sweep, a migration), not a shortcut around
   the review stage. Presets are defaults, not constraints.
@@ -30,9 +46,8 @@ stage, not a courtesy, and self-review is not review.
   and/or parallel tasks lands task-by-task on a shared `integration/<epic>`
   branch, not on `main`, and the human reviews one final PR. See "Managing a
   body of work" below.
-- **Stage and model composition lives in config-args** (`args.stages`,
-  `args.models`, `[workflows]` in `.codeflow/project.toml`) — never
-  hardcoded into the workflow file.
+- **Stage and model composition lives in the invocation args** (`args.stages`,
+  `args.models`) — never hardcoded into the workflow file.
 
 ## Planning an epic
 
@@ -86,6 +101,12 @@ still applies on every branch; only the merge-into-`main` step is deferred.
    the integration branch*: serial tasks branch from the updated integration
    after their predecessor lands; parallel tasks branch concurrently, one
    agent + worktree each.
+   Before fan-out, assign one writer per file/component and a single owner for
+   shared schemas, migrations, lockfiles, generated registries, and other merge
+   hotspots. Set a concurrency cap from observed host memory, CPU, disk, and
+   tool limits; reserve headroom and reduce it before swap pressure, duplicate
+   heavyweight builds/browsers, or context sprawl harms quality. Parallelism is
+   optional when its coordination cost exceeds its critical-path gain.
 4. **Land a task** by one of two sanctioned modes:
    - **Local** — `codeflow integrate <task-branch> --into integration/<…>`:
      flock-serialized (safe for parallel agents), rebases the task branch, runs
@@ -93,6 +114,8 @@ still applies on every branch; only the merge-into-`main` step is deferred.
    - **PR** — open a PR with base = the integration branch; CI runs (the
      `pull_request` trigger fires regardless of base) and the agent merges on
      green, because the base is non-protected.
+   Land tasks in the planned dependency order and run affected gates after each
+   merge; task-local green is not integration evidence.
 5. **Drift control** (long-running epics): periodically **merge** `origin/main`
    *into* the integration branch. Merge only — never rebase a shared branch;
    rebase only task branches.
@@ -193,7 +216,7 @@ growth is mechanical, never re-architecture.
 | Work outlives sessions; planning spans days | tier standard → full (`codeflow init --full`, additive) |
 | ~15 capability entries | `capabilities.md` → `docs/capabilities/CAP-*.md` + index |
 | architecture.md section outgrows a screen | → `docs/architecture/<area>.md`, one-line pointer left behind |
-| Throwaway becomes real | `--minimal` → `--standard` re-init (idempotent, additive) |
+| A doc-set or small tool grows into a code project needing the method | `--minimal` → `--standard` re-init (idempotent, additive) |
 
 Downgrade is never destructive: stop managing, do not delete.
 
@@ -218,4 +241,7 @@ Downgrade is never destructive: stop managing, do not delete.
 - **Agent-merging a protected branch.** An agent never merges into protected —
   a human merges the PR, or `codeflow integrate` lands it. Override envs
   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only; setting them
-  in-session is laundering and is blocked. Never `gh pr merge --delete-branch`.
+  in-session is laundering — blocked wherever a PreToolUse guard binds (Claude
+  Code always; interactive codex after the one-time `/hooks` trust), while the
+  git-hook plane honors the env by design as the sanctioned human path; the
+  remote perimeter is the hard line. Never `gh pr merge --delete-branch`.

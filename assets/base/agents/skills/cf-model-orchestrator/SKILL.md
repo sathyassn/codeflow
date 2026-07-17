@@ -1,18 +1,38 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex development duo from either Claude Code or Codex. Both models independently research, analyze, and plan; Claude leads design and final independent review; Codex implements and first-verifies; the host reconciles a versioned dual-approved plan and evidence ledger. Use for planned feature, fix, refactor, or documentation work with acceptance criteria. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex duo for every non-trivial repository task from either Claude Code, Codex, or another capable host. Both models independently research, analyze, and plan; Claude leads design and final independent review; Codex implements and first-verifies when implementation is in scope; the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
 
-Use the duo for all non-trivial development work with acceptance criteria.
-Harness choice changes the transport and coordinator, not the roles or quality
-bar. A conversational answer or pure question needs no duo.
+Use the duo for every non-trivial repository task. Harness choice changes the
+transport and coordinator, not the roles or quality bar. A conversational
+answer or one obvious local edit needs no duo; uncertainty, material judgment,
+external or repository research, multiple affected surfaces, or evidence beyond
+one obvious check makes the task non-trivial.
 
 Read [resources/quality-contract.md](resources/quality-contract.md) before
 planning. It is the shared, harness-neutral contract for plans, evidence,
 testing, coverage, UI validation, security, and final review. Harness-specific
 agents are adapters to that contract, not alternate sources of truth.
+
+## Outcome modes
+
+Select the smallest complete stage set before starting; do not manufacture an
+implementation stage for an analysis-only request.
+
+- **Research / analysis:** independent discovery → evidence comparison → joint
+  settled findings and recommendations → closeout.
+- **Plan / design:** independent discovery → Claude-led options → versioned
+  dual-approved plan and detailed tasks → closeout without edits.
+- **Implementation:** full workflow through Codex implementation, first
+  verification, Claude final review, and joint closeout.
+- **Review / verification:** both inspect independently; Codex performs the
+  first evidence pass and Claude owns the final verdict. Findings return to the
+  designated implementer; review authority does not imply edit authority.
+- **Substantive documentation:** use research/plan mode when only the proposed
+  content is requested; use implementation mode when repository docs will be
+  changed and verified.
 
 ## Invariants
 
@@ -27,6 +47,14 @@ agents are adapters to that contract, not alternate sources of truth.
   the implementation and first verification regardless of which harness hosts.
 - **Claude final-reviews.** Claude independently reviews the diff, design
   conformance, security posture, and test evidence, and reruns relevant tests.
+- **Strongest reasoning seats.** Use the latest available Fable-class Claude
+  model at xhigh effort for research, analysis, synthesis, design,
+  coordination, and final review. Fable may delegate mechanistic browser,
+  Playwright, Computer Use, or MCP operation to current Opus-class subagents,
+  but Fable interprets their evidence and owns every judgment. Use the strongest
+  supported Codex coding model at xhigh for orchestration, implementation, and
+  difficult verification. Lower-effort Codex workers are optional only when the
+  harness exposes safe per-worker routing; never assume that it does.
 - **Evidence outranks agreement.** A model claim, consensus, or approval never
   substitutes for a source, file:line, command result, rendered UI observation,
   or other reproducible evidence.
@@ -36,6 +64,13 @@ agents are adapters to that contract, not alternate sources of truth.
 - **Bounded loops.** Plan reconciliation and post-review rework are each bounded
   to at most two rounds. Unresolved disagreement or a red deterministic gate
   stops for the human; no model talks it green.
+- **Bounded parallelism.** Parallelize independent discovery and implementation
+  workstreams when it shortens the critical path. Give each implementation task
+  one owner, branch, and worktree; serialize shared contracts and integration.
+  The host sets and revises a concurrency cap from available memory, CPU, disk,
+  context, and tool limits—reserve headroom and reduce fan-out before swapping,
+  duplicate heavyweight builds, browser fleets, or context sprawl erode
+  quality. Parallel output is provisional until the integrated diff is green.
 
 ## Seat and transport matrix
 
@@ -73,13 +108,34 @@ of the host model.
    - Claude-host lane: the `codex@openai-codex` plugin is enabled and
      `/codex:setup` succeeds.
    - Codex-host lane: start Claude in a dedicated tmux session rooted at the
-     worktree and complete one scoped interactive canary.
-4. Verify task-specific tools before promising their evidence: test toolchain,
-   security scanners, Playwright/browser tools for web UI, and Computer Use or
-   a surface-specific driver for native/mobile/desktop UI.
-5. Record the selected models and reasoning levels as run evidence. Choose the
-   strongest supported model available for each seat; do not hard-code
-   fast-aging model names into this skill.
+     worktree with `--model fable --effort xhigh --permission-mode auto
+     --settings '{"autoMode":{"classifyAllShell":true}}'` and complete one
+     scoped interactive canary. The explicit CLI settings scope makes every
+     shell action reach the auto-mode classifier; Claude intentionally ignores
+     `autoMode` from repository settings. If Fable or auto mode is
+     unavailable, record the exact capability gap and use the strongest
+     supported Claude reasoning model with `acceptEdits` plus the same
+     fail-closed sandbox; never fall through to bypass mode on an ordinary host.
+4. Verify the autonomy boundary through the effective settings, not prose:
+   - Claude: sandbox enabled, `failIfUnavailable: true`, sandboxed Bash
+     auto-allowed, unsandboxed escape disabled, destructive and privileged
+     actions still classified or prompted, and raw secret reads denied. A
+     repository cannot set `defaultMode: auto` or classifier policy; select
+     auto and `classifyAllShell` at CLI/user scope and canary the effective mode.
+   - Codex: the named permission profile is active without a competing legacy
+     `sandbox_mode`, public network and live search are enabled, approvals use
+     `on-request`, and eligible escalations route to automatic review.
+5. Verify task-specific capabilities before promising their evidence: live web
+   research and authoritative docs; GitHub/source control; the stack format,
+   lint, test, coverage, dependency, and security tools; Playwright/browser for
+   web UI; Computer Use or a surface driver for native/mobile/desktop UI; and
+   any design, issue-tracker, database, cloud, or private-doc MCP the task needs.
+   Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
+   tokens never enter prompts, logs, repository files, or arbitrary commands.
+6. Record the selected models, reasoning levels, permission modes, tool
+   inventories, and live-canary evidence. Model family names above are routing
+   classes; record the actual current versions at run time rather than freezing
+   them into a plan.
 
 An absent seat at preflight degrades legibly to the harness-native solo
 `/cf-develop` flow with a separate read-only review pass. A mid-run failure
@@ -126,12 +182,29 @@ After dual approval, the host expands the agreed plan into ordered tasks with:
 Claude reviews design fidelity; Codex reviews executability. Both approve the
 task breakdown before implementation begins.
 
+If implementation has independent tasks, add an explicit execution graph:
+
+- dependencies and merge order;
+- one file/component owner, branch, and worktree per parallel task;
+- shared or conflict-prone files reserved to one integration owner;
+- a host resource budget and maximum concurrent heavyweight builds/browsers;
+- the `integration/<epic>` branch and serialized `codeflow integrate` order;
+- focused checks per task and combined checks after each landing.
+
+Do not parallelize a short task when coordination costs more than it saves.
+Never use concurrent writers in one worktree or rebase a shared integration
+branch.
+
 ### 4. Codex implementation and first verification
 
-Codex works in the scoped feature worktree, implements the approved tasks, and
-keeps the evidence ledger current. It runs formatting, static checks, unit and
+Skip this stage when implementation is outside the selected outcome mode.
+Otherwise Codex works in the scoped feature worktree—or coordinates the
+approved bounded set of task worktrees—implements the approved tasks, and keeps
+the evidence ledger current. It runs formatting, static checks, unit and
 integration tests, relevant end-to-end tests, coverage, dependency/security
-checks, and UI-driven checks required by the quality contract.
+checks, and UI-driven checks required by the quality contract. Task branches
+are not final evidence: integrate them in the approved order, rerun affected
+checks after each landing, and run the aggregate suite on the combined diff.
 
 For a Claude host, use the official plugin:
 
@@ -144,18 +217,21 @@ session; the Claude tmux session remains the design/review peer.
 
 ### 5. Claude independent final review
 
-Claude reviews the actual diff rather than the implementation summary. It
-reruns relevant tests, grades every acceptance criterion with evidence, checks
-design conformance and UX/UI behavior, and performs the independent security
-pass. In Claude Code, `cf-reviewer` and `cf-security-reviewer` may deepen the
-pass; they do not replace Claude's cross-vendor review of Codex's work.
+For implementation/review modes, Claude reviews the actual integrated diff
+rather than task summaries. It reruns relevant tests, grades every acceptance
+criterion with evidence, checks design conformance and UX/UI behavior, and
+performs the independent security pass. In Claude Code, `cf-reviewer` and
+`cf-security-reviewer` may deepen the pass; they do not replace Claude's
+cross-vendor review of Codex's work. For research/analysis/plan modes, Claude
+instead final-reviews the settled artifact and its source/evidence coverage.
 
 From a Codex host, this test-running review uses a separate interactive Claude
-session with normal in-band permissions, not plan mode: plan mode is for pure
-read-only analysis and may prevent the Bash/UI actions needed for verification.
-Grant only the scoped test and inspection actions, explicitly prohibit source
-edits, and require the worktree diff to remain unchanged after review. This is
-verification authority, not an implementation handoff.
+session in auto mode under the same fail-closed sandbox—not plan or bypass
+mode—so Bash/UI verification can proceed without an unattended permission
+stall. Keep shell classification enabled, grant only the scoped test and
+inspection actions, explicitly prohibit source edits, and require the worktree
+diff to remain unchanged after review. This is verification authority, not an
+implementation handoff.
 
 Any confirmed issue returns to Codex. Rework is bounded to two rounds and
 requires fresh evidence. A deterministic failure or unverified criterion blocks
@@ -173,6 +249,6 @@ Both seats approve the final diff and evidence ledger. The host reports:
 - residual risks or unresolved assumptions;
 - the interactive transport used and session/canary evidence.
 
-Only then hand off to `cf-ship`. If a remote exists, push committed logical
-units for durability, but never use a backup push to imply review or merge
-approval.
+Only an implementation or repository-editing documentation run hands off to
+`cf-ship`. If a remote exists, push committed logical units for durability, but
+never use a backup push to imply review or merge approval.

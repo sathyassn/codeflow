@@ -38,11 +38,12 @@ Core modules grouped by responsibility:
   lint), the capability registry parser, FTS5 recall, and the cross-repo
   registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (11 checks — hooks, claude, codex, config,
+  `error.rs`): the doctor check table (12 checks — hooks, claude, codex, config,
   permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift,
-  test-config), including bidirectional delegate readiness (Codex auth/MCP,
-  Claude plugin/MCP, and tmux prerequisites; live interactive canaries remain
-  outside the binary), structured settings merge,
+  customization, test-config), including bidirectional delegate readiness
+  (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive
+  canaries remain outside the binary) and a sentinel-based consuming-project
+  customization nudge, structured settings merge,
   generated status views, the test-gate engine, path flock, and pruned error
   types.
 
@@ -89,7 +90,11 @@ in `.codex/config.toml` (selected via `default_permissions`, extending `:workspa
 denies the home-dir secret stores (`~/.ssh`, `~/.aws`, `.env`, …) at the OS-sandbox
 layer, so unlike the PreToolUse guards it holds even in headless `codex exec`
 (ADR-0014); the `gh`/`docker` tool-token stores are deliberately left readable so
-those tools can read their own tokens. Beyond the
+those tools can read their own tokens. The profile is the only sandbox
+configuration—legacy `sandbox_mode` would shadow it—and also enables broad
+public egress, exact loopback for local UI tests, and live search. Private
+destinations and arbitrary Unix sockets stay closed; `on-request` escalations
+route to automatic review (ADR-0025). Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
 the same orientation digest Claude gets. PR-content checks (attribution/emoji,
@@ -107,13 +112,27 @@ base and again after deleting fragments so crash ordering preserves the base.
 
 ### scaffold — `assets/`
 
-`cf-model-orchestrator` is a harness-neutral contract with two
+`cf-model-orchestrator` is the stage-aware harness-neutral default for every
+non-trivial repository task in standard/full scaffolds, with two
 vendor-maintained/native adapters: Claude Code reaches Codex through the
 official plugin/app-server integration, while Codex reaches an interactive
-Claude CLI through a task-scoped tmux session. Fixed model roles, the versioned
-plan/evidence contract, and quality gates live in the shared skill resource;
-harness-specific reviewer agents only deepen that contract. The binary checks
-inspectable readiness but never routes model turns (ADR-0023).
+Claude CLI through a task-scoped tmux session. Research/analysis, plan/design,
+implementation, review/verification, and substantive-doc modes select only the
+stages the requested outcome needs. Fixed model-class roles, the versioned
+plan/evidence contract, bounded worktree/resource/integration rules, and quality
+gates live in the shared skill resource; harness-specific reviewer agents only
+deepen that contract (ADR-0023, ADR-0024).
+
+Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
+project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,
+web access, local port binding, destructive asks, and secret denies. The
+interactive Codex→Claude launch supplies Fable/xhigh, auto mode, and
+`classifyAllShell` through CLI settings because Claude intentionally ignores
+classifier policy from a repository. Codex's project config selects the guarded
+workspace profile, public egress/live search, and auto-reviewed escalations.
+`cf-customize` verifies the effective modes, tools, authentication paths, and
+live canaries; the binary neither mutates global settings nor authenticates
+services (ADR-0025).
 
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the

@@ -8,13 +8,38 @@
     "force_push_unprotected": "allow",
     "delete_protected": "block",
     "hard_reset_protected": "block",
+    "merge_to_protected": "block",
+    "pr_merge_to_protected": "block",
+    "local_ref_protection": "block",
+    "hook_integrity": "block",
     "commit_format": "block",
     "commit_types": ["feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert"],
+    "commit_desc_max_len": 50,
+    "commit_subject_max_len": 72,
+    "commit_body": "block",
+    "commit_body_max_bullets": 3,
+    "commit_body_bullet_max_len": 72,
+    "commit_footer_tokens": [],
+    "commit_required_footers": [],
+    "commit_ticket_keys": [],
+    "commit_ticket_required": "off",
+    "commit_ticket_pattern": "",
+    "breaking_watch_paths": [],
     "ai_attribution": "block",
     "commit_emoji": "block",
+    "pr_sections": "block",
+    "pr_required_sections": ["Summary", "Changes"],
+    "pr_code_sections": ["Testing"],
     "branch_naming": "block",
-    "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "spike/", "experiment/"],
+    "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "spike/", "experiment/", "integration/"],
     "secret_scan": "block",
-    "test_gate_on_push": "warn"
-  }
+    "test_gate_on_push": "warn",
+    "security_review": "warn",
+    "dep_audit": "warn"
+  },
+  "security": {
+    "dangerous_commands": "block",
+    "privilege_escalation": "warn"
+  },
+  "human_authorization": "none"
 }

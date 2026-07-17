@@ -197,6 +197,12 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         !report.contains("CONFLICT"),
         "fresh init conflicted:\n{report}"
     );
+    assert!(
+        report.contains("/cf-customize")
+            && report.contains("docs/product.md")
+            && report.contains("docs/architecture.md"),
+        "full init must print the consuming-project customization next step:\n{report}"
+    );
 
     // Bootstrap grace committed a clean tree (real templates, real hooks).
     assert!(
@@ -214,6 +220,30 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         agents.contains("codeflow:managed:end"),
         "AGENTS.md lost its end marker"
     );
+
+    let product = read(&root, "docs/product.md");
+    assert!(
+        product.matches("proj").count() >= 2,
+        "product seed must include both the project heading and init one-liner"
+    );
+    assert!(
+        read(&root, "docs/architecture.md").contains("Initial areas recorded by init: `core`."),
+        "architecture seed must anchor the areas collected by init"
+    );
+
+    let claude: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    assert_eq!(claude["sandbox"]["enabled"], true);
+    assert_eq!(claude["sandbox"]["failIfUnavailable"], true);
+    assert_eq!(claude["sandbox"]["allowUnsandboxedCommands"], false);
+    assert!(claude["permissions"]["allow"]
+        .as_array()
+        .is_some_and(|entries| entries.iter().any(|entry| entry == "WebFetch")));
+
+    let codex = read(&root, ".codex/config.toml");
+    assert!(!codex.contains("sandbox_mode"));
+    assert!(codex.contains("approvals_reviewer = \"auto_review\""));
+    assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);
     assert_update_round_trips(&root);

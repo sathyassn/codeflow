@@ -23,7 +23,9 @@ bind any agent or human.
   per-change spec.
 - **When not to use it** — a scratch or throwaway repo (`--minimal`, or skip
   it), or a team that wants a full workflow framework rather than guardrails;
-  codeflow is deliberately not a harness, agent framework, or orchestrator.
+  codeflow is deliberately not a harness, agent framework, or runtime model
+  router. Its standard/full scaffold does provide a portable Claude+Codex
+  orchestration skill while each model remains in its native harness.
 
 ## Install
 
@@ -56,8 +58,12 @@ codeflow init --standard --yes   # scaffold; offline; sane defaults
 
 `init` is idempotent and non-destructive: it writes managed scaffold files,
 wires git hooks via `core.hooksPath`, and (in a fresh repo) makes the scaffold
-commit and arms branch policy. See [docs/adoption.md](docs/adoption.md) for the
-greenfield/brownfield paths, tiers, ownership model, and the daily flow.
+commit and arms branch policy. Standard/full init then points to
+`/cf-customize`, which reconciles the consuming project's product,
+architecture, commands, harness settings, and required tools before the first
+non-trivial task enters `/cf-model-orchestrator`. See
+[docs/adoption.md](docs/adoption.md) for the greenfield/brownfield paths, tiers,
+ownership model, autonomy posture, and daily flow.
 
 ## Commands
 
@@ -73,7 +79,7 @@ greenfield/brownfield paths, tiers, ownership model, and the daily flow.
 | `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
-| `doctor` | Health checks (11): hooks, claude, codex, config, permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift, test-config |
+| `doctor` | Health checks (12): hooks, claude, codex, config, permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
 | `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | `remote` | Remote provider operations (branch protection) |
@@ -97,7 +103,9 @@ One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent
   through a byte-compatible payload, for an interactive Codex session via
   `.codex/hooks.json` (ADR-0008). Codex-driven work is bound unconditionally by
   the git-hook plane above; the in-session guards are an interactive-Codex bonus
-  (headless `codex exec` 0.142.5 does not run project PreToolUse hooks).
+  (headless `codex exec` is not a sanctioned peer transport). The scaffolded
+  Claude and Codex settings also enable fail-closed workspace autonomy, public
+  research/tool access, live search, and guarded escalation; see ADR-0025.
 - **CI** — re-runs the gates as the authoritative perimeter; PR-content checks
   are CI-plane by design (a git hook never sees a PR).
 - **Remote branch protection** — the server-side backstop (`codeflow remote

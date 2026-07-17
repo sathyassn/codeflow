@@ -774,6 +774,47 @@ fn init_records_answers_and_detects_stack() {
     assert!(toml.contains("stack = \"rust\""));
 }
 
+#[test]
+fn standard_init_points_to_consuming_project_customization() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+    let report = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.0.0")).unwrap();
+    let note = report
+        .notes
+        .iter()
+        .find(|note| note.contains("/cf-customize"))
+        .expect("standard init prints the customization next step");
+    for artifact in [
+        "docs/product.md",
+        "docs/architecture.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+    ] {
+        assert!(
+            note.contains(artifact),
+            "customization note misses {artifact}"
+        );
+    }
+    assert!(note.contains("tools/MCPs"));
+    assert!(note.contains("effective settings"));
+}
+
+#[test]
+fn minimal_init_does_not_advertise_an_uninstalled_skill() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+    let report = scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+    assert!(
+        !report
+            .notes
+            .iter()
+            .any(|note| note.contains("/cf-customize")),
+        "minimal tier must not point to a skill it does not install"
+    );
+}
+
 // --- update -----------------------------------------------------------------
 
 fn init_v1(root: &Path) -> tempfile::TempDir {

@@ -16,19 +16,22 @@ Match machinery to the work; escalate only when the lighter rung fails. Every
 rung that builds code carries an independent review pass — the `cf-reviewer`
 subagent in Claude Code; a separate read-only interactive review pass on any
 other harness, never headless (cf-develop carries the same branch) — review is
-a stage, not a courtesy, and self-review is not review. Selecting the execution
-skill is itself a planning decision, orthogonal to weight: the rungs below set
-how much *process*. The duo is the default for all dev work and is host-neutral:
-both models independently research/analyze/plan; Claude leads design and final
-review; Codex implements and first-verifies; the active harness coordinates.
-Solo is only the legible degradation when a required interactive seat is
-unavailable (`cf-model-orchestrator`). Make the weight call in `cf-plan`, not
-mid-build.
+a stage, not a courtesy, and self-review is not review. Selecting the stage set
+is itself an orchestration decision, orthogonal to weight: the rungs below set
+how much *process*. The duo is the default for every non-trivial repository task
+and is host-neutral: both models independently research/analyze/plan; Claude
+leads design and final review; Codex implements and first-verifies when
+implementation is in scope; the active harness coordinates. Solo is only the
+legible degradation when a required interactive seat is unavailable
+(`cf-model-orchestrator`). Research- or planning-only work stops after its
+jointly settled artifact. Make the weight call inside the orchestrator and
+materialize it with `cf-plan`, not mid-build.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Interactive `/cf-model-orchestrator` loop** for duo-capable work — the
-  default path: parallel discovery → versioned dual-approved plan → Codex build
-  and first verification → independent Claude review, with bounded rework.
+- **Interactive `/cf-model-orchestrator` loop** for non-trivial work — the
+  default path: parallel discovery → versioned dual-approved result; when edits
+  are in scope, continue through Codex build/first verification and independent
+  Claude review, with bounded rework.
 - **Inline `/cf-develop` loop** for the solo fallback: build → independent
   review → verify, with bounded rework.
 - **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`, Claude Code) for
@@ -98,6 +101,12 @@ still applies on every branch; only the merge-into-`main` step is deferred.
    the integration branch*: serial tasks branch from the updated integration
    after their predecessor lands; parallel tasks branch concurrently, one
    agent + worktree each.
+   Before fan-out, assign one writer per file/component and a single owner for
+   shared schemas, migrations, lockfiles, generated registries, and other merge
+   hotspots. Set a concurrency cap from observed host memory, CPU, disk, and
+   tool limits; reserve headroom and reduce it before swap pressure, duplicate
+   heavyweight builds/browsers, or context sprawl harms quality. Parallelism is
+   optional when its coordination cost exceeds its critical-path gain.
 4. **Land a task** by one of two sanctioned modes:
    - **Local** — `codeflow integrate <task-branch> --into integration/<…>`:
      flock-serialized (safe for parallel agents), rebases the task branch, runs
@@ -105,6 +114,8 @@ still applies on every branch; only the merge-into-`main` step is deferred.
    - **PR** — open a PR with base = the integration branch; CI runs (the
      `pull_request` trigger fires regardless of base) and the agent merges on
      green, because the base is non-protected.
+   Land tasks in the planned dependency order and run affected gates after each
+   merge; task-local green is not integration evidence.
 5. **Drift control** (long-running epics): periodically **merge** `origin/main`
    *into* the integration branch. Merge only — never rebase a shared branch;
    rebase only task branches.

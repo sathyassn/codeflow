@@ -1,4 +1,4 @@
-# cf-dogfood — capabilities
+# codeflow-lead-model-routing — capabilities
 
 <!-- WHAT layer: the registry of what the system does. The agent's index —
      consult it before building anything ("does this exist? what does it

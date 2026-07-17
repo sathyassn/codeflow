@@ -31,6 +31,40 @@ Use a content digest or durable link for the immutable brief. Approvals must nam
 the same plan version. A changed plan invalidates both approvals until each seat
 reviews the new version.
 
+For research/analysis-only work, `TASKS_AND_OWNERS`, `TEST_AND_UI_PLAN`,
+`COVERAGE_PLAN`, and `ROLLBACK_OR_RECOVERY` may be `N/A` only with a concrete
+reason. For planning-only work they describe the future implementation rather
+than work performed in the current run. Never imply that proposed evidence was
+executed evidence.
+
+## Parallel execution contract
+
+Parallelize only workstreams whose inputs and outputs can be isolated. Record:
+
+```text
+DEPENDENCY_GRAPH:
+PARALLEL_TASKS:
+TASK_BRANCH_WORKTREE_OWNER:
+SHARED_FILE_OWNER:
+INTEGRATION_BRANCH_AND_ORDER:
+HOST_RESOURCE_BUDGET:
+PER_TASK_GATES:
+POST_MERGE_GATES:
+```
+
+Each implementation task has one writer, branch, and worktree. Shared schemas,
+migrations, lockfiles, generated registries, and other conflict hotspots have a
+single integration owner or run sequentially. The coordinator caps concurrent
+heavy builds, browsers, and model sessions from observed CPU, memory, disk, and
+tool limits and preserves headroom; reduce fan-out before swap pressure,
+duplicate caches/builds, or context dilution affects evidence quality. Never
+use concurrent writers in one worktree, and never rebase a shared integration
+branch.
+
+Merge task branches in the recorded order through serialized integration,
+running the affected gates after each merge and the aggregate gates on the final
+combined diff. Passing task-local checks does not prove the integration.
+
 ## Evidence ledger
 
 For every material claim, record the acceptance criterion or risk it supports,
@@ -58,6 +92,12 @@ Apply the checks relevant to the changed surface:
 A skipped category is explicitly `N/A` with the reason and evidence that the
 surface is absent. Tool unavailability is a blocker or declared limitation, not
 a pass.
+
+Research, analysis, and planning runs verify source authority, freshness,
+independence, contradiction handling, and traceability from each material claim
+to the evidence actually read. They do not inherit code-test requirements for a
+surface they did not change, but they still need independent Claude and Codex
+work plus a settled, evidenced result.
 
 ## Coverage
 
@@ -116,5 +156,11 @@ Completion requires:
 - UI/design evidence is present or explicitly N/A;
 - the independent Claude review is approved;
 - no unresolved critical/high security issue or material assumption remains.
+
+For a mode without implementation, read “task breakdown” as the final research,
+analysis, plan, or review artifact and apply only the relevant gates above. For
+parallel implementation, completion additionally requires a green integrated
+worktree and review of the combined diff—not a collection of green task
+branches.
 
 A failing or missing gate cannot be overridden by model consensus.

@@ -1,4 +1,4 @@
-# cf-dogfood — architecture
+# codeflow-lead-model-routing — architecture
 
 <!-- HOW layer. Updated only inside the ship flow, in the same PR as the code,
      when an ADR declares architecture impact. Link to decisions by ADR id —
@@ -18,5 +18,7 @@
 <!-- One subsection per entry in project.toml areas[]. For each: its
      responsibility in one sentence, key paths/modules, and the ADRs that
      shaped it. -->
+
+Initial areas recorded by init: `engine, scaffold, docs`.
 
 {{ARCHITECTURE_AREAS}}

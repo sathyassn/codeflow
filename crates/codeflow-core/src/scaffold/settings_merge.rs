@@ -9,9 +9,13 @@
 //! - **permission entries** (`permissions.deny` / `ask` / `allow` arrays) —
 //!   union-added, never removed; scalar permission keys (`defaultMode`) are
 //!   set only when absent.
+//! - **sandbox entries** — recursively add missing keys and union shipped array
+//!   entries, while preserving every explicit user scalar. This lets security
+//!   additions such as fail-closed startup reach an existing partial sandbox
+//!   without silently changing a user's chosen value.
 //!
 //! Every other key — user or shipped — is preserved verbatim: shipped
-//! top-level keys (`statusLine`, `sandbox`, `$schema`) are added only when
+//! top-level keys (`statusLine`, `$schema`) are added only when
 //! the user file lacks them. Every mutation is reported.
 
 use serde_json::{Map, Value};
@@ -66,6 +70,7 @@ pub fn merge_settings(
         match key.as_str() {
             "hooks" => merge_hooks(cur, inc_val, report),
             "permissions" => merge_permissions(cur, inc_val, report),
+            "sandbox" => merge_sandbox(cur, inc_val, report),
             _ => {
                 if cur.contains_key(key) {
                     if cur[key] != *inc_val {
@@ -85,6 +90,53 @@ pub fn merge_settings(
             s
         })
         .map_err(ScaffoldError::from)
+}
+
+fn merge_sandbox(cur: &mut Map<String, Value>, inc_sandbox: &Value, report: &mut Vec<String>) {
+    let Some(inc_sandbox) = inc_sandbox.as_object() else {
+        return;
+    };
+    let cur_sandbox = cur
+        .entry("sandbox")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(cur_sandbox) = cur_sandbox.as_object_mut() else {
+        report.push("settings: \"sandbox\" is not an object; left untouched".to_string());
+        return;
+    };
+    merge_additive_object(cur_sandbox, inc_sandbox, "sandbox", report);
+}
+
+fn merge_additive_object(
+    current: &mut Map<String, Value>,
+    incoming: &Map<String, Value>,
+    path: &str,
+    report: &mut Vec<String>,
+) {
+    for (key, inc_val) in incoming {
+        let key_path = format!("{path}.{key}");
+        match (current.get_mut(key), inc_val) {
+            (Some(Value::Object(cur_obj)), Value::Object(inc_obj)) => {
+                merge_additive_object(cur_obj, inc_obj, &key_path, report);
+            }
+            (Some(Value::Array(cur_arr)), Value::Array(inc_arr)) => {
+                for item in inc_arr {
+                    if !cur_arr.contains(item) {
+                        cur_arr.push(item.clone());
+                        report.push(format!("settings: added {key_path} entry {item}"));
+                    }
+                }
+            }
+            (Some(existing), _) => {
+                if existing != inc_val {
+                    report.push(format!("settings: preserved user value for {key_path}"));
+                }
+            }
+            (None, _) => {
+                current.insert(key.clone(), inc_val.clone());
+                report.push(format!("settings: added {key_path}"));
+            }
+        }
+    }
 }
 
 fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec<String>) {
@@ -242,6 +294,12 @@ mod tests {
             ]
         },
         "statusLine": {"type": "command", "command": "echo cf"}
+        ,"sandbox": {
+            "enabled": true,
+            "failIfUnavailable": true,
+            "allowUnsandboxedCommands": false,
+            "network": {"allowLocalBinding": true}
+        }
     }"#;
 
     #[test]
@@ -312,5 +370,30 @@ mod tests {
             .any(|h| h["command"] == "codeflow hook old-guard"));
         assert!(hooks.iter().any(|h| h["command"] == "./mine.sh"));
         assert!(report.iter().any(|l| l.contains("removed stale hook")));
+    }
+
+    #[test]
+    fn sandbox_adds_missing_guards_but_preserves_explicit_values() {
+        let user = r#"{
+            "sandbox": {
+                "enabled": false,
+                "network": {"allowedDomains": ["internal.example"]}
+            }
+        }"#;
+        let mut report = vec![];
+        let merged = merge_settings(user, PRESET, &mut report).unwrap();
+        let v: Value = serde_json::from_str(&merged).unwrap();
+
+        assert_eq!(v["sandbox"]["enabled"], false);
+        assert_eq!(v["sandbox"]["failIfUnavailable"], true);
+        assert_eq!(v["sandbox"]["allowUnsandboxedCommands"], false);
+        assert_eq!(v["sandbox"]["network"]["allowLocalBinding"], true);
+        assert_eq!(
+            v["sandbox"]["network"]["allowedDomains"][0],
+            "internal.example"
+        );
+        assert!(report
+            .iter()
+            .any(|line| line.contains("preserved user value for sandbox.enabled")));
     }
 }

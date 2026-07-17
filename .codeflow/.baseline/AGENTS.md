@@ -1,4 +1,4 @@
-<!-- codeflow:managed:begin scaffold=2.0.0-dev -->
+<!-- codeflow:managed:begin scaffold=2.1.0 -->
 <!-- Owned by `codeflow update`. Edits inside this block are replaced on update;
      put project-specific instructions outside the markers. -->
 
@@ -27,12 +27,28 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Entry points
 
+Every non-trivial repository task **must begin with**
+`/cf-model-orchestrator`. Non-trivial includes work that needs repository or
+external research, analysis, planning, design judgment, implementation,
+debugging, security review, substantive documentation, or verification beyond
+one obvious local check. The orchestrator selects only the stages the outcome
+needs; a research- or planning-only task stops before implementation. A trivial
+edit or conversational answer needs no skill.
+
+`/cf-plan`, `/cf-develop`, and the other skills are supporting flows, not
+competing ways around the duo default. Use them inside the orchestrated flow or
+after its preflight has proved a required interactive seat unavailable and
+recorded the reduced assurance. When uncertain whether work is trivial, treat
+it as non-trivial.
+
 | Intent | Use |
 |---|---|
-| Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
-| Build planned work | `/cf-develop` — build → independent review → verify, bounded rework |
+| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design and final review; Codex implements and first-verifies when implementation is in scope. Claude Code hosts through the official Codex plugin; Codex hosts through interactive Claude CLI + tmux. Missing seats degrade legibly after preflight |
+| Materialize an agreed plan | `/cf-plan` — supporting flow for acceptance criteria, epic/spec/ADR artifacts, used inside the duo or after a recorded solo degradation |
+| Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
+| Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
 | Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `task new` |
 
@@ -51,17 +67,34 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 Four planes enforce the git standards, defense in depth: git hooks, the `git-guard`
 PreToolUse hook, and remote branch protection each read `.codeflow/policy.json`, and
-the scaffolded CI re-implements the commit-format, attribution, and emoji checks
-inline (keep it in step with policy.json). The local planes are fast in-session
-feedback; CI and remote branch protection are the authoritative, server-enforced
-perimeter — the real boundary (why the split matters: cf-method, "Why the git
-boundary is remote"). The rules, compressed:
+the scaffolded CI runs the same commit-format, attribution, emoji, and branch
+checks through the `codeflow ci` binary — one source of truth with the hooks, no
+inline drift (ADR-0017). The PreToolUse plane is per-harness: Claude Code
+always; interactive codex after the one-time `/hooks` trust; a harness with no
+hooks engine not at all — and since headless task execution is prohibited
+outright (ADR-0018), that last case is the whole gap. The local planes are fast
+in-session feedback; CI and remote branch protection are the authoritative,
+server-enforced perimeter — the real boundary (why the split matters:
+cf-method, "Why the git boundary is remote"). The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
-  test/ chore/ ci/ hotfix/ plan/ spike/ experiment/`. Pick by work intent.
-- **Commits:** conventional format `type(scope): description` — imperative mood,
-  lower-case type from the policy whitelist, no trailing period; body explains
-  *why* when non-obvious. One logical change per commit.
+  test/ chore/ ci/ hotfix/ plan/ spike/ experiment/ integration/`. Pick by work intent.
+- **Commits:** conventional format `type(scope): description` (scope optional) —
+  imperative mood, lower-case type from the policy whitelist, no trailing period;
+  the description ≤ 50 chars and the whole subject line ≤ 72. A body, when
+  present, is **only** `-` bullets — at most 3, each a single line ≤ 72 chars —
+  optionally followed by a `BREAKING CHANGE:` footer; no prose paragraphs. One
+  logical change per commit. Other git-trailer footers (`Refs:`, `Signed-off-by:`,
+  …) are blocked unless the project opts them in — a team can allow specific
+  trailers, require a ticket reference, or require `Signed-off-by` (DCO) via
+  `policy.json`.
+- **Breaking changes are a judgment call, made every commit.** Before each
+  commit, ask whether it changes anything a consumer depends on — API, CLI flags,
+  config schema, file formats, defaults, or managed-file semantics. If yes, mark
+  the subject `type!:` and add a `BREAKING CHANGE:` footer stating the migration
+  path; that footer is what drives the major version bump. A `policy.json`
+  `breaking_watch_paths` glob warns when a declared contract surface is touched
+  unmarked, but the glob only nudges — detection is yours, not the gate's.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
@@ -75,11 +108,28 @@ boundary is remote"). The rules, compressed:
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
   can corrupt the root repo).
+- **Durability push:** when a remote is configured, push the working branch after
+  each committed logical unit so work survives a machine failure; use `git push
+  --force-with-lease` (never bare `--force`) when history was rewritten. This is
+  backup, not a merge — the pre-commit secret scan still guards what is pushed and
+  every merge gate still stands. Teams that want to forbid it set
+  `git.force_push_unprotected` in `policy.json` (default allow).
 - **Bodies of work:** a multi-task epic lands task-by-task on a non-protected
   `integration/<epic>` branch (agents merge there); only the finished body
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
   work."
-- **PR bodies:** summary, changes, test results, linked epic/capability IDs.
+- **PR bodies:** follow the template — summary, changes, testing, linked
+  capability/ADR IDs — and **match the presentation to the shape of the
+  data**: tables for tabular data (coverage, test→pins, exit-code or
+  before/after matrices), fenced blocks for pasted output, short one-line
+  bullets for the rest — never paragraph-walls. The Summary is plain
+  language a reader with zero context understands — no jargon, say what
+  it means for the user. A code PR **must** carry real test
+  evidence in `## Testing`: the pasted test-summary output, the coverage
+  number, the new tests it adds, and what was NOT tested — "tests pass" as
+  prose is a claim, not evidence, and is not reviewable. Docs-only PRs say
+  so in one line plus the doc checks run. Type and breaking-change come
+  from the conventional commits, not the body.
 - When a gate blocks you, fix the cause — never bypass (`--no-verify`, editing
   hooks, exporting gate tokens). Gates exist only where mistakes are
   irreversible or invisible.
@@ -90,37 +140,94 @@ Develop in a worktree per session (native worktree support). Protected branches
 stay checked out only at the repo root, so git itself refuses a second checkout —
 structural protection for free.
 
+Parallelize independent work when it shortens the critical path, but make the
+dependency graph, file ownership, and integration order explicit first. Each
+parallel task gets one owner, branch, and worktree; never let two sessions write
+the same worktree or concurrently edit a shared contract, schema, migration, or
+other merge hotspot. The host sets a bounded concurrency cap from available CPU,
+memory, disk, and tool limits, monitors pressure, and reduces fan-out before
+swapping, duplicate heavyweight builds, or context sprawl degrade quality.
+Dependent work stays sequential.
+
+For a multi-task body, integrate through `integration/<epic>` and serialize each
+landing with `codeflow integrate`; rerun the affected and aggregate gates after
+every merge. Rebase task branches, never a shared integration branch. Parallel
+output is not complete until the integration worktree is green and the combined
+diff has received the same Codex-first/Claude-final review as a serial change.
+
 ## Session flow
 
 1. Orient: the SessionStart digest (~30 lines) gives branch and worktree state,
    work counts, recent ADRs, gate status, and pointers. Read the pointed docs
-   before deep work; the digest is pointers, not content.
+   before deep work; the digest is pointers, not content. No digest (hook
+   unwired, or not yet trusted on your harness)? Run `codeflow orient` yourself.
 2. Work on a correctly prefixed branch in a worktree; commit small and often.
-3. End: the session summary is captured automatically — no ceremony. Decisions
-   of record belong in ADRs, not in chat history.
+3. End: on a harness with a SessionEnd hook (Claude Code), the session summary
+   is captured automatically; elsewhere nothing is captured for you —
+   externalize per "Externalize state as you go" below. Decisions of record
+   belong in ADRs, not in chat history.
 
 ## Workflow discipline
 
-Principles to reason from with judgment, not a rote checklist.
+Reason like a senior engineer and architect: outcome-driven, evidence-bound, and
+proportional — deep thinking for consequential or novel work, a light pass for
+the trivial; knowing which weight a task warrants is itself judgment. Principles
+to reason from, not a rote checklist.
 
 - **Work to the outcome.** Know the task's intent and what tangible result means
   *done* before acting. Then work in small, verifiable steps — a failed gate or
   review is input to the next step, not the end. Iterate until the outcome is
-  verified, or stop and surface a genuine blocker.
+  verified, or stop and surface a genuine blocker — promptly and well-framed:
+  the situation, the options weighed, and a recommendation; never late, never
+  bare.
 - **Ground it in evidence — never assume.** Treat an unclear requirement, API, or
   fact as a stop-and-verify, not a guess. Research non-trivial decisions in both
   breadth and depth — the project's own code and docs first, then the best current
   external sources (official/primary references, reputable discussion), and
-  adjacent fields where a better idea may live. Weigh the alternatives and the
-  scenarios they create — sequential, parallel, and over time.
+  adjacent fields where a better idea may live.
+- **Why — and why not.** Interrogate a non-trivial decision in both directions
+  until it hits bedrock: why this, and why *not* this — why was the alternative
+  rejected? Steelman the rejected option before the decision stands; a choice
+  that has not survived its strongest rival is a default, not a decision.
+- **Think independently — not a yes-man.** Do not accept a request, an opinion, a
+  claim, or a proposed approach — the operator's included — on assertion alone.
+  Research it, weigh the alternatives, and stress-test it; when you disagree or
+  see a better path, say so with reasoning and evidence. The operator makes the
+  final call and their decision is respected — but they are owed your honest
+  analysis, not agreement. Agreement without examination is a failure mode, not
+  deference.
+- **Think in depth, not at the surface.** Push past the first-order read to the
+  second, third, and further order. Chase the implication chain — "and therefore?
+  … and therefore?" — until it lands on the fundamental that actually decides the
+  matter (the forward twin of the "why? … why?" root-cause drill: consequences
+  forward, causes backward, both to fundamentals). And follow those consequences
+  not only down one thread but across — trace how each order ripples through the
+  related domains and aspects, the whole value chain and sphere it touches, not
+  just the immediate area — and let that full picture inform the decision. Surface
+  thinking yields dumb answers; the useful insight lives a few levels down and a
+  few domains over.
+- **Decide by options and horizons.** Enumerate the real options with pros and
+  cons for *this* situation and the scenarios each creates — sequential,
+  parallel, and over time — then decide against short- and long-term priorities,
+  both stated. Prefer the robust, durable solution that stands the test of time;
+  when expedience wins, it wins deliberately and says so.
 - **Guard your context.** Long context degrades quality. Keep the thinking,
   planning, and synthesis in your own session, but delegate breadth (wide
   searches, reading many files), long or mechanical passes, and independent
-  checks to a subagent or workflow — each works in its own context and returns a
-  condensed result, so yours stays sharp for the decisions.
+  checks to a subagent or workflow (where your harness has them) — each works in
+  its own context and returns a condensed result, so yours stays sharp for the
+  decisions.
 - **Write it well.** Favor the simplest change that fully solves the problem: DRY,
   idiomatic, coherent with the existing architecture — its conventions over your
   taste. Leave it more consistent than you found it.
+- **Shape the deliverable.** Layer it concept → detail, each layer complete at
+  its own altitude; reveal depth progressively — never dump, and never cut key
+  information to condense. Bullets for the enumerable; prose only where it
+  earns its place; visuals where they explain better. Presentation creative,
+  elegant, modern, fit to the domain; web artifacts componentized, never
+  monolithic. Then take the audience's seat: structured, logical, progressive,
+  the sought depth findable? Craft lives in the details — sloppy work is a
+  defect, not a style.
 - **Prove it at every surface.** Verify the work where it runs — unit,
   integration, end-to-end, and user-facing behavior (drive a real UI with a
   browser/computer-use tool when that is the surface) — and check what it affects
@@ -147,7 +254,9 @@ Principles to reason from with judgment, not a rote checklist.
   change, boundary change).
 - **Append-only records:** ADRs and the ledger are never edited — supersede with
   a new entry instead.
-- Review verdicts come from the independent reviewer (`cf-reviewer`) against the
+- Review verdicts come from an independent pass — the `cf-reviewer` subagent in
+  Claude Code; a separate read-only interactive review pass on any other harness
+  (never headless — a headless pass fires no in-session guards) — against the
   stated acceptance criteria, with evidence. Self-review is not review.
 
 <!-- codeflow:managed:end -->

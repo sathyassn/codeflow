@@ -1,6 +1,18 @@
 # codeflow CI — the perimeter. Re-runs every gate that matters so nothing
-# depends on local state. Written by `codeflow init` only if absent; after
-# that it is yours.
+# depends on local state. Written by `codeflow init` and managed by `codeflow
+# update` (charter §4.3): an unmodified copy is replaced on update; your edits
+# are preserved via 3-way merge, never clobbered.
+#
+# IMPORTANT: the "Install codeflow" step below is a PLACEHOLDER. Until you
+# replace it with the release installer (or a from-source build), the codeflow
+# `test`/`validate` gates FAIL RED by design — a missing binary is an unarmed
+# perimeter, not a pass. This is a loud, honest signal that the gate is not yet
+# enforcing; wire the install step to turn it green. Do NOT "fix" the red by
+# making a missing binary skip — that hands branch protection a job that ran
+# nothing. The secret-scan and security-review jobs work out of the box
+# (external pinned tools); the commit-standards job now runs the same
+# `codeflow ci` binary as the gates, so it shares the Install-codeflow step and
+# fails RED until that step is wired (ADR-0017 — one source of truth, no drift).
 name: codeflow-ci
 
 on:
@@ -20,40 +32,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      # This repo IS codeflow, so it builds the binary from source rather than
-      # using the release installer a consumer project would. These gates block.
-      # The toolchain is pinned in rust-toolchain.toml (the single source of
-      # truth rustup honors locally and here); installing from it means a
-      # floating stable clippy cannot break CI out from under a green local run.
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build codeflow from source
+      - name: Install codeflow
         run: |
-          cargo build --release -p codeflow-cli
-          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+          # PLACEHOLDER: replace with the release installer once published, e.g.
+          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "::error::codeflow install step is an unwired PLACEHOLDER — the test/validate gates below fail RED until you replace this with the real installer. The perimeter is intentionally not armed."
 
-      - name: codeflow test --mode full
-        run: codeflow test --mode full
+      - name: codeflow test
+        run: |
+          if command -v codeflow >/dev/null 2>&1; then
+            codeflow test --strict
+          else
+            echo "::error::codeflow not installed — test gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
+          fi
 
       - name: codeflow validate --docs
-        run: codeflow validate --docs
-
-  rust:
-    name: rust (test + clippy)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo test --workspace
-        run: cargo test --workspace
-
-      - name: cargo clippy --workspace --all-targets -D warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          if command -v codeflow >/dev/null 2>&1; then
+            codeflow validate --docs
+          else
+            echo "::error::codeflow not installed — validate gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
+          fi
 
   secret-scan:
     name: secret scan
@@ -63,14 +65,74 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Run the gitleaks binary directly (pinned): the gitleaks-action wrapper
-      # requires a GitHub token/license and crashed with a RequestError here.
+      # Run the gitleaks binary directly (pinned) rather than the
+      # gitleaks-action wrapper, which requires a GitHub token/license.
       - name: gitleaks
         run: |
           GITLEAKS_VERSION=8.30.1
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz gitleaks
           ./gitleaks detect --source . --redact --no-banner --exit-code 1
+
+  security-review:
+    name: security review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Dependency / supply-chain audit — the deterministic floor the
+      # cf-security-reviewer red-team layers on (ADR-0016; OWASP A03:2025). Pinned
+      # osv-scanner is stack-agnostic: it reads every lockfile ecosystem
+      # (Cargo.lock, package-lock.json, requirements.txt, go.mod, …), so this one
+      # job is the universal floor. Add stack-specific scanners (cargo audit,
+      # pip-audit, govulncheck) and a SAST pass (semgrep --config auto) as your
+      # stack warrants.
+      #
+      # Enforcement reads two .codeflow/policy.json keys: `git.security_review` is
+      # the umbrella gate for the whole security-review job; `git.dep_audit` is the
+      # SCA-specific sub-gate for this osv-scanner step. The advisory blocks when
+      # EITHER is `block`, reports when either is `warn`, and the step is skipped
+      # only when BOTH are `off`:
+      #   block — an advisory (or scan error) fails the job (the hard CI gate);
+      #   warn  — reported, not failed (the shipped default);
+      #   off   — skipped (only when both keys are off).
+      # Record a justified suppression for an accepted or unreachable advisory in
+      # an .osv-scanner.toml allowlist (auto-discovered), so a transitive advisory
+      # in unchanged code cannot block an unrelated PR.
+      - name: dependency audit (osv-scanner)
+        run: |
+          set -u
+          sr=$(jq -r '.git.security_review // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
+          da=$(jq -r '.git.dep_audit // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
+          if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
+            level=block
+          elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then
+            echo "security_review=off and dep_audit=off — skipping."; exit 0
+          else
+            level=warn
+          fi
+
+          OSV_VERSION=2.4.0
+          curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o osv-scanner
+          chmod +x osv-scanner
+
+          set +e
+          out=$(./osv-scanner scan -r . 2>&1); rc=$?
+          set -e
+          printf '%s\n' "$out"
+
+          if [ "$rc" -eq 0 ]; then
+            echo "No known advisories."
+          elif printf '%s' "$out" | grep -qiE 'no package sources found|no packages found|no lockfiles'; then
+            echo "No scannable manifests found — nothing to audit."
+          elif [ "$level" = "block" ]; then
+            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in .osv-scanner.toml."
+            exit 1
+          else
+            echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
+          fi
 
   commit-lint:
     name: commit standards
@@ -81,71 +143,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Lint PR commits (format, no AI attribution, no emoji)
+      - name: Install codeflow
+        run: |
+          # PLACEHOLDER: replace with the release installer once published, e.g.
+          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "::error::codeflow install step is an unwired PLACEHOLDER — the commit-standards gate below fails RED until you replace this with the real installer. The perimeter is intentionally not armed."
+
+      # One source of truth: `codeflow ci` runs the SAME commit-format,
+      # no-AI-attribution, no-emoji, breaking-footer, and branch-naming checks as
+      # the git-client hooks and the Claude git-guard, reading .codeflow/policy.json
+      # for the level of each (block/warn/off), plus the PR-body structure check
+      # (git.pr_sections: required sections present and non-empty, test evidence
+      # when the range touches code). No inline regex to drift (ADR-0017).
+      # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated into
+      # the script), so an untrusted body cannot inject shell.
+      - name: codeflow ci (commit + branch + PR-body standards)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          set -u
-          fail=0
-          types='feat|fix|docs|refactor|test|chore|ci|perf|build|revert'
-
-          while IFS= read -r subject; do
-            if ! printf '%s\n' "$subject" | grep -qE "^(${types})(\([a-zA-Z0-9._/-]+\))?!?: .+[^.]$"; then
-              echo "::error::malformed commit subject: ${subject}"
-              fail=1
-            fi
-          done < <(git log --no-merges --format=%s "${BASE_SHA}..${HEAD_SHA}")
-
-          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
-            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
-            echo "::error::AI attribution found in commit message(s)"
-            fail=1
+          if command -v codeflow >/dev/null 2>&1; then
+            codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF"
+          else
+            echo "::error::codeflow not installed — commit-standards gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
           fi
-
-          if git log --no-merges --format=%B "${BASE_SHA}..${HEAD_SHA}" \
-            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
-            echo "::error::emoji found in commit message(s)"
-            fail=1
-          fi
-
-          exit "$fail"
-
-      - name: Lint PR body (no AI attribution, no emoji)
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          set -u
-          fail=0
-
-          if printf '%s\n' "${PR_BODY}" \
-            | grep -niE 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|codex|cursor|assistant|agent|\bai\b|bot)|generated (with|by)'; then
-            echo "::error::AI attribution found in PR body"
-            fail=1
-          fi
-
-          if printf '%s\n' "${PR_BODY}" \
-            | grep -P '[\x{1F000}-\x{1FAFF}]|[\x{2600}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|\x{FE0F}'; then
-            echo "::error::emoji found in PR body"
-            fail=1
-          fi
-
-          exit "$fail"
-
-  # Line-coverage floor: fails the build when workspace line coverage drops
-  # below 90% (current ~95% — headroom to avoid flakiness while still catching
-  # real regressions instead of letting them land silently).
-  coverage:
-    name: coverage report
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Coverage summary + floor (fails under 90% line coverage)
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 90

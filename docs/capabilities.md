@@ -17,9 +17,9 @@ id: CAP-001
 name: scaffold-init
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
 epics: [EPC-001]
-adrs: [ADR-0019]
+adrs: [ADR-0019, ADR-0025]
 ```
 
 `codeflow init [--minimal|--standard|--full] [--yes]` lays the discipline
@@ -32,7 +32,10 @@ armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md`);
 and the six-layer docs spine and full contract; `--full` adds
 project-management/. Idempotent, non-destructive, offline (assets embedded via
 rust-embed), with bootstrap grace, husky/hooksPath detection, and a printed
-per-file report. Re-running at a higher tier is an additive upgrade.
+per-file report. Standard/full reports close with `/cf-customize`, pointing at
+the consuming project's product, architecture, agent context, harness settings,
+and tools; minimal does not advertise an uninstalled method skill. Re-running
+at a higher tier is an additive upgrade.
 
 ## CAP-002 — scaffold-update
 
@@ -209,15 +212,18 @@ area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001]
-adrs: [ADR-0002, ADR-0007]
+adrs: [ADR-0002, ADR-0007, ADR-0025]
 ```
 
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs eleven health checks — hooks, Claude wiring, codex wiring, config,
+`codeflow doctor` runs twelve health checks — hooks, Claude wiring, codex wiring, config,
 permissions, network, delegates, repo integrity, CI perimeter, managed-region
-drift, and test config. The delegates check now inspects both directions:
+drift, consuming-project customization, and test config. The customization
+check remains quiet for minimal/non-method repos, warns while product,
+architecture, or AGENTS sentinels remain, and points to `/cf-customize`. The
+delegates check inspects both directions:
 Codex auth/MCP, Claude plugin/MCP, and tmux; it explicitly leaves live
 interactive account/tool canaries to the harness (ADR-0023).
 
@@ -262,10 +268,14 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015, ADR-0018, ADR-0023]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025]
 ```
 
-`/cf-model-orchestrator` is the host-neutral default for non-trivial dev work.
+`/cf-model-orchestrator` is the host-neutral default for every non-trivial
+repository task: research, analysis, planning, design, implementation,
+debugging, security, substantive documentation, review, or verification. It
+selects the smallest complete outcome mode, so research/planning-only work
+settles an evidenced artifact and stops before implementation.
 Both seats independently research, analyze, and plan from an immutable brief;
 Claude leads design and final independent review, while Codex implements and
 first-verifies regardless of which harness hosts. The coordinator reconciles a
@@ -277,8 +287,16 @@ other host, including Hermes, may coordinate only if it preserves both native
 sessions and their tools. The shared quality resource requires reproducible
 evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
 coverage floor where measurable (90% normal target), security review, and
-bounded rework. Missing seats degrade legibly to solo; mid-run failure blocks
-and escalates.
+bounded rework. Latest Fable-class/xhigh owns Claude reasoning and judgment;
+current Opus-class subagents may operate UI/MCP tools; strongest Codex/xhigh
+owns implementation and difficult verification. Each run records actual model
+versions rather than freezing pins in doctrine.
+
+Independent implementation tasks use bounded, host-resource-aware parallelism:
+one owner/branch/worktree per task, a single owner for shared files, serialized
+landing through `codeflow integrate` to `integration/<epic>`, affected gates
+after each landing, and aggregate gates plus review on the combined diff.
+Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
 
 The unattended Claude workflow is explicitly single-vendor and rejects the old
 `duo` preset semantics. Manifest parity tests pin byte mirrors, while
@@ -324,9 +342,9 @@ id: CAP-012
 name: scaffold-customize
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs"]
 epics: []
-adrs: []
+adrs: [ADR-0025]
 ```
 
 `/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
@@ -336,9 +354,18 @@ project actually uses (git and the harness for every flow; the `codex-plugin-cc`
 plugin, codex, and its MCP servers for a Claude-hosted duo; Claude CLI/MCP,
 tmux, and the completion-hook canary for a Codex-hosted duo or reverse consult;
 the stack's test toolchain) —
-then fills the project-owned artifacts still sitting at template defaults
-(`docs/product.md`, the AGENTS.md/CLAUDE.md project sections, policy.json gate
-levels, model pins). Analysis-then-propose: one prioritized report first, then
-fixes applied interactively on a working branch through a PR; it never
-auto-installs a tool. Ships as the `cf-customize` skill, mirrored across
+then reconciles the consuming project's actual README, manifests, code, and CI
+against its project-owned artifacts (`docs/product.md`,
+`docs/architecture.md`, common instructions/commands in `AGENTS.md`, only
+Claude-specific differences in `CLAUDE.md`, policy levels, and runtime model
+routing). It verifies effective Claude/Codex sandbox, network, live-search, and
+approval posture rather than trusting comments. It also canaries the task's
+research, GitHub, stack, coverage/security, browser/UI, design, and
+project-specific MCP tools with brokered authentication and no raw secrets.
+
+Analysis-then-propose: one prioritized report first, then fixes applied
+interactively on a working branch through a PR; it never auto-installs a tool or
+silently changes global harness settings. `codeflow init` prints the next step,
+and doctor keeps a nudge visible while scaffold sentinels remain. Ships as the
+`cf-customize` skill, mirrored across
 `.claude/skills`, `.agents/skills`, and the `assets/base` scaffold source.

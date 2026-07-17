@@ -1,6 +1,6 @@
 ---
 name: cf-customize
-description: Tailor a Codeflow scaffold to its project. Verify the core harness and test tools plus both interactive duo lanes—Claude Code to Codex through the official plugin, and Codex to Claude through tmux—along with task-specific MCP/UI tools. Then propose project-owned docs, policy, workflow, and model-selection changes. Use after init or when an update brings defaults to decide. Analyze before editing; never auto-install tools.
+description: Tailor a CodeFlow scaffold to its consuming project. Verify both interactive duo lanes, their effective autonomy/network/secret boundaries, and the research, source-control, test, security, browser/UI, design, and project-specific MCP tools the work needs. Then derive and confirm the consuming project's product, architecture, operating-contract, policy, workflow, parallelism, and model-routing specifics from evidence already in the repo. Use after init or when an update brings defaults to decide. Analyze before editing; never invent project facts or auto-install tools.
 ---
 
 # cf-customize — tailor a scaffolded project to itself
@@ -31,7 +31,9 @@ artifacts still sitting at template defaults.
 
 ## Part A — flow-aware tool preflight
 
-First decide **which flows this project uses**, then verify each flow's tools:
+First decide **which flows this project uses**, then verify each flow's tools.
+Standard/full installs default every non-trivial repository task to the duo;
+solo is a preflight-proven degradation, not an equivalent preference:
 
 - **Solo** (`/cf-develop`) — always in play.
 - **Duo** (`/cf-model-orchestrator`) — host-neutral when both native
@@ -53,13 +55,33 @@ Then verify and **offer** remediation — never install silently.
     plugin is the only sanctioned Claude → Codex transport; never use headless
     `codex exec`, a hand-rolled app-server driver, or tmux-driving Codex.
   - **Codex-host lane** — `claude`, `tmux`, and `claude mcp list`, followed by
-    an authenticated interactive TTY canary and a task-scoped tmux round trip
-    using Stop/StopFailure hook completion. Never use `claude -p` or pane
-    stability as the work protocol.
-  - **Task tools** — Playwright or an equivalent browser driver for web UI;
-    Computer Use or a surface-specific driver for native/mobile/desktop UI;
-    the project's format, lint, test, coverage, and security tools. Prove tool
-    access through the actual peer lane, not only by listing configuration.
+    an authenticated interactive Fable-class/xhigh TTY canary in auto mode and
+    `autoMode.classifyAllShell: true` supplied through `--settings`, plus a
+    task-scoped tmux round trip using Stop/StopFailure hook completion. Never
+    use `claude -p` or pane stability as the work protocol. If Fable/auto is
+    unavailable, record it and canary the strongest reasoning model with
+    `acceptEdits`; never select bypass on an ordinary host.
+  - **Autonomy settings** — parse and inspect the effective files rather than
+    trusting their comments:
+    - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
+      auto-approved, unsandboxed escape disabled, wildcard public-domain egress
+      present for dependency/tool subprocesses, common private/link-local
+      destinations denied, destructive/privileged operations asked or
+      classified, and secret reads denied. Claude ignores project
+      `defaultMode: auto` and `autoMode`, so offer the user-level setting or
+      select auto plus `classifyAllShell` through CLI `--settings`, then prove
+      both with a live canary.
+    - `.codex/config.toml`: `default_permissions` selects the guarded workspace
+      profile, no legacy `sandbox_mode` shadows it, public network and live web
+      search are enabled, and `on-request` approvals route eligible requests to
+      `auto_review`.
+  - **Research and task tools** — live web search/fetch and authoritative docs;
+    GitHub/source-control; the project's format, lint, test, coverage,
+    dependency, and security tools; Playwright or an equivalent browser driver
+    for web UI; Computer Use or a surface-specific driver for
+    native/mobile/desktop UI; design tools for UI work; and project-specific
+    issue-tracker, database, cloud, or private-document MCPs. Prove tool access
+    through the actual peer lane, not only by listing configuration.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
@@ -89,22 +111,54 @@ or outward action. The fixes:
   args = ["-y", "@playwright/mcp@latest"]
   ```
 
+- Claude auto mode unavailable → show the failed capability check; use
+  `acceptEdits` with the fail-closed project sandbox for this run. Do not write
+  `defaultMode: auto` into `.claude/settings.json`—Claude ignores it at project
+  scope. Offer the user-level setting only with approval. For an interactive
+  peer run, pass `--settings '{"autoMode":{"classifyAllShell":true}}'` so the
+  classifier setting is effective without changing global configuration.
+- a tool needs a credential → prefer its OAuth/keychain/app connector or MCP
+  authentication. For Claude CLI subprocesses that require an environment
+  token, offer user/CLI-level credential masking with an exact `injectHosts`
+  list; project settings cannot safely configure masking. Never put a secret
+  value in repository settings, prompts, logs, or an allow rule.
+- GitHub CLI or Docker needs its config → verify, without printing credential
+  values, that `gh` uses secure keychain storage and Docker uses a credential
+  helper/`credsStore` before treating those config files as non-secret. On a
+  keyring-less host with an inline plaintext/base64 credential, retain or add
+  the file deny and configure a broker instead. If storage cannot be proven,
+  fail closed and report the tool unavailable rather than reading the file.
+
 If a tool is absent and the user declines the fix, **degrade legibly**—name the
 missing lane/evidence and use solo `/cf-develop`. Never label the run duo or
 quietly replace the missing vendor with another instance of the host model.
 
 ## Part B — project-artifact customization
 
-Analyze what is still at template defaults, then propose filling each. Walk them
-interactively — and never invent product facts; the content is the user's, you
-draft and confirm.
+Analyze what is still at template defaults, then propose filling each. First
+discover candidate facts from the consuming repository's README, manifests,
+package metadata, CI workflows, code layout, existing docs, and supported
+commands. Reconcile contradictions and cite where every proposed fact came
+from. Walk the result interactively—never invent project facts; the owner
+confirms the final content.
 
 - **`docs/product.md`** — the WHY layer: purpose, users, scope, non-goals. Init
   seeds only the one-liner; fill the four sections. Non-goals are the
-  load-bearing part — `cf-plan` checks new work against them.
-- **`AGENTS.md` / `CLAUDE.md`** — the project-owned sections *outside* the
-  `codeflow:managed` markers: project-specific instructions, non-goals, stack
-  specifics. **Never edit inside the managed block** — `codeflow update` owns it.
+  load-bearing part—the orchestrator/`cf-plan` checks new work against them.
+  This describes the consuming project, never CodeFlow itself.
+- **`docs/architecture.md`** — the HOW layer: major components, boundaries,
+  ownership, state, integrations, and repository paths, with ADR links rather
+  than duplicated decisions. Fill its overview and area sections from the
+  actual layout.
+- **`AGENTS.md`** — the common project-owned operating section *outside* the
+  `codeflow:managed` markers: supported setup/dev/build/format/lint/test/security
+  commands, prerequisites, repository map, environment constraints, and
+  project-specific guardrails. Common project facts live here, not duplicated
+  into every harness adapter.
+- **`CLAUDE.md`** — append only genuinely Claude-specific project differences
+  outside its managed region. Do not repeat the project brief or common commands
+  already owned by `docs/product.md`, `docs/architecture.md`, or `AGENTS.md`.
+  **Never edit inside either managed block**—`codeflow update` owns it.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer
@@ -119,12 +173,20 @@ draft and confirm.
   `commit_footer_tokens` to allow it. Leave every list empty for the strict
   default — an agent fills any slot you open, so open only what you mean.
 - **`.claude/workflows/pipeline.workflow.js`** — per-stage model selection and
-  the honest single-vendor assurance preset. It is user-owned; `codeflow update`
-  never touches it.
-- **Harness model/MCP config** — choose the strongest supported model and high
-  reasoning available to each seat, and configure the MCP/UI tools the project
-  needs. Record selected versions as run evidence; keep fast-aging model names
-  out of shared skills and doctrine.
+  the honest single-vendor assurance preset. Define bounded concurrency from
+  the host's actual memory/CPU/tool budget; independent work gets separate
+  branches/worktrees, explicit file ownership, and serialized integration. It
+  is user-owned; `codeflow update` never touches it.
+- **Harness model/MCP config** — route latest available Fable-class/xhigh Claude
+  to reasoning/design/review, let it use current Opus-class subagents for
+  mechanistic tool operation, and use the strongest supported Codex coding
+  model at xhigh for implementation/verification. Configure the research,
+  GitHub, docs, MCP, browser/UI, design, and project-service tools the project
+  needs. Record actual selected versions and tool canaries as run evidence;
+  keep fast-aging version pins out of shared doctrine.
+- **README and CI reconciliation** — update human-facing setup or CI only when
+  the discovered canonical commands and documented behavior disagree. README is
+  the human front door, not a second agent authority.
 
 For each: propose the change, get the user's content, write it, commit in a
 scoped unit, and push for durability. `codeflow validate` and `codeflow doctor`
@@ -134,11 +196,11 @@ green before reporting done.
 
 cf-customize needs an interactive thinking session, so it is **never auto-run**
 (`codeflow init` may be non-interactive or run in CI). The intended surface is a
-*reminder*: a `codeflow init` closing hint to run `/cf-customize`, plus an
-orient/doctor nudge while `docs/product.md` or the AGENTS.md/CLAUDE.md project
-sections are still at template defaults, clearing once they are filled. None of
-that is wired into the engine yet — today the user (or an agent reading this
-skill) invokes `/cf-customize` by hand. Do **not** propose auto-running it.
+*reminder*: a `codeflow init` closing hint to run `/cf-customize`, plus a
+doctor nudge while `docs/product.md`, `docs/architecture.md`, or the AGENTS.md
+project section remains at template defaults, clearing once they are filled.
+The reminder and doctor nudge are informational; they never mutate project
+content. Do **not** propose auto-running the skill.
 
 Report completion with the prioritized findings, the tool fixes applied or
 declined (and what each declined fix costs), the artifacts filled, and the gate

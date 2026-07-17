@@ -135,6 +135,7 @@ const CHECK_NAMES: &[&str] = &[
     "repo-integrity",
     "ci-perimeter",
     "managed-drift",
+    "customization",
     "test-config",
 ];
 
@@ -160,6 +161,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("repo-integrity", check_repo_integrity);
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("managed-drift", check_managed_drift);
+    m.insert("customization", check_customization);
     m.insert("test-config", check_test_config);
     m
 }
@@ -817,6 +819,81 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
     }
 }
 
+/// Consuming-project onboarding health. Standard/full scaffolds intentionally
+/// ship explicit placeholders rather than inventing product or architecture
+/// facts. Once those documents exist, keep the reminder visible until the
+/// project has reconciled them through `/cf-customize`. Minimal installs do not
+/// ship the method documents, so absence of both is a clean not-applicable pass.
+fn check_customization(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let product = root.join("docs/product.md");
+    let architecture = root.join("docs/architecture.md");
+
+    if !product.exists() && !architecture.exists() {
+        return CheckResult {
+            name: "customization".into(),
+            status: Status::Pass,
+            message: "method product/architecture docs not installed (customization check not applicable)"
+                .into(),
+            duration: start.elapsed(),
+        };
+    }
+
+    let mut incomplete = Vec::new();
+    for (path, sentinels) in [
+        (
+            "docs/product.md",
+            &[
+                "{{PRODUCT_PURPOSE}}",
+                "{{PRODUCT_USERS}}",
+                "{{PRODUCT_SCOPE}}",
+                "{{PRODUCT_NON_GOALS}}",
+            ][..],
+        ),
+        (
+            "docs/architecture.md",
+            &["{{ARCHITECTURE_OVERVIEW}}", "{{ARCHITECTURE_AREAS}}"][..],
+        ),
+    ] {
+        match std::fs::read_to_string(root.join(path)) {
+            Ok(content) if sentinels.iter().any(|sentinel| content.contains(sentinel)) => {
+                incomplete.push(path.to_string());
+            }
+            Ok(_) => {}
+            Err(_) => incomplete.push(format!("{path} (missing/unreadable)")),
+        }
+    }
+
+    let agents = root.join("AGENTS.md");
+    if agents.exists()
+        && std::fs::read_to_string(&agents)
+            .is_ok_and(|content| content.contains("<!-- Add project-specific notes here. -->"))
+    {
+        incomplete.push("AGENTS.md".to_string());
+    }
+
+    if incomplete.is_empty() {
+        CheckResult {
+            name: "customization".into(),
+            status: Status::Pass,
+            message: "consuming-project product, architecture, and agent context are customized"
+                .into(),
+            duration: start.elapsed(),
+        }
+    } else {
+        CheckResult {
+            name: "customization".into(),
+            status: Status::Warn,
+            message: format!(
+                "consuming-project context still needs reconciliation: {} — run `/cf-customize` to verify it against README, manifests, code, CI, harness settings, and live tools",
+                incomplete.join(", ")
+            ),
+            duration: start.elapsed(),
+        }
+    }
+}
+
 /// Generic-testing config health. When `.codeflow/test-config.json` exists,
 /// runs the testing engine's config-health checks (cwd existence, command
 /// parsing, path safety, glob validity, runner probes, …) and WARNS with a
@@ -879,7 +956,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 11);
+        assert_eq!(check_names().len(), 12);
     }
 
     #[test]
@@ -1039,6 +1116,72 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().to_string();
         let result = check_config(&opts);
         assert_eq!(result.status, Status::Fail);
+    }
+
+    #[test]
+    fn test_customization_is_not_applicable_without_method_docs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let result = check_customization(&opts);
+        assert_eq!(result.status, Status::Pass);
+        assert!(result.message.contains("not applicable"));
+    }
+
+    #[test]
+    fn test_customization_warns_on_shipped_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(
+            dir.path().join("docs/product.md"),
+            "# Product\n{{PRODUCT_PURPOSE}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("docs/architecture.md"),
+            "# Architecture\n{{ARCHITECTURE_AREAS}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "<!-- Add project-specific notes here. -->\n",
+        )
+        .unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let result = check_customization(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(result.message.contains("docs/product.md"));
+        assert!(result.message.contains("docs/architecture.md"));
+        assert!(result.message.contains("AGENTS.md"));
+        assert!(result.message.contains("/cf-customize"));
+    }
+
+    #[test]
+    fn test_customization_passes_after_reconciliation() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(
+            dir.path().join("docs/product.md"),
+            "# Product\nUseful context\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("docs/architecture.md"),
+            "# Architecture\nReal component map\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "Project commands: cargo test\n",
+        )
+        .unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let result = check_customization(&opts);
+        assert_eq!(result.status, Status::Pass);
     }
 
     /// git in a tempdir, isolated from the host config (mirrors orient's

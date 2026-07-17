@@ -11,8 +11,12 @@
   SessionStart, the session summary at SessionEnd, and `git-guard` + `exec-guard`
   before every Bash call. When a command is blocked, read the guard message — it
   names the violated policy rule and the sanctioned path.
-- The permission preset and sandbox mode were chosen at init and live in
-  `.claude/settings.json`; change them there, not ad hoc.
+- The Claude project preset and fail-closed sandbox live in
+  `.claude/settings.json`: sandbox-contained Bash and web research are enabled,
+  unsandboxed retry is disabled, local dev binding is available, and
+  destructive/privileged/secret boundaries remain. Codex uses the separate
+  guarded profile in `.codex/config.toml`; one harness's settings do not
+  configure the other.
 - The AGENTS.md git rules are **hook-enforced** here — the commit-msg, pre-push,
   pre-merge-commit, and reference-transaction hooks plus `git-guard` block
   violations before they land, so fix the cause, never route around them. Full

@@ -55,6 +55,7 @@
       "Bash(pytest *)",
       "Bash(uv *)",
       "WebSearch",
+      "WebFetch",
       "WebFetch(domain:docs.rs)",
       "WebFetch(domain:doc.rust-lang.org)",
       "WebFetch(domain:crates.io)",
@@ -70,6 +71,15 @@
       "Bash(rm -fr /*)",
       "Bash(rm -rf ~*)",
       "Bash(rm -fr ~*)",
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Bash(git reset --hard)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- .)",
+      "Bash(git restore .)",
+      "Bash(git stash drop *)",
+      "Bash(git stash clear)",
       "Bash(cargo publish *)",
       "Bash(npm publish *)",
       "Bash(gh release *)",
@@ -90,12 +100,46 @@
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",
       "Read(~/.gnupg/**)",
-      "Read(~/.config/gh/**)",
       "Read(~/.kube/**)",
-      "Read(~/.docker/config.json)",
       "Read(~/.cargo/credentials*)",
       "Read(~/.claude/**)"
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowedDomains": [
+        "*"
+      ],
+      "deniedDomains": [
+        "10.*",
+        "169.254.*",
+        "172.16.*",
+        "172.17.*",
+        "172.18.*",
+        "172.19.*",
+        "172.20.*",
+        "172.21.*",
+        "172.22.*",
+        "172.23.*",
+        "172.24.*",
+        "172.25.*",
+        "172.26.*",
+        "172.27.*",
+        "172.28.*",
+        "172.29.*",
+        "172.30.*",
+        "172.31.*",
+        "192.168.*",
+        "*.internal",
+        "*.lan",
+        "*.local"
+      ],
+      "allowLocalBinding": true
+    }
   },
   "hooks": {
     "PreToolUse": [

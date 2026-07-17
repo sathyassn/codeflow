@@ -1,73 +1,52 @@
-# Codex config for a CodeFlow-managed repo (harness parity — ADR-0008).
+# Codex config for a CodeFlow-managed repository (ADR-0008).
 #
-# The same `codeflow hook git-guard` / `codeflow hook exec-guard` binaries that
-# bind a Claude session bind Codex here, via `.codex/hooks.json`. Their payload
-# contract is byte-compatible, so protection is identical across harnesses.
-#
-# ONE-TIME TRUST: Codex requires you to trust a hook source before it runs.
-# Run `/hooks` inside an interactive `codex` session once and approve the
-# CodeFlow hooks. For CI / headless `codex exec`, pass
-# `--dangerously-bypass-hook-trust` (only in an environment that already vets
-# the hook source — here, this repo's own committed config).
+# Project hooks provide session guidance and fast feedback. The named permission
+# profile below is the OS-enforced boundary: normal work has workspace write
+# access, broad public-network access, and loopback access for local UI testing,
+# while sensitive files, private-network destinations, privileged operations,
+# and destructive escalations remain guarded.
 
-# Workspace autonomy (owner posture): project-scoped work runs promptless.
-# `workspace-write` lets Codex edit the repo without approval; `on-request`
-# means it only asks when it needs to escalate BEYOND the workspace sandbox —
-# exactly where a human decision belongs. Tighten (`read-only` / `untrusted`)
-# or loosen (`never` for fully headless) per repo.
 approval_policy = "on-request"
-sandbox_mode = "workspace-write"
-
-# Credential read-guard: select the `cf-guard` permission profile (defined at
-# the end of this file) as the OS-sandbox default. See that block for the full
-# rationale — the pure-secret deny-list, the deliberate gh/docker carve-out, and
-# the escalation caveat.
+approvals_reviewer = "auto_review"
+web_search = "live"
 default_permissions = "cf-guard"
 
 [features]
-# Enable the hooks engine (declared defensively; recent Codex enables it, but
-# an explicit value survives a default flip).
 hooks = true
 
-# Credential read-guard (cf-guard) — OS-sandbox-enforced deny-list.
-#
-# `default_permissions = "cf-guard"` (above) selects this named profile. It
-# extends the built-in `:workspace` (workspace-write: read anywhere, write the
-# workspace) and then subtracts the pure-secret credential stores below via an
-# OS-level filesystem deny — closing the credential-read parity gap with Claude's
-# Read-tool deny-list (ADR-0008 gave Codex the Bash guards; this adds the reads).
-#
-# (1) OS-sandbox-enforced, so it holds in headless `codex exec`. Unlike the
-#     PreToolUse guards (git-guard/exec-guard), which headless `codex exec`
-#     0.142.5 does NOT fire, this deny is enforced by the Codex sandbox itself
-#     and blocks the read for EVERY subprocess, interactive or headless.
-#
-# (2) gh/docker carve-out (deliberate — matches the Claude nuance). `~/.config/gh`
-#     and `~/.docker/config.json` are NOT denied. Claude's deny is app-level (it
-#     only stops the model's own Read tool); this OS deny blocks ALL subprocesses,
-#     so denying those would break the `gh`/`docker` tools that read their own
-#     tokens. They stay readable by design.
-#
-# (3) Escalation caveat. A user-level profile can be bypassed if the model
-#     requests `require_escalated` AND a human approves it under
-#     `approval_policy = "on-request"`. Headless `codex exec --ask-for-approval`
-#     never auto-approves an escalation, so unattended the deny holds. For
-#     UNBYPASSABLE org enforcement, use the requirements-level
-#     `[permissions.filesystem]` `deny_read = [...]` key, which loads only from a
-#     managed `requirements.toml` / MDM layer (e.g. `/etc/codex/requirements.toml`),
-#     never a plain user `config.toml`.
 [permissions.cf-guard]
 extends = ":workspace"
 
-# glob/path -> "deny"; a trailing `/**` denies the whole subtree. Covers the
-# PURE-SECRET stores Claude's deny-list blocks — NOT the tool-token stores
-# (~/.config/gh, ~/.docker/config.json), which are left readable on purpose. The
-# `~/**/.env` glob denies a workspace `.env` too.
+# Deny direct reads of pure-secret stores. Authenticated tools should use their
+# OAuth, keychain, app/MCP, or credential-broker path. GitHub CLI and Docker
+# configuration are deliberately not denied because those tools need to read
+# their own configuration.
 [permissions.cf-guard.filesystem]
+glob_scan_max_depth = 6
 "~/.ssh/**" = "deny"
 "~/.aws/**" = "deny"
 "~/.gnupg/**" = "deny"
 "~/.netrc" = "deny"
 "~/.kube/**" = "deny"
 "~/.cargo/credentials*" = "deny"
-"~/**/.env" = "deny"
+
+[permissions.cf-guard.filesystem.":workspace_roots"]
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+
+# Allow research, dependency resolution, and external tool APIs on public
+# hosts. Keep private/link-local destinations and arbitrary Unix sockets closed;
+# exact loopback exceptions support local dev servers and browser/UI tests.
+[permissions.cf-guard.network]
+enabled = true
+mode = "full"
+allow_local_binding = false
+allow_upstream_proxy = false
+dangerously_allow_non_loopback_proxy = false
+dangerously_allow_all_unix_sockets = false
+
+[permissions.cf-guard.network.domains]
+"*" = "allow"
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"

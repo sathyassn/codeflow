@@ -60,7 +60,8 @@
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:code.claude.com)"
+      "WebFetch(domain:code.claude.com)",
+      "WebFetch"
     ],
     "ask": [
       "Bash(sudo *)",
@@ -73,7 +74,16 @@
       "Bash(cargo publish *)",
       "Bash(npm publish *)",
       "Bash(gh release *)",
-      "Bash(gh repo delete *)"
+      "Bash(gh repo delete *)",
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Bash(git reset --hard)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- .)",
+      "Bash(git restore .)",
+      "Bash(git stash drop *)",
+      "Bash(git stash clear)"
     ],
     "deny": [
       "Read(**/.env)",
@@ -90,9 +100,7 @@
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",
       "Read(~/.gnupg/**)",
-      "Read(~/.config/gh/**)",
       "Read(~/.kube/**)",
-      "Read(~/.docker/config.json)",
       "Read(~/.cargo/credentials*)",
       "Read(~/.claude/**)"
     ]
@@ -137,5 +145,41 @@
   "statusLine": {
     "type": "command",
     "command": "printf '%s' \"$(git branch --show-current 2>/dev/null || echo codeflow)\""
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowLocalBinding": true,
+      "allowedDomains": [
+        "*"
+      ],
+      "deniedDomains": [
+        "10.*",
+        "169.254.*",
+        "172.16.*",
+        "172.17.*",
+        "172.18.*",
+        "172.19.*",
+        "172.20.*",
+        "172.21.*",
+        "172.22.*",
+        "172.23.*",
+        "172.24.*",
+        "172.25.*",
+        "172.26.*",
+        "172.27.*",
+        "172.28.*",
+        "172.29.*",
+        "172.30.*",
+        "172.31.*",
+        "192.168.*",
+        "*.internal",
+        "*.lan",
+        "*.local"
+      ]
+    }
   }
 }

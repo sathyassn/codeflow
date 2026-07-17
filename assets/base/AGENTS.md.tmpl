@@ -39,16 +39,25 @@ what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
 
 ## Entry points
 
-Before starting any non-trivial task, match your intent to a codeflow skill and
-use it — the table below maps the common entry points, and each skill carries
-the current method, so working around one drifts from it. A trivial edit or a
-conversational answer needs no skill.
+Every non-trivial repository task **must begin with**
+`/cf-model-orchestrator`. Non-trivial includes work that needs repository or
+external research, analysis, planning, design judgment, implementation,
+debugging, security review, substantive documentation, or verification beyond
+one obvious local check. The orchestrator selects only the stages the outcome
+needs; a research- or planning-only task stops before implementation. A trivial
+edit or conversational answer needs no skill.
+
+`/cf-plan`, `/cf-develop`, and the other skills are supporting flows, not
+competing ways around the duo default. Use them inside the orchestrated flow or
+after its preflight has proved a required interactive seat unavailable and
+recorded the reduced assurance. When uncertain whether work is trivial, treat
+it as non-trivial.
 
 | Intent | Use |
 |---|---|
-| Plan a feature or change | `/cf-plan` — clarify intent, draft epic + spec (+ ADR if warranted) |
-| Plan and build non-trivial work | `/cf-model-orchestrator` — the host-neutral Claude+Codex duo is the default: both independently research/analyze/plan; Claude leads design and final review; Codex implements and first-verifies. Claude Code hosts through the official Codex plugin; Codex hosts through interactive Claude CLI + tmux. Missing seats degrade legibly to solo `/cf-develop` |
-| Build planned work when the duo is unavailable | `/cf-develop` — the solo fallback: build → independent review (`cf-reviewer`) → verify, bounded rework |
+| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design and final review; Codex implements and first-verifies when implementation is in scope. Claude Code hosts through the official Codex plugin; Codex hosts through interactive Claude CLI + tmux. Missing seats degrade legibly after preflight |
+| Materialize an agreed plan | `/cf-plan` — supporting flow for acceptance criteria, epic/spec/ADR artifacts, used inside the duo or after a recorded solo degradation |
+| Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
@@ -142,6 +151,21 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
 Develop in a worktree per session (native worktree support). Protected branches
 stay checked out only at the repo root, so git itself refuses a second checkout —
 structural protection for free.
+
+Parallelize independent work when it shortens the critical path, but make the
+dependency graph, file ownership, and integration order explicit first. Each
+parallel task gets one owner, branch, and worktree; never let two sessions write
+the same worktree or concurrently edit a shared contract, schema, migration, or
+other merge hotspot. The host sets a bounded concurrency cap from available CPU,
+memory, disk, and tool limits, monitors pressure, and reduces fan-out before
+swapping, duplicate heavyweight builds, or context sprawl degrade quality.
+Dependent work stays sequential.
+
+For a multi-task body, integrate through `integration/<epic>` and serialize each
+landing with `codeflow integrate`; rerun the affected and aggregate gates after
+every merge. Rebase task branches, never a shared integration branch. Parallel
+output is not complete until the integration worktree is green and the combined
+diff has received the same Codex-first/Claude-final review as a serial change.
 
 ## Session flow
 

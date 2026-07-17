@@ -105,7 +105,7 @@ yourself (see Guardrails).
 The transport pattern, compactly:
 
 ```sh
-tmux new-session -d -s delegate -x 220 -y 50 -c /path/to/worktree 'claude --permission-mode plan --settings /path/to/task-settings.json'
+tmux new-session -d -s delegate -x 220 -y 50 -c /path/to/worktree 'claude --model fable --effort xhigh --permission-mode auto --settings /path/to/task-settings.json'
 tmux send-keys -t delegate -l 'Review src/foo.rs for correctness. Cite line numbers. Read and reason only - edit nothing. End with VERDICT: approved|changes_requested.'
 tmux send-keys -t delegate Enter
 # The task-scoped Stop/StopFailure hooks signal completion. Read the pane only
@@ -131,33 +131,33 @@ tmux capture-pane -p -J -t delegate -S -200
 - **Pane access:** capture only the dedicated task pane, after the completion
   signal or on bounded failure diagnosis. Never enumerate or capture unrelated
   tmux sessions; they may contain secrets or other users' work.
-- **Read-only has layered enforcement:** launch consults with
-  `--permission-mode plan`, which current Claude Code documents as read-only
-  exploration, and keep "read and reason only; edit nothing" in the prompt.
-  Add Claude's OS sandbox with `sandbox.failIfUnavailable: true` where the
-  instance requires a hard Bash filesystem/network boundary. Verify the
-  worktree diff after the consult; permissions, sandbox, prompt, and review are
-  complementary—not interchangeable. See
-  <https://code.claude.com/docs/en/permission-modes> and
+- **Effective autonomy is layered:** launch Claude with the latest available
+  Fable-class model at `xhigh`, `--permission-mode auto`, and task-scoped
+  settings containing `autoMode.classifyAllShell: true`. Require the effective
+  project settings to keep the OS sandbox enabled, set
+  `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, and disallow
+  unsandboxed commands.
+  This preserves native tools, MCP servers, and broad public-network research
+  while keeping secret stores, private-network access, destructive operations,
+  and privilege changes behind explicit controls. Never use bypass mode on an
+  ordinary host. See <https://code.claude.com/docs/en/permission-modes> and
   <https://code.claude.com/docs/en/sandboxing>.
-  Plan mode may finish its reasoning by opening an `AskUserQuestion` or
-  `ExitPlanMode` dialog instead of ending the turn. That is interactive input,
-  not completion: answer it in the dedicated pane, then keep waiting for the
-  terminal hook. A bounded diagnostic capture is allowed for this purpose.
-- **Edit handoff:** start a separate session without plan mode, with the
-  worktree as its working directory (`tmux new-session -d -s delegate -c
-  /path/to/worktree 'claude --settings /path/to/task-settings.json'`) so edits
-  and commits land where the gates guard them. Never reuse a consult session as
-  an implicit write grant.
-- **Test-running review:** a final reviewer that must execute tests or UI tools
-  also needs a separate normal-permission interactive session, because plan
-  mode is for pure analysis. This does **not** grant edit authority: approve
-  only scoped verification actions, say "edit no source files," and require a
-  clean before/after worktree-diff comparison. If a fix is needed, return it to
-  the Codex implementer.
+- **Read-only consults:** keep "read and reason only; edit nothing" in the
+  prompt, record the worktree state before launch, and compare the diff after
+  completion. Auto mode enables useful inspection and test tools; it does not
+  silently turn a consult into an edit handoff. If stronger write isolation is
+  required, use a separate read-only checkout or filesystem boundary.
+- **Edit handoff:** start a separate auto-mode session with explicit write
+  authority and the worktree as its working directory so edits and commits land
+  where the gates guard them. Never reuse a consult session as an implicit
+  write grant.
+- **Test-running review:** use a separate auto-mode interactive session with
+  the same fail-closed sandbox. Instruct Claude to edit no source files and
+  require a clean before/after worktree-diff comparison. If a fix is needed,
+  return it to the Codex implementer.
 - **Multiline prompts:** `set-buffer` + `paste-buffer -p`, then a separate
   `send-keys Enter`.
-- **Interactive prompts:** permissions, plan exit, ambiguity, and other user
+- **Interactive prompts:** classifier escalations, ambiguity, and other user
   questions are handled in the same dedicated session. They never authorize a
   write silently, and a visible question never substitutes for the terminal
   hook result.

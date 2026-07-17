@@ -44,7 +44,7 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   verified; full-tier additive upgrade (`project-management/`) on the closure
   branch
 - [x] Doctor wired and clean (6 checks at Day 3; `repo-integrity` added later via
-  ADR-0007; 11 checks as of 2026-07-11 — architecture.md carries the live count)
+  ADR-0007; 12 checks as of 2026-07-16 — architecture.md carries the live count)
 - [x] `codeflow integrate` used for all landings (4 integrations)
 - [x] Live AC demos: #1, #3, #5, #6, #13 — including the `policy_armed` bug
   found during #1, fixed with a regression test (612ec23d)
@@ -139,6 +139,12 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   in-session guards are an interactive-Codex safeguard and headless Codex leans
   on the git-hook plane. agy deferred (dialect differs, macOS reliability open)
   with a manual experimental snippet in cf-delegate.
+- Effective harness autonomy supersedes the original settings assumptions
+  (ADR-0025): Codex now uses one named permission profile with broad public
+  egress, live search, auto-reviewed escalation, workspace-relative secret
+  denies, and no shadowing legacy `sandbox_mode`; every Claude preset is
+  fail-closed and sandbox-autonomous, while auto/classifier policy is supplied
+  at user or explicit CLI scope because project scope is intentionally ignored.
 - §4.4 caps corrected (2026-07-13): the Day-1 "all §4.4 caps respected" note above
   recorded that day's counts, but later decisions grew the corpus past the original
   caps — `AGENTS.md.tmpl` 256 lines (>250), `CLAUDE.md.tmpl` 32 (>15),

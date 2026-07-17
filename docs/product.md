@@ -34,10 +34,12 @@ multi-user coordination remains deferred.
   enforcement floor is the same at every tier and the tiers scale only the
   project-management on top (ADR-0019) — the binary validating every shape so
   growth is mechanical.
-- Host-neutral skill contracts for a Claude+Codex development duo: parallel
-  independent planning, fixed design/implementation/review roles, versioned
-  dual approval, and evidence-based verification through each vendor's native
-  interactive harness (ADR-0023).
+- Host-neutral skill contracts for a Claude+Codex duo over every non-trivial
+  repository task: stage-aware parallel independent work, fixed
+  design/implementation/review roles, versioned dual approval, bounded
+  worktree parallelism, effective network/tool autonomy, and evidence-based
+  verification through each vendor's native interactive harness (ADR-0023,
+  ADR-0024, ADR-0025).
 
 ## Non-goals
 

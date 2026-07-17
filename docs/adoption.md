@@ -60,12 +60,18 @@ codeflow init --standard --yes    # scaffold; offline; sane defaults
 `init` scaffolds every managed file, then — because this is a fresh repo — makes
 the initial `chore: scaffold codeflow standard tier` commit for you, wires git
 hooks via `core.hooksPath`, and arms branch policy. The printed report lists
-every file written. From there:
+every file written and closes with the next step. From there:
 
-1. Start your first feature on a `feat/*` branch, in a worktree.
-2. Build with tests; commit small (`type(scope): description` — description ≤ 50
+1. Run `/cf-customize`. It verifies the installed harness settings and tools,
+   then walks the **consuming project's** `docs/product.md`,
+   `docs/architecture.md`, `AGENTS.md`, Claude-specific differences in
+   `CLAUDE.md`, README/manifests, CI commands, policy, and required MCPs. Review
+   and commit those project facts; CodeFlow never invents them or silently
+   changes global harness settings.
+2. Start your first feature on a `feat/*` branch, in a worktree.
+3. Build with tests; commit small (`type(scope): description` — description ≤ 50
    chars, subject line ≤ 72, a body of only `-` bullets when one is needed).
-3. Land via a PR (or `codeflow integrate` with no remote).
+4. Land via a PR (or `codeflow integrate` with no remote).
 
 **Bootstrap grace.** codeflow needs exactly one commit before its gates guard
 the repo — its own scaffold commit — and that is a sanctioned path (it arms
@@ -98,6 +104,9 @@ floor is the same at every tier — the upgrade never *adds* enforcement you wer
 missing, only the method on top. An existing `--minimal` repo initialized before
 this floor moved down gains the rest of the enforcement plane automatically on
 its next `codeflow update` (the reconciliation installs the now-in-tier files).
+When you add the standard/full method, run `/cf-customize` before treating the
+generated product, architecture, commands, or tool posture as project truth;
+`codeflow doctor` keeps a reminder visible while scaffold sentinels remain.
 
 ## Ownership model — who owns what on update
 
@@ -142,11 +151,51 @@ New policy keys arrive this way too. When a codeflow upgrade adds a
 `update` inserts it with its shipped default and reports it, and never touches
 the values you already set — so tightening ships without a manual migration.
 
+## Network, tools, and autonomy
+
+These are enabled in runtime settings as well as described in the skills
+(ADR-0025):
+
+- Claude's project preset enables a fail-closed OS sandbox, autonomous
+  sandbox-contained Bash, web search/fetch, wildcard public-domain egress for
+  dependency/tool subprocesses, and local port binding for dev/UI tests;
+  common private, link-local, and internal-name destinations remain denied. It
+  disables the unsandboxed retry escape and keeps destructive, privileged,
+  publish, and secret-read boundaries. Claude deliberately ignores repository
+  requests for auto mode and classifier policy, so a Codex-hosted peer launches
+  interactively with `--permission-mode auto` and CLI-scoped
+  `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user
+  default but never writes it without approval.
+- Codex's `.codex/config.toml` selects the guarded workspace permission profile
+  without a legacy `sandbox_mode` override. It enables live search and broad
+  public egress, grants exact loopback for local verification, keeps private
+  destinations and arbitrary Unix sockets closed, and sends eligible
+  `on-request` escalations through automatic safety review.
+- A settings file cannot install or authenticate every task-specific tool.
+  `/cf-customize` inventories and canaries authoritative-doc research, GitHub,
+  the stack format/lint/test/coverage/security toolchain, browser/Playwright,
+  Computer Use or a surface driver, design tooling, and project-specific MCPs.
+  It proposes only the missing pieces. Authentication stays in OAuth, keychain,
+  app/MCP, or supported credential-broker paths; raw tokens do not enter the
+  repository, prompts, logs, or arbitrary commands. GitHub/Docker configuration
+  is permitted for autonomous tool use only after `/cf-customize` proves secure
+  keychain or credential-helper storage; on a keyring-less inline-credential
+  host it adds a file deny until a broker is configured.
+
+`docs/product.md` always describes the consuming project's purpose, users,
+scope, and non-goals—not the CodeFlow CLI. `docs/architecture.md` describes how
+that project is built. Common project facts, commands, and constraints belong in
+`AGENTS.md`; `CLAUDE.md` carries only Claude-specific differences. CodeFlow does
+not introduce a competing `project.md` or `projects.md`.
+
 ## The daily flow
 
-1. **Orient.** The SessionStart digest (or `codeflow orient`) gives branch and
+1. **Orient and route.** The SessionStart digest (or `codeflow orient`) gives branch and
    worktree state, work counts, recent ADR titles, gate status, and pointers —
-   read the pointed docs, not the digest, for depth.
+   read the pointed docs, not the digest, for depth. Begin every non-trivial
+   repository task with `/cf-model-orchestrator`; it uses only the research,
+   planning, implementation, or review stages the requested outcome needs and
+   degrades visibly if a native peer seat is unavailable.
 2. **Branch in a worktree.** Work on a `{prefix}/{kebab-name}` branch in a
    worktree; never develop on the root protected-branch checkout.
 3. **Gates as you go.** pre-commit (secret scan), commit-msg (conventional
@@ -178,6 +227,14 @@ human with reviews and makes agents wait on one another. Instead, cut a shared
 - Only the finished body reaches `main`, as **one** human-reviewed
   `integration → main` PR raised after the ship flow runs on the integration
   branch.
+
+Parallelize only independent tasks whose isolation pays for the coordination:
+one owner/branch/worktree per task, one owner for shared contracts and conflict
+hotspots, and a concurrency cap based on available memory, CPU, disk, model
+contexts, and browser/tool capacity. Land tasks serially through
+`codeflow integrate`, rerun affected gates after each landing, then run the
+aggregate suite and both-model review on the combined integration diff. Never
+run concurrent writers in one worktree or rebase the shared integration branch.
 
 `main` stays human-merge-only throughout — the integration branch is never a
 backdoor to it. See cf-method's "Managing a body of work" for the full procedure.
@@ -246,9 +303,10 @@ The one-line version: **codeflow *enforces* the same rules on every harness (git
 hooks + CI); it *guides* Claude and Codex.** Any tool that touches the repo is
 disciplined; the richer in-session help is where the integrations are.
 
-**Verified against:** codex-cli 0.142.5 (ADR-0008, ADR-0013, ADR-0014) and
-Claude Code as of 2026-07. These surfaces (hook payload contracts, config
-schemas) move fast on both sides; the release checklist
+**Verified against:** codex-cli 0.144.3 and Claude Code 2.1.211 on 2026-07-16
+(with earlier hook-specific evidence retained by ADR-0008, ADR-0013, and
+ADR-0014). These surfaces (hook payload contracts, config schemas) move fast on
+both sides; the release checklist
 ([docs/releasing.md](releasing.md)) re-verifies them before each codeflow tag.
 
 ## Delegation quickstart (optional)
@@ -287,9 +345,11 @@ comes from two layers, and it helps to be precise about which does what.
   scaffold ships a `.codex/` starter (part of the enforcement floor, from
   `--minimal` up): `hooks.json`
   wires `codeflow hook git-guard` and `codeflow hook exec-guard` onto Codex's
-  `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with
-  workspace autonomy (`sandbox_mode = "workspace-write"`,
-  `approval_policy = "on-request"`). Codex's hook payload is byte-compatible with
+  `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with a
+  guarded workspace permission profile, broad public network, live search,
+  `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"`.
+  The config intentionally contains no legacy `sandbox_mode`, because that
+  would shadow the named profile. Codex's hook payload is byte-compatible with
   Claude's, so the same binaries run unchanged.
 
 One-time setup for the in-session guards: Codex loads a project's `.codex/hooks.json`

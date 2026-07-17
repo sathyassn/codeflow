@@ -64,7 +64,19 @@
     "secret_scan": "block",
     "test_gate_on_push": "warn",
     "security_review": "block",
-    "dep_audit": "block"
+    "dep_audit": "block",
+    "pr_sections": "block",
+    "pr_required_sections": [
+      "Summary",
+      "Changes"
+    ],
+    "pr_code_sections": [
+      "Testing"
+    ]
   },
-  "human_authorization": "none"
+  "human_authorization": "none",
+  "security": {
+    "dangerous_commands": "block",
+    "privilege_escalation": "warn"
+  }
 }

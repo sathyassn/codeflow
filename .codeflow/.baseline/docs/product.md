@@ -1,12 +1,14 @@
-# cf-dogfood — product
+# codeflow-lead-model-routing — product
 
 <!-- WHY layer. Human-owned: agents propose changes here, the human accepts.
      Keep it small and stable — this file should change rarely.
-     `codeflow doctor` flags epics whose scope violates the non-goals below. -->
+     The non-goals below are what planning is checked against. -->
 
 ## Purpose
 
 <!-- One or two sentences: what this exists to do, and the problem it solves. -->
+
+The AI-development discipline layer you install into any repo
 
 {{PRODUCT_PURPOSE}}
 

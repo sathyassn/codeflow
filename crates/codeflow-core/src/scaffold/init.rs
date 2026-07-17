@@ -243,15 +243,15 @@ pub fn init(
         }
     }
 
-    // Harness honesty (ADR-0008): the permission preset above configured
-    // Claude Code only. When the codex layer is present, say what binds it —
-    // a fixed posture in .codex/config.toml — and the one manual step its
-    // in-session guards need. Trust state is codex-internal and not
-    // inspectable from here, so this is a pointer, never a claim.
+    // Harness honesty (ADR-0008): the permission preset above configures
+    // Claude Code only. Codex has its own guarded workspace profile, live
+    // search, public egress, and automatic approval review. Hook trust state is
+    // codex-internal and not inspectable here, so this is a pointer, not a
+    // claim that the one-time trust step has happened.
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): autonomy posture lives in .codex/config.toml — the Claude Code permission preset does not apply to codex; in-session guards are wired structurally and activate after a one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
+            "codex harness present (.codex/): .codex/config.toml enables the guarded workspace profile, public network, live search, and automatic approval review — the Claude Code permission preset does not apply to codex; in-session guards activate after one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
                 .to_string(),
         );
     }
@@ -262,6 +262,13 @@ pub fn init(
     if newly_armed && !fresh_repo {
         report.notes.push(
             "branch policy armed (policy_armed = true); start feature work on a feat/* branch"
+                .to_string(),
+        );
+    }
+
+    if tier >= Tier::Standard {
+        report.notes.push(
+            "next: run `/cf-customize` to reconcile this consuming project's docs/product.md, docs/architecture.md, AGENTS.md, CLAUDE.md, CI commands, harness autonomy, and required tools/MCPs; the skill verifies effective settings and live canaries before changing anything outside the repository"
                 .to_string(),
         );
     }

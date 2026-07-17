@@ -26,7 +26,13 @@ fn orchestrator_is_host_neutral_with_fixed_roles() {
         "**Claude leads design.**",
         "**Codex implements.**",
         "**Claude final-reviews.**",
+        "latest available Fable-class Claude",
+        "model at xhigh effort",
+        "current Opus-class subagents",
+        "strongest",
+        "supported Codex coding model at xhigh",
         "**Evidence outranks agreement.**",
+        "**Bounded parallelism.**",
         "Plan v1",
         "at most two rounds",
     ] {
@@ -40,6 +46,47 @@ fn orchestrator_is_host_neutral_with_fixed_roles() {
         assert!(
             !skill.contains(stale_pin),
             "orchestrator must not hard-code model pin {stale_pin}"
+        );
+    }
+}
+
+#[test]
+fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
+    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let agents = read("assets/base/AGENTS.md.tmpl");
+
+    for required in [
+        "Use the duo for every non-trivial repository task.",
+        "## Outcome modes",
+        "**Research / analysis:**",
+        "**Plan / design:**",
+        "**Implementation:**",
+        "**Review / verification:**",
+        "**Substantive documentation:**",
+        "--model fable --effort xhigh --permission-mode auto",
+        "--settings '{\"autoMode\":{\"classifyAllShell\":true}}'",
+        "never fall through to bypass mode on an ordinary host",
+        "session in auto mode under the same fail-closed sandbox",
+        "not plan or bypass",
+        "public network and live search are enabled",
+        "Authenticated tools use their broker/OAuth/keychain/credential-mask path",
+    ] {
+        assert!(
+            skill.contains(required),
+            "stage/autonomy contract lost marker: {required}"
+        );
+    }
+
+    for required in [
+        "Every non-trivial repository task **must begin with**",
+        "`/cf-model-orchestrator`",
+        "research- or planning-only task stops before implementation",
+        "supporting flows, not",
+        "When uncertain whether work is trivial, treat",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS template lost duo entry-point marker: {required}"
         );
     }
 }
@@ -60,6 +107,13 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "Computer Use",
         "UI: N/A",
         "failing or missing gate cannot be overridden by model consensus",
+        "DEPENDENCY_GRAPH:",
+        "TASK_BRANCH_WORKTREE_OWNER:",
+        "SHARED_FILE_OWNER:",
+        "HOST_RESOURCE_BUDGET:",
+        "one writer, branch, and worktree",
+        "aggregate gates on the final",
+        "combined diff",
     ] {
         assert!(
             contract.contains(required),
@@ -76,7 +130,8 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(delegate.contains("task-scoped Claude"));
     assert!(delegate.contains("StopFailure"));
     assert!(delegate.contains("last_assistant_message"));
-    assert!(delegate.contains("--permission-mode plan"));
+    assert!(delegate.contains("--model fable --effort xhigh --permission-mode auto"));
+    assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));
     assert!(delegate.contains("Never enumerate or capture unrelated"));
     assert!(!delegate.contains("two identical captures"));
@@ -85,6 +140,8 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
         "codeflow hook delegate-turn",
         "owner-only",
         "tmux wait-for codeflow-delegate-review-42",
+        "\"classifyAllShell\": true",
+        "--permission-mode auto",
         "schema_version",
         "dedicated pane only for bounded diagnosis",
     ] {

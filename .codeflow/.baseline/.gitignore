@@ -8,9 +8,6 @@
 *.pfx
 *credentials*
 
-# codeflow runtime (lives in .git/codeflow/, never tracked)
-.codeflow/runtime/
-
 # os / editor
 .DS_Store
 *.swp

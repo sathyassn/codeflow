@@ -213,6 +213,7 @@ fn allow_arrays_grant_project_autonomy() {
         "Bash(python3 *)",
         "Bash(uv *)",
         "WebSearch",
+        "WebFetch",
         "WebFetch(domain:docs.rs)",
     ];
     for name in preset_files() {
@@ -235,6 +236,15 @@ fn ask_arrays_gate_escalation_and_publish() {
         "Bash(sudo *)",
         "Bash(su *)",
         "Bash(doas *)",
+        "Bash(rm -rf *)",
+        "Bash(rm -fr *)",
+        "Bash(git reset --hard)",
+        "Bash(git reset --hard *)",
+        "Bash(git clean *)",
+        "Bash(git checkout -- .)",
+        "Bash(git restore .)",
+        "Bash(git stash drop *)",
+        "Bash(git stash clear)",
         "Bash(cargo publish *)",
         "Bash(npm publish *)",
         "Bash(gh release *)",
@@ -263,16 +273,14 @@ fn ask_arrays_gate_escalation_and_publish() {
 }
 
 #[test]
-fn deny_extends_to_home_credential_stores() {
+fn deny_extends_to_pure_secret_home_stores() {
     // Read protection reaches beyond the project cwd to the home-dir secret
     // stores an agent must never read (ADR-0008), while keeping the cwd globs.
     let home_stores = [
         "Read(~/.ssh/**)",
         "Read(~/.aws/**)",
         "Read(~/.gnupg/**)",
-        "Read(~/.config/gh/**)",
         "Read(~/.kube/**)",
-        "Read(~/.docker/config.json)",
         "Read(~/.claude/**)",
     ];
     for name in preset_files() {
@@ -296,20 +304,76 @@ fn deny_extends_to_home_credential_stores() {
 }
 
 #[test]
-fn bypass_sandbox_uses_schema_keys() {
-    // Regression for ADR-0008: the sandbox network key is `allowedDomains`
-    // (schema), NOT the pre-parity `allowedHosts`; and OS-level read blocking
-    // is wired via `filesystem.denyRead`.
+fn authenticated_tool_configuration_remains_available() {
+    // GitHub CLI and Docker may resolve real credentials through the OS
+    // keychain or another broker, but they still need their non-secret config
+    // to locate that path. Blocking the whole config file disables the tool.
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        for entry in ["Read(~/.config/gh/**)", "Read(~/.docker/config.json)"] {
+            assert!(
+                !deny.iter().any(|d| d == entry),
+                "{name}: {entry} prevents an approved authenticated tool from using brokered configuration"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_preset_has_a_fail_closed_autonomous_sandbox() {
+    // Broad public access is available to both native web tools and sandboxed
+    // development commands. Auto mode still classifies every shell command,
+    // while the sandbox blocks common private/link-local destinations.
+    for name in preset_files() {
+        let value = load(&name);
+        let sandbox = &value["sandbox"];
+        assert_eq!(sandbox["enabled"], true, "{name}: sandbox disabled");
+        assert_eq!(
+            sandbox["failIfUnavailable"], true,
+            "{name}: sandbox must fail closed"
+        );
+        assert_eq!(
+            sandbox["autoAllowBashIfSandboxed"], true,
+            "{name}: sandboxed Bash should run autonomously"
+        );
+        assert_eq!(
+            sandbox["allowUnsandboxedCommands"], false,
+            "{name}: unsandboxed retry escape must be disabled"
+        );
+        assert_eq!(
+            sandbox["network"]["allowLocalBinding"], true,
+            "{name}: local dev servers must be available to UI tests"
+        );
+        let allowed_domains = sandbox["network"]["allowedDomains"]
+            .as_array()
+            .expect("allowedDomains array");
+        assert!(
+            allowed_domains.iter().any(|domain| domain == "*"),
+            "{name}: sandboxed development tools need broad public egress"
+        );
+        let denied_domains = sandbox["network"]["deniedDomains"]
+            .as_array()
+            .expect("deniedDomains array");
+        for destination in ["10.*", "169.254.*", "192.168.*", "*.internal"] {
+            assert!(
+                denied_domains.iter().any(|domain| domain == destination),
+                "{name}: private/link-local destination {destination} is not guarded"
+            );
+        }
+        assert!(
+            value.get("autoMode").is_none(),
+            "{name}: Claude ignores autoMode in shared project settings; pass it at user/CLI scope"
+        );
+    }
+}
+
+#[test]
+fn bypass_sandbox_keeps_os_level_secret_denies() {
+    // bypassPermissions skips the ordinary permission layer. This preset is
+    // isolated-host-only, and its fail-closed sandbox keeps the pure-secret
+    // filesystem boundary active.
     let value = load("bypass-sandboxed.json");
     let sandbox = &value["sandbox"];
-    assert!(
-        sandbox["network"].get("allowedHosts").is_none(),
-        "allowedHosts is not a schema key — must be allowedDomains"
-    );
-    let domains = sandbox["network"]["allowedDomains"]
-        .as_array()
-        .expect("sandbox.network.allowedDomains array");
-    assert!(domains.iter().any(|d| d == "github.com"));
     let deny_read = sandbox["filesystem"]["denyRead"]
         .as_array()
         .expect("sandbox.filesystem.denyRead array");
