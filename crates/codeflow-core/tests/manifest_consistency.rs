@@ -69,6 +69,29 @@ fn dir_names(dir: &Path) -> BTreeSet<String> {
     names
 }
 
+#[test]
+fn ci_downloads_verify_pinned_checksums() {
+    let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-ci.yml"))
+        .expect("shipped CI workflow is readable");
+
+    for required in [
+        "GITLEAKS_VERSION=8.30.1",
+        "GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+        "OSV_VERSION=2.4.0",
+        "OSV_SHA256=15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "shipped CI workflow is missing pinned tool evidence: {required}"
+        );
+    }
+    assert_eq!(
+        workflow.matches("sha256sum -c -").count(),
+        2,
+        "both downloaded security tools must be verified before execution"
+    );
+}
+
 /// Files under `assets/base` that deliberately ship WITHOUT a manifest entry.
 /// Exact and honest: `every_authored_asset_is_in_the_manifest` fails when an
 /// entry here goes stale (file deleted, or wired into the manifest after all).
