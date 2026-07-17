@@ -196,6 +196,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Public contribution and security guidance is release-neutral.** The
+  contributor path now names the complete repository gate, including coverage
+  and model-evaluation contracts, and the security policy supports the latest
+  released major line without going stale at the v3 cut.
+
 - **CI verifies security-tool downloads before executing them.** The shipped
   workflow and CodeFlow's own perimeter pin the official SHA-256 digests for
   Gitleaks and OSV-Scanner, fail closed on a mismatch, and retain the exact

@@ -14,8 +14,8 @@ and any fix or mitigation is coordinated before public disclosure.
 
 ## Supported versions
 
-The latest released `2.x` line is supported. The `1.x` line (tag `v1-final`) is
-unmaintained and shares no code with 2.x.
+Only the latest released major line is supported. Older major lines, including
+the archived `1.x` implementation at tag `v1-final`, are unmaintained.
 
 ## A note on the enforcement model
 

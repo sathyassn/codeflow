@@ -5,11 +5,9 @@ requests.
 
 ## Ground rules
 
-- `cargo fmt --all -- --check`, `cargo test --workspace`,
-  `cargo clippy --all-targets --workspace`, and
-  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` must be green
-  before a PR is ready (workspace lints: clippy `all` = deny, `pedantic` =
-  warn).
+- The repository's full CodeFlow gate must be green before a PR is ready. It
+  runs formatting, the workspace suite, warning-free Clippy and rustdoc, the
+  90% aggregate line-coverage floor, CI parity, and model-evaluation contracts.
 - Tests ship with the code that needs them, in the same PR.
 - Commits follow the conventional format `type(scope): description` — imperative
   mood, lower-case type, no trailing period; one logical change per commit.
@@ -22,12 +20,13 @@ requests.
 ## Getting started
 
 ```sh
-cargo install --path crates/codeflow-cli   # build + install the CLI
-cargo fmt --all -- --check                 # formatting gate
-cargo test --workspace                      # run the suite
-cargo clippy --all-targets --workspace      # lint
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+cargo build --release --locked
+PATH="$PWD/target/release:$PATH" codeflow test --mode full --strict
 ```
+
+The gate requires `cargo-llvm-cov`; see [docs/adoption.md](docs/adoption.md) for
+the supported platform and installation context. Run a narrower command while
+iterating, but report the full gate in the PR.
 
 The operating contract for this repo is [AGENTS.md](AGENTS.md); the working
 method (planning weight, when an ADR is warranted, the capability registry) is
