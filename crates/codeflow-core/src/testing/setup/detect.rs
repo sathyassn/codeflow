@@ -7,8 +7,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::testing::config::{
-    CoverageConfig, CoverageFormat, CoverageRule, CoverageScope, ModeCommand, PatternMapEntry,
-    ReportConfig, ReportFormat, RunnerType, StructuralConfig, TargetConfig,
+    ModeCommand, PatternMapEntry, RunnerType, StructuralConfig, TargetConfig,
 };
 
 /// A detected stack with its best-guess target configuration.
@@ -130,33 +129,18 @@ fn build_rust_target() -> TargetConfig {
             (
                 "essential".to_string(),
                 ModeCommand {
-                    command: "cargo nextest run".to_string(),
+                    command: "cargo test --workspace --quiet".to_string(),
                 },
             ),
             (
                 "full".to_string(),
                 ModeCommand {
-                    command: "cargo nextest run --profile full".to_string(),
+                    command: "cargo test --workspace".to_string(),
                 },
             ),
         ]),
-        report: Some(ReportConfig {
-            format: ReportFormat::Junit,
-            path: "target/nextest/default/junit.xml".to_string(),
-            derive_from: Some("junit".to_string()),
-        }),
-        coverage: Some(CoverageConfig {
-            format: CoverageFormat::Lcov,
-            path: "target/llvm-cov/lcov.info".to_string(),
-            transform: None,
-            rules: vec![CoverageRule {
-                scope: CoverageScope::PerFile,
-                include: vec![],
-                exclude: vec![],
-                minimum: 85,
-            }],
-            exceptions: vec![],
-        }),
+        report: None,
+        coverage: None,
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
@@ -177,34 +161,18 @@ fn build_vitest_target() -> TargetConfig {
             (
                 "essential".to_string(),
                 ModeCommand {
-                    command: "pnpm test --run".to_string(),
+                    command: "./node_modules/.bin/vitest run".to_string(),
                 },
             ),
             (
                 "full".to_string(),
                 ModeCommand {
-                    command: "pnpm test --run --coverage --reporter=vitest-ctrf-json-reporter"
-                        .to_string(),
+                    command: "./node_modules/.bin/vitest run".to_string(),
                 },
             ),
         ]),
-        report: Some(ReportConfig {
-            format: ReportFormat::Ctrf,
-            path: "ctrf/ctrf-report.json".to_string(),
-            derive_from: None,
-        }),
-        coverage: Some(CoverageConfig {
-            format: CoverageFormat::IstanbulSummary,
-            path: "coverage/coverage-summary.json".to_string(),
-            transform: None,
-            rules: vec![CoverageRule {
-                scope: CoverageScope::PerFile,
-                include: vec![],
-                exclude: vec![],
-                minimum: 85,
-            }],
-            exceptions: vec![],
-        }),
+        report: None,
+        coverage: None,
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
@@ -225,33 +193,18 @@ fn build_jest_target() -> TargetConfig {
             (
                 "essential".to_string(),
                 ModeCommand {
-                    command: "jest --ci".to_string(),
+                    command: "./node_modules/.bin/jest --ci".to_string(),
                 },
             ),
             (
                 "full".to_string(),
                 ModeCommand {
-                    command: "jest --ci --coverage --reporters=jest-junit".to_string(),
+                    command: "./node_modules/.bin/jest --ci".to_string(),
                 },
             ),
         ]),
-        report: Some(ReportConfig {
-            format: ReportFormat::Junit,
-            path: "junit.xml".to_string(),
-            derive_from: Some("junit".to_string()),
-        }),
-        coverage: Some(CoverageConfig {
-            format: CoverageFormat::IstanbulSummary,
-            path: "coverage/coverage-summary.json".to_string(),
-            transform: None,
-            rules: vec![CoverageRule {
-                scope: CoverageScope::PerFile,
-                include: vec![],
-                exclude: vec![],
-                minimum: 85,
-            }],
-            exceptions: vec![],
-        }),
+        report: None,
+        coverage: None,
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
@@ -278,29 +231,12 @@ fn build_go_target() -> TargetConfig {
             (
                 "full".to_string(),
                 ModeCommand {
-                    command:
-                        "go test ./... -coverprofile=coverage.out -json | go-ctrf-json-reporter"
-                            .to_string(),
+                    command: "go test ./...".to_string(),
                 },
             ),
         ]),
-        report: Some(ReportConfig {
-            format: ReportFormat::Ctrf,
-            path: "ctrf/ctrf-report.json".to_string(),
-            derive_from: None,
-        }),
-        coverage: Some(CoverageConfig {
-            format: CoverageFormat::GoCover,
-            path: "coverage.out".to_string(),
-            transform: None,
-            rules: vec![CoverageRule {
-                scope: CoverageScope::PerFile,
-                include: vec![],
-                exclude: vec![],
-                minimum: 85,
-            }],
-            exceptions: vec![],
-        }),
+        report: None,
+        coverage: None,
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
@@ -327,27 +263,12 @@ fn build_python_target() -> TargetConfig {
             (
                 "full".to_string(),
                 ModeCommand {
-                    command: "pytest --cov --cov-report=xml --junitxml=report.xml".to_string(),
+                    command: "pytest".to_string(),
                 },
             ),
         ]),
-        report: Some(ReportConfig {
-            format: ReportFormat::Junit,
-            path: "report.xml".to_string(),
-            derive_from: Some("junit".to_string()),
-        }),
-        coverage: Some(CoverageConfig {
-            format: CoverageFormat::Cobertura,
-            path: "coverage.xml".to_string(),
-            transform: None,
-            rules: vec![CoverageRule {
-                scope: CoverageScope::PerFile,
-                include: vec![],
-                exclude: vec![],
-                minimum: 85,
-            }],
-            exceptions: vec![],
-        }),
+        report: None,
+        coverage: None,
         ci_skip: None,
         ci_skip_reason: None,
         timeout_seconds: None,
@@ -363,7 +284,7 @@ fn build_python_target() -> TargetConfig {
 // Each helper returns a best-effort `StructuralConfig` that a majority of
 // adopters can keep unchanged. Emitters can still replace the defaults
 // post-setup. Rust is deliberately omitted (structural = None) because
-// `cargo nextest` colocates tests under `#[cfg(test)] mod tests`, not in
+// Cargo commonly colocates tests under `#[cfg(test)] mod tests`, not in
 // sibling test files — a 1:1 source↔test pattern map does not fit.
 // -------------------------------------------------------------------------
 
@@ -435,6 +356,16 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "rust-core");
         assert_eq!(targets[0].config.runner, RunnerType::Cargo);
+        assert_eq!(
+            targets[0].config.modes["essential"].command,
+            "cargo test --workspace --quiet"
+        );
+        assert_eq!(
+            targets[0].config.modes["full"].command,
+            "cargo test --workspace"
+        );
+        assert!(targets[0].config.report.is_none());
+        assert!(targets[0].config.coverage.is_none());
     }
 
     #[test]
@@ -462,6 +393,12 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "web");
         assert_eq!(targets[0].config.runner, RunnerType::Vitest);
+        assert_eq!(
+            targets[0].config.modes["full"].command,
+            "./node_modules/.bin/vitest run"
+        );
+        assert!(targets[0].config.report.is_none());
+        assert!(targets[0].config.coverage.is_none());
     }
 
     #[test]
@@ -476,6 +413,12 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "web");
         assert_eq!(targets[0].config.runner, RunnerType::Jest);
+        assert_eq!(
+            targets[0].config.modes["full"].command,
+            "./node_modules/.bin/jest --ci"
+        );
+        assert!(targets[0].config.report.is_none());
+        assert!(targets[0].config.coverage.is_none());
     }
 
     #[test]
@@ -486,6 +429,9 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "go-service");
         assert_eq!(targets[0].config.runner, RunnerType::Go);
+        assert_eq!(targets[0].config.modes["full"].command, "go test ./...");
+        assert!(targets[0].config.report.is_none());
+        assert!(targets[0].config.coverage.is_none());
     }
 
     #[test]
@@ -500,6 +446,9 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "python");
         assert_eq!(targets[0].config.runner, RunnerType::Pytest);
+        assert_eq!(targets[0].config.modes["full"].command, "pytest");
+        assert!(targets[0].config.report.is_none());
+        assert!(targets[0].config.coverage.is_none());
     }
 
     #[test]

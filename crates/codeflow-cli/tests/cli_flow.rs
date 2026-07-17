@@ -188,7 +188,16 @@ fn test_setup_writes_config_offline_and_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     // A Cargo.toml makes stack detection fire, so setup writes a populated config.
-    write(dir.path(), "Cargo.toml", "[package]\nname = \"x\"\n");
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "#[cfg(test)]\nmod tests {\n    #[test]\n    fn passes() {}\n}\n",
+    );
 
     let first = codeflow(dir.path(), &["test", "setup"]);
     assert_eq!(
@@ -209,6 +218,18 @@ fn test_setup_writes_config_offline_and_is_idempotent() {
     assert_eq!(
         before, after,
         "setup must not overwrite an already-populated config"
+    );
+
+    // The conservative auto-detected config must run on a stock Rust
+    // toolchain. It must not assume cargo-nextest, a project-defined nextest
+    // profile, a report plugin, or a coverage artifact.
+    let gate = codeflow(dir.path(), &["test", "--mode", "full", "--strict"]);
+    assert_eq!(
+        gate.status.code(),
+        Some(0),
+        "auto-detected Rust config must be runnable:\nstdout: {}\nstderr: {}",
+        stdout(&gate),
+        stderr(&gate)
     );
 }
 

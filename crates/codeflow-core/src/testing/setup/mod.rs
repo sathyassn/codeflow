@@ -103,7 +103,7 @@ pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     if config.targets.is_empty() {
         println!(
             "No supported stack detected — wrote a config with no targets to {}. \
-             Add one with `codeflow test setup --add-target`.",
+             Add a supported stack and rerun setup, or edit the config explicitly.",
             config_path.display()
         );
         return Ok(SetupResult::WrittenNoTargets);

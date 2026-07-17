@@ -156,14 +156,13 @@ fn run_setup() -> i32 {
     }
 }
 
-/// Print the report-only coverage summary. Explicitly does NOT influence the
-/// gate verdict — threshold gating is a future step (see
-/// `codeflow_core::testing::gate::CoverageReport`).
+/// Print the coverage summary. Configured thresholds and missing required data
+/// contribute to the gate verdict in the testing engine.
 fn print_coverage_report(reports: &[CoverageReport]) {
     if reports.is_empty() {
         return;
     }
-    println!("coverage (report-only — does not affect the gate verdict):");
+    println!("coverage:");
     for r in reports {
         if let Some(note) = &r.note {
             println!("  {}: {note}", r.target);
