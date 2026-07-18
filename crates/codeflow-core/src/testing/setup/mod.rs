@@ -84,7 +84,12 @@ pub fn run_interactive(
 pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     let config_path = config_path(project_dir);
     write_schema_next_to(&config_path)?;
-    if has_populated_config(&config_path) {
+    if config_path.exists()
+        && !config::load_test_config(&config_path)
+            .map_err(|error| SetupError::Config(error.to_string()))?
+            .targets
+            .is_empty()
+    {
         return Err(SetupError::ConfigExists(config_path));
     }
     let detected = detect::detect_stacks(project_dir);
@@ -132,6 +137,33 @@ pub fn run_template(
     template_name: &str,
     force: bool,
 ) -> Result<SetupResult, SetupError> {
+    let template_path = template_path(template_dir, template_name)?;
+    if !template_path.exists() {
+        return Err(SetupError::TemplateNotFound(template_name.to_string()));
+    }
+
+    let content = std::fs::read_to_string(&template_path)?;
+    run_template_content(project_dir, template_name, &content, force)
+}
+
+/// Apply a named template supplied as UTF-8 content.
+///
+/// This is the release-binary path: the CLI reads the template from its
+/// embedded assets and passes the bytes here, while [`run_template`] remains a
+/// filesystem adapter for tests and source-tree callers.
+///
+/// # Errors
+///
+/// Returns `SetupError::ConfigExists` if config exists and `force` is false.
+/// Returns `SetupError::TemplateNotFound` for an unsafe template name.
+/// Returns `SetupError::TemplateParse` when content is not a test config.
+pub fn run_template_content(
+    project_dir: &Path,
+    template_name: &str,
+    content: &str,
+    force: bool,
+) -> Result<SetupResult, SetupError> {
+    validate_template_name(template_name)?;
     let config_path = config_path(project_dir);
     write_schema_next_to(&config_path)?;
 
@@ -139,15 +171,8 @@ pub fn run_template(
         return Err(SetupError::ConfigExists(config_path));
     }
 
-    let template_path = template_path(template_dir, template_name)?;
-    if !template_path.exists() {
-        return Err(SetupError::TemplateNotFound(template_name.to_string()));
-    }
-
-    // Read template, parse it, write via config-writer for consistency
-    let content = std::fs::read_to_string(&template_path)?;
     let config: TestConfig =
-        serde_json::from_str(&content).map_err(|e| SetupError::TemplateParse(e.to_string()))?;
+        serde_json::from_str(content).map_err(|e| SetupError::TemplateParse(e.to_string()))?;
 
     write_config(&config_path, &config)?;
     println!(
@@ -181,6 +206,13 @@ pub fn run_add_target(
 
     match target {
         Some(t) => {
+            if existing
+                .targets
+                .iter()
+                .any(|current| current.name == t.name)
+            {
+                return Err(SetupError::DuplicateTarget(t.name));
+            }
             existing.targets.push(t);
             write_config(&config_path, &existing)?;
             println!("Target added to {}", config_path.display());
@@ -240,11 +272,11 @@ pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
     let config_path = config_path(project_dir);
     write_schema_next_to(&config_path)?;
 
-    // Idempotence guard: never overwrite an existing populated config.
-    // `codeflow init` may be re-run on a configured project; the minimal
-    // scaffold must not clobber a real configuration (in v1, accidental
-    // invocation from a misdirected cwd wiped the canonical config).
-    if has_populated_config(&config_path) {
+    // Init is additive: any existing config, including one that currently
+    // fails to parse, belongs to the project and must remain byte-identical.
+    // `codeflow test`/doctor surface corruption; init never "repairs" it by
+    // replacing project-owned test intent with an empty config.
+    if config_path.exists() {
         return Ok(());
     }
 
@@ -266,28 +298,19 @@ pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
     Ok(())
 }
 
-/// Returns `true` if `path` exists and parses as a `TestConfig` with at least
-/// one target. Used as a safety gate by `write_minimal_config` and `run_auto`
-/// to prevent accidental overwrite of a real, populated configuration.
-///
-/// Parse or I/O failures are treated as "not populated" (fail-open): a
-/// corrupted or unreadable file should be replaceable, and the callers'
-/// own write step will fail with a clear error if the real issue is I/O.
-fn has_populated_config(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(existing) = serde_json::from_str::<TestConfig>(&content) else {
-        return false;
-    };
-    !existing.targets.is_empty()
-}
-
 fn read_template_description(path: &Path) -> String {
     let Ok(content) = std::fs::read_to_string(path) else {
         return String::new();
     };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
+    template_description(&content)
+}
+
+/// Read the optional human-facing `_description` from template JSON.
+/// Invalid input has no description; template application still returns its
+/// more specific parse error when selected.
+#[must_use]
+pub fn template_description(content: &str) -> String {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) else {
         return String::new();
     };
     parsed
@@ -343,11 +366,17 @@ fn is_project_root(dir: &Path) -> bool {
 }
 
 fn template_path(template_dir: &Path, name: &str) -> Result<std::path::PathBuf, SetupError> {
-    // Reject path separators and traversal sequences to prevent arbitrary file read.
+    validate_template_name(name)?;
+    Ok(template_dir.join(name))
+}
+
+fn validate_template_name(name: &str) -> Result<(), SetupError> {
+    // Reject path separators and traversal sequences to prevent arbitrary file
+    // reads through either the source-tree or embedded-asset adapter.
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err(SetupError::TemplateNotFound(name.to_string()));
     }
-    Ok(template_dir.join(name))
+    Ok(())
 }
 
 fn write_config(path: &Path, config: &TestConfig) -> Result<(), SetupError> {
@@ -426,11 +455,16 @@ pub enum SetupError {
     #[error("Config already exists at {0}. Use --force to overwrite.")]
     ConfigExists(std::path::PathBuf),
 
-    #[error("Template not found. Run `codeflow test setup --list` to see available templates.")]
+    #[error(
+        "Template not found. Run `codeflow test setup --list-templates` to see available templates."
+    )]
     TemplateNotFound(String),
 
     #[error("No config exists. Run `codeflow test setup` first.")]
     NoConfigForAddTarget,
+
+    #[error("Target already exists: {0}")]
+    DuplicateTarget(String),
 
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -735,10 +769,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn write_minimal_config_preserves_malformed_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = config_path(dir.path());
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        let malformed = b"{ populated but malformed\n";
+        std::fs::write(&cfg_path, malformed).unwrap();
+
+        write_minimal_config(dir.path()).expect("init remains idempotent");
+
+        assert_eq!(std::fs::read(&cfg_path).unwrap(), malformed);
+    }
+
     /// `run_auto` must refuse to clobber a populated config — same invariant
     /// as `write_minimal_config`. Returns `SetupError::ConfigExists` so the
-    /// caller can surface a clear error and, optionally, re-invoke with a
-    /// template-style `--force` in future.
+    /// caller can surface a clear idempotent result.
     #[test]
     fn run_auto_refuses_to_overwrite_populated_config() {
         use crate::testing::config::{ModeCommand, RunnerType, TargetConfig, TestConfig};
@@ -792,6 +838,38 @@ mod tests {
             before, after,
             "run_auto must not mutate a populated test-config.json"
         );
+    }
+
+    #[test]
+    fn run_auto_rejects_and_preserves_malformed_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = config_path(dir.path());
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        let malformed = b"{ populated but malformed\n";
+        std::fs::write(&cfg_path, malformed).unwrap();
+
+        let error = run_auto(dir.path()).expect_err("malformed config must block auto setup");
+        assert!(matches!(error, SetupError::Config(_)), "got {error:?}");
+        assert_eq!(std::fs::read(&cfg_path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn run_auto_populates_an_existing_empty_config() {
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_config(dir.path()).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname='fixture'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            run_auto(dir.path()).unwrap(),
+            SetupResult::Written
+        ));
+        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        assert_eq!(config.targets.len(), 1);
+        assert_eq!(config.targets[0].name, "rust-core");
     }
 
     #[test]
@@ -901,6 +979,37 @@ mod tests {
     }
 
     #[test]
+    fn run_template_content_uses_the_same_safe_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = std::fs::read_to_string(assets_template_dir().join("minimal.json")).unwrap();
+        let result = run_template_content(dir.path(), "minimal.json", &content, false).unwrap();
+        assert!(matches!(result, SetupResult::Written));
+        assert!(dir
+            .path()
+            .join(".codeflow/test-config.schema.json")
+            .exists());
+
+        let before = std::fs::read(config_path(dir.path())).unwrap();
+        let error = run_template_content(dir.path(), "minimal.json", &content, false)
+            .expect_err("implicit replacement must be rejected");
+        assert!(matches!(error, SetupError::ConfigExists(_)));
+        assert_eq!(std::fs::read(config_path(dir.path())).unwrap(), before);
+    }
+
+    #[test]
+    fn run_template_content_rejects_unsafe_name_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_template_content(
+            dir.path(),
+            "../minimal.json",
+            r#"{"schema_version":"1.0","targets":[]}"#,
+            false,
+        );
+        assert!(matches!(result, Err(SetupError::TemplateNotFound(_))));
+        assert!(!config_path(dir.path()).exists());
+    }
+
+    #[test]
     fn run_template_force_overwrites() {
         let dir = tempfile::tempdir().unwrap();
         // Create existing config
@@ -936,6 +1045,20 @@ mod tests {
         let config = config::load_test_config(&config_path(dir.path())).unwrap();
         assert_eq!(config.targets.len(), 1);
         assert_eq!(config.targets[0].name, "my-target");
+    }
+
+    #[test]
+    fn run_add_target_rejects_duplicate_without_mutating_config() {
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_config(dir.path()).unwrap();
+        let first = ScriptedPromptProvider::new(vec!["api", "custom", ".", "true", "true"]);
+        run_add_target(dir.path(), &first).unwrap();
+        let before = std::fs::read(config_path(dir.path())).unwrap();
+
+        let duplicate = ScriptedPromptProvider::new(vec!["api", "custom", ".", "true", "true"]);
+        let error = run_add_target(dir.path(), &duplicate).unwrap_err();
+        assert!(matches!(error, SetupError::DuplicateTarget(name) if name == "api"));
+        assert_eq!(std::fs::read(config_path(dir.path())).unwrap(), before);
     }
 
     #[test]

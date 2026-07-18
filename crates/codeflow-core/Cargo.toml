@@ -11,8 +11,8 @@ publish = false
 
 [features]
 # Structural source-to-test mapping validator (`testing::structural`). Parked:
-# the `structural` config block ships and stack detection populates it, but the
-# validator is not yet wired into the gate. Enable to compile/test it.
+# the schema still accepts legacy `structural` blocks, but setup does not emit
+# them and the validator is not wired into the gate. Enable to compile/test it.
 structural-check = []
 
 [dependencies]

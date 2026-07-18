@@ -227,6 +227,11 @@ pub fn run_add_target_wizard(
     if !full_cmd.is_empty() {
         modes.insert("full".to_string(), ModeCommand { command: full_cmd });
     }
+    if modes.is_empty() {
+        return Err(WizardError::EmptyInput(
+            "essential or full mode command".to_string(),
+        ));
+    }
 
     let target = TargetConfig {
         name,
@@ -388,6 +393,16 @@ mod tests {
         let prompts = ScriptedPromptProvider::new(vec!["my-target", "invalid-runner"]);
         let result = run_add_target_wizard(dir.path(), &prompts);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn add_target_wizard_requires_at_least_one_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts = ScriptedPromptProvider::new(vec!["my-target", "custom", ".", "", ""]);
+        let error = run_add_target_wizard(dir.path(), &prompts)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("essential or full mode command"), "{error}");
     }
 
     #[test]

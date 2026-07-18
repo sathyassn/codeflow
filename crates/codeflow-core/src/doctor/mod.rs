@@ -920,8 +920,13 @@ fn check_test_config(opts: &Options) -> CheckResult {
         .filter(|c| c.status == crate::testing::doctor::CheckStatus::Fail)
         .map(|c| c.name.clone())
         .collect();
+    let warnings: Vec<String> = checks
+        .iter()
+        .filter(|c| c.status == crate::testing::doctor::CheckStatus::Warn)
+        .map(|c| c.name.clone())
+        .collect();
 
-    if failures.is_empty() {
+    if failures.is_empty() && warnings.is_empty() {
         return CheckResult {
             name: "test-config".into(),
             status: Status::Pass,
@@ -930,11 +935,24 @@ fn check_test_config(opts: &Options) -> CheckResult {
         };
     }
 
+    if failures.is_empty() {
+        return CheckResult {
+            name: "test-config".into(),
+            status: Status::Warn,
+            message: format!(
+                "{} test-config warning(s): {} — run `codeflow doctor --check test-config` for the aggregate result and inspect the config",
+                warnings.len(),
+                warnings.join(", ")
+            ),
+            duration: start.elapsed(),
+        };
+    }
+
     CheckResult {
         name: "test-config".into(),
         status: Status::Warn,
         message: format!(
-            "{} test-config health check(s) failed: {} — run `codeflow test doctor` for detail",
+            "{} test-config health check(s) failed: {} — run `codeflow doctor --check test-config` for detail",
             failures.len(),
             failures.join(", ")
         ),
@@ -1846,10 +1864,24 @@ mod tests {
         assert_eq!(r.status, Status::Warn, "got: {}", r.message);
         assert!(r.message.contains("failed"), "got: {}", r.message);
         assert!(
-            r.message.contains("codeflow test doctor"),
+            r.message.contains("codeflow doctor --check test-config"),
             "points to detail: {}",
             r.message
         );
+    }
+
+    #[test]
+    fn test_check_test_config_structural_block_warns_as_unenforced() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_config(
+            dir.path(),
+            r#"{"schema_version":"1.0","targets":[{"name":"t","runner":"custom","modes":{"full":{"command":"true"}},"structural":{"source_glob":["src/**/*.rs"]}}]}"#,
+        );
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let result = check_test_config(&opts);
+        assert_eq!(result.status, Status::Warn, "got: {}", result.message);
+        assert!(result.message.contains("structural-unenforced"));
     }
 
     #[test]

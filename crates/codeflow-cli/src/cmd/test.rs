@@ -1,7 +1,8 @@
 //! `codeflow test` — the generic test gate (charter §3.1, AC #7).
 
-use clap::{Args, Subcommand};
+use clap::{ArgGroup, Args, Subcommand};
 use codeflow_core::testing::gate::{run_gate, CoverageReport, FailureReport, GateOutcome};
+use codeflow_core::testing::setup::prompt::TerminalPromptProvider;
 use codeflow_core::testing::setup::{self, SetupError, SetupResult};
 
 #[derive(Args)]
@@ -27,14 +28,38 @@ pub struct TestArgs {
 
 #[derive(Subcommand)]
 pub enum TestCommand {
-    /// Detect the stack and write `.codeflow/test-config.json` (offline,
-    /// idempotent). Never overwrites a populated config.
-    Setup,
+    /// Configure `.codeflow/test-config.json` using root detection, an embedded
+    /// template, or an appended target. Safe auto-detection is the default.
+    Setup(SetupArgs),
+}
+
+#[derive(Args)]
+#[command(group(
+    ArgGroup::new("setup-action")
+        .args(["list_templates", "template", "add_target"])
+        .multiple(false)
+))]
+pub struct SetupArgs {
+    /// List the test-config templates embedded in this binary.
+    #[arg(long)]
+    pub list_templates: bool,
+
+    /// Write an embedded test-config template by name.
+    #[arg(long, value_name = "NAME")]
+    pub template: Option<String>,
+
+    /// Explicitly replace an existing config when applying --template.
+    #[arg(long, requires = "template")]
+    pub replace: bool,
+
+    /// Interactively append one target to the existing config.
+    #[arg(long)]
+    pub add_target: bool,
 }
 
 pub fn run(args: &TestArgs) -> i32 {
-    if matches!(args.command, Some(TestCommand::Setup)) {
-        return run_setup();
+    if let Some(TestCommand::Setup(setup_args)) = &args.command {
+        return run_setup(setup_args);
     }
 
     let root = super::repo_root();
@@ -127,11 +152,57 @@ fn print_failure_report(report: &FailureReport) {
     }
 }
 
-/// `codeflow test setup`: deterministic, offline stack detection that writes
-/// `.codeflow/test-config.json`. Idempotent — a populated config is left
-/// untouched (reported as success, not an error).
-fn run_setup() -> i32 {
+/// `codeflow test setup`: deterministic, offline config mechanics over root
+/// detection, release-embedded templates, and explicit target append.
+fn run_setup(args: &SetupArgs) -> i32 {
     let root = super::repo_root();
+    if args.list_templates {
+        for name in crate::embedded::test_template_names() {
+            let description = crate::embedded::read_test_template(&name)
+                .map(|content| setup::template_description(&content))
+                .unwrap_or_default();
+            println!("{name}  — {description}");
+        }
+        return 0;
+    }
+
+    if let Some(name) = &args.template {
+        let Some(content) = crate::embedded::read_test_template(name) else {
+            eprintln!(
+                "codeflow test setup: template {name:?} not found; run `codeflow test setup --list-templates`"
+            );
+            return 1;
+        };
+        return match setup::run_template_content(&root, name, &content, args.replace) {
+            Ok(SetupResult::Written) => {
+                println!("Next: run `codeflow test --mode essential` to try it.");
+                0
+            }
+            Ok(SetupResult::WrittenNoTargets | SetupResult::Aborted) => 0,
+            Err(SetupError::ConfigExists(path)) => {
+                eprintln!(
+                    "codeflow test setup: {} already exists; inspect it or rerun this template with --replace",
+                    path.display()
+                );
+                1
+            }
+            Err(error) => {
+                eprintln!("codeflow test setup: {error}");
+                1
+            }
+        };
+    }
+
+    if args.add_target {
+        return match setup::run_add_target(&root, &TerminalPromptProvider) {
+            Ok(SetupResult::Written | SetupResult::WrittenNoTargets | SetupResult::Aborted) => 0,
+            Err(error) => {
+                eprintln!("codeflow test setup: {error}");
+                1
+            }
+        };
+    }
+
     match setup::run_auto(&root) {
         Ok(SetupResult::Written) => {
             println!("Next: run `codeflow test --mode essential` to try it.");

@@ -52,6 +52,12 @@ The test gate evaluates file and aggregate coverage rules through one verdict.
 have no explicit comparison base (ADR-0021); silently evaluating an empty set is
 not a supported degradation. Child stdout and stderr are drained into bounded
 tail buffers, with truncation recorded on each target result.
+Setup is an adapter over the same typed config boundary: root-only detection,
+release-embedded templates, and explicit target append all use the deterministic
+writer and colocated schema. Automatic setup may fill an absent/empty config but
+never replaces populated or malformed project intent. The schema retains legacy
+`structural` blocks for compatibility while doctor labels them unenforced; the
+prescriptive structural validator remains outside the gate (ADR-0031).
 Codeflow's own full local gate additionally runs `cargo llvm-cov` with a 90%
 aggregate line floor, matching the independent CI coverage job.
 

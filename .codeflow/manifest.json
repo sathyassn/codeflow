@@ -101,7 +101,7 @@
     ".agents/skills/cf-stack/SKILL.md": {
       "src": "agents/skills/cf-stack/SKILL.md",
       "ownership": "managed",
-      "sha256": "d114c1837fef85646781b97b72e009bab6085edf1d5a111a6866503cca9d8e0c",
+      "sha256": "b9434c13e3170c1bbae84d23e5e2bf5f933355062a83bd7824ed43dd8d8d5838",
       "exec": false
     },
     ".claude/agents/cf-reviewer.md": {
@@ -221,7 +221,7 @@
     ".claude/skills/cf-stack/SKILL.md": {
       "src": "agents/skills/cf-stack/SKILL.md",
       "ownership": "managed",
-      "sha256": "d114c1837fef85646781b97b72e009bab6085edf1d5a111a6866503cca9d8e0c",
+      "sha256": "b9434c13e3170c1bbae84d23e5e2bf5f933355062a83bd7824ed43dd8d8d5838",
       "exec": false
     },
     ".claude/workflows/pipeline.workflow.js": {

@@ -1,5 +1,5 @@
 {
-  "_description": "Go project with go test, CTRF via go-ctrf-json-reporter, and go-cover coverage.",
+  "_description": "Go project with go test and go-cover coverage.",
   "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
@@ -19,12 +19,8 @@
           "command": "go test ./..."
         },
         "full": {
-          "command": "go test ./... -coverprofile=coverage.out -json | go-ctrf-json-reporter"
+          "command": "go test ./... -coverprofile=coverage.out"
         }
-      },
-      "report": {
-        "format": "ctrf",
-        "path": "ctrf/ctrf-report.json"
       },
       "coverage": {
         "format": "go-cover",

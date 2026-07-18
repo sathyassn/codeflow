@@ -87,7 +87,8 @@
         },
         "modes": {
           "type": "object",
-          "description": "Mode-specific commands. At least one mode must be defined.",
+          "minProperties": 1,
+          "description": "Mode-specific commands. The public modes are full (CLI default), essential (explicit lighter run), and quick (pre-push name). When quick is requested and no target defines it, CodeFlow aliases quick to essential only when essential is defined; an explicit quick command is honored. At least one mode must be defined.",
           "properties": {
             "quick": {
               "$ref": "#/$defs/mode_command"
@@ -127,7 +128,7 @@
         "ci_skip": {
           "type": "boolean",
           "default": false,
-          "description": "When true, the target is skipped in CI runs (set by CODEFLOW_CI=1 or GITHUB_ACTIONS=true)."
+          "description": "When true, the target is skipped only when the process environment has CI set to a non-empty value other than 'false' or '0'. Local runs ignore ci_skip."
         },
         "ci_skip_reason": {
           "type": "string",

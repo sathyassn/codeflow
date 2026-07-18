@@ -13,9 +13,13 @@ and decide; `codeflow` verifies the result deterministically.
    go.mod, ...), existing CI, and the user's hint. State what you found and
    confirm with the user before writing anything — never assume.
 2. Write `.codeflow/test-config.json`. Start from the closest shape among
-   codeflow's shipped test-config templates, then tailor: real commands for
+   codeflow's shipped test-config templates (`codeflow test setup --list-templates`, then
+   `--template <name>`), then tailor: real commands for
    `essential` and `full` modes, real coverage tooling or an empty `coverage`
-   list. If the file exists, extend — do not clobber working targets.
+   list. Root auto-detection is intentionally non-recursive. For a monorepo,
+   add one explicit target and `cwd` per package (`--add-target` or the
+   multi-target template). If the file exists, extend — do not clobber working
+   targets; `--replace` is only for a reviewed, deliberate template reset.
 3. Author lint configuration tailored to the project (clippy workspace lints,
    eslint + config, ruff, ...). Respect existing config: tighten or extend,
    never silently replace. Wire the lint command into the test config's `full`

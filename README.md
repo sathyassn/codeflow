@@ -79,7 +79,7 @@ ordinary task execution and adds no model-running CLI command.
 | `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
-| `test` | Run the test gate (configured targets or runtime stack detection); `test setup` detects the stack and writes `.codeflow/test-config.json` |
+| `test` | Run the test gate; `test setup` safely detects root stacks, lists/applies embedded templates, or appends explicit targets |
 | `validate` | Validate `.codeflow/policy.json` (loudly) + record frontmatter; `--docs` adds the doc-graph lint |
 | `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
@@ -90,6 +90,14 @@ ordinary task execution and adds no model-running CLI command.
 | `remote` | Remote provider operations (branch protection) |
 | `epic new` | Allocate the next `EPC-NNN` and scaffold the epic from the template |
 | `task new` | Allocate the next `TSK-NNN-MMM` under an epic and scaffold it |
+
+`codeflow test setup` with no options detects only stack markers at the project
+root and fills an absent or empty config; it never replaces a populated or
+malformed config. Use `--list-templates`, `--template <name>`, or `--add-target` for
+explicit setup. Template replacement requires the deliberate
+`--template <name> --replace` combination. Monorepos should apply
+`monorepo-multi-target.json` or append one target per package with its `cwd`;
+auto-detection does not recursively guess package boundaries or commands.
 
 ## Enforcement planes
 

@@ -1,4 +1,4 @@
-//! Doctor validator for `codeflow test doctor`.
+//! Test-config validator used by `codeflow doctor --check test-config`.
 //!
 //! Runs 9 checks against `test-config.json` and reports PASS/FAIL/WARN
 //! for each. Designed to catch config drift and misconfigurations.
@@ -216,6 +216,17 @@ fn run_target_checks(config: &TestConfig, project_dir: &Path) -> Vec<DoctorCheck
                     });
                 }
             }
+        }
+
+        // The schema still accepts legacy structural blocks, but the
+        // structural validator is deliberately not wired into the public gate.
+        // Surface that boundary instead of implying these rules are enforced.
+        if target.structural.is_some() {
+            checks.push(DoctorCheck {
+                name: format!("{}.structural-unenforced", target.name),
+                status: CheckStatus::Warn,
+                message: "structural rules are stored but not enforced by `codeflow test`; remove the block or treat it as documentation only".to_string(),
+            });
         }
 
         // Check 4: dry-run probe
@@ -544,6 +555,26 @@ mod tests {
             .find(|c| c.name.contains("command-parses"))
             .unwrap();
         assert_eq!(cmd_check.status, CheckStatus::Fail);
+    }
+
+    #[test]
+    fn configured_structural_rules_warn_that_gate_does_not_enforce_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = make_minimal_config();
+        let mut target = make_valid_target();
+        target.structural = Some(StructuralConfig {
+            source_glob: vec!["src/**/*.rs".to_string()],
+            ..StructuralConfig::default()
+        });
+        config.targets.push(target);
+
+        let checks = run_target_checks(&config, dir.path());
+        let structural = checks
+            .iter()
+            .find(|check| check.name == "test.structural-unenforced")
+            .expect("structural warning present");
+        assert_eq!(structural.status, CheckStatus::Warn);
+        assert!(structural.message.contains("not enforced"));
     }
 
     // Check 3c: report.path safe — positive

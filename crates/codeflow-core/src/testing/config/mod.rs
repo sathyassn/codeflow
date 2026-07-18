@@ -97,9 +97,8 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<CoverageConfig>,
 
-    /// When `true` and the process runs with `CI=true` in the environment, the
-    /// generic engine skips this target entirely. Lets a target opt out of the
-    /// CI wall-time budget while staying enabled for local dev.
+    /// When `true` and the process has a truthy `CI` environment value, the
+    /// generic engine skips this target entirely. Local runs ignore this flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_skip: Option<bool>,
 
@@ -258,7 +257,8 @@ pub enum RunnerType {
     Custom,
 }
 
-/// A mode command (e.g., quick, essential, full).
+/// A public mode command: `full`, `essential`, or `quick`. The gate aliases a
+/// requested `quick` to `essential` only when no explicit quick mode exists.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModeCommand {
     pub command: String,
@@ -367,6 +367,103 @@ fn default_true() -> bool {
     true
 }
 
+fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), TestingError> {
+    let known_target_fields = [
+        "name",
+        "enabled",
+        "cwd",
+        "env",
+        "runner",
+        "modes",
+        "report",
+        "coverage",
+        "ci_skip",
+        "ci_skip_reason",
+        "timeout_seconds",
+        "structural",
+        "tags",
+        "test_files",
+    ];
+    if let Some(targets) = raw.get("targets").and_then(|targets| targets.as_array()) {
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(object) = target.as_object() {
+                for key in object.keys() {
+                    if !known_target_fields.contains(&key.as_str()) {
+                        return Err(TestingError::ConfigInvalid {
+                            path: path.to_path_buf(),
+                            message: format!("targets[{index}].{key}: unknown field"),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let known_top_level = [
+        "_description",
+        "$schema",
+        "schema_version",
+        "execution",
+        "defaults",
+        "targets",
+    ];
+    if let Some(object) = raw.as_object() {
+        for key in object.keys() {
+            if !known_top_level.contains(&key.as_str()) {
+                eprintln!("warning: unknown top-level field '{key}' in test config (ignored)");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
+    let mut seen_names = std::collections::HashSet::new();
+    for target in &config.targets {
+        if !seen_names.insert(&target.name) {
+            return Err(TestingError::DuplicateTarget(target.name.clone()));
+        }
+        if target.modes.is_empty() {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{}': modes must define at least one of quick, essential, or full",
+                    target.name
+                ),
+            });
+        }
+        if let Some(mode) = target
+            .modes
+            .keys()
+            .find(|mode| !matches!(mode.as_str(), "quick" | "essential" | "full"))
+        {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{}': unsupported mode '{mode}'; expected quick, essential, or full",
+                    target.name
+                ),
+            });
+        }
+        if target.coverage.as_ref().is_some_and(|coverage| {
+            coverage
+                .rules
+                .iter()
+                .any(|rule| rule.scope == CoverageScope::ChangedFiles)
+        }) {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!(
+                    "target '{}': coverage scope 'changed_files' requires a comparison base, \
+                     but standalone codeflow test has none",
+                    target.name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Load and validate test configuration.
 ///
 /// # Errors
@@ -403,54 +500,7 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
         }
     }
 
-    // Check for unknown fields in targets
-    if let Some(targets) = raw.get("targets").and_then(|t| t.as_array()) {
-        let known_target_fields = [
-            "name",
-            "enabled",
-            "cwd",
-            "env",
-            "runner",
-            "modes",
-            "report",
-            "coverage",
-            "ci_skip",
-            "ci_skip_reason",
-            "timeout_seconds",
-            "structural",
-            "tags",
-            "test_files",
-        ];
-        for (i, target) in targets.iter().enumerate() {
-            if let Some(obj) = target.as_object() {
-                for key in obj.keys() {
-                    if !known_target_fields.contains(&key.as_str()) {
-                        return Err(TestingError::ConfigInvalid {
-                            path: path.to_path_buf(),
-                            message: format!("targets[{i}].{key}: unknown field"),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Warn about unknown top-level fields
-    let known_top_level = [
-        "_description",
-        "$schema",
-        "schema_version",
-        "execution",
-        "defaults",
-        "targets",
-    ];
-    if let Some(obj) = raw.as_object() {
-        for key in obj.keys() {
-            if !known_top_level.contains(&key.as_str()) {
-                eprintln!("warning: unknown top-level field '{key}' in test config (ignored)");
-            }
-        }
-    }
+    validate_raw_fields(path, &raw)?;
 
     // Full parse into typed struct
     let config: TestConfig =
@@ -459,29 +509,7 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
             message: format!("{e}"),
         })?;
 
-    // Check for duplicate target names
-    let mut seen_names = std::collections::HashSet::new();
-    for target in &config.targets {
-        if !seen_names.insert(&target.name) {
-            return Err(TestingError::DuplicateTarget(target.name.clone()));
-        }
-        if target.coverage.as_ref().is_some_and(|coverage| {
-            coverage
-                .rules
-                .iter()
-                .any(|rule| rule.scope == CoverageScope::ChangedFiles)
-        }) {
-            return Err(TestingError::ConfigInvalid {
-                path: path.to_path_buf(),
-                message: format!(
-                    "target '{}': coverage scope 'changed_files' requires a comparison base, \
-                     but standalone codeflow test has none",
-                    target.name
-                ),
-            });
-        }
-    }
-
+    validate_targets(path, &config)?;
     Ok(config)
 }
 
@@ -638,8 +666,8 @@ mod tests {
             r#"{
             "schema_version": "1.0",
             "targets": [
-                {"name": "rust", "runner": "cargo", "modes": {}},
-                {"name": "rust", "runner": "cargo", "modes": {}}
+                {"name": "rust", "runner": "cargo", "modes": {"full":{"command":"true"}}},
+                {"name": "rust", "runner": "cargo", "modes": {"full":{"command":"true"}}}
             ]
         }"#,
         );
@@ -647,6 +675,28 @@ mod tests {
         match err {
             TestingError::DuplicateTarget(name) => assert_eq!(name, "rust"),
             other => panic!("expected DuplicateTarget, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn test_load_rejects_empty_or_unknown_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, modes, expected) in [
+            ("empty", r"{}", "at least one"),
+            (
+                "unknown",
+                r#"{"smoke":{"command":"true"}}"#,
+                "unsupported mode 'smoke'",
+            ),
+        ] {
+            let path = write_config(
+                dir.path(),
+                &format!(
+                    r#"{{"schema_version":"1.0","targets":[{{"name":"{name}","runner":"custom","modes":{modes}}}]}}"#
+                ),
+            );
+            let error = load_test_config(&path).unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
         }
     }
 

@@ -73,6 +73,27 @@ every file written and closes with the next step. From there:
    chars, subject line ≤ 72, a body of only `-` bullets when one is needed).
 4. Land via a PR (or `codeflow integrate` with no remote).
 
+### Configure test targets
+
+`codeflow test setup` is a safe deterministic starting point. With no options it
+checks only root-level `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`,
+or `setup.py` markers and writes detected targets into an absent or empty
+`.codeflow/test-config.json`. It does not recursively inspect workspaces or
+guess package boundaries, and it never auto-replaces a populated or malformed
+config.
+
+```sh
+codeflow test setup --list-templates
+codeflow test setup --template example-rust.json
+codeflow test setup --add-target
+```
+
+For a monorepo, start with `monorepo-multi-target.json` or append one target per
+package and set each target's repository-relative `cwd`. Review and tailor every
+command to the consuming project. Replacing an existing config is deliberately
+separate: `codeflow test setup --template <name> --replace`. Run `codeflow test`
+and `codeflow doctor --check test-config` after setup.
+
 **Bootstrap grace.** codeflow needs exactly one commit before its gates guard
 the repo — its own scaffold commit — and that is a sanctioned path (it arms
 `policy_armed` and passes the hooks via the gate-context token), so you never

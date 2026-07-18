@@ -14,6 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Adaptive test setup is safe and release-complete (ADR-0031).** Existing
+  populated or malformed configs are preserved unless a reviewed template is
+  explicitly applied with `--replace`; malformed configured pre-push gates now
+  violate instead of skipping. `codeflow test setup` can list/apply templates
+  embedded in the binary and append monorepo targets, while automatic detection
+  remains root-only. Setup no longer emits dormant structural rules, doctor
+  warns on legacy blocks without enabling the parked validator, and the schema
+  now states the actual `CI` and quick/essential/full contracts; configs with
+  empty mode maps or non-public mode names now fail validation.
 - **Right-sized design and code are now a blocking duo gate (ADR-0030).**
   Both seats must approve design proportionality; Codex implements and
   first-verifies the smallest coherent, idiomatic change, while the directly

@@ -133,7 +133,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
 epics: [EPC-001]
-adrs: [ADR-0021]
+adrs: [ADR-0021, ADR-0031]
 ```
 
 `codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
@@ -146,6 +146,13 @@ stack it is a real gate, wired into pre-push via the `test_gate_on_push` policy 
 re-run in CI. File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
+`codeflow test setup` safely fills absent/empty root-detected configs, lists and
+applies release-embedded templates, and appends explicit targets. Detection is
+root-only; monorepos declare package `cwd` targets explicitly. Populated or
+malformed configs are never auto-replaced, and a malformed configured pre-push
+gate is a violation rather than a skip. Legacy `structural` blocks remain
+loadable but doctor warns that the public gate does not enforce them; setup no
+longer emits dormant rules.
 
 ## CAP-005 — integrate
 

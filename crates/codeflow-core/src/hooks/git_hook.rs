@@ -758,8 +758,12 @@ fn run_test_gate(root: &Path, policy: &GitPolicy, report: &mut StageReport) {
             }
         }
         Err(e) => {
-            report.notes.push(format!(
-                "test gate skipped: test-config.json unreadable: {e}"
+            report.violations.push(Violation::new(
+                "git.test_gate_on_push",
+                policy.test_gate_on_push,
+                format!("quick test gate could not load test-config.json: {e}"),
+                "repair .codeflow/test-config.json, then run `codeflow test --mode quick`"
+                    .to_string(),
             ));
         }
     }
@@ -2036,24 +2040,24 @@ mod tests {
     }
 
     #[test]
-    fn test_gate_unreadable_config_is_a_skip_note() {
-        // A malformed test-config.json makes run_gate return Err; the pre-push
-        // gate degrades to a loud skip note — never a false green, never a
-        // violation.
+    fn test_gate_unreadable_config_is_a_violation() {
+        // A populated but malformed config is a broken gate, not absence. If
+        // parsing fails, pre-push must preserve the policy level and refuse to
+        // turn the configured gate into a skip.
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         write_raw_test_config(dir.path(), "{ not json");
         let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
         let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.contains("test gate skipped") && n.contains("unreadable")),
-            "unreadable config must be a loud skip: {:?}",
-            report.notes
-        );
+        let gate: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.rule == "git.test_gate_on_push")
+            .collect();
+        assert_eq!(gate.len(), 1, "{:?}", report.violations);
+        assert!(gate[0].message.contains("could not load"));
+        assert!(gate[0].message.contains("invalid test config"));
+        assert!(!report.notes.iter().any(|n| n.contains("test gate skipped")));
     }
     // Regression: a one-parent commit named `Merge ...` is checked; a real
     // merge (is_merge = true) stays exempt (codex pre-flip review).

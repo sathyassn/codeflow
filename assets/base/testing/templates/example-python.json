@@ -24,8 +24,7 @@
       },
       "report": {
         "format": "junit",
-        "path": "report.xml",
-        "derive_from": "junit"
+        "path": "report.xml"
       },
       "coverage": {
         "format": "cobertura",
