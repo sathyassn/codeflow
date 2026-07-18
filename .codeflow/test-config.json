@@ -90,10 +90,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "python3 -B -m unittest evals/model-artifacts/test_eval_kit.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
         },
         "full": {
-          "command": "python3 -B -m unittest evals/model-artifacts/test_eval_kit.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
         }
       }
     }

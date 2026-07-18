@@ -24,8 +24,9 @@ cargo build --release --locked
 PATH="$PWD/target/release:$PATH" codeflow test --mode full --strict
 ```
 
-The gate requires `cargo-llvm-cov`; see [docs/adoption.md](docs/adoption.md) for
-the supported platform and installation context. Run a narrower command while
+The gate requires `cargo-llvm-cov` (`cargo install cargo-llvm-cov --locked`).
+CodeFlow itself supports macOS and Linux; Windows is unsupported because its git
+hooks and executable-bit handling use Unix paths. Run a narrower command while
 iterating, but report the full gate in the PR.
 
 The operating contract for this repo is [AGENTS.md](AGENTS.md); the working

@@ -45,6 +45,13 @@ KNOWN_VALIDITY_FLAGS = {
 }
 EVALUATION_ROUTE_PREFIX = "| Qualify a model or harness change |"
 SAFE_BRANCH = re.compile(r"^(?:main|master|fixture/[a-z0-9][a-z0-9-]*)$")
+GRADER_MATERIAL_DIRS = (
+    ".agents/skills/cf-evaluate-model",
+    ".claude/skills/cf-evaluate-model",
+    ".codeflow/.baseline/.agents/skills/cf-evaluate-model",
+    ".codeflow/.baseline/.claude/skills/cf-evaluate-model",
+)
+GRADER_ROUTE_FILES = ("AGENTS.md", ".codeflow/.baseline/AGENTS.md")
 
 
 class EvalError(ValueError):
@@ -245,11 +252,20 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
             continue
         for rel_path, content in files.items():
             try:
-                safe_relative_path(rel_path)
+                safe_path = safe_relative_path(rel_path).as_posix()
             except EvalError as error:
                 errors.append(f"{fixture_id}: {error}")
+                safe_path = ""
             if not isinstance(content, str):
                 errors.append(f"{fixture_id}: {rel_path} content must be a string")
+                continue
+            if any(
+                safe_path == grader_dir or safe_path.startswith(grader_dir + "/")
+                for grader_dir in GRADER_MATERIAL_DIRS
+            ):
+                errors.append(f"{fixture_id}: overlay restores grader material: {rel_path}")
+            if safe_path in GRADER_ROUTE_FILES and EVALUATION_ROUTE_PREFIX in content:
+                errors.append(f"{fixture_id}: overlay restores evaluation route: {rel_path}")
 
     hard = {
         requirement_id
@@ -328,6 +344,8 @@ def ensure_run_root(run_root: Path) -> dict:
         marker = load_json(marker_path)
         if not isinstance(marker, dict) or marker.get("schema_version") != 1:
             raise EvalError("invalid evaluation run marker")
+        if marker.get("suite_digest") != suite_digest():
+            raise EvalError("evaluation run marker belongs to a different suite revision")
         return marker
     run_root.mkdir(parents=True)
     marker = {
@@ -343,19 +361,13 @@ def ensure_run_root(run_root: Path) -> dict:
 
 
 def remove_grader_material(fixture_root: Path) -> None:
-    relative_dirs = [
-        ".agents/skills/cf-evaluate-model",
-        ".claude/skills/cf-evaluate-model",
-        ".codeflow/.baseline/.agents/skills/cf-evaluate-model",
-        ".codeflow/.baseline/.claude/skills/cf-evaluate-model",
-    ]
-    for relative in relative_dirs:
+    for relative in GRADER_MATERIAL_DIRS:
         target = fixture_root / relative
         if target.is_symlink():
             raise EvalError(f"refusing grader-material symlink: {target}")
         if target.exists():
             shutil.rmtree(target)
-    for relative in ("AGENTS.md", ".codeflow/.baseline/AGENTS.md"):
+    for relative in GRADER_ROUTE_FILES:
         target = fixture_root / relative
         if not target.is_file():
             continue
@@ -382,11 +394,18 @@ def remove_grader_material(fixture_root: Path) -> None:
                     baseline_agents.read_bytes()
                 ).hexdigest()
             write_json(manifest_path, manifest)
-    for relative in relative_dirs:
+    assert_no_grader_material(fixture_root)
+
+
+def assert_no_grader_material(fixture_root: Path) -> None:
+    """Fail when a subject fixture exposes evaluator-only material."""
+
+    manifest_path = fixture_root / ".codeflow/manifest.json"
+    for relative in GRADER_MATERIAL_DIRS:
         target = fixture_root / relative
         if target.is_symlink() or target.exists():
             raise EvalError(f"grader material survived scrub: {relative}")
-    for relative in ("AGENTS.md", ".codeflow/.baseline/AGENTS.md"):
+    for relative in GRADER_ROUTE_FILES:
         target = fixture_root / relative
         if target.is_file() and EVALUATION_ROUTE_PREFIX in target.read_text(
             encoding="utf-8"
@@ -445,9 +464,11 @@ def tree_digest(root: Path) -> str:
             if path.is_symlink():
                 raise EvalError(f"fixture tree contains symlink: {path}")
             relative = path.relative_to(root).as_posix()
-            mode = stat.S_IMODE(path.stat().st_mode)
+            executable = bool(
+                path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            )
             digest.update(relative.encode("utf-8") + b"\0")
-            digest.update(f"{mode:o}".encode("ascii") + b"\0")
+            digest.update((b"x" if executable else b"-") + b"\0")
             digest.update(path.read_bytes() + b"\0")
     return "sha256:" + digest.hexdigest()
 
@@ -465,7 +486,10 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     if case_id not in cases:
         raise EvalError(f"unknown case: {case_id}")
     case = cases[case_id]
-    fixture = fixtures[case["fixture"]]
+    fixture_id = case.get("fixture")
+    fixture = fixtures.get(fixture_id)
+    if fixture is None:
+        raise EvalError(f"case {case_id} refers to unknown fixture {fixture_id!r}")
     marker = ensure_run_root(run_root)
     resolved_run_root = run_root.expanduser().resolve()
     opaque_id = hashlib.sha256(
@@ -488,6 +512,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     for relative, content in fixture["files"].items():
         write_fixture_file(output, relative, content)
     write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
+    assert_no_grader_material(output)
     branch = fixture["state"].get("branch", "fixture/base")
     reset_fixture_history(output, branch)
     digest = tree_digest(output)
@@ -959,7 +984,7 @@ def main() -> int:
             cleanup_run(args.run_root, args.confirm)
             print("evaluation run root removed")
             return 0
-    except (EvalError, OSError, subprocess.SubprocessError) as error:
+    except (EvalError, OSError, subprocess.SubprocessError, KeyError) as error:
         print(f"evaluation error: {error}", file=sys.stderr)
         return 2
     return 2

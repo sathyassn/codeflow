@@ -8,12 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Next release: `v3.0.0` (MAJOR).** Test configurations that use the
 > unsupported `changed_files` coverage scope must migrate to `per_file`,
-> `overall`, or another supported scope. That explicit contract break requires
+> `per_package`, `per_module`, or `global`. That explicit contract break requires
 > a major bump from `v2.1.0`; the feature additions below do not reduce it to a
 > minor release.
 
 ### Changed
 
+- **Coverage scope must have a measurable denominator.** Configuration now
+  rejects the former `changed_files` scope because an invalid base ref could
+  make it measure an empty file set and pass vacuously. Migrate affected rules
+  to `per_file`, `per_package`, `per_module`, or `global`.
 - **Harness settings now close the remaining credential and destructive-action
   gaps (ADR-0026).** Codex explicitly selects full public subprocess networking,
   denies high-confidence workspace key/certificate files plus its raw auth
@@ -130,8 +134,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   baseline comparison, and marker+run-ID-gated cleanup. Subject models remain in
   supervised native Codex or Claude sessions with their actual tools; no
   headless model runner, CLI subcommand, CI model call, hard token-deletion
-  budget, or generic cleanup surface is introduced.
-
+  gate, or generic cleanup surface is introduced.
 - **A lazy PR body now fails CI mechanically.** When `codeflow ci` is given a
   PR/MR body, it checks the body's structure against three new `git` policy
   keys: `pr_sections` (level, default `block`) governs the check;
@@ -200,7 +203,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   contributor path now names the complete repository gate, including coverage
   and model-evaluation contracts, and the security policy supports the latest
   released major line without going stale at the v3 cut.
-
 - **CI verifies security-tool downloads before executing them.** The shipped
   workflow and CodeFlow's own perimeter pin the official SHA-256 digests for
   Gitleaks and OSV-Scanner, fail closed on a mismatch, and retain the exact

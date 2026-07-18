@@ -1,6 +1,7 @@
 # build (cargo)
 /target
 **/target/
+__pycache__/
 *.lcov
 lcov.info
 

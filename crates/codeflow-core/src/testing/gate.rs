@@ -250,10 +250,11 @@ pub fn gate_verdict(results: &[GateTargetResult], coverage: &[CoverageReport]) -
             .all(|c| c.thresholds_failed == 0 && !c.data_missing)
 }
 
-/// Build report-only coverage summaries for the targets that ran successfully
-/// and configure coverage. Reuses the post-test parsing/threshold machinery in
-/// [`crate::testing::validation`]. Never blocks: a missing or unparseable
-/// artifact yields a note, not an error.
+/// Build coverage summaries for the targets that ran successfully and configure
+/// coverage. Reuses the post-test parsing/threshold machinery in
+/// [`crate::testing::validation`]. Missing or unparseable artifacts are
+/// informational for collection-only coverage and gate failures when threshold
+/// rules make coverage enforcing.
 fn collect_coverage_reports(
     targets: &[TargetConfig],
     runs: &[TargetRunResult],

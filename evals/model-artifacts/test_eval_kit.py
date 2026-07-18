@@ -144,6 +144,52 @@ class SuiteContractTests(unittest.TestCase):
             with self.assertRaises(eval_kit.EvalError):
                 eval_kit.write_fixture_file(root, "linked.md", "content")
 
+    def test_suite_rejects_overlays_that_restore_grader_material(self) -> None:
+        requirements, cases, fixtures = eval_kit.suite_documents()
+        for path, content in (
+            (".agents/skills/cf-evaluate-model/SKILL.md", "grader"),
+            ("AGENTS.md", eval_kit.EVALUATION_ROUTE_PREFIX + " hidden\n"),
+        ):
+            mutated = copy.deepcopy(fixtures)
+            mutated["fixtures"][0]["files"][path] = content
+            with tempfile.TemporaryDirectory() as temp:
+                resource_dir = Path(temp)
+                for name, document in (
+                    ("requirements.json", requirements),
+                    ("cases.json", cases),
+                    ("fixtures.json", mutated),
+                ):
+                    eval_kit.write_json(resource_dir / name, document)
+                errors = eval_kit.validate_suite(project_root(), resource_dir)
+            self.assertTrue(any("restores" in error for error in errors), path)
+
+    def test_existing_run_root_must_match_current_suite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "run"
+            root.mkdir()
+            eval_kit.write_json(
+                root / eval_kit.RUN_MARKER,
+                {
+                    "schema_version": 1,
+                    "run_id": "old",
+                    "suite_digest": "sha256:" + "0" * 64,
+                },
+            )
+            with self.assertRaisesRegex(eval_kit.EvalError, "different suite revision"):
+                eval_kit.ensure_run_root(root)
+
+    def test_fixture_digest_ignores_umask_bits_but_tracks_executable_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            file = root / "fixture.txt"
+            file.write_text("same\n", encoding="utf-8")
+            file.chmod(0o600)
+            first = eval_kit.tree_digest(root)
+            file.chmod(0o644)
+            self.assertEqual(first, eval_kit.tree_digest(root))
+            file.chmod(0o755)
+            self.assertNotEqual(first, eval_kit.tree_digest(root))
+
 
 class ResultScoringTests(unittest.TestCase):
     def test_complete_canary_and_full_results_pass(self) -> None:

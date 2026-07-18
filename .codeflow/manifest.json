@@ -65,7 +65,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "26fe0aaa1a964395ccf47120adc27dfe67459254fc1b8038415d1b7c9f867f2e",
+      "sha256": "426e445c4983e432d304b74b6c8982ee38dfb4ead9383102a9ce98f88acaa902",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -185,7 +185,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "26fe0aaa1a964395ccf47120adc27dfe67459254fc1b8038415d1b7c9f867f2e",
+      "sha256": "426e445c4983e432d304b74b6c8982ee38dfb4ead9383102a9ce98f88acaa902",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
