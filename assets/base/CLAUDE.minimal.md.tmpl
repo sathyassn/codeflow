@@ -13,8 +13,10 @@
   names the violated policy rule and the sanctioned path.
 - The Claude project preset and fail-closed sandbox live in
   `.claude/settings.json`: sandbox-contained Bash and web research are enabled,
-  unsandboxed retry is disabled, local dev binding is available, and
-  destructive/privileged/secret boundaries remain. Codex uses the separate
+  local dev binding is available, and a sandbox failure may request one
+  auto-classified unsandboxed retry for a trusted installed tool requiring host
+  state. This is not a general bypass; destructive/privileged/secret boundaries
+  remain. Codex uses the separate
   guarded profile in `.codex/config.toml`; one harness's settings do not
   configure the other.
 - The AGENTS.md git rules are **hook-enforced** here — the commit-msg, pre-push,

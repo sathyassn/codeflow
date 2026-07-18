@@ -125,6 +125,7 @@ fn cases_and_exact_fixture_registry_are_consistent() {
         "outputs",
         "shipping",
         "artifact_quality",
+        "code_quality",
     ] {
         assert!(categories.contains(category), "missing category {category}");
     }
@@ -170,6 +171,26 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
         assert!(
             required.contains(requirement),
             "compression canary lost {requirement}"
+        );
+    }
+
+    let right_sized = indexed["reject-overengineered-correct-change"];
+    assert_eq!(right_sized["canary"], true);
+    let right_sized_signals: BTreeSet<&str> = right_sized["expected"]["signals"]
+        .as_array()
+        .expect("right-sized signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "simpler_equivalent_identified",
+        "speculative_scope_rejected",
+        "fable_design_and_code_review",
+        "changes_requested_for_avoidable_complexity",
+    ] {
+        assert!(
+            right_sized_signals.contains(signal),
+            "right-sized canary lost {signal}"
         );
     }
 }

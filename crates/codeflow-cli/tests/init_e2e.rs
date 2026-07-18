@@ -253,7 +253,7 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
     assert_eq!(claude["sandbox"]["enabled"], true);
     assert_eq!(claude["sandbox"]["failIfUnavailable"], true);
-    assert_eq!(claude["sandbox"]["allowUnsandboxedCommands"], false);
+    assert_eq!(claude["sandbox"]["allowUnsandboxedCommands"], true);
     assert!(claude["permissions"]["allow"]
         .as_array()
         .is_some_and(|entries| entries.iter().any(|entry| entry == "WebFetch")));
@@ -261,6 +261,7 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     let codex = read(&root, ".codex/config.toml");
     assert!(!codex.contains("sandbox_mode"));
     assert!(codex.contains("approvals_reviewer = \"auto_review\""));
+    assert!(codex.contains("model_reasoning_effort = \"high\""));
     assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);

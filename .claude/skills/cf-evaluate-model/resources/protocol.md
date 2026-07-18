@@ -25,7 +25,7 @@ trials and recomputes each status and the summary from observations.
   "suite_digest": "sha256:...",
   "system": {
     "model": "actual model version",
-    "effort": "xhigh",
+    "effort": "high",
     "harness": "codex-app | codex-cli | claude-code",
     "harness_version": "actual version",
     "codeflow_revision": "commit",
@@ -33,8 +33,22 @@ trials and recomputes each status and the summary from observations.
     "permission_profile": "name",
     "tools": ["observed tool inventory"],
     "network": "effective boundary",
-    "budget": {"turns": 0, "tokens": null, "wall_seconds": 0, "retries": 0}
+    "budget": {"turns": 0, "tokens": null, "wall_seconds": 0, "retries": 0},
+    "observed": {
+      "model": "model displayed by the harness",
+      "effort": "effort displayed by the harness",
+      "evidence": [{"kind": "session | tool | file | command | ui", "ref": "durable reference", "digest": "sha256:..."}]
+    },
+    "peer_seats": [{
+      "seat": "claude | codex",
+      "model": "fixed peer model",
+      "effort": "fixed peer effort",
+      "harness": "native harness",
+      "harness_version": "actual version",
+      "settings_digest": "sha256:..."
+    }]
   },
+  "experiment": {"variable": "system.effort", "baseline_run_id": "baseline run ID"},
   "trials": [{
     "case_id": "model-independent-plans",
     "trial": 1,
@@ -63,6 +77,13 @@ trials and recomputes each status and the summary from observations.
 }
 ```
 
+`system.observed`, `system.peer_seats`, and `experiment` are optional for
+schema-version 1 compatibility. Strict one-variable comparisons require
+observed binding evidence and an experiment declaration. When requested and
+observed model or effort differ, record `harness_context_mismatch`; that run is
+evidence of a mismatch, never promotion evidence. A duo case records the
+subject in the normal system fields and every fixed other seat in `peer_seats`.
+
 `status` is derived:
 
 - `error` or `not_run` follows the trial outcome.
@@ -78,7 +99,8 @@ remain visible and never count as passes.
 Validity flags use the tool's declared vocabulary and represent unresolved
 threats; any entry blocks a pass. Promotion validation accepts only a full
 suite and an `approved` decision with a nonempty human reviewer and review
-timestamp.
+timestamp. It also requires every hard-linked trial to pass, no validity flags,
+and no `error` or `not_run` outcomes.
 
 Accepted flags are `ambiguous_task`, `baseline_contamination`,
 `budget_exhaustion`, `broken_fixture`, `evaluation_awareness`,
@@ -91,6 +113,11 @@ flag to the protocol and validator together; an unknown spelling is invalid.
 The validator proves structural consistency and expected-vs-observed scoring;
 it cannot prove that a cited trace is genuine. That requires independent trace
 inspection and, for promotion, human approval.
+
+Use `score <result.json>` to recompute statuses and the summary from raw
+observations. It prints to stdout by default. Persist only through explicit
+`--output <path>` or `--in-place`; output writes are atomic, and `--output`
+cannot alias the input.
 
 ## Evidence and graders
 
@@ -127,6 +154,15 @@ validity finding, and explicit human approval. Record capability improvements
 separately. A candidate may be useful for a narrower role even when it does not
 replace the production binding; document that scope rather than averaging away
 the failure.
+
+For a single-variable promotion, put the same `experiment.variable` in both
+results and point the candidate's `baseline_run_id` at the baseline run. Compare
+with `compare --variable <system.field>`. This mode requires requested bindings
+to match observed harness evidence, rejects drift in every other system field
+including peer seats, and blocks on any case regression. It reports
+min/median/max and totals for duration, tokens, and cost; incomplete telemetry
+is `n/a` and never estimated. Efficiency improvements cannot offset a semantic
+regression.
 
 ## References
 

@@ -58,22 +58,27 @@ for the same result path is rejected.
 
 ## Launch and wait
 
-Launch the dedicated session in the intended worktree. Use the latest available
-Fable-class model at `xhigh` and auto permissions inside the effective
-fail-closed project sandbox:
+Launch the dedicated session in the intended worktree. Invoke the latest
+available Fable-class model directly at high by default, or xhigh for the
+escalation triggers in `cf-model-orchestrator`, with auto permissions inside the
+effective fail-closed project sandbox. Fable owns any internal Opus delegation
+and the resulting judgment:
 
 ```sh
 tmux new-session -d -s cf-review-42 -x 220 -y 50 -c /absolute/worktree \
-  'claude --model fable --effort xhigh --permission-mode auto --settings /absolute/task-settings.json'
+  'claude --model fable --effort high --permission-mode auto --settings /absolute/task-settings.json'
 tmux send-keys -t cf-review-42 -l \
   'Review only the named scope. Edit nothing. Return evidence and VERDICT: approved|changes_requested.'
 tmux send-keys -t cf-review-42 Enter
 tmux wait-for codeflow-delegate-review-42
 ```
 
+Replace `high` with `xhigh` when the selected escalation trigger applies.
+
 Before launch, verify that the effective project settings enable the OS sandbox,
-set `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, disallow
-unsandboxed commands, allow the public-network and local-server access the task
+set `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, and permit an
+auto-classified unsandboxed retry only for a trusted installed tool that
+requires host state. Arbitrary unsandboxed commands remain out of bounds. Allow the public-network and local-server access the task
 needs, and keep secret/private-network/destructive-action controls. Auto mode is
 not bypass mode; never use bypass mode on an ordinary host. A read-only consult
 must say "edit nothing" and compare the worktree state before and after. A

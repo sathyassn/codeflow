@@ -73,12 +73,13 @@ fixture overlays in [resources/fixtures.json](resources/fixtures.json).
 6. **Record raw observations.** Use the result shape in the protocol. Record the
    route, signals actually observed, violations, references consulted, evidence
    references, duration, tokens/cost when exposed, and any `not_run` reason.
-   Never set `pass` by judgment alone; the validator recomputes it.
+   Never set `pass` by judgment alone; use `score` to recompute derived fields.
 7. **Grade in layers.** Run deterministic validation first. Have the other
    vendor independently grade qualitative evidence with the case rubric, then
    reconcile. A human reviews every hard failure, disagreement, security case,
    and promotion decision. Do not majority-vote away divergent evidence.
 8. **Compare and decide.** Compare the candidate result with the pinned baseline.
+   For a controlled promotion, declare one variable and use `compare --variable`.
    Promotion requires no hard-case regression, no unresolved validity threat,
    complete full-suite evidence, and explicit human approval. Improvements in
    latency or token use never compensate for a lost semantic duty.
@@ -99,5 +100,8 @@ fixture overlays in [resources/fixtures.json](resources/fixtures.json).
   problem is invalid.
 - Review token and latency metrics as diagnostics. Token consciousness means
   reliable adherence per loaded token; it never authorizes deleting a duty.
+- Treat an effort-policy change as a controlled binding experiment: prove the
+  requested and observed high/xhigh seat, hold every other subject and peer
+  field fixed, and reject any loss of a duo duty regardless of cost savings.
 - Keep cleanup inside this skill. Do not create a broad repository-cleanup
   skill whose deletion boundary is harder to prove.

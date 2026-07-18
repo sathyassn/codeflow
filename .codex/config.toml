@@ -12,6 +12,9 @@ approval_policy = "on-request"
 approvals_reviewer = "auto_review"
 web_search = "live"
 default_permissions = "cf-guard"
+# Pin the primary Codex seat's ordinary starting effort. The orchestrator may
+# select xhigh for a task with a documented escalation trigger.
+model_reasoning_effort = "high"
 
 [features]
 hooks = true

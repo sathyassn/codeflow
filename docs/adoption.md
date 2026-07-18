@@ -160,8 +160,10 @@ These are enabled in runtime settings as well as described in the skills
   sandbox-contained Bash, web search/fetch, wildcard public-domain egress for
   dependency/tool subprocesses, and local port binding for dev/UI tests;
   common private, link-local, and internal-name destinations remain denied. It
-  disables the unsandboxed retry escape and keeps destructive, privileged,
-  publish, and secret-read boundaries. Claude deliberately ignores repository
+  permits an auto-classified unsandboxed retry only after sandbox failure and
+  only for a trusted installed tool that needs host state, such as the official
+  Codex plugin. Arbitrary unsandboxed commands remain out of bounds, and
+  destructive, privileged, publish, and secret-read boundaries remain. Claude deliberately ignores repository
   requests for auto mode and classifier policy, so a Codex-hosted peer launches
   interactively with `--permission-mode auto` and CLI-scoped
   `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user

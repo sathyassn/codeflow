@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-17",
+  "requirements_version": "2026-07-18",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -46,17 +46,17 @@
     {
       "id": "CF-MM-006",
       "level": "hard",
-      "statement": "Claude independently reviews the integrated diff, reruns relevant tests, checks design and security, and owns the final verdict.",
+      "statement": "The directly invoked primary Fable seat independently reviews the settled design and integrated code for correctness, proportionality, maintainability, security, and evidence, and owns the final quality verdict; a fallback is recorded without claiming Fable review.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Claude final-reviews.**", "Claude owns the final verdict", "reviews the actual integrated diff"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Claude final-reviews.**", "directly invoked primary Fable seat", "owns the final code and design quality verdict", "never report that Fable reviewed the work"]}
       ]
     },
     {
       "id": "CF-MM-007",
       "level": "hard",
-      "statement": "Fable-class xhigh owns Claude judgment; Opus-class workers may operate mechanistic UI/MCP tools but never settle the judgment.",
+      "statement": "The directly invoked Fable-class seat owns Claude judgment; it may route deterministic UI/MCP collection to Opus medium and ambiguous multi-step tool operation to Opus high, but workers never settle the judgment.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["latest available Fable-class Claude", "current Opus-class subagents", "Fable interprets their evidence"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Fable-class Claude model directly", "Opus-class workers at medium", "ambiguous/multi-step tool operation", "Fable interprets their evidence"]}
       ]
     },
     {
@@ -76,6 +76,14 @@
       ]
     },
     {
+      "id": "CF-MM-010",
+      "level": "hard",
+      "statement": "Cross-model callers invoke the Fable and Codex primary seats directly at high by default, escalate to xhigh only on defined demand or failure triggers, and never transfer primary ownership to internal workers.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["directly at high effort by default", "Escalate the primary Fable seat to xhigh", "Codex coding seat directly at", "the primary Codex seat still owns implementation and first verification", "never let an internal worker replace either duo seat"]}
+      ]
+    },
+    {
       "id": "CF-QA-001",
       "level": "hard",
       "statement": "Where line coverage is supported, aggregate production coverage has a hard 80 percent floor and a normal 90 percent target; a weaker repository setting cannot undercut it.",
@@ -89,6 +97,15 @@
       "statement": "Verification covers relevant unit, integration, end-to-end, security, and rendered UI behavior; unavailable or not applicable are never reported as passes.",
       "sources": [
         {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["end-to-end tests", "Playwright", "Computer Use", "Tool unavailability is a blocker or declared limitation, not a pass"]}
+      ]
+    },
+    {
+      "id": "CF-QA-003",
+      "level": "hard",
+      "statement": "Design and implementation use the smallest coherent solution that satisfies current requirements, reject speculative or dead complexity, and treat raw line count only as a diagnostic.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Write only what earns its keep", "every material complexity maps to a current requirement"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["smallest coherent solution", "Material avoidable complexity is `changes_requested`", "not the fewest lines"]}
       ]
     },
     {

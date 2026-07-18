@@ -14,6 +14,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Right-sized design and code are now a blocking duo gate (ADR-0030).**
+  Both seats must approve design proportionality; Codex implements and
+  first-verifies the smallest coherent, idiomatic change, while the directly
+  invoked Fable primary reviews the settled design and actual integrated diff
+  and owns the final quality verdict. Speculative features, abstractions,
+  configuration, dependencies, compatibility paths, dead code, and other
+  complexity without a current requirement or evidenced risk yield
+  `changes_requested` even when tests pass. A new regression fixture tests this
+  behavior without treating raw line count as a quality target.
+- **Primary model seats now start at high and escalate by evidence (ADR-0028).**
+  Cross-harness calls still target Fable and GPT-5.6 Sol (or their strongest
+  supported successors) as the two independent reasoning seats. High is the
+  default; xhigh is reserved for defined complexity, ambiguity, security,
+  long-horizon, disagreement, or failed/stalled-high triggers. Fable owns
+  Opus medium/high tool-operation routing, and Codex owns any verified native
+  Sol-class medium/high worker routing without transferring either primary
+  seat's judgment, approval, implementation, or verification responsibility.
+  Codex project settings pin high as the fallback, while Claude-hosted plugin
+  turns pass high/xhigh explicitly so a user-level default cannot silently
+  change the observed peer binding.
+- **Claude can use trusted native tools that require host state (ADR-0029).**
+  The fail-closed sandbox remains the default, but Auto may classify one
+  unsandboxed retry after a sandbox-boundary failure for a trusted installed
+  tool such as the official Codex plugin. This avoids granting arbitrary Bash
+  write access to `~/.codex`; destructive, privileged, secret, credential, and
+  private-network controls remain in force, and arbitrary unsandboxed commands
+  remain outside the workflow contract.
+- **Model-effort comparisons now prove the binding and isolate the variable.**
+  The evaluator can record harness-observed model/effort evidence and fixed peer
+  seats, reject configuration drift outside the declared experiment variable,
+  recompute raw results safely, report latency/token/cost distributions, and
+  block promotion on any case regression, incomplete run, validity flag, or
+  missing identified human approval. Existing protocol-conformant schema-version
+  1 results remain valid when they are not used for strict promotion comparisons.
 - **Coverage scope must have a measurable denominator.** Configuration now
   rejects the former `changed_files` scope because an invalid base ref could
   make it measure an empty file set and pass vacuously. Migrate affected rules
@@ -23,7 +57,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   denies high-confidence workspace key/certificate files plus its raw auth
   store to sandboxed subprocesses, and pins the built-in secret-bearing
   environment filter. Claude removes raw Anthropic, OpenAI, and AWS credentials
-  from sandboxed Bash and asks before restore, common checkout-discard,
+  from sandboxed Bash, protects transcripts, memory, session state, settings,
+  and auth caches with narrow home-directory denies that leave the official
+  plugin runtime readable, and asks before restore, common checkout-discard,
   force-push, flag-based remote-delete, prune/mirror, forced local-branch
   reset/move, and delete forms.
   Protected-branch hooks remain the backstop for deletion-refspec syntax that

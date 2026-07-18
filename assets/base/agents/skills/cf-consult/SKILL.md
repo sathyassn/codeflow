@@ -29,17 +29,23 @@ independent.
      `last_assistant_message` from the Stop input. Use `capture-pane` only for
      the dedicated task pane after completion or bounded diagnosis—never as a
      stability heuristic and never against unrelated sessions. Launch the
-     consult with the latest Fable-class model at xhigh effort using
-     `claude --model fable --effort xhigh --permission-mode auto --settings
-     /path/to/task-settings.json`; the task settings must set
+     consult by invoking the latest Fable-class model directly at high effort,
+     escalating to xhigh only for the triggers in `cf-model-orchestrator`, using
+     `claude --model fable --effort high --permission-mode auto --settings
+     /path/to/task-settings.json` (replace `high` with `xhigh` when escalating);
+     the task settings must set
      `autoMode.classifyAllShell: true` and add the Stop hooks. Keep "read and
      reason only; edit nothing" in the prompt, require the effective project
      settings to enable the OS sandbox with `sandbox.failIfUnavailable: true`
-     and no unsandboxed fallback, and verify the worktree diff. This gives the
+     and permits an auto-classified unsandboxed retry only for a trusted
+     installed tool that requires host state; the consult must not run
+     arbitrary commands outside the sandbox. Verify the worktree diff. This gives the
      reviewer its native tools, MCPs, and public-network research without
      using bypass mode on an ordinary host. Preflight: `claude` and `tmux` are
      present, `claude mcp list` succeeds, and a scoped interactive canary
-     returns an authenticated response. See
+     returns an authenticated response. Fable owns any internal Opus delegation
+     and the resulting judgment; the caller never invokes Opus as the Claude
+     reasoning seat. See
      <https://code.claude.com/docs/en/permission-modes>.
 3. The named vendor's CLI missing, the plugin surface absent, or auth failing
    → tell the user the remedy (`codex login`; install the plugin from a Claude

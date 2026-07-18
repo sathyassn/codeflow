@@ -45,16 +45,25 @@ implementation stage for an analysis-only request.
   challenges feasibility, operability, security, and implementation detail.
 - **Codex implements.** Once both approve the same versioned plan, Codex owns
   the implementation and first verification regardless of which harness hosts.
-- **Claude final-reviews.** Claude independently reviews the diff, design
-  conformance, security posture, and test evidence, and reruns relevant tests.
-- **Strongest reasoning seats.** Use the latest available Fable-class Claude
-  model at xhigh effort for research, analysis, synthesis, design,
-  coordination, and final review. Fable may delegate mechanistic browser,
-  Playwright, Computer Use, or MCP operation to current Opus-class subagents,
-  but Fable interprets their evidence and owns every judgment. Use the strongest
-  supported Codex coding model at xhigh for orchestration, implementation, and
-  difficult verification. Lower-effort Codex workers are optional only when the
-  harness exposes safe per-worker routing; never assume that it does.
+- **Claude final-reviews.** The directly invoked primary Fable seat independently
+  reviews the settled design and actual integrated diff for correctness,
+  right-sizing, clarity, maintainability, security, conformance, and test
+  evidence, reruns relevant tests, and owns the final quality verdict.
+- **Evidence-routed reasoning seats.** Cross-model callers invoke the latest
+  Fable-class Claude model directly at high effort by default. Escalate the
+  primary Fable seat to xhigh for capability-sensitive or long-horizon work,
+  material ambiguity, cross-cutting architecture/security, unresolved duo
+  disagreement, or a failed/stalled high run. Fable owns its native session and
+  may delegate bounded deterministic browser/UI/MCP evidence collection to
+  current Opus-class workers at medium, or ambiguous/multi-step tool operation
+  at high; Fable interprets their evidence and owns every judgment. Invoke
+  GPT-5.6 Sol or the strongest supported successor Codex coding seat directly at
+  high by default, with xhigh on the same triggers. Codex may use bounded
+  Sol-class medium workers for localized deterministic work and high workers
+  for complex independent work only through verified native per-worker routing;
+  the primary Codex seat still owns implementation and first verification.
+  Never assume worker routing exists, and never let an internal worker replace
+  either duo seat or its approval.
 - **Evidence outranks agreement.** A model claim, consensus, or approval never
   substitutes for a source, file:line, command result, rendered UI observation,
   or other reproducible evidence.
@@ -106,20 +115,27 @@ of the host model.
      do not treat a status subcommand as authoritative when it contradicts a
      working authenticated TTY.
    - Claude-host lane: the `codex@openai-codex` plugin is enabled and
-     `/codex:setup` succeeds.
-   - Codex-host lane: start Claude in a dedicated tmux session rooted at the
-     worktree with `--model fable --effort xhigh --permission-mode auto
+     `/codex:setup` succeeds. Pass `--effort high` on the plugin task/rescue
+     invocation by default, or `--effort xhigh` when an escalation trigger
+     applies; do not inherit an unobserved user default.
+   - Codex-host lane: choose Fable high/xhigh by the invariant above, then start
+     Claude directly in a dedicated tmux session rooted at the worktree with
+     `--model fable --effort high --permission-mode auto
      --settings '{"autoMode":{"classifyAllShell":true}}'` and complete one
      scoped interactive canary. The explicit CLI settings scope makes every
      shell action reach the auto-mode classifier; Claude intentionally ignores
      `autoMode` from repository settings. If Fable or auto mode is
      unavailable, record the exact capability gap and use the strongest
      supported Claude reasoning model with `acceptEdits` plus the same
-     fail-closed sandbox; never fall through to bypass mode on an ordinary host.
+     fail-closed sandbox; replace `high` with `xhigh` when an escalation trigger
+     applies. Never fall through to bypass mode on an ordinary host.
 4. Verify the autonomy boundary through the effective settings, not prose:
    - Claude: sandbox enabled, `failIfUnavailable: true`, sandboxed Bash
-     auto-allowed, unsandboxed escape disabled, destructive and privileged
-     actions still classified or prompted, and raw secret reads denied. A
+     auto-allowed, and a sandbox failure may request one auto-classified
+     unsandboxed retry only for a trusted installed tool that requires host
+     state, such as the official Codex plugin. Arbitrary unsandboxed commands
+     remain out of bounds; destructive and privileged actions are still
+     classified or prompted, and raw secret reads are denied. A
      repository cannot set `defaultMode: auto` or classifier policy; select
      auto and `classifyAllShell` at CLI/user scope and canary the effective mode.
    - Codex: the named permission profile is active without a competing legacy
@@ -134,10 +150,10 @@ of the host model.
    any design, issue-tracker, database, cloud, or private-doc MCP the task needs.
    Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
    tokens never enter prompts, logs, repository files, or arbitrary commands.
-6. Record the selected models, reasoning levels, permission modes, tool
-   inventories, and live-canary evidence. Model family names above are routing
-   classes; record the actual current versions at run time rather than freezing
-   them into a plan.
+6. Record the selected models, reasoning levels, escalation reasons, permission
+   modes, tool inventories, and live-canary evidence. Model family names above
+   are routing classes; record the actual current versions at run time rather
+   than freezing them into a plan.
 
 An absent seat at preflight degrades legibly to the harness-native solo
 `/cf-develop` flow with a separate read-only review pass. A mid-run failure
@@ -163,7 +179,8 @@ The host records both outputs without collapsing disagreements.
 Claude supplies the design options and recommendation. When the brief already
 dictates one clear design direction, record that constraint and why option
 exploration was waived. Codex reviews the design for implementation feasibility,
-failure modes, security, testing, and maintainability.
+failure modes, security, testing, and maintainability. It also challenges
+whether a simpler proportionate design satisfies the same requirements.
 
 The host reconciles the two drafts into **Plan v1** using the plan contract in
 the quality resource. Both seats review exactly that version. Amendments create
@@ -201,8 +218,9 @@ branch.
 
 Skip this stage when implementation is outside the selected outcome mode.
 Otherwise Codex works in the scoped feature worktree—or coordinates the
-approved bounded set of task worktrees—implements the approved tasks, and keeps
-the evidence ledger current. It runs formatting, static checks, unit and
+approved bounded set of task worktrees—implements the smallest clear, idiomatic
+diff that satisfies the approved tasks without speculative scope, and keeps the
+evidence ledger current. It runs formatting, static checks, unit and
 integration tests, relevant end-to-end tests, coverage, dependency/security
 checks, and UI-driven checks required by the quality contract. Task branches
 are not final evidence: integrate them in the approved order, rerun affected
@@ -211,18 +229,26 @@ checks after each landing, and run the aggregate suite on the combined diff.
 For a Claude host, use the official plugin:
 
 - `/codex:review` or `/codex:adversarial-review` for read-only critiques;
-- `/codex:rescue` for implementation and first verification;
+- `/codex:rescue --effort high` for ordinary implementation and first
+  verification, replacing `high` with `xhigh` only on a recorded trigger;
 - `/codex:transfer` for a persistent task visible in Codex App/TUI.
+
+Apply the same explicit `--effort high|xhigh` selection to every plugin task
+that starts a primary Codex reasoning turn. Record the plugin result's observed
+model and effort; a project-level high default is a fallback, not evidence that
+the requested turn used it.
 
 For a Codex host, implementation stays in the current Codex worktree and
 session; the Claude tmux session remains the design/review peer.
 
 ### 5. Claude independent final review
 
-For implementation/review modes, Claude reviews the actual integrated diff
-rather than task summaries. It reruns relevant tests, grades every acceptance
-criterion with evidence, checks design conformance and UX/UI behavior, and
-performs the independent security pass. In Claude Code, `cf-reviewer` and
+For implementation/review modes, the directly invoked primary Fable seat
+reviews the actual integrated diff rather than task summaries. It reruns
+relevant tests, grades every acceptance criterion with evidence, rejects
+unnecessary or non-idiomatic complexity, checks design conformance and UX/UI
+behavior, performs the independent security pass, and owns the final code and
+design quality verdict. In Claude Code, `cf-reviewer` and
 `cf-security-reviewer` may deepen the pass; they do not replace Claude's
 cross-vendor review of Codex's work. For research/analysis/plan modes, Claude
 instead final-reviews the settled artifact and its source/evidence coverage.
@@ -237,7 +263,8 @@ implementation handoff.
 
 Any confirmed issue returns to Codex. Rework is bounded to two rounds and
 requires fresh evidence. A deterministic failure or unverified criterion blocks
-completion.
+completion. If Fable is unavailable, record the fallback and reduced assurance;
+never report that Fable reviewed the work.
 
 ### 6. Joint closeout
 

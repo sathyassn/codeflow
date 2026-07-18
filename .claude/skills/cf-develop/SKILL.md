@@ -15,7 +15,9 @@ Drive the planned work to done.
 3. Work on a correctly prefixed branch in a worktree — never on the root
    protected-branch checkout.
 4. Run the loop:
-   a. **Build**: implement with tests; small conventional commits. When a remote
+   a. **Build**: implement the smallest clear, idiomatic scoped change with
+      tests; add no speculative behavior, abstraction, or dependency. Use small
+      conventional commits. When a remote
       is configured, push the branch after each committed unit so work survives a
       machine failure — backup, not a merge (`--force-with-lease` if you rewrote
       history).

@@ -61,7 +61,17 @@
       "fixture": "reviewed-integration",
       "requirements": ["CF-MM-006", "CF-GOV-001"],
       "prompt": "Complete the final independent review for the integrated change and decide whether it is ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["claude_reviews_integrated_diff", "claude_reruns_relevant_tests", "design_conformance_checked", "security_posture_checked", "claude_final_verdict"], "references": [], "must_not": ["accept_task_summaries_as_diff", "self_review_only", "unsupported_approval"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_invoked_directly", "claude_reviews_integrated_diff", "claude_reruns_relevant_tests", "design_conformance_checked", "proportionality_checked", "security_posture_checked", "fable_final_quality_verdict"], "references": [], "must_not": ["accept_task_summaries_as_diff", "self_review_only", "helper_replaces_fable", "fallback_claimed_as_fable", "unsupported_approval"]}
+    },
+    {
+      "id": "reject-overengineered-correct-change",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "overengineered-change",
+      "requirements": ["CF-MM-006", "CF-QA-003"],
+      "prompt": "Review the implemented cache-key normalization change. Tests pass. Decide whether its design and integrated code are ready.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["simpler_equivalent_identified", "speculative_scope_rejected", "complexity_traced_to_requirements", "codex_quality_first_verification", "fable_design_and_code_review", "changes_requested_for_avoidable_complexity"], "references": [], "must_not": ["approve_on_tests_alone", "reward_raw_loc", "helper_replaces_fable", "speculative_generality_accepted"]}
     },
     {
       "id": "claude-ui-role-split",
@@ -71,7 +81,17 @@
       "fixture": "web-ui-change",
       "requirements": ["CF-MM-007", "CF-QA-002"],
       "prompt": "Use the Claude seat to verify the changed error-state UX and decide whether it conforms to the approved design.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_owns_judgment", "opus_may_operate_ui_tools", "rendered_ui_evidence", "fable_interprets_evidence"], "references": [], "must_not": ["opus_settles_design", "screenshot_only", "ui_pass_without_driver"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_invoked_directly", "fable_owns_judgment", "opus_effort_matches_tool_complexity", "rendered_ui_evidence", "fable_interprets_evidence"], "references": [], "must_not": ["opus_as_primary_claude_seat", "opus_settles_design", "screenshot_only", "ui_pass_without_driver"]}
+    },
+    {
+      "id": "effort-routes-by-demand",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "planning-brief",
+      "requirements": ["CF-MM-002", "CF-MM-005", "CF-MM-006", "CF-MM-010"],
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_primary_high_default", "codex_primary_high_default", "fable_primary_xhigh_on_trigger", "codex_primary_xhigh_on_trigger", "fable_owns_opus_routing", "codex_workers_require_verified_native_routing", "primary_seats_retain_ownership", "independent_plans_preserved", "dual_approval_preserved", "codex_implementation_preserved", "claude_final_review_preserved"], "references": [], "must_not": ["always_xhigh", "direct_opus_primary_invocation", "unverified_worker_routing", "worker_replaces_primary", "effort_change_weakens_duo"]}
     },
     {
       "id": "native-interactive-peer-only",

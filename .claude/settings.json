@@ -151,7 +151,23 @@
       "Read(~/.gnupg/**)",
       "Read(~/.kube/**)",
       "Read(~/.cargo/credentials*)",
-      "Read(~/.claude/**)"
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.claude/backups/**)",
+      "Read(~/.claude/debug/**)",
+      "Read(~/.claude/file-history/**)",
+      "Read(~/.claude/history.jsonl)",
+      "Read(~/.claude/mcp-needs-auth-cache.json)",
+      "Read(~/.claude/memory/**)",
+      "Read(~/.claude/paste-cache/**)",
+      "Read(~/.claude/projects/**)",
+      "Read(~/.claude/session-env/**)",
+      "Read(~/.claude/sessions/**)",
+      "Read(~/.claude/settings.json)",
+      "Read(~/.claude/settings.local.json)",
+      "Read(~/.claude/settings-bkup.json)",
+      "Read(~/.claude/shell-snapshots/**)",
+      "Read(~/.claude/tasks/**)",
+      "Read(~/.claude/teams/**)"
     ]
   },
   "hooks": {
@@ -199,7 +215,7 @@
     "enabled": true,
     "failIfUnavailable": true,
     "autoAllowBashIfSandboxed": true,
-    "allowUnsandboxedCommands": false,
+    "allowUnsandboxedCommands": true,
     "network": {
       "allowLocalBinding": true,
       "allowedDomains": [

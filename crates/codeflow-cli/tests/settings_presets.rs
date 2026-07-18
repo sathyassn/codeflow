@@ -26,6 +26,28 @@ const HOOK_NAMES: [&str; 4] = [
 /// updating this list in the same change.
 const TOP_LEVEL_KEYS: [&str; 5] = ["$schema", "hooks", "permissions", "sandbox", "statusLine"];
 
+/// Claude's private state must stay unreadable without hiding the official
+/// plugin runtime under `~/.claude/plugins` from Claude Code itself.
+const CLAUDE_SENSITIVE_READ_DENIES: [&str; 17] = [
+    "Read(~/.claude/.credentials.json)",
+    "Read(~/.claude/backups/**)",
+    "Read(~/.claude/debug/**)",
+    "Read(~/.claude/file-history/**)",
+    "Read(~/.claude/history.jsonl)",
+    "Read(~/.claude/mcp-needs-auth-cache.json)",
+    "Read(~/.claude/memory/**)",
+    "Read(~/.claude/paste-cache/**)",
+    "Read(~/.claude/projects/**)",
+    "Read(~/.claude/session-env/**)",
+    "Read(~/.claude/sessions/**)",
+    "Read(~/.claude/settings.json)",
+    "Read(~/.claude/settings.local.json)",
+    "Read(~/.claude/settings-bkup.json)",
+    "Read(~/.claude/shell-snapshots/**)",
+    "Read(~/.claude/tasks/**)",
+    "Read(~/.claude/teams/**)",
+];
+
 fn settings_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings")
 }
@@ -368,7 +390,6 @@ fn deny_extends_to_pure_secret_home_stores() {
         "Read(~/.aws/**)",
         "Read(~/.gnupg/**)",
         "Read(~/.kube/**)",
-        "Read(~/.claude/**)",
     ];
     for name in preset_files() {
         let deny = perm_array(&load(&name), "deny");
@@ -386,6 +407,33 @@ fn deny_extends_to_pure_secret_home_stores() {
         assert!(
             deny.iter().any(|d| d == "Read(**/.env)"),
             "{name}: lost cwd .env deny"
+        );
+    }
+}
+
+#[test]
+fn claude_state_denies_leave_the_official_plugin_runtime_available() {
+    let expected: BTreeSet<&str> = CLAUDE_SENSITIVE_READ_DENIES.into_iter().collect();
+
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        let actual: BTreeSet<&str> = deny
+            .iter()
+            .map(String::as_str)
+            .filter(|entry| entry.starts_with("Read(~/.claude/"))
+            .collect();
+
+        assert_eq!(
+            actual, expected,
+            "{name}: Claude state denies must stay narrow and complete"
+        );
+        assert!(
+            !deny.iter().any(|entry| entry == "Read(~/.claude/**)"),
+            "{name}: a broad ~/.claude deny hides the official Codex plugin runtime"
+        );
+        assert!(
+            !deny.iter().any(|entry| entry.contains("~/.claude/plugins")),
+            "{name}: ~/.claude/plugins must remain readable for official plugins"
         );
     }
 }
@@ -424,8 +472,14 @@ fn every_preset_has_a_fail_closed_autonomous_sandbox() {
             "{name}: sandboxed Bash should run autonomously"
         );
         assert_eq!(
-            sandbox["allowUnsandboxedCommands"], false,
-            "{name}: unsandboxed retry escape must be disabled"
+            sandbox["allowUnsandboxedCommands"], true,
+            "{name}: trusted tools that cannot run in the OS sandbox need the classified retry path"
+        );
+        assert!(
+            sandbox["excludedCommands"]
+                .as_array()
+                .is_none_or(std::vec::Vec::is_empty),
+            "{name}: do not grant a static broad sandbox exclusion; use the classified retry path"
         );
         assert_eq!(
             sandbox["network"]["allowLocalBinding"], true,
@@ -492,4 +546,16 @@ fn top_level_keys_stay_within_the_pinned_union() {
     // preset must be removed here too, keeping the allowlist honest.
     let union: BTreeSet<&str> = union.iter().map(String::as_str).collect();
     assert_eq!(union, allowed, "pinned union out of date with the presets");
+}
+
+#[test]
+fn minimal_claude_guidance_matches_the_classified_retry_setting() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/CLAUDE.minimal.md.tmpl");
+    let guidance = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    assert!(guidance.contains("auto-classified unsandboxed retry"));
+    assert!(guidance.contains("trusted installed tool"));
+    assert!(guidance.contains("This is not a general bypass"));
+    assert!(!guidance.contains("unsandboxed retry is disabled"));
 }

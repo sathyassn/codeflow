@@ -40,11 +40,17 @@ at a higher tier is an additive upgrade.
 The harness starters are executable policy, not prompt-only guidance. Codex
 ships one current-schema guarded permission profile with public research,
 loopback UI testing, reviewer-subagent escalation review, workspace key-file
-denies, and the default secret-bearing environment filter pinned on. Claude
+denies, the primary seat's high-effort fallback, and the default secret-bearing
+environment filter pinned on. Claude-hosted plugin turns pass high/xhigh
+explicitly so they cannot inherit a different user default. Claude
 ships a fail-closed sandbox, public web/tool access, raw model/cloud credential
 removal for sandboxed Bash, and ask rules for destructive source-control
-operations; project `acceptEdits` remains the ordinary fallback because
-repository-scoped Auto is intentionally ignored (ADR-0025, ADR-0026).
+operations. A sandbox failure may request an auto-classified unsandboxed retry
+only for a trusted installed tool that needs host state; this enables the
+official Codex plugin without granting a general bypass. Project `acceptEdits`
+remains the ordinary fallback because
+repository-scoped Auto is intentionally ignored (ADR-0025, ADR-0026,
+ADR-0029).
 
 ## CAP-002 — scaffold-update
 
@@ -277,7 +283,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -299,10 +305,19 @@ other host, including Hermes, may coordinate only if it preserves both native
 sessions and their tools. The shared quality resource requires reproducible
 evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
 coverage floor where measurable (90% normal target), security review, and
-bounded rework. Latest Fable-class/xhigh owns Claude reasoning and judgment;
-current Opus-class subagents may operate UI/MCP tools; strongest Codex/xhigh
-owns implementation and difficult verification. Each run records actual model
-versions rather than freezing pins in doctrine.
+bounded rework. It also blocks material avoidable complexity: both seats review
+design proportionality, Codex first-verifies the smallest coherent implementation,
+and the directly invoked Fable primary reviews the settled design and actual
+integrated diff for the final quality verdict. Cross-model callers invoke the
+latest Fable-class seat directly
+at high by default and xhigh on defined complexity/failure triggers; Fable may
+route bounded deterministic tool evidence to Opus medium and ambiguous or
+multi-step tool operation to Opus high, but retains interpretation and judgment.
+They invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat
+directly at high by default and xhigh on equivalent triggers; verified native
+Sol-class medium/high workers may assist, but the primary retains implementation
+and first verification. Each run records actual model versions, effort, and
+escalation rationale rather than freezing exact version pins in doctrine.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, serialized

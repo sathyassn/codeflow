@@ -18,7 +18,10 @@ itself a blocker finding — return changes_requested.
 ## Procedure
 
 1. Read the acceptance criteria and list them.
-2. Inspect the diff (`git diff <base>...HEAD`) and every touched file.
+2. Inspect the diff (`git diff <base>...HEAD`) and every touched file. Challenge
+   whether a smaller, clearer solution meets the same criteria; flag speculative
+   features, abstractions, dependencies, configuration, compatibility layers,
+   dead/duplicate paths, and complexity without a current requirement or risk.
 3. For each criterion, verify it in the code and record evidence: file:line plus
    one sentence on how it is satisfied. No evidence means not verified.
 4. Run the mechanical gates and capture their output:
@@ -73,5 +76,7 @@ findings:
 - `approved` requires: every criterion verified, all gates pass, zero blocker or
   major findings. Anything less is `changes_requested`.
 - Minor findings never block, but always list them.
+- Material avoidable complexity is major even when tests pass; raw LOC alone is
+  never the target.
 - Never fix issues, never amend commits, never re-run the build to "make it
   pass" — report and stop.

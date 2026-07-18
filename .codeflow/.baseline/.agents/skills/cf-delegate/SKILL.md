@@ -96,6 +96,14 @@ The plugin's commands cover both modes:
 - **Multi-round:** `/codex:transfer` — a persistent codex thread for the
   back-and-forth; follow-ups resume it instead of starting fresh.
 
+Invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat
+directly at high effort by default. Escalate the primary to xhigh only for
+capability-sensitive or long-horizon work, material ambiguity, cross-cutting
+architecture/security, unresolved disagreement, or failed/stalled high work.
+Codex may use bounded Sol-class medium/high workers only through verified native
+routing; the invoked primary retains the task, implementation, verification,
+and verdict.
+
 Ask every consult for a closing `VERDICT: approved|changes_requested` line so
 the reply is checkable, and branch on it — then re-derive the findings
 yourself (see Guardrails).
@@ -105,7 +113,7 @@ yourself (see Guardrails).
 The transport pattern, compactly:
 
 ```sh
-tmux new-session -d -s delegate -x 220 -y 50 -c /path/to/worktree 'claude --model fable --effort xhigh --permission-mode auto --settings /path/to/task-settings.json'
+tmux new-session -d -s delegate -x 220 -y 50 -c /path/to/worktree 'claude --model fable --effort high --permission-mode auto --settings /path/to/task-settings.json'
 tmux send-keys -t delegate -l 'Review src/foo.rs for correctness. Cite line numbers. Read and reason only - edit nothing. End with VERDICT: approved|changes_requested.'
 tmux send-keys -t delegate Enter
 # The task-scoped Stop/StopFailure hooks signal completion. Read the pane only
@@ -131,12 +139,19 @@ tmux capture-pane -p -J -t delegate -S -200
 - **Pane access:** capture only the dedicated task pane, after the completion
   signal or on bounded failure diagnosis. Never enumerate or capture unrelated
   tmux sessions; they may contain secrets or other users' work.
-- **Effective autonomy is layered:** launch Claude with the latest available
-  Fable-class model at `xhigh`, `--permission-mode auto`, and task-scoped
-  settings containing `autoMode.classifyAllShell: true`. Require the effective
+- **Effective autonomy is layered:** invoke the latest available Fable-class
+  model directly at high by default, or xhigh for capability-sensitive,
+  long-horizon, materially ambiguous, cross-cutting architecture/security,
+  unresolved-disagreement, or failed/stalled-high work. Fable owns the native
+  session and may use Opus medium for bounded deterministic tool/UI/MCP evidence
+  collection or Opus high for ambiguous/multi-step tool operation; Fable
+  interprets the evidence and owns the judgment. Launch with the selected
+  effort, `--permission-mode auto`, and task-scoped settings containing
+  `autoMode.classifyAllShell: true`. Require the effective
   project settings to keep the OS sandbox enabled, set
-  `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, and disallow
-  unsandboxed commands.
+  `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, and permit an
+  auto-classified unsandboxed retry only for a trusted installed tool that
+  requires host state. Arbitrary unsandboxed commands remain out of bounds.
   This preserves native tools, MCP servers, and broad public-network research
   while keeping secret stores, private-network access, destructive operations,
   and privilege changes behind explicit controls. Never use bypass mode on an

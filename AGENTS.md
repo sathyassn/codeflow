@@ -232,9 +232,11 @@ to reason from, not a rote checklist.
   checks to a subagent or workflow (where your harness has them) — each works in
   its own context and returns a condensed result, so yours stays sharp for the
   decisions.
-- **Write it well.** Favor the simplest change that fully solves the problem: DRY,
-  idiomatic, coherent with the existing architecture — its conventions over your
-  taste. Leave it more consistent than you found it.
+- **Write only what earns its keep.** Make the smallest clear, idiomatic change
+  that fully satisfies approved behavior—not minimum LOC. Add no speculative
+  feature, abstraction, configuration, dependency, compatibility layer, or
+  dead/duplicate path; every material complexity maps to a current requirement
+  or evidenced risk.
 - **Shape the deliverable.** Layer it concept → detail, each layer complete at
   its own altitude; reveal depth progressively — never dump, and never cut key
   information to condense. Bullets for the enumerable; prose only where it

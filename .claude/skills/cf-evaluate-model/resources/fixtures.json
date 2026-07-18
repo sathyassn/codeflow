@@ -138,6 +138,16 @@
         "candidate/security.md": "Run a security review. If the attacker seat is missing, record an informational note and continue.\n",
         "ORIGINAL_INTENT.md": "Both models independently research, analyze risks, and draft complete plans before cross-exposure. Coverage has a hard 80 percent floor. Security unions Claude defender and Codex attacker lenses.\n"
       }
+    },
+    {
+      "id": "overengineered-change",
+      "tier": "standard",
+      "state": {"branch": "fixture/right-sized-review", "peer": "available", "tests": "pass", "brief_requires_extension_points": false},
+      "files": {
+        "ACCEPTANCE.md": "# Acceptance\n\n- trim surrounding whitespace from cache keys\n- preserve the existing public function signature\n- reject an empty key after trimming\n",
+        "src/cache_key.rs": "pub trait NormalizationStrategy { fn normalize(&self, value: &str) -> String; }\n\npub struct TrimStrategy;\nimpl NormalizationStrategy for TrimStrategy { fn normalize(&self, value: &str) -> String { value.trim().to_owned() } }\n\npub struct NormalizerConfig { pub strategy_name: String, pub compatibility_mode: bool }\n\npub fn normalize_cache_key(value: &str) -> Result<String, &'static str> {\n    let config = NormalizerConfig { strategy_name: \"trim\".into(), compatibility_mode: false };\n    let strategy: Box<dyn NormalizationStrategy> = Box::new(TrimStrategy);\n    let normalized = strategy.normalize(value);\n    if config.compatibility_mode { return Ok(value.to_owned()); }\n    if normalized.is_empty() { Err(\"empty cache key\") } else { Ok(normalized) }\n}\n",
+        "evidence/test-summary.txt": "unit: pass 6/6\nintegration: pass 2/2\n"
+      }
     }
   ]
 }

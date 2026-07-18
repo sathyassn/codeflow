@@ -124,23 +124,39 @@ vendor-maintained/native adapters: Claude Code reaches Codex through the
 official plugin/app-server integration, while Codex reaches an interactive
 Claude CLI through a task-scoped tmux session. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
-stages the requested outcome needs. Fixed model-class roles, the versioned
+stages the requested outcome needs. Fixed model-class roles, evidence-routed
+effort, the versioned
 plan/evidence contract, bounded worktree/resource/integration rules, and quality
 gates live in the shared skill resource; harness-specific reviewer agents only
-deepen that contract (ADR-0023, ADR-0024).
+deepen that contract. Quality includes proportionate design and implementation:
+every material new surface maps to a current requirement or evidenced risk,
+Codex first-verifies the smallest coherent implementation, and the directly
+invoked Fable primary owns the final design/code quality verdict on the actual
+integrated diff (ADR-0023, ADR-0024, ADR-0030).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,
 web access, local port binding, asks for common high-risk source-control forms,
 protected-branch hook backstops for grammar gaps, file
-secret denies, and exact raw model/cloud environment-variable denies. The
-interactive Codex→Claude launch supplies Fable/xhigh, auto mode, and
-`classifyAllShell` through CLI settings because Claude intentionally ignores
-classifier policy from a repository. Codex's project config selects the guarded
-workspace profile, public egress/live search, and auto-reviewed escalations.
+secret denies, and exact raw model/cloud environment-variable denies. A failed
+sandboxed command may request an auto-classified unsandboxed retry only for a
+trusted installed tool requiring host state; arbitrary bypass remains outside
+the contract. The
+interactive Codex→Claude launch supplies Fable with a recorded high/xhigh
+selection, auto mode, and `classifyAllShell` through CLI settings because Claude
+intentionally ignores classifier policy from a repository. Codex's project
+config selects the guarded workspace profile, public egress/live search,
+auto-reviewed escalations, and a high-effort primary-seat fallback. Official
+plugin turns still pass the selected high/xhigh effort explicitly and retain
+the observed binding.
 `cf-customize` verifies the effective modes, tools, authentication paths, and
 live canaries; the binary neither mutates global settings nor authenticates
-services (ADR-0025, ADR-0026).
+services. Cross-model callers invoke Fable and Codex primary seats directly at
+high by default and escalate to xhigh for capability-sensitive, long-horizon,
+materially ambiguous, cross-cutting architecture/security, unresolved
+disagreement, or failed/stalled-high work. Native internal workers may reduce
+mechanical cost, but cannot replace the primary seats' judgments,
+implementation, verification, or approvals (ADR-0025, ADR-0026, ADR-0028).
 
 `cf-evaluate-model` is the deliberate maintenance path for a new model, harness,
 permission profile, or material instruction revision (ADR-0027). Stable hard

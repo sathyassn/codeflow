@@ -9,7 +9,10 @@
   violated policy rule and the sanctioned path.
 - The project permission preset and fail-closed sandbox live in
   `.claude/settings.json`: sandbox-contained Bash, public web research, and
-  local dev binding are enabled; unsandboxed retry is disabled. Claude ignores
+  local dev binding are enabled; a failed sandboxed command may request one
+  auto-classified unsandboxed retry for a trusted installed tool that needs
+  host state (for example, the official Codex plugin). This is not a general
+  bypass. Claude ignores
   repository requests for both auto mode and classifier policy, so select auto
   in the active host (or user settings) and supply
   `autoMode.classifyAllShell` at user/CLI scope. `/cf-customize` canaries the
@@ -27,13 +30,16 @@
   Codex implements/first-verifies when implementation is in scope. A missing
   seat degrades legibly only after preflight. The unattended pipeline is
   explicitly single-vendor and never substitutes for the interactive duo.
-- Use the latest available Fable-class Claude model at xhigh effort for
-  reasoning, synthesis, design, coordination, and final review. It may delegate
-  mechanistic browser, Playwright, Computer Use, or MCP operation to current
-  Opus-class subagents, but Fable interprets their evidence and owns every
-  judgment. The Codex seat uses its strongest supported coding model at xhigh
-  for orchestration, implementation, and difficult verification; lower-effort
-  workers are optional only when that harness exposes safe per-worker routing.
+- Invoke the latest available Fable-class Claude model directly at high effort
+  by default; use xhigh for capability-sensitive or long-horizon work, material
+  ambiguity, cross-cutting architecture/security, unresolved duo disagreement,
+  or failed/stalled high work. Fable owns internal Opus delegation: medium for
+  bounded deterministic UI/MCP evidence collection, high for ambiguous or
+  multi-step tool operation; Fable interprets the evidence and owns judgment.
+  Invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat at
+  high by default and xhigh on equivalent triggers. Bounded Sol-class
+  medium/high workers require verified native routing; the primary Codex seat
+  retains implementation and first verification.
 - Match stages and process weight to the outcome: trivial → just do it;
   otherwise begin `/cf-model-orchestrator`. Research/planning-only work exits
   after joint settlement; implementation continues through Codex build and

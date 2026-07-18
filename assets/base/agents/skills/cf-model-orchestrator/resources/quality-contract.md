@@ -16,6 +16,7 @@ VERIFIED_CONTEXT:
 ASSUMPTIONS_OR_UNRESOLVED:
 DESIGN_OPTIONS:
 CHOSEN_DESIGN_AND_RATIONALE:
+COMPLEXITY_JUSTIFICATION:
 TASKS_AND_OWNERS:
 ACCEPTANCE_CRITERIA:
 EDGE_AND_ERROR_CASES:
@@ -36,6 +37,25 @@ For research/analysis-only work, `TASKS_AND_OWNERS`, `TEST_AND_UI_PLAN`,
 reason. For planning-only work they describe the future implementation rather
 than work performed in the current run. Never imply that proposed evidence was
 executed evidence.
+
+## Design and implementation quality
+
+Approve the smallest coherent solution that fully satisfies the accepted
+behavior, not the fewest lines. Every material abstraction, public interface,
+configuration surface, dependency, compatibility path, and operational concept
+must map to a current requirement, observed constraint, or evidenced risk; if it
+does not, remove or simplify it. Reject speculative generality, duplicate or
+dead paths, cleverness that obscures control flow, and architecture that fights
+the repository's established patterns.
+
+Both seats grade design proportionality before approval. Codex first-verifies
+the implementation for necessity, clarity, idiomatic structure, maintainability,
+failure behavior, and security. The directly invoked primary Fable seat reviews
+the settled design and actual integrated diff and owns the final quality verdict;
+helpers may collect evidence but cannot replace that judgment.
+Material avoidable complexity is `changes_requested`, even when tests pass.
+A non-Fable fallback records reduced assurance and never claims that Fable
+reviewed the work.
 
 ## Parallel execution contract
 
@@ -155,6 +175,7 @@ Completion requires:
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
 - the independent Claude review is approved;
+- design and implementation proportionality are approved;
 - no unresolved critical/high security issue or material assumption remains.
 
 For a mode without implementation, read “task breakdown” as the final research,

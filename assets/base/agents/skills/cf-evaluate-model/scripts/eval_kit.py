@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import hashlib
@@ -14,6 +15,7 @@ import re
 import secrets
 import shutil
 import stat
+import statistics
 import subprocess
 import sys
 from typing import Any
@@ -72,6 +74,21 @@ def write_json(path: Path, value: Any) -> None:
     )
 
 
+def write_json_atomic(path: Path, value: Any) -> None:
+    """Write JSON without exposing a partially rewritten result record."""
+
+    if path.is_symlink():
+        raise EvalError(f"refusing symlinked JSON output: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        write_json(temporary, value)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def canonical_digest(value: Any) -> str:
     encoded = json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -118,6 +135,25 @@ def string_list(value: Any, label: str, *, allow_empty: bool = False) -> list[st
     if not allow_empty and not value:
         raise EvalError(f"{label} must not be empty")
     return value
+
+
+def evidence_errors(value: Any, label: str, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or (not allow_empty and not value):
+        return [f"{label} must be a nonempty evidence array"]
+    errors: list[str] = []
+    for index, item in enumerate(value):
+        item_label = f"{label}[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_label} must be an object")
+            continue
+        if item.get("kind") not in {"session", "tool", "file", "command", "ui"}:
+            errors.append(f"{item_label}.kind is invalid")
+        if not isinstance(item.get("ref"), str) or not item["ref"].strip():
+            errors.append(f"{item_label}.ref must be a nonempty string")
+        digest = item.get("digest")
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            errors.append(f"{item_label}.digest must be canonical sha256")
+    return errors
 
 
 def unique_objects(items: Any, label: str) -> dict[str, dict]:
@@ -627,6 +663,7 @@ def expected_summary(trials: list[dict], cases: dict[str, dict]) -> dict:
 
 def validate_result(result: Any, *, require_approval: bool = False) -> list[str]:
     errors: list[str] = []
+    binding_mismatch = False
     if not isinstance(result, dict):
         return ["result must be an object"]
     _, cases_doc, _ = suite_documents()
@@ -703,6 +740,77 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
                 errors.append(
                     "result.system.budget.tokens must be null or a nonnegative integer"
                 )
+        observed_binding = system.get("observed")
+        if observed_binding is not None:
+            if not isinstance(observed_binding, dict):
+                errors.append("result.system.observed must be an object")
+            else:
+                for field in ("model", "effort"):
+                    value = observed_binding.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        errors.append(
+                            f"result.system.observed.{field} must be a nonempty string"
+                        )
+                    elif value != system.get(field):
+                        binding_mismatch = True
+                errors.extend(
+                    evidence_errors(
+                        observed_binding.get("evidence"),
+                        "result.system.observed.evidence",
+                    )
+                )
+        peer_seats = system.get("peer_seats")
+        if peer_seats is not None:
+            if not isinstance(peer_seats, list) or not peer_seats:
+                errors.append("result.system.peer_seats must be a nonempty array")
+            else:
+                seen_seats: set[str] = set()
+                for index, peer in enumerate(peer_seats):
+                    label = f"result.system.peer_seats[{index}]"
+                    if not isinstance(peer, dict):
+                        errors.append(f"{label} must be an object")
+                        continue
+                    for field in (
+                        "seat",
+                        "model",
+                        "effort",
+                        "harness",
+                        "harness_version",
+                    ):
+                        value = peer.get(field)
+                        if not isinstance(value, str) or not value.strip():
+                            errors.append(f"{label}.{field} must be a nonempty string")
+                    seat = peer.get("seat")
+                    if isinstance(seat, str) and seat:
+                        if seat in seen_seats:
+                            errors.append(f"{label}.seat duplicates {seat!r}")
+                        seen_seats.add(seat)
+                    digest = peer.get("settings_digest")
+                    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+                        errors.append(
+                            f"{label}.settings_digest must be canonical sha256"
+                        )
+    experiment = result.get("experiment")
+    if experiment is not None:
+        if not isinstance(experiment, dict):
+            errors.append("result.experiment must be an object")
+        else:
+            variable = experiment.get("variable")
+            if (
+                not isinstance(variable, str)
+                or not re.fullmatch(r"system\.[a-z_][a-z0-9_.]*", variable)
+            ):
+                errors.append(
+                    "result.experiment.variable must be a system.* field path"
+                )
+            baseline_run_id = experiment.get("baseline_run_id")
+            if (
+                not isinstance(baseline_run_id, str)
+                or not baseline_run_id.strip()
+            ):
+                errors.append(
+                    "result.experiment.baseline_run_id must be a nonempty string"
+                )
     trials = result.get("trials")
     if not isinstance(trials, list):
         return errors + ["result.trials must be an array"]
@@ -765,6 +873,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
         except EvalError as error:
             errors.append(str(error))
         if outcome == "completed":
+            errors.extend(evidence_errors(trial.get("evidence"), f"{label}.evidence"))
             observed = trial.get("observed")
             if not isinstance(observed, dict):
                 errors.append(f"{label}.observed must be an object")
@@ -788,6 +897,16 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
                 f"{label}.status is {trial.get('status')!r}; "
                 f"expected {computed!r} from observations"
             )
+    if binding_mismatch and not any(
+        isinstance(trial, dict)
+        and isinstance(trial.get("validity_flags"), list)
+        and "harness_context_mismatch" in trial["validity_flags"]
+        for trial in trials
+    ):
+        errors.append(
+            "requested and observed model/effort differ without a "
+            "harness_context_mismatch validity flag"
+        )
     expected_pairs = expected_trial_pairs(suite, cases_doc)
     missing = expected_pairs - seen
     extra = seen - expected_pairs
@@ -823,6 +942,41 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
                     )
         if require_approval and approval.get("decision") != "approved":
             errors.append("promotion validation requires explicit human approval")
+    if require_approval:
+        hard_requirements = {
+            requirement["id"]
+            for requirement in suite_documents()[0]["requirements"]
+            if requirement.get("level") == "hard"
+        }
+        hard_cases = {
+            case_id
+            for case_id, case in cases.items()
+            if hard_requirements.intersection(case["requirements"])
+        }
+        failed_hard = sorted(
+            case_id
+            for case_id in hard_cases
+            if any(
+                trial.get("case_id") == case_id and trial.get("status") != "pass"
+                for trial in trials
+                if isinstance(trial, dict)
+            )
+        )
+        if failed_hard:
+            errors.append(
+                "promotion validation requires every hard-linked trial to pass: "
+                + ", ".join(failed_hard)
+            )
+        if any(
+            isinstance(trial, dict) and trial.get("validity_flags")
+            for trial in trials
+        ):
+            errors.append("promotion validation requires zero validity flags")
+        if any(
+            isinstance(trial, dict) and trial.get("outcome") in {"error", "not_run"}
+            for trial in trials
+        ):
+            errors.append("promotion validation does not allow error or not_run trials")
     return errors
 
 
@@ -836,7 +990,147 @@ def case_pass_rates(result: dict) -> dict[str, float]:
     return {case_id: passes[case_id] / total for case_id, total in totals.items()}
 
 
-def compare_results(baseline: dict, candidate: dict) -> tuple[str, bool]:
+def score_result(result: Any) -> dict:
+    """Return a validated copy with every derived field recomputed."""
+
+    if not isinstance(result, dict):
+        raise EvalError("result must be an object")
+    scored = copy.deepcopy(result)
+    _, cases_doc, _ = suite_documents()
+    cases = unique_objects(cases_doc["cases"], "cases")
+    trials = scored.get("trials")
+    if not isinstance(trials, list):
+        raise EvalError("result.trials must be an array")
+    for index, trial in enumerate(trials):
+        if not isinstance(trial, dict):
+            raise EvalError(f"trials[{index}] must be an object")
+        case_id = trial.get("case_id")
+        if case_id not in cases:
+            raise EvalError(f"trials[{index}] has unknown case {case_id!r}")
+        trial["status"] = computed_trial_status(trial, cases[case_id])
+    scored["summary"] = expected_summary(trials, cases)
+    errors = validate_result(scored)
+    if errors:
+        raise EvalError("cannot score invalid raw result:\n- " + "\n- ".join(errors))
+    return scored
+
+
+def value_at_path(value: dict, path: str) -> Any:
+    current: Any = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise EvalError(f"comparison variable does not exist: {path}")
+        current = current[part]
+    return current
+
+
+def remove_path(value: dict, path: str) -> None:
+    parts = path.split(".")
+    current: Any = value
+    for part in parts[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            raise EvalError(f"comparison variable does not exist: {path}")
+        current = current[part]
+    if not isinstance(current, dict) or parts[-1] not in current:
+        raise EvalError(f"comparison variable does not exist: {path}")
+    del current[parts[-1]]
+
+
+def verified_observed_binding(result: dict, label: str) -> None:
+    system = result["system"]
+    observed = system.get("observed")
+    if not isinstance(observed, dict):
+        raise EvalError(f"{label} lacks system.observed binding evidence")
+    for field in ("model", "effort"):
+        if observed.get(field) != system.get(field):
+            raise EvalError(
+                f"{label} observed {field} does not match requested {field}"
+            )
+    errors = evidence_errors(observed.get("evidence"), f"{label}.system.observed.evidence")
+    if errors:
+        raise EvalError("; ".join(errors))
+
+
+def enforce_one_variable(
+    baseline: dict, candidate: dict, variable: str
+) -> None:
+    if not re.fullmatch(r"system\.[a-z_][a-z0-9_.]*", variable):
+        raise EvalError("comparison variable must be a system.* field path")
+    if variable.startswith("system.observed") or variable.startswith(
+        "system.peer_seats"
+    ):
+        raise EvalError("observed bindings and peer seats cannot be varied directly")
+    for label, result in (("baseline", baseline), ("candidate", candidate)):
+        experiment = result.get("experiment")
+        if not isinstance(experiment, dict) or experiment.get("variable") != variable:
+            raise EvalError(f"{label} experiment does not declare {variable}")
+        verified_observed_binding(result, label)
+    if candidate["experiment"].get("baseline_run_id") != baseline["run_id"]:
+        raise EvalError("candidate experiment.baseline_run_id does not name baseline")
+    baseline_value = value_at_path(baseline, variable)
+    candidate_value = value_at_path(candidate, variable)
+    if baseline_value == candidate_value:
+        raise EvalError("declared comparison variable does not differ")
+
+    baseline_system = copy.deepcopy(baseline["system"])
+    candidate_system = copy.deepcopy(candidate["system"])
+    # Runtime evidence is necessarily run-specific; requested configuration is
+    # compared independently and each observed binding is proven above.
+    baseline_system.pop("observed", None)
+    candidate_system.pop("observed", None)
+    relative_path = variable.removeprefix("system.")
+    remove_path(baseline_system, relative_path)
+    remove_path(candidate_system, relative_path)
+    if baseline_system != candidate_system:
+        raise EvalError(
+            "baseline and candidate differ outside the declared comparison variable"
+        )
+
+
+def metric_distribution(trials: list[dict], metric: str) -> tuple[Any, Any, Any, Any] | None:
+    values = [trial.get(metric) for trial in trials]
+    if not values or any(
+        value is None
+        or not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        for value in values
+    ):
+        return None
+    return min(values), statistics.median(values), max(values), sum(values)
+
+
+def format_metric(value: tuple[Any, Any, Any, Any] | None) -> str:
+    if value is None:
+        return "n/a"
+    minimum, median, maximum, total = value
+    return f"{minimum:g}/{median:g}/{maximum:g} ({total:g})"
+
+
+def distribution_rows(baseline: dict, candidate: dict, metric: str) -> list[str]:
+    rows: list[str] = []
+    case_ids = sorted({trial["case_id"] for trial in baseline["trials"]})
+    for case_id in case_ids:
+        base_trials = [
+            trial for trial in baseline["trials"] if trial["case_id"] == case_id
+        ]
+        candidate_trials = [
+            trial for trial in candidate["trials"] if trial["case_id"] == case_id
+        ]
+        rows.append(
+            f"| {case_id} | {format_metric(metric_distribution(base_trials, metric))} | "
+            f"{format_metric(metric_distribution(candidate_trials, metric))} |"
+        )
+    rows.append(
+        f"| **All trials** | "
+        f"{format_metric(metric_distribution(baseline['trials'], metric))} | "
+        f"{format_metric(metric_distribution(candidate['trials'], metric))} |"
+    )
+    return rows
+
+
+def compare_results(
+    baseline: dict, candidate: dict, *, variable: str | None = None
+) -> tuple[str, bool]:
     baseline_errors = validate_result(baseline)
     candidate_errors = validate_result(candidate)
     if baseline_errors or candidate_errors:
@@ -847,6 +1141,22 @@ def compare_results(baseline: dict, candidate: dict) -> tuple[str, bool]:
         raise EvalError("cannot compare invalid results:\n- " + "\n- ".join(joined))
     if baseline["suite"] != candidate["suite"]:
         raise EvalError("baseline and candidate suites differ")
+    if variable is not None:
+        enforce_one_variable(baseline, candidate, variable)
+    promotion_errors = (
+        [
+            *(
+                f"baseline: {error}"
+                for error in validate_result(baseline, require_approval=True)
+            ),
+            *(
+                f"candidate: {error}"
+                for error in validate_result(candidate, require_approval=True)
+            ),
+        ]
+        if variable is not None
+        else []
+    )
     base_rates = case_pass_rates(baseline)
     candidate_rates = case_pass_rates(candidate)
     requirements_doc, cases_doc, _ = suite_documents()
@@ -858,6 +1168,7 @@ def compare_results(baseline: dict, candidate: dict) -> tuple[str, bool]:
     }
     rows: list[str] = []
     hard_regressions: list[str] = []
+    regressions: list[str] = []
     for case_id in sorted(base_rates):
         delta = candidate_rates[case_id] - base_rates[case_id]
         rows.append(
@@ -865,6 +1176,8 @@ def compare_results(baseline: dict, candidate: dict) -> tuple[str, bool]:
             f"{candidate_rates[case_id]:.3f} | {delta:+.3f} |"
         )
         linked = cases[case_id]["requirements"]
+        if delta < 0:
+            regressions.append(case_id)
         if delta < 0 and any(requirement in hard_requirements for requirement in linked):
             hard_regressions.append(case_id)
     summary_delta = candidate["summary"]["pass_rate"] - baseline["summary"]["pass_rate"]
@@ -876,18 +1189,46 @@ def compare_results(baseline: dict, candidate: dict) -> tuple[str, bool]:
         f"- Suite: `{candidate['suite']}`",
         f"- Aggregate pass-rate delta: `{summary_delta:+.3f}`",
         f"- Hard regressions: `{len(hard_regressions)}`",
+        *(
+            [
+                f"- Declared variable: `{variable}`",
+                f"- Any regressions: `{len(regressions)}`",
+                f"- Promotion validation blockers: `{len(promotion_errors)}`",
+            ]
+            if variable
+            else []
+        ),
         "",
         "| Case | Baseline | Candidate | Delta |",
         "|---|---:|---:|---:|",
         *rows,
         "",
     ]
-    if hard_regressions:
+    if variable is not None:
+        for metric, heading in (
+            ("duration_ms", "Duration ms"),
+            ("tokens", "Tokens"),
+            ("cost", "Cost"),
+        ):
+            report.extend(
+                [
+                    f"## {heading} distributions",
+                    "",
+                    "Values are min/median/max (total); `n/a` means telemetry was incomplete.",
+                    "",
+                    "| Case | Baseline | Candidate |",
+                    "|---|---:|---:|",
+                    *distribution_rows(baseline, candidate, metric),
+                    "",
+                ]
+            )
+    blocking_regressions = regressions if variable is not None else hard_regressions
+    if blocking_regressions:
         report.extend(
             [
-                "Promotion blocked by hard regressions:",
+                "Promotion blocked by regressions:",
                 "",
-                *(f"- `{case}`" for case in hard_regressions),
+                *(f"- `{case}`" for case in blocking_regressions),
             ]
         )
     else:
@@ -895,7 +1236,16 @@ def compare_results(baseline: dict, candidate: dict) -> tuple[str, bool]:
             "No hard-case pass-rate regression was observed; promotion still "
             "requires validity review and human approval."
         )
-    return "\n".join(report) + "\n", not hard_regressions
+    if promotion_errors:
+        report.extend(
+            [
+                "",
+                "Promotion validation blockers:",
+                "",
+                *(f"- {error}" for error in promotion_errors),
+            ]
+        )
+    return "\n".join(report) + "\n", not blocking_regressions and not promotion_errors
 
 
 def cleanup_run(run_root: Path, confirmation: str) -> None:
@@ -934,9 +1284,16 @@ def parser() -> argparse.ArgumentParser:
     validate_result_cmd.add_argument("result", type=Path)
     validate_result_cmd.add_argument("--require-approval", action="store_true")
 
+    score_cmd = sub.add_parser("score")
+    score_cmd.add_argument("result", type=Path)
+    score_destination = score_cmd.add_mutually_exclusive_group()
+    score_destination.add_argument("--output", type=Path)
+    score_destination.add_argument("--in-place", action="store_true")
+
     compare_cmd = sub.add_parser("compare")
     compare_cmd.add_argument("baseline", type=Path)
     compare_cmd.add_argument("candidate", type=Path)
+    compare_cmd.add_argument("--variable")
 
     cleanup_cmd = sub.add_parser("cleanup")
     cleanup_cmd.add_argument("--run-root", required=True, type=Path)
@@ -966,7 +1323,9 @@ def main() -> int:
             )
             return 0
         if args.command == "validate-result":
-            errors = validate_result(load_json(args.result), require_approval=args.require_approval)
+            errors = validate_result(
+                load_json(args.result), require_approval=args.require_approval
+            )
             if errors:
                 print("result invalid:")
                 for error in errors:
@@ -974,9 +1333,24 @@ def main() -> int:
                 return 1
             print("result valid")
             return 0
+        if args.command == "score":
+            scored = score_result(load_json(args.result))
+            if args.in_place:
+                write_json_atomic(args.result, scored)
+                print(f"scored result written in place: {args.result}")
+            elif args.output:
+                if args.output.resolve() == args.result.resolve():
+                    raise EvalError("use --in-place to overwrite the input result")
+                write_json_atomic(args.output, scored)
+                print(f"scored result written: {args.output}")
+            else:
+                print(json.dumps(scored, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
         if args.command == "compare":
             report, promotable = compare_results(
-                load_json(args.baseline), load_json(args.candidate)
+                load_json(args.baseline),
+                load_json(args.candidate),
+                variable=args.variable,
             )
             print(report, end="")
             return 0 if promotable else 1

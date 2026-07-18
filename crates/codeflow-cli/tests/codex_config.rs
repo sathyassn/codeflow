@@ -53,6 +53,11 @@ fn autonomy_and_automatic_review_are_enabled() {
     assert_eq!(cfg["approval_policy"].as_str(), Some("on-request"));
     assert_eq!(cfg["approvals_reviewer"].as_str(), Some("auto_review"));
     assert_eq!(cfg["web_search"].as_str(), Some("live"));
+    assert_eq!(
+        cfg["model_reasoning_effort"].as_str(),
+        Some("high"),
+        "the primary Codex seat must not inherit an unrelated user-level effort"
+    );
     assert_eq!(cfg["features"]["hooks"].as_bool(), Some(true));
     assert_eq!(
         cfg["shell_environment_policy"]["ignore_default_excludes"].as_bool(),
@@ -150,6 +155,7 @@ fn dogfood_codex_config_matches_the_shipped_posture() {
         "approvals_reviewer",
         "web_search",
         "default_permissions",
+        "model_reasoning_effort",
         "features",
         "permissions",
     ] {

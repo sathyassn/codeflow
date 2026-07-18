@@ -142,24 +142,26 @@ v1's corpus (8 agents, 14 commands, 7 skills, 1,790-line CLAUDE.md ≈ 135K toke
 
 Always-loaded budget: AGENTS.md + orient digest ≈ **≤3K tokens** (v1: ~15.5K).
 
-> **Superseding note (2026-07-13) — caps updated to shipped reality.** The table
+> **Superseding note (2026-07-18) — caps updated to shipped reality.** The table
 > above is the original plan of record; the caps below supersede it, updated to
-> what the corpus actually ships after the later decisions that grew it. Line
-> counts are honest current measurements, not aspirations; the discipline (an
-> artifact earns its tokens, added only on proven need) is unchanged.
+> what the corpus actually ships after the later decisions that grew it. Lines
+> remain a readability diagnostic, while bytes are the enforceable context-cost
+> proxy; neither may be gamed by dense formatting. Current measurements are
+> honest, not aspirations, and every artifact must still earn its tokens.
 >
 > | Artifact | Original cap | Superseding cap | Shipped now | Why it grew |
 > |---|---|---|---|---|
-> | Agent defs | 1 — `cf-reviewer` ≤80 | 2 — `cf-reviewer` ≤80, `cf-security-reviewer` ≤180 | 64 / 170 | ADR-0016 added the security / red-team reviewer as a second agent (dual-vendor, seven-axis checklist). |
-> | AGENTS.md (standard) | ≤250 lines; 32KiB hard | ≤270 lines; 32KiB hard | 256 lines, ~16.2KiB | ADR-0019 (enforcement floor), ADR-0020 (restored commit standard), and the two added working principles. Well under the 32KiB hard cap. |
-> | AGENTS.md (minimal) | — | ≤160 lines | 144 lines | The minimal-tier contract shipped by ADR-0019. |
-> | CLAUDE.md (standard) | ≤15 lines | ≤35 lines | 32 lines | Carries the workflow/skill-ladder and delegation addenda beyond `@AGENTS.md`. |
-> | CLAUDE.md (minimal) | — | ≤20 lines | 19 lines | The lean minimal-tier variant (ADR-0019). |
+> | Agent defs | 1 — `cf-reviewer` ≤80 lines | 2 — reviewer ≤6KiB; security reviewer ≤16KiB | 82 / 187 lines; 3.8 / 10.6KiB | ADR-0016 added the security/red-team reviewer; later duo and proportionality duties made both verdict contracts explicit. |
+> | AGENTS.md (standard) | ≤250 lines; 32KiB hard | ≤24KiB; 32KiB hard | 283 lines; 18.2KiB | ADR-0019 through ADR-0030 added the enforcement floor, commit standard, host-neutral duo, evidence routing, and proportionate-quality gate. |
+> | AGENTS.md (minimal) | — | ≤12KiB | 146 lines; 8.5KiB | The minimal tier retains the same hard behavioral floor with fewer operating details. |
+> | CLAUDE.md (standard) | ≤15 lines | ≤6KiB | 55 lines; 3.4KiB | Carries only Claude-specific routing, effort, native-peer, and sandbox-retry addenda beyond `@AGENTS.md`. |
+> | CLAUDE.md (minimal) | — | ≤3KiB | 25 lines; 1.5KiB | The lean minimal-tier Claude addendum. |
 > | Commands | 3 — `/cf-plan` etc. ≤40 | superseded — commands merged into skills (v2.1.0); see §4.4 skills row | — | Claude merged custom commands into skills; codeflow ships `cf-*` skills only. |
 >
-> The `cf-method` skill (≤300 lines) is unchanged and within cap (231 lines).
-> These replacement caps are the ones to enforce mechanically; the original row
-> values remain only as the historical record.
+> The `cf-method` skill remains within its original cap. These replacement caps
+> are the ones to enforce; the original values remain historical context. The
+> standard always-loaded pair is about 22KiB (roughly 5–6K tokens), not the
+> original 3K estimate.
 
 ### 4.5 Responsibility split
 

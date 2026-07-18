@@ -56,8 +56,9 @@ Then verify and **offer** remediation — never install silently.
     `codex exec`, a hand-rolled app-server driver, or tmux-driving Codex.
   - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
     environment-variable denies), `tmux`, and `claude mcp list`, followed by
-    an authenticated interactive Fable-class/xhigh TTY canary in auto mode and
-    `autoMode.classifyAllShell: true` supplied through `--settings`, plus a
+    authenticated interactive Fable-class high and xhigh TTY canaries in auto
+    mode with `autoMode.classifyAllShell: true` supplied through `--settings`,
+    plus a
     task-scoped tmux round trip using Stop/StopFailure hook completion. Never
     use `claude -p` or pane stability as the work protocol. If Fable/auto is
     unavailable, record it and canary the strongest reasoning model with
@@ -65,8 +66,9 @@ Then verify and **offer** remediation — never install silently.
   - **Autonomy settings** — parse and inspect the effective files rather than
     trusting their comments:
     - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
-      auto-approved, unsandboxed escape disabled, wildcard public-domain egress
-      present for dependency/tool subprocesses, common private/link-local
+      auto-approved, classified unsandboxed retry enabled only for trusted
+      installed tools that fail because they require host state, wildcard
+      public-domain egress present for dependency/tool subprocesses, common private/link-local
       destinations denied, destructive/privileged operations asked or
       classified, secret reads denied, and the shipped raw Anthropic/OpenAI/AWS
       variables absent from sandboxed Bash. Claude ignores project
@@ -189,10 +191,15 @@ confirms the final content.
   the host's actual memory/CPU/tool budget; independent work gets separate
   branches/worktrees, explicit file ownership, and serialized integration. It
   is user-owned; `codeflow update` never touches it.
-- **Harness model/MCP config** — route latest available Fable-class/xhigh Claude
-  to reasoning/design/review, let it use current Opus-class subagents for
-  mechanistic tool operation, and use the strongest supported Codex coding
-  model at xhigh for implementation/verification. Configure the research,
+- **Harness model/MCP config** — invoke latest available Fable-class Claude
+  directly at high by default and xhigh on the orchestrator's escalation
+  triggers. Let Fable own internal Opus routing: medium for bounded deterministic
+  UI/MCP evidence collection, high for ambiguous/multi-step tool operation, with
+  Fable retaining interpretation and judgment. Invoke GPT-5.6 Sol or the
+  strongest supported successor Codex coding seat at high by default and xhigh
+  on equivalent triggers; allow bounded Sol-class medium/high workers only
+  through verified native routing while the primary retains implementation and
+  verification. Configure the research,
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;
   keep fast-aging version pins out of shared doctrine.

@@ -19,7 +19,9 @@ fn normalize_whitespace(value: &str) -> String {
 
 #[test]
 fn orchestrator_is_host_neutral_with_fixed_roles() {
-    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
 
     for required in [
         "Detect capabilities, not model identity.",
@@ -30,11 +32,15 @@ fn orchestrator_is_host_neutral_with_fixed_roles() {
         "**Claude leads design.**",
         "**Codex implements.**",
         "**Claude final-reviews.**",
-        "latest available Fable-class Claude",
-        "model at xhigh effort",
-        "current Opus-class subagents",
-        "strongest",
-        "supported Codex coding model at xhigh",
+        "directly invoked primary Fable seat independently reviews",
+        "owns the final quality verdict",
+        "latest Fable-class Claude model directly",
+        "directly at high effort by default",
+        "Escalate the primary Fable seat to xhigh",
+        "Opus-class workers at medium",
+        "GPT-5.6 Sol or the strongest supported successor Codex coding seat",
+        "the primary Codex seat still owns implementation and first verification",
+        "never let an internal worker replace either duo seat",
         "**Evidence outranks agreement.**",
         "**Bounded parallelism.**",
         "Plan v1",
@@ -131,6 +137,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "require at least 80% aggregate production-code line coverage",
         "the approved design",
         "Anything less is `changes_requested`.",
+        "Material avoidable complexity is major even when tests pass",
     ] {
         assert!(
             normalize_whitespace(&reviewer).contains(required),
@@ -176,6 +183,8 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
         "Agreement without examination is a failure mode",
         "Think in depth, not at the surface.",
         "Decide by options and horizons.",
+        "Write only what earns its keep.",
+        "every material complexity maps to a current requirement",
         "Shape the deliverable.",
         "check what it affects upstream and downstream",
         "ADRs and the ledger are never edited",
@@ -189,7 +198,9 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
 
 #[test]
 fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
-    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
     let agents = read("assets/base/AGENTS.md.tmpl");
 
     for required in [
@@ -200,9 +211,12 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "**Implementation:**",
         "**Review / verification:**",
         "**Substantive documentation:**",
-        "--model fable --effort xhigh --permission-mode auto",
+        "--model fable --effort high --permission-mode auto",
+        "replace `high` with `xhigh`",
+        "/codex:rescue --effort high",
+        "do not inherit an unobserved user default",
         "--settings '{\"autoMode\":{\"classifyAllShell\":true}}'",
-        "never fall through to bypass mode on an ordinary host",
+        "Never fall through to bypass mode on an ordinary host",
         "session in auto mode under the same fail-closed sandbox",
         "not plan or bypass",
         "public network and live search are enabled",
@@ -251,6 +265,10 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "one writer, branch, and worktree",
         "aggregate gates on the final",
         "combined diff",
+        "COMPLEXITY_JUSTIFICATION:",
+        "smallest coherent solution",
+        "Material avoidable complexity is `changes_requested`",
+        "not the fewest lines",
     ] {
         assert!(
             contract.contains(required),
@@ -267,7 +285,8 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(delegate.contains("task-scoped Claude"));
     assert!(delegate.contains("StopFailure"));
     assert!(delegate.contains("last_assistant_message"));
-    assert!(delegate.contains("--model fable --effort xhigh --permission-mode auto"));
+    assert!(delegate.contains("--model fable --effort high --permission-mode auto"));
+    assert!(delegate.contains("xhigh for capability-sensitive"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));
     assert!(delegate.contains("Never enumerate or capture unrelated"));

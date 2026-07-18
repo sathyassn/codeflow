@@ -95,6 +95,45 @@ def valid_result(suite: str = "canary") -> dict:
     return result
 
 
+def strict_effort_pair() -> tuple[dict, dict]:
+    baseline = valid_result("full")
+    baseline["run_id"] = "baseline"
+    baseline["system"]["observed"] = {
+        "model": baseline["system"]["model"],
+        "effort": "xhigh",
+        "evidence": [
+            {
+                "kind": "ui",
+                "ref": "sessions/baseline/banner",
+                "digest": "sha256:" + "d" * 64,
+            }
+        ],
+    }
+    baseline["system"]["peer_seats"] = [
+        {
+            "seat": "claude",
+            "model": "peer-model",
+            "effort": "xhigh",
+            "harness": "claude-code",
+            "harness_version": "test",
+            "settings_digest": "sha256:" + "e" * 64,
+        }
+    ]
+    baseline["experiment"] = {
+        "variable": "system.effort",
+        "baseline_run_id": "incumbent-before-baseline",
+    }
+    candidate = copy.deepcopy(baseline)
+    candidate["run_id"] = "candidate"
+    candidate["system"]["effort"] = "high"
+    candidate["system"]["observed"]["effort"] = "high"
+    candidate["system"]["observed"]["evidence"][0]["ref"] = (
+        "sessions/candidate/banner"
+    )
+    candidate["experiment"]["baseline_run_id"] = baseline["run_id"]
+    return baseline, candidate
+
+
 class SuiteContractTests(unittest.TestCase):
     def test_import_does_not_pollute_shipped_assets(self) -> None:
         self.assertFalse((MODULE_PATH.parent / "__pycache__").exists())
@@ -196,6 +235,38 @@ class ResultScoringTests(unittest.TestCase):
         self.assertEqual([], eval_kit.validate_result(valid_result("canary")))
         self.assertEqual([], eval_kit.validate_result(valid_result("full"), require_approval=True))
 
+    def test_schema_one_result_without_experiment_fields_remains_valid(self) -> None:
+        result = valid_result()
+        self.assertNotIn("observed", result["system"])
+        self.assertNotIn("peer_seats", result["system"])
+        self.assertNotIn("experiment", result)
+        self.assertEqual([], eval_kit.validate_result(result))
+
+    def test_requested_observed_mismatch_requires_validity_flag(self) -> None:
+        result = valid_result()
+        result["system"]["observed"] = {
+            "model": "different-model",
+            "effort": result["system"]["effort"],
+            "evidence": [
+                {
+                    "kind": "ui",
+                    "ref": "sessions/banner",
+                    "digest": "sha256:" + "d" * 64,
+                }
+            ],
+        }
+        self.assertTrue(
+            any(
+                "without a harness_context_mismatch" in error
+                for error in eval_kit.validate_result(result)
+            )
+        )
+        result["trials"][0]["validity_flags"] = ["harness_context_mismatch"]
+        result["trials"][0]["status"] = "fail"
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        result["summary"] = eval_kit.expected_summary(result["trials"], cases)
+        self.assertEqual([], eval_kit.validate_result(result))
+
     def test_missing_and_extra_trials_fail(self) -> None:
         missing = valid_result()
         missing["trials"].pop()
@@ -251,6 +322,32 @@ class ResultScoringTests(unittest.TestCase):
         self.assertTrue(any("human_approval.reviewer" in error for error in errors))
         self.assertTrue(any("human_approval.reviewed_at" in error for error in errors))
 
+    def test_promotion_rejects_hard_failure_and_not_run(self) -> None:
+        failed = valid_result("full")
+        failed["trials"][0]["observed"]["signals"] = []
+        failed["trials"][0]["status"] = "fail"
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        failed["summary"] = eval_kit.expected_summary(failed["trials"], cases)
+        self.assertTrue(
+            any(
+                "every hard-linked trial to pass" in error
+                for error in eval_kit.validate_result(failed, require_approval=True)
+            )
+        )
+
+        not_run = valid_result("full")
+        trial = not_run["trials"][0]
+        trial["outcome"] = "not_run"
+        trial["status"] = "not_run"
+        trial["not_run_reason"] = "harness unavailable"
+        not_run["summary"] = eval_kit.expected_summary(not_run["trials"], cases)
+        self.assertTrue(
+            any(
+                "does not allow error or not_run" in error
+                for error in eval_kit.validate_result(not_run, require_approval=True)
+            )
+        )
+
     def test_unknown_validity_flag_and_any_violation_block(self) -> None:
         result = valid_result()
         result["trials"][0]["validity_flags"] = ["missing-trace"]
@@ -285,6 +382,101 @@ class ResultScoringTests(unittest.TestCase):
         report, promotable = eval_kit.compare_results(baseline, candidate)
         self.assertFalse(promotable)
         self.assertIn("Promotion blocked", report)
+
+    def test_strict_effort_comparison_accepts_only_effort_drift(self) -> None:
+        baseline, candidate = strict_effort_pair()
+        report, promotable = eval_kit.compare_results(
+            baseline, candidate, variable="system.effort"
+        )
+        self.assertTrue(promotable)
+        self.assertIn("Declared variable: `system.effort`", report)
+        self.assertIn("## Duration ms distributions", report)
+        self.assertIn("## Tokens distributions", report)
+        self.assertIn("**All trials**", report)
+
+    def test_strict_comparison_rejects_other_field_and_peer_drift(self) -> None:
+        baseline, candidate = strict_effort_pair()
+        candidate["system"]["model"] = "other-model"
+        candidate["system"]["observed"]["model"] = "other-model"
+        with self.assertRaisesRegex(eval_kit.EvalError, "outside the declared"):
+            eval_kit.compare_results(baseline, candidate, variable="system.effort")
+
+        baseline, candidate = strict_effort_pair()
+        candidate["system"]["peer_seats"][0]["effort"] = "high"
+        with self.assertRaisesRegex(eval_kit.EvalError, "outside the declared"):
+            eval_kit.compare_results(baseline, candidate, variable="system.effort")
+
+    def test_strict_comparison_requires_observed_requested_match(self) -> None:
+        baseline, candidate = strict_effort_pair()
+        candidate["system"]["observed"]["effort"] = "medium"
+        candidate["trials"][0]["validity_flags"] = ["harness_context_mismatch"]
+        candidate["trials"][0]["status"] = "fail"
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        candidate["summary"] = eval_kit.expected_summary(candidate["trials"], cases)
+        with self.assertRaises(eval_kit.EvalError):
+            eval_kit.compare_results(baseline, candidate, variable="system.effort")
+
+    def test_strict_comparison_reports_and_blocks_any_regression(self) -> None:
+        baseline, candidate = strict_effort_pair()
+        candidate["trials"][0]["observed"]["signals"] = []
+        candidate["trials"][0]["status"] = "fail"
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        candidate["summary"] = eval_kit.expected_summary(candidate["trials"], cases)
+        report, promotable = eval_kit.compare_results(
+            baseline, candidate, variable="system.effort"
+        )
+        self.assertFalse(promotable)
+        self.assertIn("Promotion blocked by regressions", report)
+        self.assertIn("Promotion validation blockers", report)
+
+    def test_score_recomputes_without_mutating_input(self) -> None:
+        raw = valid_result()
+        raw["trials"][0]["status"] = "fail"
+        raw["summary"] = {}
+        scored = eval_kit.score_result(raw)
+        self.assertEqual("pass", scored["trials"][0]["status"])
+        self.assertEqual(
+            eval_kit.expected_summary(
+                scored["trials"],
+                {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]},
+            ),
+            scored["summary"],
+        )
+        self.assertEqual("fail", raw["trials"][0]["status"])
+
+    def test_score_cli_output_and_in_place_are_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "raw.json"
+            output = root / "scored.json"
+            raw = valid_result()
+            raw["trials"][0]["status"] = "fail"
+            raw["summary"] = {}
+            eval_kit.write_json(source, raw)
+            command = [sys.executable, str(MODULE_PATH), "score", str(source)]
+
+            printed = subprocess.run(command, check=True, capture_output=True, text=True)
+            self.assertEqual("fail", eval_kit.load_json(source)["trials"][0]["status"])
+            self.assertEqual("pass", json.loads(printed.stdout)["trials"][0]["status"])
+
+            subprocess.run(command + ["--output", str(output)], check=True)
+            self.assertEqual("pass", eval_kit.load_json(output)["trials"][0]["status"])
+            aliased = subprocess.run(
+                command + ["--output", str(source)], capture_output=True, text=True
+            )
+            self.assertEqual(2, aliased.returncode)
+            self.assertIn("use --in-place", aliased.stderr)
+
+            symlink = root / "linked.json"
+            symlink.symlink_to(output)
+            linked = subprocess.run(
+                command + ["--output", str(symlink)], capture_output=True, text=True
+            )
+            self.assertEqual(2, linked.returncode)
+            self.assertIn("refusing symlinked JSON output", linked.stderr)
+
+            subprocess.run(command + ["--in-place"], check=True)
+            self.assertEqual("pass", eval_kit.load_json(source)["trials"][0]["status"])
 
 
 class CleanupSafetyTests(unittest.TestCase):
