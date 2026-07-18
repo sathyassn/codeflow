@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeFlow Editorial Review"
+  short_description: "Review substantial prose without semantic drift"
+  default_prompt: "Use $cf-editorial-review to review this substantial artifact in its project and audience context."

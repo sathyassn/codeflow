@@ -22,7 +22,10 @@ description: Land finished work — docs and capability updates, then a PR throu
    migration path, which drives the major bump) or consciously stated
    non-breaking with the reason. The `breaking_watch_paths` warn is a backstop,
    not the judgment.
-5. Push and open the PR. Every commit conforms to the standard — `type(scope):
+5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
+   the PR narrative. It refines the writing but cannot weaken the template,
+   evidence, policy, or no-emoji requirements below.
+6. Push and open the PR. Every commit conforms to the standard — `type(scope):
    description` (≤ 50-char description, ≤ 72-char subject line), a body of only
    `-` bullets (at most 3, each a single line ≤ 72 chars) with an optional
    trailing `BREAKING CHANGE:` footer, one logical change each; reword or squash
@@ -37,10 +40,10 @@ description: Land finished work — docs and capability updates, then a PR throu
    the new tests added and what each pins, manual/e2e commands with the
    observed result, and what was NOT tested. A docs-only PR replaces that with
    one line saying so plus the doc checks run. No AI attribution, no emoji.
-6. Land via a PR **merged by a human** on green CI, or `codeflow integrate
+7. Land via a PR **merged by a human** on green CI, or `codeflow integrate
    <branch> --into <target>` when there is no remote. An agent never merges into
    a protected branch — no `gh pr merge` into a protected base, no by-hand
    merge, never `gh pr merge --delete-branch`. Override envs
    (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
-7. Confirm the landed state with `codeflow status`; report the final epic and
+8. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.

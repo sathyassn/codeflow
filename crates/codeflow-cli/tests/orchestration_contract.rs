@@ -284,6 +284,66 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
 }
 
 #[test]
+fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
+    let full_agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    let minimal_agents = normalize_whitespace(&read("assets/base/AGENTS.minimal.md.tmpl"));
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+    ));
+    let smells = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-editorial-review/references/editorial-smells.md",
+    ));
+
+    for required in [
+        "verified truth and policy outrank CodeFlow philosophy",
+        "documented voice/examples",
+        "Preserve technical meaning",
+        "never fabricate personality",
+    ] {
+        assert!(
+            full_agents.contains(required),
+            "full contract lost editorial principle: {required}"
+        );
+    }
+    for required in [
+        "verified truth and policy outrank documented project voice",
+        "preserve technical meaning",
+        "never invent personality",
+    ] {
+        assert!(
+            minimal_agents.contains(required),
+            "minimal contract lost proportionate editorial principle: {required}"
+        );
+    }
+
+    for required in [
+        "verified truth, evidence, exact technical meaning, and governing policy",
+        "the consuming project's documented voice and human-approved examples",
+        "Never trade precision for fluency",
+        "cluster items by shared purpose and audience",
+        "There is no universal word, punctuation, formatting, or emoji blacklist",
+        "Do not use an AI detector",
+        "primary Fable seat reviews",
+    ] {
+        assert!(skill.contains(required), "editorial skill lost {required}");
+    }
+    for required in [
+        "Use these as diagnostic prompts, not a checklist or blacklist",
+        "Do not rewrite merely because text uses an em dash",
+        "Do not replace an established project voice",
+    ] {
+        assert!(
+            smells.contains(required),
+            "editorial reference lost {required}"
+        );
+    }
+    assert!(
+        !skill.contains("Vale"),
+        "editorial skill must not require Vale"
+    );
+}
+
+#[test]
 fn reverse_lane_uses_hook_completion_not_pane_stability() {
     let delegate = read("assets/base/claude/skills/cf-delegate/SKILL.md");
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");

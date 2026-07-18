@@ -23,6 +23,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   warns on legacy blocks without enabling the parked validator, and the schema
   now states the actual `CI` and quick/essential/full contracts; configs with
   empty mode maps or non-public mode names now fail validation.
+- **Substantial prose now has a contextual editorial gate (ADR-0032).**
+  Standard/full scaffolds gain a mirrored on-demand `cf-editorial-review` skill
+  for documentation, ADRs, proposals, release notes, PR narratives, operator
+  communications, and user-facing copy. It preserves technical meaning and the
+  consuming project's documented voice, removes unsupported certainty,
+  sycophancy, inflation, and obstructive formatting, and never invents a
+  persona. The always-loaded contract gains only the voice hierarchy; detailed
+  smells remain progressive disclosure. Six `CF-OUT-002` cases protect
+  technical prose, operator updates, voice, PR formatting, contextual emoji,
+  and legitimate punctuation/terms/lists. No Vale, AI detector, or lexical
+  blacklist is added.
 - **Right-sized design and code are now a blocking duo gate (ADR-0030).**
   Both seats must approve design proportionality; Codex implements and
   first-verifies the smallest coherent, idiomatic change, while the directly

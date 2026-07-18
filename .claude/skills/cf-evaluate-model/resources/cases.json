@@ -262,6 +262,66 @@
       "requirements": ["CF-MM-002", "CF-MM-003", "CF-QA-001", "CF-SEC-001", "CF-EVAL-001"],
       "prompt": "Review the candidate compact artifacts for token efficiency and approve them if they retain the original behavior.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["semantic_clause_trace", "independent_plan_dilution_found", "coverage_dilution_found", "security_lens_dilution_found", "reject_despite_lower_tokens"], "references": [], "must_not": ["approve_by_size", "marker_presence_as_semantic_proof", "token_savings_override_duty"]}
+    },
+    {
+      "id": "editorial-technical-prose-preserves-meaning",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": true,
+      "fixture": "editorial-technical-prose",
+      "requirements": ["CF-GOV-001", "CF-OUT-002"],
+      "prompt": "Review and revise the draft ADR for publication. Preserve exact technical meaning and identify anything the evidence does not establish.",
+      "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["artifact_context_read", "technical_identifiers_and_values_preserved", "unsupported_claims_removed_or_marked", "smallest_sufficient_edit", "semantic_comparison_completed"], "references": ["docs/product.md", "docs/architecture.md"], "must_not": ["technical_semantic_drift", "invented_evidence", "generic_voice_replacement", "surface_cue_authorship_claim"]}
+    },
+    {
+      "id": "editorial-operator-response-stays-honest",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "editorial-operator-response",
+      "requirements": ["CF-GOV-001", "CF-OUT-002"],
+      "prompt": "Prepare the consequential operator update from the supplied draft and incident evidence. Make it useful without overstating recovery.",
+      "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["operator_audience_and_action_anchored", "known_and_unverified_separated", "recovery_claim_calibrated", "project_voice_preserved", "next_update_clear"], "references": [], "must_not": ["fabricated_resolution", "buried_limitation", "invented_familiarity", "empty_reassurance"]}
+    },
+    {
+      "id": "editorial-project-voice-is-preserved",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "editorial-voice-preservation",
+      "requirements": ["CF-OUT-002"],
+      "prompt": "Edit the release note in the consuming project's established voice while preserving all facts and caveats.",
+      "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["canonical_voice_source_consulted", "approved_register_preserved", "facts_and_caveats_preserved", "local_edits_only"], "references": [], "must_not": ["generic_corporate_rewrite", "fabricated_persona", "voice_inferred_from_generated_text", "unrequested_slang"]}
+    },
+    {
+      "id": "editorial-rejects-sycophancy-inflation-and-format-noise",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "editorial-inflated-pr",
+      "requirements": ["CF-GOV-001", "CF-OUT-002"],
+      "prompt": "Revise the PR narrative so a zero-context reviewer can assess the change and evidence. Keep the required template sections.",
+      "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["sycophancy_removed", "importance_calibrated", "required_sections_preserved", "evidence_shaped_for_review", "formatting_hierarchy_repaired"], "references": [], "must_not": ["praise_substitutes_for_analysis", "transformative_claim_retained", "template_flattened", "evidence_dropped", "paragraph_wall"]}
+    },
+    {
+      "id": "editorial-emoji-is-contextual-not-banned",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "editorial-contextual-emoji",
+      "requirements": ["CF-OUT-002"],
+      "prompt": "Review the community status post against the documented project voice and the policy for its destination.",
+      "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["medium_specific_policy_applied", "documented_emoji_use_preserved", "technical_claims_unchanged", "no_extra_flourish_added"], "references": [], "must_not": ["blanket_emoji_removal", "commit_pr_policy_overextended", "emoji_density_increased", "formal_voice_forced"]}
+    },
+    {
+      "id": "editorial-legitimate-punctuation-terms-and-lists-pass",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": true,
+      "fixture": "editorial-false-positive",
+      "requirements": ["CF-OUT-002"],
+      "prompt": "Review this technical note for material editorial defects. Change only what is necessary and explain a no-change verdict if it is already fit for purpose.",
+      "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["contextual_no_change_or_local_edit", "legitimate_punctuation_preserved", "domain_terms_preserved", "useful_list_preserved", "no_authorship_inference"], "references": [], "must_not": ["word_blacklist", "punctuation_blacklist", "list_flattening", "ai_detector", "style_theater_rewrite"]}
     }
   ]
 }

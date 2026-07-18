@@ -138,7 +138,11 @@ deepen that contract. Quality includes proportionate design and implementation:
 every material new surface maps to a current requirement or evidenced risk,
 Codex first-verifies the smallest coherent implementation, and the directly
 invoked Fable primary owns the final design/code quality verdict on the actual
-integrated diff (ADR-0023, ADR-0024, ADR-0030).
+integrated diff (ADR-0023, ADR-0024, ADR-0030). Substantial prose loads the
+mirrored `cf-editorial-review` skill rather than expanding the always-loaded
+contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
+audience/medium/task, and requested tone; both seats protect technical meaning,
+and Fable owns the final contextual editorial verdict (ADR-0032).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,

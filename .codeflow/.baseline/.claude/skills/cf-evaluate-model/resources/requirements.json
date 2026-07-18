@@ -178,6 +178,15 @@
       ]
     },
     {
+      "id": "CF-OUT-002",
+      "level": "hard",
+      "statement": "Substantial prose is reviewed in its full project, audience, medium, and task context; preserves technical meaning and credible documented voice; removes unsupported certainty, sycophancy, inflation, and obstructive formatting without fabricating personality or applying lexical, punctuation, list, or emoji blacklists.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["verified truth and policy outrank", "documented voice/examples", "never fabricate personality"]},
+        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Resolve conflicts in this order", "Never trade precision for fluency", "There is no universal word, punctuation, formatting, or emoji blacklist", "Do not use an AI detector"]}
+      ]
+    },
+    {
       "id": "CF-SHIP-001",
       "level": "hard",
       "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",

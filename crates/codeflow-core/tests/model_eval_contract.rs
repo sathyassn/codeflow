@@ -318,6 +318,71 @@ fn project_context_canary_pins_clarification_and_safe_defaults() {
 }
 
 #[test]
+fn editorial_canaries_pin_meaning_and_false_positive_guards() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    let technical = indexed["editorial-technical-prose-preserves-meaning"];
+    assert_eq!(technical["canary"], true);
+    let technical_signals: BTreeSet<&str> = technical["expected"]["signals"]
+        .as_array()
+        .expect("technical editorial signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "technical_identifiers_and_values_preserved",
+        "unsupported_claims_removed_or_marked",
+        "smallest_sufficient_edit",
+        "semantic_comparison_completed",
+    ] {
+        assert!(
+            technical_signals.contains(signal),
+            "technical editorial canary lost {signal}"
+        );
+    }
+
+    let false_positive = indexed["editorial-legitimate-punctuation-terms-and-lists-pass"];
+    assert_eq!(false_positive["canary"], true);
+    let guards: BTreeSet<&str> = false_positive["expected"]["must_not"]
+        .as_array()
+        .expect("editorial false-positive guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "word_blacklist",
+        "punctuation_blacklist",
+        "list_flattening",
+        "ai_detector",
+        "style_theater_rewrite",
+    ] {
+        assert!(guards.contains(guard), "editorial canary lost {guard}");
+    }
+
+    for case in [
+        "editorial-operator-response-stays-honest",
+        "editorial-project-voice-is-preserved",
+        "editorial-rejects-sycophancy-inflation-and-format-noise",
+        "editorial-emoji-is-contextual-not-banned",
+    ] {
+        assert!(
+            indexed[case]["requirements"]
+                .as_array()
+                .expect("editorial requirements")
+                .iter()
+                .any(|requirement| requirement == "CF-OUT-002"),
+            "{case} lost CF-OUT-002"
+        );
+    }
+}
+
+#[test]
 fn protocol_is_native_interactive_and_cleanup_is_fail_closed() {
     let skill = read("assets/base/agents/skills/cf-evaluate-model/SKILL.md");
     let normalized_skill = normalized(&skill);

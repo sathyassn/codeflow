@@ -139,6 +139,14 @@ to the evidence actually read. They do not inherit code-test requirements for a
 surface they did not change, but they still need independent Claude and Codex
 work plus a settled, evidenced result.
 
+## Editorial quality
+
+Apply `cf-editorial-review` to substantial documentation, ADRs, proposals,
+release notes, PR narratives, operator communications, and user-facing copy.
+The primary Fable seat owns the final contextual editorial verdict; both seats
+still verify technical meaning and evidence. Do not invoke the skill for every
+short response, and do not let tone override truth, policy, or precision.
+
 ## Coverage
 
 Scenario coverage comes first: happy paths, boundaries, malformed input,
@@ -206,6 +214,7 @@ Completion requires:
 - UI/design evidence is present or explicitly N/A;
 - the independent Claude review is approved;
 - design and implementation proportionality are approved;
+- substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.
 
 For a mode without implementation, read “task breakdown” as the final research,

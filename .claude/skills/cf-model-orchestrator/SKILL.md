@@ -32,7 +32,7 @@ implementation stage for an analysis-only request.
   designated implementer; review authority does not imply edit authority.
 - **Substantive documentation:** use research/plan mode when only the proposed
   content is requested; use implementation mode when repository docs will be
-  changed and verified.
+  changed and verified. Apply `cf-editorial-review` before final approval.
 
 ## Invariants
 
@@ -249,7 +249,8 @@ reviews the actual integrated diff rather than task summaries. It reruns
 relevant tests, grades every acceptance criterion with evidence, rejects
 unnecessary or non-idiomatic complexity and brittle under-design, checks design
 and design-system conformance plus UX/UI behavior, performs the independent
-security pass, and owns the final code and design quality verdict. In Claude
+security pass, applies `cf-editorial-review` to substantial changed prose and
+user-facing copy, and owns the final code and design quality verdict. In Claude
 Code, `cf-reviewer` and
 `cf-security-reviewer` may deepen the pass; they do not replace Claude's
 cross-vendor review of Codex's work. For research/analysis/plan modes, Claude

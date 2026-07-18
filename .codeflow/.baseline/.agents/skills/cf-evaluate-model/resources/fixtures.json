@@ -172,6 +172,66 @@
         "ui/BillingView.tsx": "export function BillingView() { return <div style={{ color: '#b42318', padding: '12px' }}><p>Account failed</p><button>Retry</button></div>; }\n",
         "evidence/test-summary.txt": "component: pass 12/12\nbrowser: not run\n"
       }
+    },
+    {
+      "id": "editorial-technical-prose",
+      "tier": "standard",
+      "state": {"branch": "fixture/editorial-adr", "peer": "available", "artifact": "ADR", "voice_documented": true},
+      "files": {
+        "docs/product.md": "# Product\n\nA reliability tool for infrastructure operators.\n\n## Writing voice\n\nPlain, exact, and calm. Lead with the decision and show the evidence. Do not inflate routine engineering work.\n",
+        "docs/architecture.md": "# Architecture\n\nThe dispatcher calls the worker over `DispatchPort`. The current request timeout is 30 seconds; the caller may retry twice with the same idempotency key.\n",
+        "EVIDENCE.md": "# Verified evidence\n\n- `DispatchPort` remains the public boundary.\n- Request timeout: 30 seconds.\n- Maximum caller retries: 2.\n- The canary covered 12,400 requests with no duplicate side effects.\n- Regional failover was not tested.\n",
+        "DRAFT_ADR.md": "# ADR — Revolutionary dispatch resilience\n\nWe are thrilled to introduce an incredibly robust architecture that completely eliminates duplicate work. The new `DispatchPort` boundary uses a 30-second timeout and two retries—guaranteeing seamless reliability in every region.\n\n## Decision\n\nKeep `DispatchPort`; retry at most twice with the same idempotency key.\n"
+      }
+    },
+    {
+      "id": "editorial-operator-response",
+      "tier": "standard",
+      "state": {"branch": "fixture/operator-update", "peer": "available", "audience": "on-call operators", "severity": "SEV-2"},
+      "files": {
+        "PROJECT_VOICE.md": "# Operator voice\n\nState impact, known facts, uncertainty, operator action, and the next update. Be calm and direct.\n",
+        "INCIDENT_FACTS.md": "# Incident facts at 14:20 UTC\n\n- Elevated checkout latency began at 13:47 UTC.\n- Error rate fell from 8.2% to 1.1% after traffic shifted at 14:12 UTC.\n- Root cause is still under investigation.\n- Operators should leave traffic on region B.\n- Next update: 14:45 UTC.\n",
+        "DRAFT.md": "Amazing catch, team! Everything is basically fixed and customers should be completely safe now. We feel great about the recovery. Please keep doing what you are doing and stay tuned!\n"
+      }
+    },
+    {
+      "id": "editorial-voice-preservation",
+      "tier": "standard",
+      "state": {"branch": "fixture/voice", "peer": "available", "voice_documented": true, "examples_human_approved": true},
+      "files": {
+        "docs/style.md": "# Release-note voice\n\nSpare, concrete, uncelebratory. Use the product's established line, `Proof before promises`, only when evidence follows it.\n\n## Approved example\n\nProof before promises. Export retries now resume from the last confirmed page; interrupted exports no longer restart from page one.\n",
+        "FACTS.md": "# Facts\n\n- Export retries resume from the last confirmed page.\n- Existing export files remain compatible.\n- Mobile export was not tested.\n",
+        "RELEASE_NOTE.md": "Export retries now resume from the last confirmed page. Existing export files remain compatible. Mobile export was not tested.\n"
+      }
+    },
+    {
+      "id": "editorial-inflated-pr",
+      "tier": "standard",
+      "state": {"branch": "fixture/pr-copy", "peer": "available", "artifact": "PR narrative"},
+      "files": {
+        ".github/pull_request_template.md": "## Summary\n\n## Changes\n\n## Testing\n\n## Linked decisions\n",
+        "CHANGE_FACTS.md": "# Change facts\n\n- Fixes a null dereference when an optional label is absent.\n- Adds one regression test.\n- `cargo test -p labels`: 18 passed.\n- No UI changed.\n- Linked ADR: ADR-0012.\n",
+        "PR_DRAFT.md": "# An Absolutely Transformative Improvement\n\n## Summary\n\nFirst and foremost, this brilliant change represents a major leap forward for the entire platform. Great idea!\n\n## Why This Matters So Much\n\nIt is important to note that quality is important.\n\n## Changes\n\n**MAJOR:** We fixed stuff and made things robust.\n\n## Testing\n\nTests pass.\n\n## Linked decisions\n\nADR-0012\n"
+      }
+    },
+    {
+      "id": "editorial-contextual-emoji",
+      "tier": "standard",
+      "state": {"branch": "fixture/community-post", "peer": "available", "destination": "community status channel", "emoji_allowed": true},
+      "files": {
+        "docs/community-voice.md": "# Community status voice\n\nFriendly and concise. A single status emoji may lead a resolved item in community chat. Do not use emoji in commits, PR bodies, incidents, or security notices.\n",
+        "FACTS.md": "# Facts\n\n- Package search indexing caught up at 09:18 UTC.\n- Searches created after 09:18 UTC are current.\n- Backfill verification passed for 40 sampled packages.\n",
+        "POST.md": "✅ Package search indexing caught up at 09:18 UTC. New searches are current, and the 40-package backfill sample passed.\n"
+      }
+    },
+    {
+      "id": "editorial-false-positive",
+      "tier": "standard",
+      "state": {"branch": "fixture/editorial-pass", "peer": "available", "artifact": "technical note"},
+      "files": {
+        "docs/style.md": "# Technical-note style\n\nUse exact terms, compact headings, and lists when readers need to scan conditions. Standard English punctuation is welcome.\n",
+        "NOTE.md": "# Retry boundary\n\n`Retry-After` is authoritative—the client must not substitute its local backoff. Preserve the server value; cap only the wait performed by this process.\n\n**Apply the cap when:**\n\n- the response is `429` or `503`;\n- `Retry-After` parses as delta-seconds; and\n- the parsed value exceeds `MAX_LOCAL_WAIT`.\n\nNote: HTTP-date parsing remains the gateway's responsibility.\n"
+      }
     }
   ]
 }

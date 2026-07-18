@@ -344,3 +344,50 @@ fn model_eval_source_live_and_baseline_copies_are_byte_identical() {
         problems.join("\n  ")
     );
 }
+
+/// The contextual editorial skill is managed in the same five source/live/
+/// baseline locations. Pin the baseline too: active mirror parity alone cannot
+/// detect a stale three-way merge base.
+#[test]
+fn editorial_source_live_and_baseline_copies_are_byte_identical() {
+    let root = repo_root();
+    let canonical = root.join("assets/base/agents/skills/cf-editorial-review");
+    let copies = [
+        root.join(".agents/skills/cf-editorial-review"),
+        root.join(".claude/skills/cf-editorial-review"),
+        root.join(".codeflow/.baseline/.agents/skills/cf-editorial-review"),
+        root.join(".codeflow/.baseline/.claude/skills/cf-editorial-review"),
+    ];
+    let canonical_files: BTreeSet<String> = walk_files(&canonical)
+        .iter()
+        .map(|path| rel(&canonical, path))
+        .collect();
+    assert!(
+        !canonical_files.is_empty(),
+        "editorial skill source is empty"
+    );
+
+    let mut problems = Vec::new();
+    for copy in copies {
+        let copy_files: BTreeSet<String> = walk_files(&copy)
+            .iter()
+            .map(|path| rel(&copy, path))
+            .collect();
+        for file in canonical_files.symmetric_difference(&copy_files) {
+            problems.push(format!("{}: file-set drift at {file}", copy.display()));
+        }
+        for file in canonical_files.intersection(&copy_files) {
+            let expected = std::fs::read(canonical.join(file)).expect("read canonical file");
+            let actual = std::fs::read(copy.join(file)).expect("read mirrored file");
+            if expected != actual {
+                problems.push(format!("{}: byte drift at {file}", copy.display()));
+            }
+        }
+    }
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "editorial source/live/baseline copies drifted:\n  {}",
+        problems.join("\n  ")
+    );
+}

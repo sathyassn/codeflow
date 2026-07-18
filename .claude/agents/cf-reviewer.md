@@ -32,6 +32,9 @@ itself a blocker finding — return changes_requested.
    accepting one-off styling, state logic, or a new higher-order abstraction.
 3. For each criterion, verify it in the code and record evidence: file:line plus
    one sentence on how it is satisfied. No evidence means not verified.
+   For substantial documentation or user-facing copy, read and apply
+   `.claude/skills/cf-editorial-review/SKILL.md`; treat meaning, evidence,
+   policy, and contextual voice defects as findings, not taste preferences.
 4. Run the mechanical gates and capture their output:
    - `codeflow test`
    - `codeflow validate --docs` (the docs spine ships from standard tier up, and

@@ -206,6 +206,11 @@ confirms the final content.
 - **README and CI reconciliation** — update human-facing setup or CI only when
   the discovered canonical commands and documented behavior disagree. README is
   the human front door, not a second agent authority.
+- **Editorial voice** — find existing project-owned voice/style guidance and
+  representative human-approved examples. If none exists, ask whether durable
+  guidance is wanted; never infer a persona from generated text. Keep the
+  canonical guidance in the project's existing content/style home and add only
+  a short pointer in the AGENTS.md project-owned section when agents need it.
 
 For each: propose the change, get the user's content, write it, commit in a
 scoped unit, and push for durability. `codeflow validate` and `codeflow doctor`
@@ -223,4 +228,5 @@ content. Do **not** propose auto-running the skill.
 
 Report completion with the prioritized findings, the tool fixes applied or
 declined (and what each declined fix costs), the artifacts filled, and the gate
-output. Hand off to `cf-ship` to land the PR — a human merges it.
+output. Apply `cf-editorial-review` to the substantive report and artifact
+edits, then hand off to `cf-ship` to land the PR — a human merges it.

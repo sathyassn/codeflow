@@ -290,7 +290,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -315,9 +315,11 @@ coverage floor where measurable (90% normal target), security review, and
 bounded rework. It also blocks material avoidable complexity: both seats review
 design proportionality, Codex first-verifies the smallest coherent implementation,
 and the directly invoked Fable primary reviews the settled design and actual
-integrated diff for the final quality verdict. Cross-model callers invoke the
-latest Fable-class seat directly
-at high by default and xhigh on defined complexity/failure triggers; Fable may
+integrated diff for the final quality verdict. Substantial prose additionally
+loads `cf-editorial-review`: both seats protect technical meaning and evidence,
+while Fable owns the final contextual voice and editorial verdict. Cross-model
+callers invoke the latest Fable-class seat directly at high by default and
+xhigh on defined complexity/failure triggers; Fable may
 route bounded deterministic tool evidence to Opus medium and ambiguous or
 multi-step tool operation to Opus high, but retains interpretation and judgment.
 They invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat
@@ -393,8 +395,11 @@ then reconciles the consuming project's actual README, manifests, code, and CI
 against its project-owned artifacts (`docs/product.md`,
 `docs/architecture.md`, common instructions/commands in `AGENTS.md`, only
 Claude-specific differences in `CLAUDE.md`, policy levels, and runtime model
-routing). It verifies effective Claude/Codex sandbox, network, live-search, and
-approval posture rather than trusting comments. It also canaries the task's
+routing). It locates existing human-approved editorial voice guidance and
+examples without inventing a persona, and points agents to the project-owned
+canonical source when one exists. It verifies effective Claude/Codex sandbox,
+network, live-search, and approval posture rather than trusting comments. It
+also canaries the task's
 research, GitHub, stack, coverage/security, browser/UI, design, and
 project-specific MCP tools with brokered authentication and no raw secrets.
 
@@ -414,7 +419,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs"]
 epics: []
-adrs: [ADR-0027]
+adrs: [ADR-0027, ADR-0032]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,
@@ -424,6 +429,12 @@ requirement IDs, source-marker traceability, balanced regression/capability
 cases, exact fixture overlays, a native-interactive run protocol, and a
 standard-library tool for deterministic validation, materialization, scoring,
 baseline comparison, and fail-closed cleanup.
+
+The hard `CF-OUT-002` contract evaluates contextual editorial quality without
+surface-cue policing. Its cases cover technical semantic preservation,
+operator uncertainty, consuming-project voice, sycophancy/inflation/formatting,
+medium-appropriate emoji, and false positives for legitimate punctuation,
+terms, and lists.
 
 Canary mode runs selected regressions once while maintaining the corpus. Full
 qualification runs every case three times and is required for promotion. Each
