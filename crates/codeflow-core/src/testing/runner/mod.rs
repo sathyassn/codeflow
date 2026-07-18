@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::testing::config::{Tag, TargetConfig};
+use crate::testing::config::{CommandShell, Tag, TargetConfig};
 use crate::testing::error::TestingError;
 
 /// Default per-target wall-clock timeout, applied when a target omits
@@ -66,7 +66,14 @@ pub fn run_target(
     let timeout = Duration::from_secs(timeout_secs);
 
     let start = Instant::now();
-    let outcome = spawn_command(&mode_cmd.command, &cwd, &target.env, &target.name, timeout)?;
+    let outcome = spawn_command(
+        &mode_cmd.command,
+        &cwd,
+        &target.env,
+        &target.name,
+        target.shell,
+        timeout,
+    )?;
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let report_path = target.report.as_ref().map(|r| cwd.join(&r.path));
@@ -335,9 +342,10 @@ fn spawn_command(
     cwd: &Path,
     env: &std::collections::BTreeMap<String, String>,
     target_name: &str,
+    shell: CommandShell,
     timeout: Duration,
 ) -> Result<CommandOutcome, TestingError> {
-    let mut cmd = build_command(command, cwd, env, target_name)?;
+    let mut cmd = build_command(command, cwd, env, target_name, shell)?;
 
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
@@ -386,6 +394,15 @@ fn spawn_command(
                     .args(["-KILL", "--", &format!("-{}", child.id())])
                     .status();
             }
+            #[cfg(windows)]
+            {
+                // `/T` terminates descendants and `/F` avoids leaving a hung
+                // test process behind. The direct-child kill below remains a
+                // backstop if taskkill itself is unavailable.
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                    .status();
+            }
             let _ = child.kill();
             timed_out = true;
             break child.wait().map_err(spawn_err)?;
@@ -411,9 +428,39 @@ fn build_command(
     cwd: &Path,
     env: &std::collections::BTreeMap<String, String>,
     target_name: &str,
+    shell: CommandShell,
 ) -> Result<Command, TestingError> {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(command).current_dir(cwd);
+    let effective = effective_shell(shell, cfg!(windows));
+    let mut cmd = match effective {
+        CommandShell::Auto => unreachable!("auto shell resolved above"),
+        CommandShell::Sh => {
+            let mut command_process = Command::new("sh");
+            command_process.args(["-c", command]);
+            command_process
+        }
+        CommandShell::Powershell => {
+            let executable = if cfg!(windows) {
+                "powershell.exe"
+            } else {
+                "pwsh"
+            };
+            let mut command_process = Command::new(executable);
+            command_process.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ]);
+            command_process
+        }
+        CommandShell::Cmd => {
+            let mut command_process = Command::new("cmd.exe");
+            command_process.args(["/D", "/S", "/C", command]);
+            command_process
+        }
+    };
+    cmd.current_dir(cwd);
 
     // The test gate can run inside a git hook (the pre-push `test_gate_on_push`,
     // or `integrate`'s internal gate), where git exports GIT_DIR / GIT_WORK_TREE
@@ -435,6 +482,14 @@ fn build_command(
         cmd.env(key, val);
     }
     Ok(cmd)
+}
+
+fn effective_shell(shell: CommandShell, windows: bool) -> CommandShell {
+    match shell {
+        CommandShell::Auto if windows => CommandShell::Cmd,
+        CommandShell::Auto => CommandShell::Sh,
+        explicit => explicit,
+    }
 }
 
 struct CapturedOutput {
@@ -558,6 +613,7 @@ mod tests {
             enabled: true,
             cwd: None,
             env: BTreeMap::new(),
+            shell: CommandShell::Auto,
             runner: RunnerType::Custom,
             modes: BTreeMap::from([(
                 "full".to_string(),
@@ -926,8 +982,14 @@ mod tests {
     /// test command discovers git from `cwd`.
     #[test]
     fn spawn_command_clears_inherited_git_env() {
-        let command = build_command("true", Path::new("."), &BTreeMap::new(), "probe")
-            .expect("probe command builds");
+        let command = build_command(
+            "true",
+            Path::new("."),
+            &BTreeMap::new(),
+            "probe",
+            CommandShell::Auto,
+        )
+        .expect("probe command builds");
         let removed: std::collections::BTreeSet<_> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
@@ -939,6 +1001,13 @@ mod tests {
                 "{key} must be removed from the child environment"
             );
         }
+    }
+
+    #[test]
+    fn auto_shell_follows_runtime_platform_and_explicit_shell_wins() {
+        assert_eq!(effective_shell(CommandShell::Auto, false), CommandShell::Sh);
+        assert_eq!(effective_shell(CommandShell::Auto, true), CommandShell::Cmd);
+        assert_eq!(effective_shell(CommandShell::Cmd, false), CommandShell::Cmd);
     }
 
     /// `ci_skip=true` targets still run OUTSIDE CI (local dev loop).

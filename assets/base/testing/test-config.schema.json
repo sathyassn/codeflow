@@ -139,6 +139,12 @@
           "minimum": 1,
           "default": 600,
           "description": "Per-target wall-clock timeout in seconds. When the command runs longer, the runner kills it and the target fails loudly. Omitted → 600s. Guards the gate/pre-push against a single hanging target blocking forever."
+        },
+        "shell": {
+          "type": "string",
+          "enum": ["auto", "sh", "powershell", "cmd"],
+          "default": "auto",
+          "description": "Shell for mode commands. auto uses sh on macOS/Linux/WSL2 and cmd.exe on native Windows so generated && command chains work without an extra dependency; choose an explicit shell only when the project requires it."
         }
       },
       "additionalProperties": false

@@ -2,6 +2,8 @@
 
 How a codeflow release is cut, and how a project that *consumes* codeflow should
 think about its own versioning. Decision record: ADR-0012 (supersedes ADR-0010).
+Use [the release checklist](release-checklist.md) as the evidence-bearing
+approval record for every run of this procedure.
 
 ## codeflow's own releases
 
@@ -12,8 +14,34 @@ driven and human-gated. Two tools do the work:
 - **git-cliff** derives the next SemVer **and** the changelog from the
   Conventional Commits the commit-msg gate already enforces — reading git history
   only, so it never publishes or runs `cargo package`.
-- **cargo-dist** builds the three target binaries + the shell installer and
-  publishes the GitHub Release, triggered by the version tag.
+- **cargo-dist** builds four target binaries plus shell and PowerShell
+  installers and publishes the GitHub Release, triggered by the version tag.
+
+### Cross-build toolchain
+
+Release CI uses native cargo-dist runners for macOS, Linux, and Windows so each
+binary is linked with the platform SDK and can be exercised there. For an
+earlier host-agnostic build check, the repository also provides Cargo aliases:
+
+```sh
+cargo install --locked cargo-xwin --version 0.23.0
+cargo install --locked cargo-zigbuild --version 0.23.0
+rustup target add x86_64-pc-windows-msvc x86_64-unknown-linux-gnu
+# Install the current stable Zig from https://ziglang.org/download/ or the
+# host package manager, then record `zig version` with the release evidence.
+
+cargo cross-check-windows
+cargo cross-build-windows
+cargo cross-check-linux       # requires Zig on PATH
+cargo cross-build-linux       # requires Zig on PATH
+```
+
+`cargo-xwin` acquires the Windows CRT/SDK inputs needed to build MSVC targets
+from macOS or Linux. `cargo-zigbuild` uses Zig as the linker for a Linux GNU
+binary with a glibc 2.17 floor. macOS artifacts still build on macOS because
+Apple SDK redistribution/licensing prevents a generic bundled cross toolchain.
+Cross-build success proves compilation and linking only; it never replaces a
+native Windows/Linux/macOS test and installer canary.
 
 ### The runbook
 
@@ -67,13 +95,17 @@ git push -u origin chore/release   # then open the PR
     auth status output in place of a working interactive session.
   - `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
     locally; CI billing/availability never substitutes for this evidence.
+  - `cargo dist plan --output-format=json` lists all four archives, both
+    installers, and native runner rows. Canary the shell installer on each
+    macOS/Linux architecture and the PowerShell installer on Windows; confirm
+    WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
 
   Record new verification in a current ADR/release note and update
   docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
 - After merge, tag the release; the tag drives cargo-dist:
 
   ```sh
-  git tag "$NEXT" && git push origin "$NEXT"
+  git tag -a "$NEXT" -m "CodeFlow $NEXT" && git push origin "$NEXT"
   ```
 
   A real tag push triggers `.github/workflows/release.yml` — **no PAT or bot

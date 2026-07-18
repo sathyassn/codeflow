@@ -349,6 +349,52 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
 }
 
 #[test]
+fn exec_guard_blocks_powershell_catastrophe_with_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let payload = serde_json::json!({
+        "tool_name": "PowerShell",
+        "tool_input": {"command": r"Remove-Item -Recurse C:\Windows"},
+        "cwd": dir.path(),
+    })
+    .to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "exec-guard"])
+            .current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
+}
+
+#[test]
+fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+
+    for command in ["bash -lc 'rm -rf /System'", "sh -ic 'rm -rf /Library'"] {
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        );
+        assert_eq!(out.status.code(), Some(2), "should block: {command}");
+    }
+
+    for command in ["rm -rf ~/code/app/target", "rm -rf $HOME/code/app/build"] {
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        );
+        assert!(out.status.success(), "should allow: {command}");
+    }
+}
+
+#[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
     let dir = tempfile::tempdir().unwrap();

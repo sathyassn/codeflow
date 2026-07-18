@@ -62,6 +62,21 @@ jobs:
       - name: cargo doc --workspace -D warnings
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+  windows:
+    name: windows (build + test + clippy)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo clippy --workspace --all-targets -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   secret-scan:
     name: secret scan
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-//! `git-guard` — the `PreToolUse` (Bash) hook (charter §3.3, §6.1 plane 2).
+//! `git-guard` — the `PreToolUse` shell hook (charter §3.3, §6.1 plane 2).
 //!
 //! Intercepts git operations the client-side git hooks can't reach:
 //! force-push / push / delete against protected branches, hard reset on a
@@ -44,7 +44,7 @@ pub struct HookPayload {
     pub cwd: Option<PathBuf>,
 }
 
-/// `tool_input` for Bash invocations.
+/// `tool_input` for shell invocations.
 #[derive(Debug, Default, Deserialize)]
 pub struct ToolInput {
     #[serde(default)]
@@ -61,10 +61,12 @@ impl HookPayload {
         serde_json::from_str(json).map_err(|e| e.to_string())
     }
 
-    /// The Bash command to evaluate, when this payload is a Bash tool call.
+    /// The command to evaluate when this is a Bash or `PowerShell` tool call.
+    /// Claude exposes `PowerShell` as a distinct tool on native Windows; Codex
+    /// currently sends the same command shape under its shell hook.
     #[must_use]
-    pub fn bash_command(&self) -> Option<&str> {
-        if self.tool_name == "Bash" {
+    pub fn shell_command(&self) -> Option<&str> {
+        if matches!(self.tool_name.as_str(), "Bash" | "PowerShell") {
             self.tool_input.command.as_deref()
         } else {
             None
@@ -1773,7 +1775,7 @@ mod tests {
     fn test_payload_parse_bash() {
         let json = r#"{"tool_name":"Bash","tool_input":{"command":"git status"},"cwd":"/x"}"#;
         let p = HookPayload::parse(json).unwrap();
-        assert_eq!(p.bash_command(), Some("git status"));
+        assert_eq!(p.shell_command(), Some("git status"));
         assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/x")));
     }
 
@@ -1795,15 +1797,24 @@ mod tests {
             "permission_mode": "dontAsk"
         }"#;
         let p = HookPayload::parse(json).unwrap();
-        assert_eq!(p.bash_command(), Some("git status"));
+        assert_eq!(p.shell_command(), Some("git status"));
         assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
+    }
+
+    #[test]
+    fn test_payload_parse_powershell() {
+        let json =
+            r#"{"tool_name":"PowerShell","tool_input":{"command":"git status"},"cwd":"C:\\repo"}"#;
+        let p = HookPayload::parse(json).unwrap();
+        assert_eq!(p.shell_command(), Some("git status"));
+        assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new(r"C:\repo")));
     }
 
     #[test]
     fn test_payload_non_bash_tool_ignored() {
         let json = r#"{"tool_name":"Write","tool_input":{"file_path":"a"}}"#;
         let p = HookPayload::parse(json).unwrap();
-        assert_eq!(p.bash_command(), None);
+        assert_eq!(p.shell_command(), None);
     }
 
     #[test]

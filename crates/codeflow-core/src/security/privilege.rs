@@ -1,7 +1,8 @@
 //! Detects and blocks privilege escalation attempts.
 //!
-//! Checks for: sudo/su/doas, shell chaining to privilege commands,
-//! script bypass (bash -c, eval), environment manipulation (`LD_PRELOAD`).
+//! Checks for: Unix and Windows privilege launchers, shell chaining to
+//! privilege commands, script bypass (bash -c, eval), and environment
+//! manipulation (`LD_PRELOAD`).
 
 use std::sync::OnceLock;
 
@@ -11,6 +12,19 @@ use super::{block, CheckContext, SecurityModule, Verdict};
 
 /// Commands that escalate privileges.
 const PRIV_ESC_CMDS: &[&str] = &["sudo", "su", "doas", "pkexec", "runuser"];
+
+fn windows_priv_esc_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)(?:^|[;&|]\s*)(?:\S*[\\/])?(?:gsudo|runas(?:\.exe)?)(?:\s|$)")
+            .expect("valid")
+    })
+}
+
+fn elevated_start_process_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\bStart-Process\b[^\r\n]*\s-Verb\s+RunAs\b").expect("valid"))
+}
 
 fn bash_c_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -144,6 +158,20 @@ fn check_direct_priv_esc(cmd: &str) -> Option<Verdict> {
             ));
         }
     }
+    if windows_priv_esc_re().is_match(cmd) {
+        return Some(block(
+            "Privilege Escalation",
+            "Windows privilege launcher not permitted",
+            "gsudo/runas",
+        ));
+    }
+    if elevated_start_process_re().is_match(cmd) {
+        return Some(block(
+            "Privilege Escalation",
+            "Elevated PowerShell process launch not permitted",
+            "Start-Process -Verb RunAs",
+        ));
+    }
     None
 }
 
@@ -249,6 +277,21 @@ mod tests {
         assert!(PrivilegeModule
             .check(&ctx("doas cat /etc/shadow"))
             .is_some());
+    }
+
+    #[test]
+    fn test_windows_privilege_launchers() {
+        for cmd in [
+            "gsudo winget upgrade",
+            "runas /user:Administrator cmd",
+            "echo ok && gsudo Remove-Item file",
+            "Start-Process powershell -Verb RunAs",
+        ] {
+            assert!(
+                PrivilegeModule.check(&ctx(cmd)).is_some(),
+                "should identify privilege escalation: {cmd}"
+            );
+        }
     }
 
     #[test]

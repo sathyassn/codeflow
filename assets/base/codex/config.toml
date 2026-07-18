@@ -4,9 +4,10 @@
 # profile below is the OS-enforced boundary: normal work has workspace write
 # access, broad public-network access, and loopback access for local UI testing,
 # while sensitive files, private-network destinations, privileged operations,
-# and destructive escalations remain guarded. Eligible escalation prompts go
-# to Codex's reviewer subagent. Select `user` in the project or launch override
-# where policy requires a human decision; managed requirements can enforce it.
+# and destructive escalations remain guarded. Ordinary eligible escalation
+# prompts go to Codex's reviewer subagent; auto-review is not human
+# authorization. Select `user` in the project or launch override before any
+# catastrophic/high-blast-radius action; managed requirements can enforce it.
 
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
@@ -15,6 +16,11 @@ default_permissions = "cf-guard"
 # Pin the primary Codex seat's ordinary starting effort. The orchestrator may
 # select xhigh for a task with a documented escalation trigger.
 model_reasoning_effort = "high"
+
+# Codex uses its Linux sandbox inside WSL2. On native Windows, prefer the
+# elevated native sandbox; this table is ignored on other platforms.
+[windows]
+sandbox = "elevated"
 
 [features]
 hooks = true

@@ -13,10 +13,261 @@ use super::{block, CheckContext, SecurityModule, Verdict};
 const DANGEROUS_SUBSTRINGS: &[&str] =
     &["dd if=/dev/zero", "dd if=/dev/random", "mkfs.", "> /dev/sd"];
 
-/// System directories whose recursive deletion is catastrophic.
+/// System directories whose recursive deletion is catastrophic, including the
+/// native macOS roots in addition to the Unix FHS roots.
 const SYSTEM_DIRS: &[&str] = &[
-    "etc", "var", "usr", "bin", "sbin", "boot", "lib", "lib64", "opt", "root", "sys", "proc", "dev",
+    "etc",
+    "var",
+    "usr",
+    "bin",
+    "sbin",
+    "boot",
+    "lib",
+    "lib64",
+    "opt",
+    "root",
+    "sys",
+    "proc",
+    "dev",
+    "System",
+    "Library",
+    "Applications",
+    "private",
+    "cores",
+    "run",
+    "srv",
+    "snap",
 ];
+
+/// Top-level user or mount collections whose *whole-tree* deletion is
+/// catastrophic. Descendants are not classified here because a consuming
+/// project may legitimately live below `/Users`, `/home`, or `/Volumes`; the
+/// harness workspace sandbox remains the boundary for those scoped paths.
+const ROOT_COLLECTION_DIRS: &[&str] = &["Users", "home", "Volumes", "mnt", "media"];
+
+/// Split a shell command into tokens without treating Windows path backslashes
+/// as escapes. This is intentionally a small classifier, not a shell parser:
+/// it preserves quoted paths such as `C:\Program Files` and is conservative
+/// around malformed quotes.
+fn command_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    for ch in command.chars() {
+        match (quote, ch) {
+            (Some(active), c) if c == active => quote = None,
+            (None, '\'' | '"') => quote = Some(ch),
+            (None, c) if c.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn program_name(token: &str) -> String {
+    token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .trim_matches(|c: char| matches!(c, '"' | '\''))
+        .to_ascii_lowercase()
+}
+
+/// Resolve the common launch layers agents use on supported hosts. The hard
+/// catastrophe floor must inspect the command that will actually execute, not
+/// stop at `sudo`, Windows `runas`/`gsudo`, a shell `-c`, or `PowerShell`'s
+/// `Start-Process`. This deliberately handles only structured, well-known
+/// launch forms; it is not intended to emulate a shell.
+fn effective_invocation(tokens: &[String]) -> Vec<String> {
+    let mut current = tokens.to_vec();
+    for _ in 0..4 {
+        let Some(program) = current.first().map(|token| program_name(token)) else {
+            break;
+        };
+
+        let next = match program.as_str() {
+            "sudo" | "doas" | "pkexec" | "gsudo" => {
+                invocation_after_privilege_launcher(&current, &program)
+            }
+            "runas" | "runas.exe" => current
+                .iter()
+                .skip(1)
+                .position(|arg| !arg.starts_with('/'))
+                .map(|offset| nested_invocation(&current[offset + 1..])),
+            "bash" | "sh" | "zsh" | "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => {
+                invocation_after_flag(&current, &["-c", "-command"])
+            }
+            "cmd" | "cmd.exe" => invocation_after_flag(&current, &["/c"]),
+            "start-process" => start_process_invocation(&current),
+            "eval" => (current.len() > 1).then(|| nested_invocation(&current[1..])),
+            "env" => invocation_after_env(&current),
+            "command" | "nohup" | "time" => invocation_after_simple_wrapper(&current, &program),
+            _ => None,
+        };
+
+        match next {
+            Some(next) if !next.is_empty() && next != current => current = next,
+            _ => break,
+        }
+    }
+    current
+}
+
+fn nested_invocation(tokens: &[String]) -> Vec<String> {
+    if tokens.len() == 1 {
+        command_tokens(&tokens[0])
+    } else {
+        tokens.to_vec()
+    }
+}
+
+fn invocation_after_flag(tokens: &[String], flags: &[&str]) -> Option<Vec<String>> {
+    let command_index = tokens.iter().enumerate().skip(1).find_map(|(index, arg)| {
+        let exact = flags.iter().any(|flag| arg.eq_ignore_ascii_case(flag));
+        let bundled_c = flags.contains(&"-c")
+            && arg.starts_with('-')
+            && !arg.starts_with("--")
+            && arg.len() > 2
+            && arg[1..].chars().all(|ch| ch.is_ascii_alphabetic())
+            && arg[1..].chars().any(|ch| ch.eq_ignore_ascii_case(&'c'));
+        (exact || bundled_c).then_some(index + 1)
+    })?;
+    (command_index < tokens.len()).then(|| nested_invocation(&tokens[command_index..]))
+}
+
+fn invocation_after_simple_wrapper(tokens: &[String], wrapper: &str) -> Option<Vec<String>> {
+    let mut index = 1;
+    while index < tokens.len() {
+        let arg = &tokens[index];
+        if arg == "--" {
+            index += 1;
+            break;
+        }
+        let time_option_with_value =
+            wrapper == "time" && matches!(arg.as_str(), "-o" | "--output" | "-f" | "--format");
+        if time_option_with_value {
+            index += 2;
+        } else if arg.starts_with('-') {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    (index < tokens.len()).then(|| nested_invocation(&tokens[index..]))
+}
+
+fn invocation_after_env(tokens: &[String]) -> Option<Vec<String>> {
+    let mut index = 1;
+    while index < tokens.len() {
+        let arg = &tokens[index];
+        if arg == "--" {
+            index += 1;
+            break;
+        }
+        if matches!(arg.as_str(), "-S" | "--split-string") {
+            let value = tokens.get(index + 1)?;
+            let mut invocation = command_tokens(value);
+            invocation.extend_from_slice(&tokens[index + 2..]);
+            return (!invocation.is_empty()).then_some(invocation);
+        }
+        if let Some(value) = arg.strip_prefix("--split-string=") {
+            let mut invocation = command_tokens(value);
+            invocation.extend_from_slice(&tokens[index + 1..]);
+            return (!invocation.is_empty()).then_some(invocation);
+        }
+        let option_with_value = matches!(arg.as_str(), "-u" | "--unset" | "-C" | "--chdir");
+        if option_with_value {
+            index += 2;
+        } else if arg.starts_with('-') || arg.contains('=') {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    (index < tokens.len()).then(|| nested_invocation(&tokens[index..]))
+}
+
+fn invocation_after_privilege_launcher(tokens: &[String], launcher: &str) -> Option<Vec<String>> {
+    let options_with_values: &[&str] = match launcher {
+        "sudo" => &[
+            "-u",
+            "--user",
+            "-g",
+            "--group",
+            "-h",
+            "--host",
+            "-p",
+            "--prompt",
+            "-c",
+            "--close-from",
+            "-t",
+            "--command-timeout",
+            "-r",
+            "--chroot",
+            "-d",
+            "--chdir",
+        ],
+        "doas" => &["-a", "-c", "-u"],
+        "pkexec" => &["--user"],
+        "gsudo" => &["-u", "--user", "-i", "--integrity"],
+        _ => &[],
+    };
+    let mut index = 1;
+    while index < tokens.len() {
+        let arg = &tokens[index];
+        if arg == "--" {
+            index += 1;
+            break;
+        }
+        if !arg.starts_with('-') {
+            break;
+        }
+        let consumes_value = options_with_values
+            .iter()
+            .any(|option| arg.eq_ignore_ascii_case(option));
+        index += if consumes_value { 2 } else { 1 };
+    }
+    (index < tokens.len()).then(|| nested_invocation(&tokens[index..]))
+}
+
+fn start_process_invocation(tokens: &[String]) -> Option<Vec<String>> {
+    let mut file_path = None;
+    let mut arguments = Vec::new();
+    let mut index = 1;
+    while index < tokens.len() {
+        let arg = &tokens[index];
+        if arg.eq_ignore_ascii_case("-filepath") && index + 1 < tokens.len() {
+            file_path = Some(tokens[index + 1].clone());
+            index += 2;
+        } else if arg.eq_ignore_ascii_case("-argumentlist") && index + 1 < tokens.len() {
+            arguments.extend(command_tokens(&tokens[index + 1]));
+            index += 2;
+        } else if matches!(
+            arg.to_ascii_lowercase().as_str(),
+            "-verb" | "-workingdirectory" | "-credential" | "-windowstyle"
+        ) && index + 1 < tokens.len()
+        {
+            index += 2;
+        } else if !arg.starts_with('-') && file_path.is_none() {
+            file_path = Some(arg.clone());
+            index += 1;
+        } else {
+            index += 1;
+        }
+    }
+    file_path.map(|program| {
+        let mut invocation = vec![program];
+        invocation.extend(arguments);
+        invocation
+    })
+}
 
 /// Split a command line into simple-command segments so an `rm` after `;`,
 /// `&&`, `||`, `|`, `&`, or a newline is still classified on its own.
@@ -61,12 +312,15 @@ fn normalize_path(op: &str) -> String {
     }
 }
 
-/// A `~` / `$HOME` reference (bare or a path under it).
-fn is_home_operand(op: &str) -> bool {
-    matches!(op, "~" | "$HOME" | "${HOME}")
-        || op.starts_with("~/")
-        || op.starts_with("$HOME/")
-        || op.starts_with("${HOME}/")
+/// The home root or a glob that selects the whole home tree. Descendants are
+/// intentionally not included: a consuming project commonly lives at
+/// `~/code/app`, and its task-scoped build directory must behave the same as
+/// the equivalent `/Users/alice/code/app` path.
+fn is_home_root_operand(op: &str) -> bool {
+    matches!(
+        op,
+        "~" | "~/" | "~/*" | "$HOME" | "$HOME/" | "$HOME/*" | "${HOME}" | "${HOME}/" | "${HOME}/*"
+    )
 }
 
 /// Classify an `rm` operand as a protected target (root, root glob, a system
@@ -75,14 +329,13 @@ fn is_home_operand(op: &str) -> bool {
 /// and `"$HOME"/` are all caught, not only the literal `/` / `/etc` forms.
 ///
 /// Scope: this guards against *accidental* destructive commands (defense in
-/// depth), so it deliberately does not chase command-name obfuscation like
-/// `"/bin/rm"`, `r\m`, or `bash -c 'rm -rf /'` — an agent with shell access
-/// needs no such evasion, and matching them would force whole-line quote
-/// stripping that false-positives on ordinary `echo`/`commit` strings.
+/// depth). It recognizes ordinary command paths and direct `sh -c`/`eval`
+/// quoting without stripping quotes from an entire line, which would
+/// false-positive on ordinary `echo` and commit-message strings.
 fn dangerous_rm_target(op: &str) -> Option<&'static str> {
     let op = unquote_unescape(op);
     let op = op.trim();
-    if is_home_operand(op) {
+    if is_home_root_operand(op) {
         return Some("home directory");
     }
     let norm = normalize_path(op);
@@ -90,22 +343,97 @@ fn dangerous_rm_target(op: &str) -> Option<&'static str> {
         return Some("/");
     }
     if let Some(rest) = norm.strip_prefix('/') {
-        let first = rest.split('/').next().unwrap_or("");
+        let mut parts = rest.split('/');
+        let first = parts.next().unwrap_or("");
         if SYSTEM_DIRS.contains(&first) {
             return Some("system directory");
+        }
+        let remainder = parts.collect::<Vec<_>>().join("/");
+        if ROOT_COLLECTION_DIRS.contains(&first) && (remainder.is_empty() || remainder == "*") {
+            return Some("top-level user or mount collection");
         }
     }
     None
 }
 
+/// Classify Windows drive, system, profile, and share roots. Comparisons are
+/// case-insensitive and accept either separator because `PowerShell` accepts
+/// both. A descendant project under a user profile remains task-scoped; only
+/// the profile itself (or its whole-tree glob) is protected here.
+fn dangerous_windows_target(op: &str) -> Option<&'static str> {
+    let normalized = op
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'))
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let path = normalized.strip_suffix("\\*").unwrap_or(&normalized);
+    let path = if path.len() > 3 {
+        path.trim_end_matches('\\')
+    } else {
+        path
+    };
+
+    if matches!(
+        path,
+        "$env:systemroot" | "$env:windir" | "%systemroot%" | "%windir%"
+    ) || path.starts_with("$env:systemroot\\")
+        || path.starts_with("$env:windir\\")
+        || path.starts_with("%systemroot%\\")
+        || path.starts_with("%windir%\\")
+    {
+        return Some("Windows system directory");
+    }
+    if matches!(
+        path,
+        "~" | "$home" | "$env:userprofile" | "%userprofile%" | "%homedrive%%homepath%"
+    ) {
+        return Some("Windows user profile");
+    }
+
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
+        let rest = &path[3..];
+        if rest.is_empty() {
+            return Some("Windows drive root");
+        }
+        let parts: Vec<&str> = rest.split('\\').filter(|part| !part.is_empty()).collect();
+        if matches!(
+            parts.first().copied(),
+            Some("windows" | "program files" | "program files (x86)" | "programdata")
+        ) {
+            return Some("Windows system directory");
+        }
+        if parts.first().copied() == Some("users") && parts.len() <= 2 {
+            return Some("Windows user collection or profile");
+        }
+    }
+
+    // A UNC share root (`\\server\share`) is a cross-machine blast radius;
+    // descendants can still be a legitimate task-scoped workspace.
+    if let Some(rest) = path.strip_prefix("\\\\") {
+        let parts: Vec<&str> = rest.split('\\').filter(|part| !part.is_empty()).collect();
+        if parts.len() == 2 {
+            return Some("Windows network share root");
+        }
+    }
+    None
+}
+
+fn is_windows_drive_designator(op: &str) -> bool {
+    let op = op.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'));
+    let bytes = op.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
 fn dd_disk_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"dd\s.*of=/dev/(sd|hd|nvme|vd)[a-z]").expect("valid"))
+    RE.get_or_init(|| {
+        Regex::new(r"dd\s.*of=/dev/((sd|hd|vd)[a-z]|nvme[0-9]|(r?disk)[0-9])").expect("valid")
+    })
 }
 
 fn format_cmd_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(mkfs|mke2fs|mkswap)\s").expect("valid"))
+    RE.get_or_init(|| Regex::new(r"(mkfs|mke2fs|mkswap|newfs_[a-zA-Z0-9_]+)\s").expect("valid"))
 }
 
 fn chmod_777_re() -> &'static Regex {
@@ -189,18 +517,15 @@ impl SecurityModule for DangerousModule {
 /// `rm -rf "$HOME"` are all caught, not only the exact `rm -rf` form.
 fn check_recursive_delete(cmd: &str) -> Option<Verdict> {
     for seg in command_segments(cmd) {
-        let toks: Vec<&str> = seg.split_whitespace().collect();
-        let Some(rm_idx) = toks
-            .iter()
-            .position(|t| t.rsplit('/').next().unwrap_or(t) == "rm")
-        else {
+        let tokens = effective_invocation(&command_tokens(seg));
+        if tokens.first().map(|token| program_name(token)).as_deref() != Some("rm") {
             continue;
-        };
+        }
 
         let mut recursive = false;
         let mut operands: Vec<&str> = Vec::new();
         let mut operands_only = false; // everything after a lone `--`
-        for &a in &toks[rm_idx + 1..] {
+        for a in tokens.iter().skip(1).map(String::as_str) {
             if operands_only {
                 operands.push(a);
                 continue;
@@ -237,23 +562,156 @@ fn check_recursive_delete(cmd: &str) -> Option<Verdict> {
             }
         }
     }
+    check_windows_recursive_delete(cmd)
+}
+
+fn check_windows_recursive_delete(cmd: &str) -> Option<Verdict> {
+    for segment in command_segments(cmd) {
+        let tokens = effective_invocation(&command_tokens(segment));
+        let Some(command_index) = tokens.iter().position(|token| {
+            matches!(
+                token
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(token)
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "remove-item" | "rm" | "del" | "erase" | "rd" | "rmdir"
+            )
+        }) else {
+            continue;
+        };
+        let args = &tokens[command_index + 1..];
+        let recursive = args.iter().any(|arg| {
+            let arg = arg.to_ascii_lowercase();
+            arg == "-recurse"
+                || arg.starts_with("-recurse:")
+                || arg == "-r"
+                || arg == "/s"
+                || (arg.starts_with('-') && arg[1..].contains('r'))
+        });
+        if !recursive {
+            continue;
+        }
+        if let Some(target) = args.iter().find_map(|arg| dangerous_windows_target(arg)) {
+            return Some(block(
+                "Dangerous Command",
+                "Recursive deletion of a protected Windows location",
+                target,
+            ));
+        }
+    }
     None
 }
 
 fn check_disk_operations(cmd: &str) -> Option<Verdict> {
-    if dd_disk_re().is_match(cmd) {
-        return Some(block(
-            "Dangerous Command",
-            "Direct disk write operation",
-            "dd of=/dev/*",
-        ));
-    }
-    if format_cmd_re().is_match(cmd) {
-        return Some(block(
-            "Dangerous Command",
-            "Disk format operation",
-            "mkfs/mke2fs/mkswap",
-        ));
+    for segment in command_segments(cmd) {
+        let tokens = effective_invocation(&command_tokens(segment));
+        let Some(program) = tokens.first().map(|token| program_name(token)) else {
+            continue;
+        };
+        let normalized = tokens.join(" ");
+        let args = tokens
+            .iter()
+            .skip(1)
+            .map(|arg| arg.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+
+        if program == "dd" && dd_disk_re().is_match(&normalized) {
+            return Some(block(
+                "Dangerous Command",
+                "Direct disk write operation",
+                "dd of=/dev/*",
+            ));
+        }
+        if format_cmd_re().is_match(&format!("{normalized} ")) {
+            return Some(block(
+                "Dangerous Command",
+                "Disk format operation",
+                "mkfs/mke2fs/mkswap/newfs",
+            ));
+        }
+
+        let destructive_unix = (program == "diskutil"
+            && (args.first().is_some_and(|arg| {
+                matches!(
+                    arg.as_str(),
+                    "erasedisk"
+                        | "erasevolume"
+                        | "partitiondisk"
+                        | "zerodisk"
+                        | "randomdisk"
+                        | "secureerase"
+                )
+            }) || (args.first().is_some_and(|arg| arg == "apfs")
+                && args.get(1).is_some_and(|arg| {
+                    matches!(arg.as_str(), "deletecontainer" | "deletevolume")
+                }))))
+            || matches!(
+                program.as_str(),
+                "wipefs" | "blkdiscard" | "pvremove" | "vgremove" | "lvremove"
+            )
+            || (matches!(program.as_str(), "zpool" | "zfs")
+                && args.first().is_some_and(|arg| arg == "destroy"))
+            || (program == "cryptsetup"
+                && args
+                    .first()
+                    .is_some_and(|arg| matches!(arg.as_str(), "luksformat" | "erase")))
+            || (program == "sgdisk"
+                && args
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "--zap-all" | "-z" | "--clear" | "-o")))
+            || (program == "parted"
+                && args
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "rm" | "mklabel" | "mkpart" | "resizepart")))
+            || (program == "sfdisk"
+                && args
+                    .iter()
+                    .any(|arg| arg == "--delete" || arg.starts_with("--wipe")))
+            || (program == "mdadm" && args.iter().any(|arg| arg == "--zero-superblock"))
+            || (program == "shred" && tokens.iter().skip(1).any(|arg| arg.starts_with("/dev/")));
+        if destructive_unix {
+            return Some(block(
+                "Dangerous Command",
+                "Destructive disk-management operation",
+                &program,
+            ));
+        }
+
+        if matches!(
+            program.as_str(),
+            "diskpart"
+                | "clear-disk"
+                | "initialize-disk"
+                | "format-volume"
+                | "remove-partition"
+                | "remove-virtualdisk"
+                | "disable-bitlocker"
+        ) || (program == "format"
+            && tokens
+                .iter()
+                .skip(1)
+                .any(|arg| is_windows_drive_designator(arg)))
+            || (program == "manage-bde" && args.iter().any(|arg| arg == "-off"))
+            || (program == "vssadmin"
+                && args.iter().any(|arg| arg == "delete")
+                && args.iter().any(|arg| arg == "shadows"))
+            || (program == "wbadmin"
+                && args.iter().any(|arg| arg == "delete")
+                && args
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "catalog" | "systemstatebackup")))
+            || (program == "wmic"
+                && args.iter().any(|arg| arg == "shadowcopy")
+                && args.iter().any(|arg| arg == "delete"))
+        {
+            return Some(block(
+                "Dangerous Command",
+                "Destructive Windows disk or recovery operation",
+                &program,
+            ));
+        }
     }
     None
 }
@@ -279,6 +737,50 @@ fn check_permission_changes(cmd: &str) -> Option<Verdict> {
             "Recursive ownership change on root",
             "chown -R /",
         ));
+    }
+    for segment in command_segments(cmd) {
+        let tokens = effective_invocation(&command_tokens(segment));
+        let Some(program) = tokens.first().map(|token| program_name(token)) else {
+            continue;
+        };
+        let args = &tokens[1..];
+        let unix_recursive = args.iter().any(|arg| {
+            arg == "-R"
+                || arg == "--recursive"
+                || (arg.starts_with('-')
+                    && !arg.starts_with("--")
+                    && arg[1..].chars().any(|ch| ch == 'R'))
+        });
+        if matches!(program.as_str(), "chmod" | "chown" | "chgrp") && unix_recursive {
+            if let Some(target) = args.iter().find_map(|arg| dangerous_rm_target(arg)) {
+                return Some(block(
+                    "Dangerous Command",
+                    "Recursive permission or ownership change on protected path",
+                    target,
+                ));
+            }
+        }
+
+        let windows_modifier = match program.as_str() {
+            "takeown" => args.iter().any(|arg| arg.eq_ignore_ascii_case("/r")),
+            "icacls" => args.iter().any(|arg| {
+                let arg = arg.to_ascii_lowercase();
+                ["/grant", "/deny", "/remove", "/reset", "/inheritance"]
+                    .iter()
+                    .any(|prefix| arg.starts_with(prefix))
+            }),
+            "set-acl" => true,
+            _ => false,
+        };
+        if windows_modifier {
+            if let Some(target) = args.iter().find_map(|arg| dangerous_windows_target(arg)) {
+                return Some(block(
+                    "Dangerous Command",
+                    "Windows permission or ownership change on protected path",
+                    target,
+                ));
+            }
+        }
     }
     None
 }
@@ -346,7 +848,19 @@ mod tests {
 
     #[test]
     fn test_rm_r_home() {
-        assert!(DangerousModule.check(&ctx("rm -r ~")).is_some());
+        for cmd in [
+            "rm -r ~",
+            "rm -rf ~/",
+            "rm -rf ~/*",
+            "rm -rf $HOME",
+            "rm -rf $HOME/*",
+            "rm -rf ${HOME}/*",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block the whole home tree: {cmd}"
+            );
+        }
     }
 
     #[test]
@@ -354,6 +868,75 @@ mod tests {
         assert!(DangerousModule.check(&ctx("rm -rf /etc")).is_some());
         assert!(DangerousModule.check(&ctx("rm -r /usr/")).is_some());
         assert!(DangerousModule.check(&ctx("rm -rf /var")).is_some());
+    }
+
+    #[test]
+    fn test_rm_r_macos_system_roots() {
+        for cmd in [
+            "rm -rf /System",
+            "rm -rf /Library/Preferences",
+            "rm -rf /Applications",
+            "rm -rf /private/etc",
+            "rm -rf /Users",
+            "rm -rf /Users/*",
+            "rm -rf /Volumes",
+            "rm -rf /Volumes/*",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_root_collection_descendant_can_be_project_scoped() {
+        for cmd in [
+            "rm -rf /Users/alice/project/target",
+            "rm -rf /home/alice/project/target",
+            "rm -rf /Volumes/Data/project/target",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_none(),
+                "project-scoped descendant should reach the harness boundary: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_windows_recursive_delete_protected_roots() {
+        for cmd in [
+            r"Remove-Item -Recurse -Force C:\",
+            r#"Remove-Item "C:\Windows\System32" -Recurse"#,
+            r#"rm -r "C:\Program Files""#,
+            r"rd /s /q C:\Users",
+            r"rmdir /s \\server\share",
+            r"Remove-Item -Recurse $env:SystemRoot",
+            r"Remove-Item $env:USERPROFILE -Recurse",
+            r"Remove-Item -Recurse ~",
+            r"Remove-Item -Recurse $HOME",
+            r#"powershell -Command "Remove-Item -Recurse C:\Windows""#,
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_windows_project_scoped_delete_allowed() {
+        for cmd in [
+            r"Remove-Item -Recurse .\target",
+            r"Remove-Item -Recurse C:\Users\alice\project\target",
+            r"rmdir /s /q D:\work\project\node_modules",
+            r"Remove-Item C:\Windows\Temp\one.log", // not recursive
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_none(),
+                "task-scoped delete should remain available: {cmd}"
+            );
+        }
     }
 
     // Regression: flag re-spellings that the old regex classifier missed
@@ -420,6 +1003,9 @@ mod tests {
             "rm -f /etc/hosts.bak",      // not recursive
             "rm -rf /home/user/proj/..", // == /home/user, not protected
             "rm -rf ./scratch/..",       // relative, not protected
+            "rm -rf ~/code/app/target",
+            "rm -rf $HOME/code/app/build",
+            "rm -rf ${HOME}/work/project/node_modules",
         ] {
             assert!(
                 DangerousModule.check(&ctx(cmd)).is_none(),
@@ -446,16 +1032,13 @@ mod tests {
         }
     }
 
-    // Documented conservative behavior: a *bare* `rm` word followed by a
-    // recursive flag and a protected target is blocked even inside a harmless
-    // `echo '… rm -rf / …'`. A static guard cannot prove command position
-    // without a shell parser, and for a safety guard failing safe (over-block a
-    // rare echo) beats failing open (miss a real `rm -rf /`).
+    // A quoted example is data, not a command. Wrapper resolution starts from
+    // the actual program so routine documentation and diagnostics stay usable.
     #[test]
-    fn test_bare_rm_in_string_is_conservatively_blocked() {
+    fn test_bare_rm_in_string_is_not_misread_as_command() {
         assert!(DangerousModule
             .check(&ctx("echo 'do not run rm -rf /'"))
-            .is_some());
+            .is_none());
     }
 
     #[test]
@@ -470,11 +1053,118 @@ mod tests {
         assert!(DangerousModule
             .check(&ctx("dd if=image of=/dev/sda"))
             .is_some());
+        assert!(DangerousModule
+            .check(&ctx("dd if=image of=/dev/disk0"))
+            .is_some());
     }
 
     #[test]
     fn test_mkfs() {
         assert!(DangerousModule.check(&ctx("mkfs.ext4 /dev/sda1")).is_some());
+        assert!(DangerousModule
+            .check(&ctx("newfs_apfs /dev/disk9s1"))
+            .is_some());
+    }
+
+    #[test]
+    fn test_destructive_disk_management() {
+        for cmd in [
+            "diskutil eraseDisk APFS Test /dev/disk9",
+            "/usr/sbin/diskutil eraseVolume APFS Test /dev/disk9s1",
+            "diskutil apfs deleteContainer /dev/disk9",
+            "sudo diskutil eraseDisk APFS Test /dev/disk9",
+            "wipefs --all /dev/sda",
+            "sudo wipefs --all /dev/sda",
+            "bash -lc 'wipefs --all /dev/sda'",
+            "env LC_ALL=C wipefs --all /dev/sda",
+            "blkdiscard /dev/nvme0n1",
+            "sgdisk --zap-all /dev/sda",
+            "parted /dev/sda mklabel gpt",
+            "sfdisk --delete /dev/sda",
+            "mdadm --zero-superblock /dev/sda1",
+            "shred /dev/sda",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+        for cmd in ["diskutil list", "diskutil verifyDisk /dev/disk9"] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_none(),
+                "read-only disk inspection should remain available: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_windows_destructive_disk_and_recovery_operations() {
+        for cmd in [
+            "diskpart /s destructive.txt",
+            "gsudo diskpart /s destructive.txt",
+            "runas /user:Administrator \"diskpart /s destructive.txt\"",
+            "Start-Process diskpart -Verb RunAs -ArgumentList '/s destructive.txt'",
+            "Clear-Disk -Number 0 -RemoveData",
+            "powershell -Command \"Clear-Disk -Number 0 -RemoveData\"",
+            "Start-Process powershell -Verb RunAs -ArgumentList '-Command Clear-Disk -Number 0 -RemoveData'",
+            "Initialize-Disk -Number 0",
+            "Format-Volume -DriveLetter C",
+            "format C:",
+            "Disable-BitLocker -MountPoint C:",
+            "manage-bde -off C:",
+            "vssadmin delete shadows /all",
+            "wbadmin delete catalog -quiet",
+            "wmic shadowcopy delete",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_windows_recursive_permission_changes() {
+        for cmd in [
+            r"takeown /f C:\Windows /r",
+            r"gsudo takeown /f C:\Windows /r",
+            r#"icacls "C:\Program Files" /reset /t"#,
+            r#"icacls "C:\Windows" /grant:r Everyone:F /t"#,
+            r#"cmd /c "icacls C:\Windows /reset /t""#,
+            r"Set-Acl -Path C:\Windows -AclObject $acl",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+        assert!(DangerousModule
+            .check(&ctx(r"icacls .\build /reset /t"))
+            .is_none());
+    }
+
+    #[test]
+    fn test_shell_wrapped_catastrophic_rm_blocked() {
+        for cmd in [
+            "bash -c 'rm -rf /System'",
+            "bash -lc 'rm -rf /System'",
+            "sh -c \"rm -rf /Library\"",
+            "sh -ic \"rm -rf /Library\"",
+            "zsh -c 'rm -rf /'",
+            "eval 'rm -rf /Applications'",
+            "env CLEAN=1 rm -rf /Applications",
+            "env -u CLEAN rm -rf /Applications",
+            "env --chdir /tmp rm -rf /System",
+            "env -S 'rm -rf /Library'",
+            "command rm -rf /System",
+            "time -o timing.txt rm -rf /System",
+            "time --format elapsed rm -rf /Applications",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block wrapped command: {cmd}"
+            );
+        }
     }
 
     #[test]
@@ -492,6 +1182,24 @@ mod tests {
         assert!(DangerousModule
             .check(&ctx("chown -R root:root /"))
             .is_some());
+    }
+
+    #[test]
+    fn test_recursive_permission_changes_on_system_trees() {
+        for cmd in [
+            "chmod -R 755 /System",
+            "chown --recursive root:wheel /Library",
+            "sudo chgrp -Rv staff /etc",
+            "bash -lc 'chmod -R 755 /Applications'",
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                "should block: {cmd}"
+            );
+        }
+        assert!(DangerousModule
+            .check(&ctx("chmod -R 755 ~/code/app/target"))
+            .is_none());
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! | Hook | Event | Module |
 //! |---|---|---|
-//! | `git-guard` | `PreToolUse` (Bash) | [`git_guard`] |
-//! | `exec-guard` | `PreToolUse` (Bash) | [`exec_guard`] |
+//! | `git-guard` | `PreToolUse` (Bash/PowerShell) | [`git_guard`] |
+//! | `exec-guard` | `PreToolUse` (Bash/PowerShell) | [`exec_guard`] |
 //! | `session-orient` | `SessionStart` | [`orient`] |
 //! | `session-summary` | `SessionEnd` | [`session_summary`] |
 //! | `delegate-turn` | `Stop` / `StopFailure` | [`delegate_turn`] |

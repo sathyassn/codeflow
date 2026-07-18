@@ -79,7 +79,7 @@ fn every_hook_command_is_a_known_codeflow_hook() {
 }
 
 #[test]
-fn pretooluse_binds_git_and_exec_guard_on_bash() {
+fn pretooluse_binds_git_and_exec_guard_on_supported_shells() {
     let v = hooks_json();
     let pre = v["hooks"]["PreToolUse"].clone();
     let mut commands = Vec::new();
@@ -92,11 +92,16 @@ fn pretooluse_binds_git_and_exec_guard_on_bash() {
             "PreToolUse: {hook} not wired"
         );
     }
-    // The Bash matcher is what scopes the guards to shell commands.
+    // Keep the shared hook payload compatible with Unix/WSL Bash and native
+    // Windows PowerShell command events.
     let matcher = pre[0]["matcher"].as_str().unwrap_or_default();
     assert!(
         matcher.contains("Bash"),
         "PreToolUse matcher must target Bash, got {matcher:?}"
+    );
+    assert!(
+        matcher.contains("PowerShell"),
+        "PreToolUse matcher must target PowerShell, got {matcher:?}"
     );
 }
 

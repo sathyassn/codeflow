@@ -4,7 +4,7 @@
 //! Exit-code contract:
 //! - `git-guard`: 0 allow, 2 block (`PreToolUse` deny) with the violated rule
 //!   and sanctioned path on stderr.
-//! - `exec-guard`: 0 allow (or warn), 2 block — same `PreToolUse` (Bash)
+//! - `exec-guard`: 0 allow (or warn), 2 block — same `PreToolUse` shell
 //!   contract, enforcing the `security` policy section (ADR-0008). Payload is
 //!   parsed leniently so the same subcommand serves the Codex hooks engine.
 //! - `session-orient`: digest on stdout, always 0.
@@ -24,9 +24,9 @@ use codeflow_core::hooks::{
 /// Which Claude-layer hook to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum HookName {
-    /// `PreToolUse` (Bash): enforce policy.json git rules in-session.
+    /// `PreToolUse` (Bash/PowerShell): enforce policy.json git rules in-session.
     GitGuard,
-    /// `PreToolUse` (Bash): enforce policy.json `security` rules (dangerous
+    /// `PreToolUse` (Bash/PowerShell): enforce policy.json `security` rules (dangerous
     /// commands, privilege escalation). Harness-agnostic — also serves Codex.
     ExecGuard,
     /// `SessionStart`: emit the orient digest to stdout.
@@ -95,13 +95,13 @@ fn git_guard(stdin: &str) -> i32 {
         Ok(p) => p,
         Err(e) => {
             // Fail open with a visible warning: a malformed payload must not
-            // veto every Bash call (charter principle 8 — legible, not silent).
+            // veto every shell call (charter principle 8 — legible, not silent).
             eprintln!("codeflow git-guard: warning: unreadable hook payload ({e}); allowing");
             return 0;
         }
     };
-    let Some(command) = payload.bash_command() else {
-        return 0; // not a Bash tool call
+    let Some(command) = payload.shell_command() else {
+        return 0; // not a supported shell tool call
     };
 
     let cwd = payload
@@ -154,7 +154,7 @@ fn resolve_dir_branch(cwd: &std::path::Path, dir: &str) -> Option<String> {
         .filter(|b| !b.is_empty())
 }
 
-/// `exec-guard` (`PreToolUse` Bash): run the dangerous/privilege security
+/// `exec-guard` (`PreToolUse` Bash/PowerShell): run the dangerous/privilege security
 /// modules against the command per the `security` policy section (ADR-0008).
 ///
 /// Payload parsing reuses [`git_guard::HookPayload`], which is lenient by
@@ -169,8 +169,8 @@ fn exec_guard(stdin: &str) -> i32 {
             return 0;
         }
     };
-    let Some(command) = payload.bash_command() else {
-        return 0; // not a Bash tool call
+    let Some(command) = payload.shell_command() else {
+        return 0; // not a supported shell tool call
     };
 
     let cwd = payload

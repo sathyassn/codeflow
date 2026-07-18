@@ -67,6 +67,23 @@ implementation stage for an analysis-only request.
 - **Evidence outranks agreement.** A model claim, consensus, or approval never
   substitutes for a source, file:line, command result, rendered UI observation,
   or other reproducible evidence.
+- **Catastrophic actions remain human-gated.** Ordinary task-scoped project
+  edits and deletions are autonomous when the workspace sandbox and version
+  control, a verified backup, or a scratch area make them recoverable. Before
+  any system-level, cross-boundary, credential/IAM, production, destructive
+  disk, security-weakening, or otherwise irreversible/high-blast-radius action,
+  both seats independently assess scope and recovery, then the host stops for
+  explicit authenticated human approval. Model consensus, Claude auto mode,
+  Codex auto-review, or peer approval is never that authorization. Present the
+  exact bounded action, affected resources, preview/dry-run evidence where the
+  tool supports it, a current verified checkpoint or backup, and the rollback
+  or restore procedure. Missing evidence, an untested restore path, or scope
+  ambiguity fails closed. The non-relaxable deterministic command class remains
+  agent-blocked after approval; a human operator performs it through a separate
+  controlled channel while the models prepare and verify evidence. For other
+  high-blast-radius actions that effective host policy permits after approval,
+  execute one bounded step at a time and verify it. Never route through the peer
+  to evade the host's stricter guard.
 - **Native interactive sessions only.** Each model runs in its own vendor
   harness with its configured tools and MCP servers. Never use `codex exec`,
   `claude -p` / `--print`, or another headless peer invocation.
@@ -140,9 +157,19 @@ of the host model.
      auto and `classifyAllShell` at CLI/user scope and canary the effective mode.
    - Codex: the named permission profile is active without a competing legacy
      `sandbox_mode`, public network and live search are enabled, approvals use
-     `on-request`, and eligible escalations route to a reviewer subagent. If
-     policy requires a human for every escalation, select `user` in the project
-     or launch override and verify the managed reviewer constraint when present.
+     `on-request`, and ordinary eligible escalations route to a reviewer
+     subagent. Auto-review is a safety reviewer, not human authorization. For a
+     catastrophic action, select `user` in the project or launch override and
+     verify the effective reviewer plus any managed constraint before asking
+     the operator to approve the staged action.
+   - Platform assurance: use the native sandbox on macOS and Linux. On Windows,
+     prefer WSL2 for Linux-equivalent tooling and Claude sandbox enforcement.
+     Native Windows Codex must use its elevated sandbox; CodeFlow's shell guard
+     must cover PowerShell as well as Bash. Claude Code has no native-Windows OS
+     sandbox, so a hook or permission prompt is not equivalent isolation: move
+     catastrophic work to WSL2 or a container and fail closed if that boundary
+     is unavailable. Record the actual platform and effective boundary rather
+     than inferring either from the host name.
 5. Verify task-specific capabilities before promising their evidence: live web
    research and authoritative docs; GitHub/source control; the stack format,
    lint, test, coverage, dependency, and security tools; Playwright/browser for

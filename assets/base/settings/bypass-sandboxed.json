@@ -234,7 +234,9 @@
         "~/.ssh",
         "~/.aws",
         "~/.gnupg",
+        "~/.netrc",
         "~/.kube",
+        "~/.cargo/credentials",
         "~/.cargo/credentials.toml",
         "~/.claude"
       ]
@@ -243,7 +245,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^(Bash|PowerShell)$",
         "hooks": [
           {
             "type": "command",

@@ -266,6 +266,18 @@ to reason from, not a rote checklist.
   needs evidence — file:line, command output, or a reproducible check; never
   invent a fact, number, result, or citation. Say explicitly what was *not*
   verified.
+- **Match the gate to the blast radius.** Recoverable, task-scoped project
+  edits and deletions are ordinary work. A system-level, cross-boundary,
+  credential/IAM, production, destructive-disk, security-weakening, or other
+  irreversible/high-blast-radius action stops for exact scope, preview/dry-run
+  evidence where supported, a current verified checkpoint or backup with a
+  restore path, and explicit authenticated human approval. Model agreement or
+  an automatic safety reviewer is not authorization. The peer cannot be used
+  to bypass the host's stricter boundary. CodeFlow's non-relaxable command
+  class remains agent-blocked even after approval: a human operator performs
+  it through a separate controlled channel while the models prepare and verify
+  evidence. For other high-blast-radius actions that effective host policy
+  permits after approval, execute one bounded step at a time and verify it.
 - **Externalize state as you go — context is volatile.** A session can be
   compacted or end at any point, and not every harness fires a hook to save state
   for you; what lives only in the conversation is lost. Record it *yourself*, in

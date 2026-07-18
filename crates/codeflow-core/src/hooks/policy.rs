@@ -327,20 +327,20 @@ impl GitPolicy {
     }
 }
 
-/// The `security` section of `.codeflow/policy.json` — the two levels the
-/// `exec-guard` hook enforces against a Bash command (ADR-0008). Separate from
-/// the `git` section: `dangerous_commands` stays `block` regardless, exactly as
-/// `secret_scan` does.
+/// The `security` section of `.codeflow/policy.json` — the exec-guard posture
+/// (ADR-0008). Separate from the `git` section: `dangerous_commands` is accepted
+/// only as the explicit `block` marker and remains enforced as a block despite
+/// a stale or hand-edited weaker value.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecuritySection {
     /// Destructive commands the `dangerous` module catches (rm -rf on `/`, `~`,
     /// or system dirs; `dd` to a block device; `mkfs`; fork bombs; recursive
-    /// chmod/chown on system paths). Default `block`: never legitimate in a
+    /// chmod/chown on system paths). Pinned to `block`: never legitimate in a
     /// project, so no sanctioned path exists — the guard is the hard line.
     pub dangerous_commands: PolicyLevel,
-    /// Privilege escalation the `privilege` module catches (sudo/su/doas/pkexec,
-    /// shell `-c` chains, `LD_PRELOAD`/PATH injection). Default `warn`, NOT
+    /// Privilege escalation the `privilege` module catches (Unix and Windows
+    /// launchers, shell `-c` chains, `LD_PRELOAD`/PATH injection). Default `warn`, NOT
     /// block: a hook exit-2 here would override even an explicit human
     /// ask-approval, and the settings `ask` tier is what owns sudo prompting.
     /// The exec-guard only surfaces in-session feedback; it never vetoes the

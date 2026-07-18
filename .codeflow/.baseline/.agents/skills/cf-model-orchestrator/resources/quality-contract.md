@@ -117,6 +117,17 @@ result is not evidence. An assumption becomes verified only after a source,
 tool, or direct observation supports it. Conflicting evidence remains visible
 until resolved.
 
+For a catastrophic or irreversible action, the ledger also records independent
+Claude and Codex risk assessments, the authenticated human approval, exact
+scope and command/tool input, preview or dry-run evidence when supported, the
+current checkpoint/backup and tested restore path, execution result, and
+postcondition verification. Model consensus and automatic safety review never
+stand in for the human approval. Ordinary recoverable worktree edits and
+deletions do not require this ceremony. An operation in CodeFlow's
+non-relaxable deterministic class is performed by the human operator through a
+separate controlled channel; the models record the operator's result and verify
+the postcondition without weakening the guard.
+
 ## Required verification
 
 Apply the checks relevant to the changed surface:
@@ -216,6 +227,8 @@ Completion requires:
 - design and implementation proportionality are approved;
 - substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.
+- every catastrophic action, if any, has the human authorization and recovery
+  evidence required above; without it, the action was not executed.
 
 For a mode without implementation, read “task breakdown” as the final research,
 analysis, plan, or review artifact and apply only the relevant gates above. For

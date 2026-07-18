@@ -14,6 +14,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Catastrophic-action protection is cross-platform and non-relaxable
+  (ADR-0033).** The deterministic shell guard now covers Linux/WSL2, macOS, and
+  native Windows Bash/PowerShell events; blocks protected-root deletion plus
+  destructive disk, recovery, and system-permission operations; and cannot be
+  downgraded through project policy. Common privilege, shell-command, and
+  environment wrappers cannot bypass the classifier, while equivalent
+  task-scoped project paths remain autonomous. Model agreement and automatic review are
+  explicitly not human authorization. Secret-store denies now reach Claude's
+  OS-sandboxed subprocesses. CodeFlow adds a native Windows x64 artifact,
+  PowerShell installer, elevated Codex sandbox default, Windows build/test
+  lane, and configurable test-command shell with dependency-free native
+  defaults; WSL2 remains the required route
+  for Claude work that needs OS-enforced containment. A release checklist now
+  makes source/security gates, native platform and installer canaries,
+  harness/model qualification, public-network installation, and rollback
+  evidence explicit before downstream Agent OS work begins.
 - **Adaptive test setup is safe and release-complete (ADR-0031).** Existing
   populated or malformed configs are preserved unless a reviewed template is
   explicitly applied with `--replace`; malformed configured pre-push gates now

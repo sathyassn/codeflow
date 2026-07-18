@@ -106,7 +106,13 @@ route to a reviewer subagent (or a human when the project/launch setting selects
 `KEY`/`SECRET`/`TOKEN` environment scrub (ADR-0025, ADR-0026). Claude's
 sandbox removes the raw Anthropic, OpenAI, and AWS credentials named in
 ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
-available. Beyond the
+available. The deterministic shell plane accepts both Bash and PowerShell
+payloads and keeps its catastrophic classifier non-relaxable across Unix/macOS
+roots and Windows drive, system, profile, disk, recovery, and permission
+operations. macOS and Linux use native harness sandboxes; WSL2 follows the
+Linux path. Native Windows Codex selects its elevated sandbox, while native
+Windows Claude has no equivalent OS sandbox and therefore moves
+high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
 the same orientation digest Claude gets. PR-content checks (attribution/emoji,

@@ -1,9 +1,10 @@
-//! `exec-guard` — the `PreToolUse` (Bash) security hook (ADR-0008).
+//! `exec-guard` — the `PreToolUse` shell security hook (ADR-0008).
 //!
 //! A thin adapter over two existing security modules — [`DangerousModule`] and
-//! [`PrivilegeModule`] — that runs them against a Bash command and maps each
-//! module's verdict to the level configured in `policy.json`'s `security`
-//! section. It sits alongside `git-guard` on the `PreToolUse` (Bash) event and
+//! [`PrivilegeModule`] — that runs them against a Bash command. Catastrophic
+//! commands are a non-relaxable block; privilege escalation maps to the level
+//! configured in `policy.json`'s `security` section. It sits alongside
+//! `git-guard` on the `PreToolUse` (Bash/PowerShell) event and
 //! shares its lenient payload contract, so the same binary serves both Claude
 //! and the Codex hooks engine (ADR-0008).
 //!
@@ -44,7 +45,8 @@ use super::Violation;
 ///
 /// Returns all violations found (at most one per module); the caller maps
 /// block-level violations to exit 2 (deny) and warn-level to stderr advice.
-/// A module whose level is `off` is not run at all.
+/// Privilege checking is skipped when its level is `off`; catastrophic-command
+/// checking is a non-relaxable floor.
 #[must_use]
 pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
     // The dangerous/privilege modules read only `command`; branch, sandbox
@@ -60,10 +62,11 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
 
     let mut violations = Vec::new();
 
-    if levels.dangerous_commands.is_active() {
-        if let Some(verdict) = DangerousModule.check(&ctx) {
-            violations.push(dangerous_violation(levels.dangerous_commands, &verdict));
-        }
+    // A consuming repository cannot turn the catastrophic floor off or
+    // downgrade it to advice. The serialized key stays explicit for policy
+    // compatibility, but a stale or hand-edited weaker value is not authority.
+    if let Some(verdict) = DangerousModule.check(&ctx) {
+        violations.push(dangerous_violation(PolicyLevel::Block, &verdict));
     }
     if levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
@@ -174,21 +177,27 @@ mod tests {
     }
 
     #[test]
-    fn test_off_level_skips_module() {
-        // dangerous off, privilege off → even rm -rf / and sudo are silent.
+    fn test_catastrophic_floor_cannot_be_disabled() {
         let off = levels(PolicyLevel::Off, PolicyLevel::Off);
-        assert!(evaluate("rm -rf /", &off).is_empty());
+        let v = evaluate("rm -rf /", &off);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "security.dangerous_commands");
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
         assert!(evaluate("sudo rm file", &off).is_empty());
     }
 
     #[test]
-    fn test_dangerous_off_still_warns_privilege() {
+    fn test_catastrophic_floor_and_privilege_warning_both_apply() {
         let s = levels(PolicyLevel::Off, PolicyLevel::Warn);
-        // A command that is both dangerous and privileged: dangerous is off, so
-        // only the privilege warning fires.
         let v = evaluate("sudo dd if=image of=/dev/sda", &s);
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].rule, "security.privilege_escalation");
+        assert_eq!(v.len(), 2);
+        assert!(v
+            .iter()
+            .any(|x| { x.rule == "security.dangerous_commands" && x.level == PolicyLevel::Block }));
+        assert!(v.iter().any(|x| {
+            x.rule == "security.privilege_escalation" && x.level == PolicyLevel::Warn
+        }));
     }
 
     #[test]

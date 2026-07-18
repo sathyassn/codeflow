@@ -436,6 +436,7 @@ mod tests {
             enabled: true,
             cwd: None,
             env: BTreeMap::new(),
+            shell: crate::testing::config::CommandShell::Auto,
             runner: RunnerType::Custom,
             modes,
             report: None,

@@ -384,17 +384,17 @@ pub const SCHEMA: [KeySpec; 39] = [
     // ---- security ----------------------------------------------------------
     KeySpec {
         path: "security.dangerous_commands",
-        kind: KeyKind::Level,
-        valid: LEVEL_VALID,
+        kind: KeyKind::Enum(&["block"]),
+        valid: "block",
         purpose: "Destructive commands the exec-guard catches (rm -rf on system paths, dd to devices, mkfs, fork bombs).",
-        notes: "Default block: never legitimate in a project — off/allow \
-                disables the guard entirely.",
+        notes: "Non-relaxable safety floor: stale or hand-edited weaker values \
+                are ignored by enforcement and rejected by validation.",
     },
     KeySpec {
         path: "security.privilege_escalation",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Privilege escalation the exec-guard catches (sudo/su/doas/pkexec, LD_PRELOAD/PATH injection).",
+        purpose: "Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection).",
         notes: "Default warn, not block — the harness's ask tier owns sudo \
                 prompting; the guard only surfaces in-session feedback.",
     },
@@ -780,6 +780,16 @@ mod tests {
         let errs =
             validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
+    }
+
+    #[test]
+    fn test_validate_rejects_weakening_catastrophic_floor() {
+        for level in ["off", "warn", "allow"] {
+            let json = format!(r#"{{"security":{{"dangerous_commands":"{level}"}}}}"#);
+            let errs = validate_policy_str(&json).unwrap_err();
+            assert_eq!(errs[0].key, "security.dangerous_commands");
+            assert!(errs[0].message.contains("block"), "{}", errs[0]);
+        }
     }
 
     #[test]

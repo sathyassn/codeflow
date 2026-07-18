@@ -7,13 +7,17 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 ## Install the binary
 
 `codeflow` is a single binary. Install the prebuilt build (macOS arm64/x64,
-Linux x64) with the shell installer from the latest release — this anonymous
-one-liner works once codeflow's releases are public; while the repo is private,
-use the checkout build or the `gh release download` path below (both authenticate
-as a collaborator):
+Linux x64, Windows x64) with the shell or PowerShell installer from the latest
+release. These anonymous one-liners work once codeflow's releases are public;
+while the repo is private, use the checkout build or the `gh release download`
+path below (both authenticate as a collaborator):
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+```
+
+```powershell
+irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex
 ```
 
 Or build from a checkout, with a Rust toolchain:
@@ -26,7 +30,8 @@ To grab a specific platform tarball directly (e.g. to pin a version or script th
 install), use `gh`:
 
 ```sh
-# platform: aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
+# platform also includes x86_64-pc-windows-msvc (.zip containing codeflow.exe)
+# aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
 A=codeflow-cli-aarch64-apple-darwin
 gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
 tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
@@ -176,6 +181,42 @@ the values you already set — so tightening ships without a manual migration.
 
 These are enabled in runtime settings as well as described in the skills
 (ADR-0025):
+
+### Platform assurance
+
+CodeFlow releases target macOS, Linux, and x86-64 native Windows. Windows users
+can also run the Linux build inside WSL2; this is the preferred route for a
+Linux-native toolchain or Claude work that needs OS-enforced sandboxing.
+
+- macOS uses each harness's native sandbox. Linux and WSL2 use their Linux
+  sandbox implementations; install the dependencies reported by the harness
+  and keep fail-closed startup enabled.
+- Native Windows Codex uses its elevated Windows sandbox by default. The
+  scaffolded deterministic guard recognizes both Bash and PowerShell command
+  events and Windows drive, system, profile, disk, recovery, and permission
+  operations.
+- Native Windows Claude Code can use Git Bash or PowerShell, but Claude's OS
+  sandbox is not available there. The settings and hooks still apply, but they
+  are not equivalent containment. Use WSL2 or a container for catastrophic or
+  otherwise high-blast-radius work; if that boundary is unavailable, stop.
+- The test runner's per-target `shell` is `auto` by default (`sh` on
+  macOS/Linux/WSL2, `cmd.exe` on native Windows). This keeps generated `&&`
+  command chains compatible with the shells built into each OS. Set it to `sh`,
+  `powershell`, or `cmd` only when the consuming project's toolchain requires a
+  specific shell. `/cf-customize` must canary the selected shell and commands.
+
+The catastrophic classifier is a non-relaxable floor, not a complete endpoint
+security product. Managed organization policy, least-privilege host accounts,
+verified backups, and authenticated human approval remain necessary at higher
+blast radii.
+
+Authenticated command-line tools must be able to read their own configuration,
+so the OS sandbox does not deny `~/.config/gh` or
+`~/.docker/config.json` to every subprocess; doing so would also disable `gh`
+and Docker. Prefer OS keychains and credential helpers rather than plaintext
+tokens in those files. The harness denies direct file-reading tools, but a host
+that cannot provide brokered or helper-backed credentials must treat arbitrary
+shell access as credential-bearing and tighten that task's tool boundary.
 
 - Claude's project preset enables a fail-closed OS sandbox, autonomous
   sandbox-contained Bash, web search/fetch, wildcard public-domain egress for

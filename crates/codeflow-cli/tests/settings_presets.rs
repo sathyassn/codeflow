@@ -209,9 +209,20 @@ fn perm_array(value: &serde_json::Value, key: &str) -> Vec<String> {
 
 #[test]
 fn exec_guard_wired_in_every_preset() {
-    // The security stage rides the same PreToolUse (Bash) matcher as git-guard.
+    // The security stage covers both shell tools Claude exposes across Unix,
+    // WSL2, and native Windows.
     for name in preset_files() {
         let value = load(&name);
+        let pre = value["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("PreToolUse hook array");
+        assert!(
+            pre.iter().any(|group| {
+                let matcher = group["matcher"].as_str().unwrap_or_default();
+                matcher.contains("Bash") && matcher.contains("PowerShell")
+            }),
+            "{name}: shell guard matcher must cover Bash and PowerShell"
+        );
         let mut commands = Vec::new();
         collect_hook_commands(&value["hooks"], &mut commands);
         assert!(
@@ -376,6 +387,36 @@ fn sandbox_removes_raw_model_and_cloud_credentials_from_bash() {
                         && entry["mode"].as_str() == Some("deny")
                 }),
                 "{name}: {variable} must be denied to sandboxed Bash"
+            );
+        }
+    }
+}
+
+#[test]
+fn sandbox_denies_secret_stores_to_every_subprocess() {
+    // Read-tool rules do not cover arbitrary Python/Node/shell subprocess
+    // reads. Pin the OS-sandbox layer as well so an allowed development tool
+    // cannot become a credential-reading escape hatch.
+    let expected = [
+        "~/.ssh",
+        "~/.aws",
+        "~/.gnupg",
+        "~/.netrc",
+        "~/.kube",
+        "~/.cargo/credentials",
+        "~/.cargo/credentials.toml",
+        "~/.claude",
+    ];
+
+    for name in preset_files() {
+        let value = load(&name);
+        let deny_read = value["sandbox"]["filesystem"]["denyRead"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: sandbox.filesystem.denyRead missing"));
+        for path in expected {
+            assert!(
+                deny_read.iter().any(|entry| entry == path),
+                "{name}: sandbox denyRead missing {path:?}"
             );
         }
     }

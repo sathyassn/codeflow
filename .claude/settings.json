@@ -173,7 +173,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^(Bash|PowerShell)$",
         "hooks": [
           {
             "type": "command",
@@ -268,6 +268,18 @@
           "name": "AWS_SESSION_TOKEN",
           "mode": "deny"
         }
+      ]
+    },
+    "filesystem": {
+      "denyRead": [
+        "~/.ssh",
+        "~/.aws",
+        "~/.gnupg",
+        "~/.netrc",
+        "~/.kube",
+        "~/.cargo/credentials",
+        "~/.cargo/credentials.toml",
+        "~/.claude"
       ]
     }
   }

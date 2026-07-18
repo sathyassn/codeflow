@@ -175,6 +175,18 @@
     "failIfUnavailable": true,
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": true,
+    "filesystem": {
+      "denyRead": [
+        "~/.ssh",
+        "~/.aws",
+        "~/.gnupg",
+        "~/.netrc",
+        "~/.kube",
+        "~/.cargo/credentials",
+        "~/.cargo/credentials.toml",
+        "~/.claude"
+      ]
+    },
     "credentials": {
       "envVars": [
         {
@@ -233,7 +245,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^(Bash|PowerShell)$",
         "hooks": [
           {
             "type": "command",

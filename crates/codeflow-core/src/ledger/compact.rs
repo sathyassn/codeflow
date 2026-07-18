@@ -158,6 +158,8 @@ pub fn compact_ledger_type(
 fn sync_directory(path: &Path) -> Result<(), LedgerError> {
     #[cfg(unix)]
     fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(test)]
     DIRECTORY_SYNC_COUNT.with(|count| count.set(count.get() + 1));
     Ok(())

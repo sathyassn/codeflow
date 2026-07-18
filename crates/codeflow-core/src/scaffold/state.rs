@@ -346,6 +346,8 @@ fn sync_directory(path: &Path) -> Result<(), ScaffoldError> {
             .and_then(|dir| dir.sync_all())
             .map_err(|e| ScaffoldError::io(path, e))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

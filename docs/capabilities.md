@@ -43,9 +43,10 @@ loopback UI testing, reviewer-subagent escalation review, workspace key-file
 denies, the primary seat's high-effort fallback, and the default secret-bearing
 environment filter pinned on. Claude-hosted plugin turns pass high/xhigh
 explicitly so they cannot inherit a different user default. Claude
-ships a fail-closed sandbox, public web/tool access, raw model/cloud credential
-removal for sandboxed Bash, and ask rules for destructive source-control
-operations. A sandbox failure may request an auto-classified unsandboxed retry
+ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
+raw model/cloud credential removal for sandboxed Bash, and ask rules for
+destructive source-control operations. A sandbox failure may request an
+auto-classified unsandboxed retry
 only for a trusted installed tool that needs host state; this enables the
 official Codex plugin without granting a general bypass. Project `acceptEdits`
 remains the ordinary fallback because

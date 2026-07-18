@@ -83,6 +83,12 @@ pub struct TargetConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 
+    /// Command shell. `auto` selects `sh` on macOS/Linux/WSL2 and `cmd.exe` on
+    /// native Windows; set an explicit value when a project deliberately
+    /// uses a different shell.
+    #[serde(default, skip_serializing_if = "CommandShell::is_auto")]
+    pub shell: CommandShell,
+
     /// Runner type.
     pub runner: RunnerType,
 
@@ -130,6 +136,29 @@ pub struct TargetConfig {
     /// Used by runners that enumerate test files directly (e.g. shell-scripts).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub test_files: Vec<TestFileEntry>,
+}
+
+/// Shell used for a target's mode commands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandShell {
+    /// Platform-native default: POSIX `sh` or Windows Command Prompt.
+    #[default]
+    Auto,
+    /// POSIX shell; on native Windows this requires Git Bash or another `sh`.
+    Sh,
+    /// `PowerShell` (`powershell.exe` on Windows, `pwsh` elsewhere).
+    Powershell,
+    /// Windows Command Prompt.
+    Cmd,
+}
+
+impl CommandShell {
+    // serde's `skip_serializing_if` contract passes a reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
 }
 
 /// Priority tag for a test target or individual test file.
@@ -767,6 +796,7 @@ mod tests {
                 enabled: true,
                 cwd: None,
                 env: BTreeMap::new(),
+                shell: CommandShell::Auto,
                 runner: RunnerType::Custom,
                 modes: BTreeMap::from([(
                     "full".to_string(),
@@ -810,6 +840,27 @@ mod tests {
             let back = serde_json::to_string(&parsed).unwrap();
             assert_eq!(back, json);
         }
+    }
+
+    #[test]
+    fn test_command_shell_serde_and_default() {
+        for (json, expected) in [
+            ("\"auto\"", CommandShell::Auto),
+            ("\"sh\"", CommandShell::Sh),
+            ("\"powershell\"", CommandShell::Powershell),
+            ("\"cmd\"", CommandShell::Cmd),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<CommandShell>(json).unwrap(),
+                expected
+            );
+        }
+
+        let target: TargetConfig = serde_json::from_str(
+            r#"{"name":"test","runner":"custom","modes":{"full":{"command":"echo ok"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(target.shell, CommandShell::Auto);
     }
 
     #[test]

@@ -496,6 +496,7 @@ mod tests {
             enabled: true,
             cwd: None,
             env: BTreeMap::new(),
+            shell: crate::testing::config::CommandShell::Auto,
             runner: RunnerType::Custom,
             modes,
             report: Some(ReportConfig {
@@ -915,6 +916,7 @@ mod tests {
             enabled: true,
             cwd: Some("backend".to_string()),
             env: BTreeMap::new(),
+            shell: crate::testing::config::CommandShell::Auto,
             runner: RunnerType::Cargo,
             modes,
             report: None,

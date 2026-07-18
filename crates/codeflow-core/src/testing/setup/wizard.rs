@@ -238,6 +238,7 @@ pub fn run_add_target_wizard(
         enabled: true,
         cwd,
         env: BTreeMap::new(),
+        shell: crate::testing::config::CommandShell::Auto,
         runner,
         modes,
         report: None,
@@ -433,6 +434,7 @@ mod tests {
             enabled: true,
             cwd: None,
             env: BTreeMap::new(),
+            shell: crate::testing::config::CommandShell::Auto,
             runner: RunnerType::Cargo,
             modes: BTreeMap::from([
                 (
@@ -477,6 +479,7 @@ mod tests {
             enabled: true,
             cwd: None,
             env: BTreeMap::new(),
+            shell: crate::testing::config::CommandShell::Auto,
             runner: RunnerType::Cargo,
             modes: BTreeMap::new(),
             report: None,

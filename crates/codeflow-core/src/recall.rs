@@ -23,6 +23,7 @@
 //! indexed are reported, never silently empty (charter principle 8).
 
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};

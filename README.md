@@ -29,12 +29,17 @@ bind any agent or human.
 
 ## Install
 
-Prebuilt binary (macOS arm64/x64, Linux x64) — the shell installer from the
+Prebuilt binary (macOS arm64/x64, Linux x64, Windows x64) — the shell or
+PowerShell installer from the
 latest release (works once codeflow's releases are public; for private/early
 access use the checkout build below or `gh release download`):
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+```
+
+```powershell
+irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex
 ```
 
 Or from a checkout, with a Rust toolchain:
@@ -43,9 +48,10 @@ Or from a checkout, with a Rust toolchain:
 cargo install --path crates/codeflow-cli
 ```
 
-codeflow targets macOS and Linux (unix); no Windows artifact is built, and
-Windows is unsupported and untested — the git-hook shims and the scaffold's
-exec-bit handling are unix code paths.
+On native Windows, use the PowerShell installer from the release or build with
+Cargo. Git for Windows is required. WSL2 uses the Linux installer and is the
+preferred Windows route for Linux-native tooling or Claude sandboxing. See the
+platform-assurance section in the adoption guide before high-blast-radius work.
 
 See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
 
@@ -134,6 +140,7 @@ never honors and blocks agents from setting in-session.
 - [docs/adoption.md](docs/adoption.md) — tiers, install, ownership, the daily flow, the enforcement matrix
 - [docs/architecture.md](docs/architecture.md) — how the binary and scaffold are built
 - [docs/product.md](docs/product.md) — what codeflow is for and its non-goals
+- [docs/release-checklist.md](docs/release-checklist.md) — evidence required for every release
 - [docs/decisions/](docs/decisions/) — ADRs (the record of why)
 
 ## Contributing
