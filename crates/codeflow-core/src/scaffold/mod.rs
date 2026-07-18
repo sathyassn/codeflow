@@ -35,6 +35,46 @@ mod gitutil;
 mod hash;
 mod version;
 
+/// The starter ADR is useful only when `CodeFlow` is creating a project's first
+/// decision record. Brownfield repositories already have an architecture and
+/// an ADR sequence; adding another `ADR-0001` would make the doc graph invalid
+/// and invent a decision after the fact.
+const INITIAL_STACK_ADR: &str = "docs/decisions/ADR-0001-stack-choice.md";
+
+fn should_skip_initial_stack_adr(
+    root: &std::path::Path,
+    dest: &str,
+) -> Result<bool, ScaffoldError> {
+    if dest != INITIAL_STACK_ADR || root.join(dest).exists() {
+        return Ok(false);
+    }
+
+    let decisions = root.join("docs/decisions");
+    let entries = match std::fs::read_dir(&decisions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(ScaffoldError::io(&decisions, error)),
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|error| ScaffoldError::io(&decisions, error))?;
+        if !entry
+            .file_type()
+            .map_err(|error| ScaffoldError::io(entry.path(), error))?
+            .is_file()
+        {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("ADR-") && name.ends_with(".md") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 pub use assets::{AssetSource, DirSource};
 pub use hash::sha256_hex;
 pub use init::{init, InitAnswers, InitOptions};

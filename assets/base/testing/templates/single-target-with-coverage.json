@@ -1,6 +1,6 @@
 {
   "_description": "Single target with coverage rules and a sample exception.",
-  "$schema": ".codeflow/test-config.schema.json",
+  "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
     "parallel": false,

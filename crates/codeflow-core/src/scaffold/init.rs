@@ -25,7 +25,7 @@ use super::state::{
     ProjectState, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
-use super::{gitutil, hash, ScaffoldError};
+use super::{gitutil, hash, should_skip_initial_stack_adr, ScaffoldError};
 
 /// Answers to init's at-most-three questions (charter §4.1: product
 /// one-liner, areas, permission preset). `None` = use the default / the
@@ -162,6 +162,17 @@ pub fn init(
     let mut written: Vec<String> = vec![PROJECT_TOML.to_string()];
     for entry in &manifest.entries {
         if !entry.applies(tier, &preset) {
+            continue;
+        }
+        if should_skip_initial_stack_adr(root, &entry.dest)? {
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![
+                    "brownfield repository already has ADRs; starter stack decision not added"
+                        .to_string(),
+                ],
+            );
             continue;
         }
         install_entry(

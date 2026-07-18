@@ -51,7 +51,7 @@ use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
     InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
 };
-use super::{hash, ScaffoldError};
+use super::{hash, should_skip_initial_stack_adr, ScaffoldError};
 
 /// Options for [`update`].
 #[derive(Debug, Clone)]
@@ -122,6 +122,17 @@ pub fn update(
                 &entry.dest,
                 Action::Skipped,
                 vec!["ignored via [scaffold] ignore in project.toml".to_string()],
+            );
+            continue;
+        }
+        if should_skip_initial_stack_adr(root, &entry.dest)? {
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![
+                    "brownfield repository already has ADRs; starter stack decision not added"
+                        .to_string(),
+                ],
             );
             continue;
         }

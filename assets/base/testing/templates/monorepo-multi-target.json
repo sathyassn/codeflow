@@ -1,6 +1,6 @@
 {
   "_description": "Monorepo with three targets (Go, Node, Python) running in parallel.",
-  "$schema": ".codeflow/test-config.schema.json",
+  "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
     "parallel": true,

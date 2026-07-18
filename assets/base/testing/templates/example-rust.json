@@ -1,6 +1,6 @@
 {
   "_description": "Rust project with cargo nextest, JUnit report via derive_from, and lcov coverage.",
-  "$schema": ".codeflow/test-config.schema.json",
+  "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
     "parallel": false,

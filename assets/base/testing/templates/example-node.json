@@ -1,6 +1,6 @@
 {
   "_description": "Node.js project with vitest, native CTRF reporter, and Istanbul coverage.",
-  "$schema": ".codeflow/test-config.schema.json",
+  "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
     "parallel": false,

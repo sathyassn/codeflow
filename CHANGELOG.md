@@ -199,6 +199,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Brownfield setup preserves the consuming project's decision history.**
+  Init and update no longer add the starter stack `ADR-0001` when an existing
+  repository already has ADRs. Test setup now installs the JSON schema beside
+  generated `.codeflow/test-config.json` files, uses a correctly relative
+  `$schema` reference, and repairs a missing schema without replacing a
+  populated project configuration. Repositories initialized by an affected
+  prerelease build should delete its duplicate starter ADR once; subsequent
+  updates leave it deleted. Previously populated test configs are intentionally
+  not rewritten; regenerate one to adopt the corrected `$schema` reference.
 - **Public contribution and security guidance is release-neutral.** The
   contributor path now names the complete repository gate, including coverage
   and model-evaluation contracts, and the security policy supports the latest

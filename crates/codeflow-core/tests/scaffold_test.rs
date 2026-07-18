@@ -88,6 +88,13 @@ tiers = ["standard", "full"]
 template = true
 
 [[entry]]
+src = "docs/decisions/ADR-0001-stack-choice.md.tmpl"
+dest = "docs/decisions/ADR-0001-stack-choice.md"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+template = true
+
+[[entry]]
 src = "ci/codeflow-ci.yml"
 dest = ".github/workflows/codeflow-ci.yml"
 ownership = "managed"
@@ -189,6 +196,10 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
     write(
         "docs/product.md.tmpl",
         "# {{PROJECT_NAME}}\n\n{{PROJECT_ONE_LINER}}\n\nstack: {{STACK}}\nareas: {{AREAS}}\npurpose: {{PRODUCT_PURPOSE}}\n",
+    );
+    write(
+        "docs/decisions/ADR-0001-stack-choice.md.tmpl",
+        "---\nid: ADR-0001\n---\n\n# Initial stack: {{STACK}}\n",
     );
     write("ci/codeflow-ci.yml", "name: codeflow-ci\non: [push]\n");
     write("pm/epic.md.tmpl", "# {{EPIC_ID}} - {{TITLE}}\n");
@@ -316,6 +327,10 @@ fn fresh_init_empty_dir_bootstrap_grace() {
     assert!(root.join(".codeflow/manifest.json").exists());
     assert!(root.join(".codeflow/.baseline/AGENTS.md").exists());
     assert!(root.join(".claude/settings.json").exists());
+    assert!(root
+        .join("docs/decisions/ADR-0001-stack-choice.md")
+        .exists());
+    assert!(read(&root, ".codeflow/manifest.json").contains("ADR-0001-stack-choice.md"));
 
     // Hook wiring + exec bit.
     assert_eq!(
@@ -373,6 +388,49 @@ fn fresh_init_leaves_clean_committable_tree() {
     let committed = git(&root, &["show", "HEAD:.codeflow/project.toml"]);
     assert!(committed.contains("policy_armed = true"), "{committed}");
     assert!(committed.contains("git_hooks = \"wired\""), "{committed}");
+}
+
+#[test]
+fn brownfield_init_and_update_do_not_add_a_second_adr_0001() {
+    isolate_git();
+    let (_a, assets) = fixture_assets(false);
+    let (_p, root) = project_dir();
+
+    std::fs::create_dir_all(root.join("docs/decisions")).unwrap();
+    std::fs::write(
+        root.join("docs/decisions/ADR-0001-existing-boundary.md"),
+        "---\nid: ADR-0001\n---\n\n# Existing boundary\n",
+    )
+    .unwrap();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.name", "CodeFlow Test"]);
+    git(&root, &["config", "user.email", "codeflow@example.invalid"]);
+    git(
+        &root,
+        &["add", "docs/decisions/ADR-0001-existing-boundary.md"],
+    );
+    git(&root, &["commit", "-m", "docs: record existing boundary"]);
+
+    let report = scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+    assert_eq!(
+        action_of(&report, "docs/decisions/ADR-0001-stack-choice.md"),
+        Action::Skipped
+    );
+    assert!(!root
+        .join("docs/decisions/ADR-0001-stack-choice.md")
+        .exists());
+
+    let installed = read(&root, ".codeflow/manifest.json");
+    assert!(!installed.contains("ADR-0001-stack-choice.md"));
+
+    let update = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(
+        action_of(&update, "docs/decisions/ADR-0001-stack-choice.md"),
+        Action::Skipped
+    );
+    assert!(!root
+        .join("docs/decisions/ADR-0001-stack-choice.md")
+        .exists());
 }
 
 #[test]

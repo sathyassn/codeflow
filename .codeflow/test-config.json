@@ -1,5 +1,5 @@
 {
-  "$schema": ".codeflow/test-config.schema.json",
+  "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
     "parallel": false,

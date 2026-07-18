@@ -17,7 +17,10 @@ use prompt::PromptProvider;
 
 /// `$schema` reference written into generated configs. The schema ships next
 /// to the config in the consumer repo (`.codeflow/test-config.schema.json`).
-pub const SCHEMA_REF: &str = ".codeflow/test-config.schema.json";
+pub const SCHEMA_REF: &str = "test-config.schema.json";
+
+const TEST_CONFIG_SCHEMA: &str =
+    include_str!("../../../../../assets/base/testing/test-config.schema.json");
 
 /// Result of a setup operation.
 #[derive(Debug)]
@@ -80,6 +83,7 @@ pub fn run_interactive(
 /// Returns `SetupError` on I/O or config-write failure.
 pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     let config_path = config_path(project_dir);
+    write_schema_next_to(&config_path)?;
     if has_populated_config(&config_path) {
         return Err(SetupError::ConfigExists(config_path));
     }
@@ -129,6 +133,7 @@ pub fn run_template(
     force: bool,
 ) -> Result<SetupResult, SetupError> {
     let config_path = config_path(project_dir);
+    write_schema_next_to(&config_path)?;
 
     if config_path.exists() && !force {
         return Err(SetupError::ConfigExists(config_path));
@@ -163,6 +168,7 @@ pub fn run_add_target(
     prompts: &dyn PromptProvider,
 ) -> Result<SetupResult, SetupError> {
     let config_path = config_path(project_dir);
+    write_schema_next_to(&config_path)?;
 
     if !config_path.exists() {
         return Err(SetupError::NoConfigForAddTarget);
@@ -232,6 +238,7 @@ pub fn get_template_list(template_dir: &Path) -> Result<Vec<(String, String)>, S
 /// Returns `SetupError` on I/O or config-write failure.
 pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
     let config_path = config_path(project_dir);
+    write_schema_next_to(&config_path)?;
 
     // Idempotence guard: never overwrite an existing populated config.
     // `codeflow init` may be re-run on a configured project; the minimal
@@ -344,10 +351,58 @@ fn template_path(template_dir: &Path, name: &str) -> Result<std::path::PathBuf, 
 }
 
 fn write_config(path: &Path, config: &TestConfig) -> Result<(), SetupError> {
+    let path = guarded_generated_path(path, "test-config.json")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    config::write_test_config(path, config).map_err(|e| SetupError::Config(e.to_string()))
+    write_schema_next_to(&path)?;
+    config::write_test_config(&path, config).map_err(|e| SetupError::Config(e.to_string()))
+}
+
+fn write_schema_next_to(config_path: &Path) -> Result<(), SetupError> {
+    let Some(parent) = config_path.parent() else {
+        return Err(SetupError::Config(format!(
+            "test config path has no parent: {}",
+            config_path.display()
+        )));
+    };
+    let schema_path = guarded_generated_path(config_path, "test-config.schema.json")?;
+    std::fs::create_dir_all(parent)?;
+    if matches!(
+        std::fs::read_to_string(&schema_path),
+        Ok(ref current) if current == TEST_CONFIG_SCHEMA
+    ) {
+        return Ok(());
+    }
+    crate::file_lock::atomic_write(&schema_path, TEST_CONFIG_SCHEMA.as_bytes())?;
+    Ok(())
+}
+
+fn guarded_generated_path(
+    config_path: &Path,
+    file_name: &str,
+) -> Result<std::path::PathBuf, SetupError> {
+    let Some(codeflow_dir) = config_path.parent() else {
+        return Err(SetupError::Config(format!(
+            "test config path has no parent: {}",
+            config_path.display()
+        )));
+    };
+    let Some(root) = codeflow_dir.parent() else {
+        return Err(SetupError::Config(format!(
+            "test config path has no project root: {}",
+            config_path.display()
+        )));
+    };
+    let generated_path = config_path.with_file_name(file_name);
+    let relative = generated_path.strip_prefix(root).map_err(|_| {
+        SetupError::Config(format!(
+            "generated test path is outside the project root: {}",
+            generated_path.display()
+        ))
+    })?;
+    crate::scaffold::state::guard_beneath_root(root, relative)
+        .map_err(|error| SetupError::Config(error.to_string()))
 }
 
 /// Errors from setup operations.
