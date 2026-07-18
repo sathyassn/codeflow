@@ -102,10 +102,19 @@
     {
       "id": "CF-QA-003",
       "level": "hard",
-      "statement": "Design and implementation use the smallest coherent solution that satisfies current requirements, reject speculative or dead complexity, and treat raw line count only as a diagnostic.",
+      "statement": "Design and implementation use the smallest coherent durable solution for the accepted lifecycle, scale, change rate, contributor and integration breadth, operational risk, and reversibility; reject both speculative complexity and brittle under-design; preserve justified modularity and reuse; handle accepted edge and failure cases; clarify materially missing context; and treat project size or raw line count only as inputs, never automatic architecture rules.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["Write only what earns its keep", "every material complexity maps to a current requirement"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["smallest coherent solution", "Material avoidable complexity is `changes_requested`", "not the fewest lines"]}
+        {"path": "AGENTS.md", "markers": ["Write only what earns its keep", "DRY with judgment", "brittle under-design, not simplicity"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["smallest coherent solution", "brittle under-design", "not the fewest lines", "accepted operating context", "size alone", "clarify it before approval"]}
+      ]
+    },
+    {
+      "id": "CF-QA-004",
+      "level": "hard",
+      "statement": "UI work reuses an existing design system when present and composes recurring tokens, accessible primitives, application components, and explicit state into views without duplicated one-off implementations or speculative framework layers.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["existing design system", "accessible primitives", "composition into views or pages", "no new design system or higher-order abstraction for a one-off surface"]},
+        {"path": ".claude/agents/cf-reviewer.md", "markers": ["For UI changes", "tokens, accessible primitives, and components"]}
       ]
     },
     {

@@ -137,7 +137,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "require at least 80% aggregate production-code line coverage",
         "the approved design",
         "Anything less is `changes_requested`.",
-        "Material avoidable complexity is major even when tests pass",
+        "Material avoidable complexity or brittleness is major even when tests pass",
     ] {
         assert!(
             normalize_whitespace(&reviewer).contains(required),
@@ -185,6 +185,8 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
         "Decide by options and horizons.",
         "Write only what earns its keep.",
         "every material complexity maps to a current requirement",
+        "DRY with judgment",
+        "brittle under-design, not simplicity",
         "Shape the deliverable.",
         "check what it affects upstream and downstream",
         "ADRs and the ledger are never edited",
@@ -244,8 +246,9 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
 
 #[test]
 fn quality_contract_pins_evidence_coverage_and_ui() {
-    let contract =
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md");
+    let contract = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    ));
 
     for required in [
         "PLAN_VERSION:",
@@ -268,6 +271,9 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "COMPLEXITY_JUSTIFICATION:",
         "smallest coherent solution",
         "Material avoidable complexity is `changes_requested`",
+        "brittle under-design",
+        "existing design system",
+        "accessible primitives",
         "not the fewest lines",
     ] {
         assert!(

@@ -26,6 +26,8 @@ SKILL_DIR = SCRIPT_DIR.parent
 RESOURCE_DIR = SKILL_DIR / "resources"
 RUN_MARKER = ".codeflow-eval-run.json"
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
+EVIDENCE_KINDS = frozenset({"session", "tool", "file", "command", "ui"})
 KNOWN_VALIDITY_FLAGS = {
     "ambiguous_task",
     "baseline_contamination",
@@ -146,7 +148,7 @@ def evidence_errors(value: Any, label: str, *, allow_empty: bool = False) -> lis
         if not isinstance(item, dict):
             errors.append(f"{item_label} must be an object")
             continue
-        if item.get("kind") not in {"session", "tool", "file", "command", "ui"}:
+        if item.get("kind") not in EVIDENCE_KINDS:
             errors.append(f"{item_label}.kind is invalid")
         if not isinstance(item.get("ref"), str) or not item["ref"].strip():
             errors.append(f"{item_label}.ref must be a nonempty string")
@@ -597,7 +599,7 @@ def computed_trial_status(trial: dict, case: dict) -> str:
     evidence = trial.get("evidence")
     valid_evidence = isinstance(evidence, list) and bool(evidence) and all(
         isinstance(item, dict)
-        and item.get("kind") in {"session", "tool", "file", "command", "ui"}
+        and item.get("kind") in EVIDENCE_KINDS
         and isinstance(item.get("ref"), str)
         and bool(item["ref"])
         and isinstance(item.get("digest"), str)
@@ -798,7 +800,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
             variable = experiment.get("variable")
             if (
                 not isinstance(variable, str)
-                or not re.fullmatch(r"system\.[a-z_][a-z0-9_.]*", variable)
+                or not EXPERIMENT_VARIABLE.fullmatch(variable)
             ):
                 errors.append(
                     "result.experiment.variable must be a system.* field path"
@@ -1054,7 +1056,7 @@ def verified_observed_binding(result: dict, label: str) -> None:
 def enforce_one_variable(
     baseline: dict, candidate: dict, variable: str
 ) -> None:
-    if not re.fullmatch(r"system\.[a-z_][a-z0-9_.]*", variable):
+    if not EXPERIMENT_VARIABLE.fullmatch(variable):
         raise EvalError("comparison variable must be a system.* field path")
     if variable.startswith("system.observed") or variable.startswith(
         "system.peer_seats"

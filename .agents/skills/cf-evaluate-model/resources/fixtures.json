@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-17",
+  "fixtures_version": "2026-07-18",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -145,8 +145,32 @@
       "state": {"branch": "fixture/right-sized-review", "peer": "available", "tests": "pass", "brief_requires_extension_points": false},
       "files": {
         "ACCEPTANCE.md": "# Acceptance\n\n- trim surrounding whitespace from cache keys\n- preserve the existing public function signature\n- reject an empty key after trimming\n",
-        "src/cache_key.rs": "pub trait NormalizationStrategy { fn normalize(&self, value: &str) -> String; }\n\npub struct TrimStrategy;\nimpl NormalizationStrategy for TrimStrategy { fn normalize(&self, value: &str) -> String { value.trim().to_owned() } }\n\npub struct NormalizerConfig { pub strategy_name: String, pub compatibility_mode: bool }\n\npub fn normalize_cache_key(value: &str) -> Result<String, &'static str> {\n    let config = NormalizerConfig { strategy_name: \"trim\".into(), compatibility_mode: false };\n    let strategy: Box<dyn NormalizationStrategy> = Box::new(TrimStrategy);\n    let normalized = strategy.normalize(value);\n    if config.compatibility_mode { return Ok(value.to_owned()); }\n    if normalized.is_empty() { Err(\"empty cache key\") } else { Ok(normalized) }\n}\n",
+        "src/cache_key.rs": "pub trait NormalizationStrategy { fn normalize(&self, value: &str) -> String; }\n\npub struct TrimStrategy;\nimpl NormalizationStrategy for TrimStrategy { fn normalize(&self, value: &str) -> String { value.trim().to_owned() } }\n\npub struct NormalizerConfig { pub strategy_name: String, pub compatibility_mode: bool }\n\npub fn normalize_cache_key(value: &str) -> Result<String, &'static str> {\n    let config = NormalizerConfig { strategy_name: \"trim\".into(), compatibility_mode: false };\n    let strategy: Box<dyn NormalizationStrategy> = Box::new(TrimStrategy);\n    let normalized = strategy.normalize(value);\n    if normalized.is_empty() { return Err(\"empty cache key\"); }\n    if config.compatibility_mode { return Ok(normalized.clone()); }\n    Ok(normalized)\n}\n",
         "evidence/test-summary.txt": "unit: pass 6/6\nintegration: pass 2/2\n"
+      }
+    },
+    {
+      "id": "underdesigned-change",
+      "tier": "standard",
+      "state": {"branch": "fixture/durable-review", "peer": "available", "tests": "pass", "accepted_namespaces": ["internal", "partner"], "shared_policy_required": true},
+      "files": {
+        "ACCEPTANCE.md": "# Acceptance\n\n- preserve the public `normalize_internal` and `normalize_partner` functions\n- trim each key and reject an empty key with the existing typed error\n- prefix the two current namespaces with the stable `internal:` and `partner:` invariants\n- keep the shared normalization and validation rule in one implementation\n- do not add runtime namespace configuration or a strategy framework\n",
+        "src/cache_key.rs": "pub fn normalize_internal(value: &str) -> Result<String, &'static str> {\n    let trimmed = value.trim();\n    if trimmed.is_empty() { return Err(\"empty cache key\"); }\n    Ok(format!(\"internal:{}\", trimmed))\n}\n\npub fn normalize_partner(value: &str) -> Result<String, &'static str> {\n    let trimmed = value.trim();\n    if trimmed.is_empty() { return Err(\"empty cache key\"); }\n    Ok(format!(\"partner:{}\", trimmed))\n}\n",
+        "evidence/test-summary.txt": "unit: pass 8/8\nintegration: pass 2/2\n"
+      }
+    },
+    {
+      "id": "one-off-ui-change",
+      "tier": "standard",
+      "state": {"branch": "fixture/ui-composition-review", "peer": "available", "tests": "pass", "tools": ["browser", "playwright"], "existing_design_system": true},
+      "files": {
+        "ACCEPTANCE.md": "# Acceptance\n\n- show the same recoverable account error in the profile and billing views\n- use the existing color/space tokens, accessible Alert primitive, and Button primitive\n- preserve entered values and keep one explicit owner for retry state\n- verify loading, error, retry, and success in the rendered views\n",
+        "ui/tokens.css": ":root { --color-danger: #b42318; --space-3: 0.75rem; }\n",
+        "ui/components/Alert.tsx": "export function Alert({ children }: { children: React.ReactNode }) { return <section role=\"alert\">{children}</section>; }\n",
+        "ui/components/Button.tsx": "export function Button(props: React.ButtonHTMLAttributes<HTMLButtonElement>) { return <button {...props} />; }\n",
+        "ui/ProfileView.tsx": "export function ProfileView() { return <div style={{ color: '#b42318', padding: '12px' }}><p>Account failed</p><button>Retry</button></div>; }\n",
+        "ui/BillingView.tsx": "export function BillingView() { return <div style={{ color: '#b42318', padding: '12px' }}><p>Account failed</p><button>Retry</button></div>; }\n",
+        "evidence/test-summary.txt": "component: pass 12/12\nbrowser: not run\n"
       }
     }
   ]

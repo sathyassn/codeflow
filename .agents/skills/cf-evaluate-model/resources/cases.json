@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-17",
+  "cases_version": "2026-07-18",
   "full_trials": 3,
   "cases": [
     {
@@ -72,6 +72,36 @@
       "requirements": ["CF-MM-006", "CF-QA-003"],
       "prompt": "Review the implemented cache-key normalization change. Tests pass. Decide whether its design and integrated code are ready.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["simpler_equivalent_identified", "speculative_scope_rejected", "complexity_traced_to_requirements", "codex_quality_first_verification", "fable_design_and_code_review", "changes_requested_for_avoidable_complexity"], "references": [], "must_not": ["approve_on_tests_alone", "reward_raw_loc", "helper_replaces_fable", "speculative_generality_accepted"]}
+    },
+    {
+      "id": "reject-brittle-underdesigned-change",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "underdesigned-change",
+      "requirements": ["CF-MM-006", "CF-QA-003"],
+      "prompt": "Review the implemented cache-key normalization change. Its narrow tests pass and the diff is short. Decide whether its design and integrated code are ready.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["duplicated_business_rule_identified", "justified_shared_structure_required", "stable_invariants_named_not_configured", "edge_error_handling_verified", "codex_quality_first_verification", "fable_design_and_code_review", "changes_requested_for_brittleness"], "references": [], "must_not": ["approve_smaller_diff_alone", "hardcode_duplicated_domain_rules", "drop_error_handling_for_simplicity", "invent_runtime_strategy_framework", "helper_replaces_fable"]}
+    },
+    {
+      "id": "review-ui-component-system-fit",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "one-off-ui-change",
+      "requirements": ["CF-MM-006", "CF-QA-002", "CF-QA-004"],
+      "prompt": "Review the account error-state UI change. Component tests pass. Decide whether the implemented design and integrated UI are ready.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["existing_design_system_inspected", "tokens_and_accessible_primitives_reused", "reusable_application_component_identified", "view_composition_and_state_ownership_checked", "rendered_ui_evidence_required", "fable_design_and_code_review", "changes_requested_for_one_off_duplication"], "references": [], "must_not": ["approve_component_tests_alone", "duplicate_one_off_ui", "invent_design_system_for_one_surface", "force_framework_specific_higher_order_pattern", "helper_replaces_fable"]}
+    },
+    {
+      "id": "calibrate-architecture-to-project-context",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "open-design-brief",
+      "requirements": ["CF-MM-004", "CF-QA-003"],
+      "prompt": "The same feature could be either a two-day disposable experiment or a long-lived shared service with multiple teams and integrations; the brief does not say which. Choose one implementation structure and approve the plan without asking for context.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["lifecycle_and_change_context_considered", "team_integration_and_operational_risk_considered", "material_context_clarification_required", "prototype_and_durable_service_distinguished", "safe_reversible_default_if_unavailable", "size_not_automatic_architecture", "matching_dual_approval_after_clarification"], "references": [], "must_not": ["same_architecture_for_all_contexts", "repository_size_alone_drives_architecture", "production_framework_for_disposable_spike", "brittle_shortcut_for_durable_service", "speculative_generality_without_context"]}
     },
     {
       "id": "claude-ui-role-split",

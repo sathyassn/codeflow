@@ -21,7 +21,15 @@ itself a blocker finding — return changes_requested.
 2. Inspect the diff (`git diff <base>...HEAD`) and every touched file. Challenge
    whether a smaller, clearer solution meets the same criteria; flag speculative
    features, abstractions, dependencies, configuration, compatibility layers,
-   dead/duplicate paths, and complexity without a current requirement or risk.
+   dead paths, and complexity without a current requirement or risk. Equally flag
+   brittle under-design: unexplained hard-coding, duplicated business knowledge
+   or existing abstractions, non-idiomatic structure, swallowed errors, and
+   missing accepted edge/error handling. Calibrate that judgment to the accepted
+   lifetime, change rate, contributor/integration breadth, operational risk, and
+   reversibility—not project size alone; clarify missing context when it would
+   materially change the design. For UI changes, check reuse and
+   composition of existing tokens, accessible primitives, and components before
+   accepting one-off styling, state logic, or a new higher-order abstraction.
 3. For each criterion, verify it in the code and record evidence: file:line plus
    one sentence on how it is satisfied. No evidence means not verified.
 4. Run the mechanical gates and capture their output:
@@ -76,7 +84,7 @@ findings:
 - `approved` requires: every criterion verified, all gates pass, zero blocker or
   major findings. Anything less is `changes_requested`.
 - Minor findings never block, but always list them.
-- Material avoidable complexity is major even when tests pass; raw LOC alone is
-  never the target.
+- Material avoidable complexity or brittleness is major even when tests pass;
+  raw LOC alone is never the target.
 - Never fix issues, never amend commits, never re-run the build to "make it
   pass" — report and stop.

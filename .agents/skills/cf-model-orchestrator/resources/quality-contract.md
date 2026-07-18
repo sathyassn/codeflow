@@ -48,6 +48,26 @@ does not, remove or simplify it. Reject speculative generality, duplicate or
 dead paths, cleverness that obscures control flow, and architecture that fights
 the repository's established patterns.
 
+Coherence includes justified structure, not merely less structure. Follow the
+language, framework, and repository idioms; keep business rules single-sourced;
+use focused composable units, clear interfaces, and explicit state and side
+effects. Prefer declarative or reactive composition when it is native to the
+stack, not as a universal mandate. Do not hard-code supported variability,
+secrets, or duplicated domain decisions; named stable invariants need not become
+configuration. Current variants, repeated behavior, observed constraints, and
+evidenced edge or failure cases may require abstraction, reuse, configuration,
+or defensive code. Unexplained hard-coding, duplicated business knowledge,
+swallowed errors, or missing accepted edge/error handling is brittle
+under-design and is `changes_requested`, even when the smaller diff passes.
+
+Calibrate structure to the accepted operating context: expected lifetime,
+scale, rate and shape of change, contributor and integration breadth,
+operational or security risk, and cost of reversal. No factor—especially size
+alone—proves an abstraction. If missing context would materially change the
+settled design, clarify it before approval; if clarification is unavailable,
+state the assumption and prefer established safe practices with reversible
+boundaries, without speculative generality.
+
 Both seats grade design proportionality before approval. Codex first-verifies
 the implementation for necessity, clarity, idiomatic structure, maintainability,
 failure behavior, and security. The directly invoked primary Fable seat reviews
@@ -139,6 +159,16 @@ repository.
 For web UI, exercise real rendered behavior with Playwright or an equivalent
 browser driver. For native, mobile, or desktop UI, use Computer Use or a
 surface-specific automation driver. Check at least:
+
+- the project's existing design system and component library before adding a
+  new pattern;
+- recurring foundations or tokens, accessible primitives, reusable
+  application-specific components, and their composition into views or pages;
+- minimal explicit interaction state with one clear owner and framework-native
+  data flow;
+- no repeated one-off styling, state logic, or components when current reuse is
+  evidenced; no new design system or higher-order abstraction for a one-off
+  surface without such evidence;
 
 - the approved design and the primary user journeys;
 - loading, empty, error, disabled, and success states;

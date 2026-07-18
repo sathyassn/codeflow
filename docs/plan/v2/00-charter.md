@@ -151,9 +151,9 @@ Always-loaded budget: AGENTS.md + orient digest ≈ **≤3K tokens** (v1: ~15.5K
 >
 > | Artifact | Original cap | Superseding cap | Shipped now | Why it grew |
 > |---|---|---|---|---|
-> | Agent defs | 1 — `cf-reviewer` ≤80 lines | 2 — reviewer ≤6KiB; security reviewer ≤16KiB | 82 / 187 lines; 3.8 / 10.6KiB | ADR-0016 added the security/red-team reviewer; later duo and proportionality duties made both verdict contracts explicit. |
-> | AGENTS.md (standard) | ≤250 lines; 32KiB hard | ≤24KiB; 32KiB hard | 283 lines; 18.2KiB | ADR-0019 through ADR-0030 added the enforcement floor, commit standard, host-neutral duo, evidence routing, and proportionate-quality gate. |
-> | AGENTS.md (minimal) | — | ≤12KiB | 146 lines; 8.5KiB | The minimal tier retains the same hard behavioral floor with fewer operating details. |
+> | Agent defs | 1 — `cf-reviewer` ≤80 lines | 2 — reviewer ≤6KiB; security reviewer ≤16KiB | 90 / 187 lines; 4.5 / 10.6KiB | ADR-0016 added the security/red-team reviewer; later duo and context-proportionate durability duties made both verdict contracts explicit. |
+> | AGENTS.md (standard) | ≤250 lines; 32KiB hard | ≤24KiB; 32KiB hard | 290 lines; 18.7KiB | ADR-0019 through ADR-0030 added the enforcement floor, commit standard, host-neutral duo, evidence routing, and balanced context-proportionate quality gate. |
+> | AGENTS.md (minimal) | — | ≤12KiB | 153 lines; 9.1KiB | The minimal tier retains the same hard behavioral floor with fewer operating details. |
 > | CLAUDE.md (standard) | ≤15 lines | ≤6KiB | 55 lines; 3.4KiB | Carries only Claude-specific routing, effort, native-peer, and sandbox-retry addenda beyond `@AGENTS.md`. |
 > | CLAUDE.md (minimal) | — | ≤3KiB | 25 lines; 1.5KiB | The lean minimal-tier Claude addendum. |
 > | Commands | 3 — `/cf-plan` etc. ≤40 | superseded — commands merged into skills (v2.1.0); see §4.4 skills row | — | Claude merged custom commands into skills; codeflow ships `cf-*` skills only. |

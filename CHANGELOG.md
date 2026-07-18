@@ -21,8 +21,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and owns the final quality verdict. Speculative features, abstractions,
   configuration, dependencies, compatibility paths, dead code, and other
   complexity without a current requirement or evidenced risk yield
-  `changes_requested` even when tests pass. A new regression fixture tests this
-  behavior without treating raw line count as a quality target.
+  `changes_requested` even when tests pass. The same gate rejects brittle
+  under-design: duplicated business rules, unexplained hard-coding, swallowed
+  errors, missing accepted edge cases, or one-off UI that bypasses an existing
+  design system. Paired regression fixtures test both directions without
+  treating raw line count or a framework pattern as a quality target. A context
+  canary distinguishes disposable experiments from durable multi-team systems,
+  requires clarification when that distinction is material, and uses safe
+  reversible defaults rather than project size as an architecture rule.
 - **Primary model seats now start at high and escalate by evidence (ADR-0028).**
   Cross-harness calls still target Fable and GPT-5.6 Sol (or their strongest
   supported successors) as the two independent reasoning seats. High is the

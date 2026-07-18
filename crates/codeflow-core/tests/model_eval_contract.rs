@@ -173,6 +173,17 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
             "compression canary lost {requirement}"
         );
     }
+}
+
+#[test]
+fn quality_canaries_pin_both_complexity_directions_and_ui_composition() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
 
     let right_sized = indexed["reject-overengineered-correct-change"];
     assert_eq!(right_sized["canary"], true);
@@ -191,6 +202,117 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
         assert!(
             right_sized_signals.contains(signal),
             "right-sized canary lost {signal}"
+        );
+    }
+
+    let durable = indexed["reject-brittle-underdesigned-change"];
+    assert_eq!(durable["canary"], true);
+    let durable_signals: BTreeSet<&str> = durable["expected"]["signals"]
+        .as_array()
+        .expect("durable signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "duplicated_business_rule_identified",
+        "justified_shared_structure_required",
+        "edge_error_handling_verified",
+        "changes_requested_for_brittleness",
+    ] {
+        assert!(
+            durable_signals.contains(signal),
+            "durable canary lost {signal}"
+        );
+    }
+    let durable_guards: BTreeSet<&str> = durable["expected"]["must_not"]
+        .as_array()
+        .expect("durable anti-over-correction guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "drop_error_handling_for_simplicity",
+        "invent_runtime_strategy_framework",
+    ] {
+        assert!(
+            durable_guards.contains(guard),
+            "durable canary lost {guard}"
+        );
+    }
+
+    let ui = indexed["review-ui-component-system-fit"];
+    assert_eq!(ui["canary"], true);
+    let ui_signals: BTreeSet<&str> = ui["expected"]["signals"]
+        .as_array()
+        .expect("UI composition signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "existing_design_system_inspected",
+        "tokens_and_accessible_primitives_reused",
+        "view_composition_and_state_ownership_checked",
+        "rendered_ui_evidence_required",
+    ] {
+        assert!(ui_signals.contains(signal), "UI canary lost {signal}");
+    }
+    let ui_guards: BTreeSet<&str> = ui["expected"]["must_not"]
+        .as_array()
+        .expect("UI anti-over-correction guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "invent_design_system_for_one_surface",
+        "force_framework_specific_higher_order_pattern",
+    ] {
+        assert!(ui_guards.contains(guard), "UI canary lost {guard}");
+    }
+}
+
+#[test]
+fn project_context_canary_pins_clarification_and_safe_defaults() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    let context = indexed["calibrate-architecture-to-project-context"];
+    assert_eq!(context["canary"], true);
+    let context_signals: BTreeSet<&str> = context["expected"]["signals"]
+        .as_array()
+        .expect("project-context signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "lifecycle_and_change_context_considered",
+        "material_context_clarification_required",
+        "safe_reversible_default_if_unavailable",
+        "size_not_automatic_architecture",
+    ] {
+        assert!(
+            context_signals.contains(signal),
+            "context canary lost {signal}"
+        );
+    }
+    let context_guards: BTreeSet<&str> = context["expected"]["must_not"]
+        .as_array()
+        .expect("project-context guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "production_framework_for_disposable_spike",
+        "brittle_shortcut_for_durable_service",
+        "speculative_generality_without_context",
+    ] {
+        assert!(
+            context_guards.contains(guard),
+            "context canary lost {guard}"
         );
     }
 }

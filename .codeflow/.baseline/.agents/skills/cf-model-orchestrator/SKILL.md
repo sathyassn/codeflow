@@ -218,9 +218,10 @@ branch.
 
 Skip this stage when implementation is outside the selected outcome mode.
 Otherwise Codex works in the scoped feature worktree—or coordinates the
-approved bounded set of task worktrees—implements the smallest clear, idiomatic
-diff that satisfies the approved tasks without speculative scope, and keeps the
-evidence ledger current. It runs formatting, static checks, unit and
+approved bounded set of task worktrees—implements the smallest clear, idiomatic,
+durable diff that satisfies the approved tasks without speculative scope,
+preserves justified reuse and modular boundaries, and handles accepted failure
+and edge cases. It keeps the evidence ledger current and runs formatting, static checks, unit and
 integration tests, relevant end-to-end tests, coverage, dependency/security
 checks, and UI-driven checks required by the quality contract. Task branches
 are not final evidence: integrate them in the approved order, rerun affected
@@ -246,9 +247,10 @@ session; the Claude tmux session remains the design/review peer.
 For implementation/review modes, the directly invoked primary Fable seat
 reviews the actual integrated diff rather than task summaries. It reruns
 relevant tests, grades every acceptance criterion with evidence, rejects
-unnecessary or non-idiomatic complexity, checks design conformance and UX/UI
-behavior, performs the independent security pass, and owns the final code and
-design quality verdict. In Claude Code, `cf-reviewer` and
+unnecessary or non-idiomatic complexity and brittle under-design, checks design
+and design-system conformance plus UX/UI behavior, performs the independent
+security pass, and owns the final code and design quality verdict. In Claude
+Code, `cf-reviewer` and
 `cf-security-reviewer` may deepen the pass; they do not replace Claude's
 cross-vendor review of Codex's work. For research/analysis/plan modes, Claude
 instead final-reviews the settled artifact and its source/evidence coverage.

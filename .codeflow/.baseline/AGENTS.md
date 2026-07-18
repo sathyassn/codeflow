@@ -218,11 +218,18 @@ to reason from, not a rote checklist.
   checks to a subagent or workflow (where your harness has them) — each works in
   its own context and returns a condensed result, so yours stays sharp for the
   decisions.
-- **Write only what earns its keep.** Make the smallest clear, idiomatic change
-  that fully satisfies approved behavior—not minimum LOC. Add no speculative
-  feature, abstraction, configuration, dependency, compatibility layer, or
-  dead/duplicate path; every material complexity maps to a current requirement
-  or evidenced risk.
+- **Write only what earns its keep.** Make the smallest clear, idiomatic, durable
+  change that fully satisfies approved behavior—not minimum LOC. Add no
+  speculative feature, abstraction, configuration, dependency, compatibility
+  layer, or dead path; every material complexity maps to a current requirement,
+  observed constraint, or evidenced risk. Preserve justified structure: stay
+  DRY with judgment, modular, and coherent with the repository's architecture.
+  Unexplained hard-coding, duplicated business knowledge, swallowed errors, or
+  missing accepted edge cases are brittle under-design, not simplicity.
+  Calibrate structure to accepted lifetime, scale, change rate, contributor and
+  integration breadth, operational risk, and reversibility—not size alone. If
+  missing context would materially change the design, clarify it; otherwise use
+  established safe practices and the least speculative reversible choice.
 - **Shape the deliverable.** Layer it concept → detail, each layer complete at
   its own altitude; reveal depth progressively — never dump, and never cut key
   information to condense. Bullets for the enumerable; prose only where it
