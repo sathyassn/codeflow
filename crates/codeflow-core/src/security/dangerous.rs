@@ -568,6 +568,12 @@ fn check_recursive_delete(cmd: &str) -> Option<Verdict> {
 fn check_windows_recursive_delete(cmd: &str) -> Option<Verdict> {
     for segment in command_segments(cmd) {
         let tokens = effective_invocation(&command_tokens(segment));
+        // PowerShell can carry a destructive cmdlet after a launcher such as
+        // `Start-Process ... -ArgumentList`, so this intentionally scans the
+        // invocation rather than requiring the cmdlet to be token zero. That
+        // fail-safe choice is narrower than raw substring matching: quoted
+        // prose remains one non-command token, while an unquoted example may
+        // be blocked and should be quoted by the caller.
         let Some(command_index) = tokens.iter().position(|token| {
             matches!(
                 token
@@ -1039,6 +1045,23 @@ mod tests {
         assert!(DangerousModule
             .check(&ctx("echo 'do not run rm -rf /'"))
             .is_none());
+    }
+
+    #[test]
+    fn test_windows_delete_examples_require_quoting() {
+        for cmd in [
+            r#"echo "Remove-Item -Recurse C:\Windows""#,
+            r#"git commit -m "Remove-Item -Recurse C:\Windows""#,
+        ] {
+            assert!(
+                DangerousModule.check(&ctx(cmd)).is_none(),
+                "quoted Windows example should stay data: {cmd}"
+            );
+        }
+
+        assert!(DangerousModule
+            .check(&ctx(r"echo Remove-Item -Recurse C:\Windows"))
+            .is_some());
     }
 
     #[test]

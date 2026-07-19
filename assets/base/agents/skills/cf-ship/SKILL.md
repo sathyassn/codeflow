@@ -22,6 +22,12 @@ description: Land finished work — docs and capability updates, then a PR throu
    migration path, which drives the major bump) or consciously stated
    non-breaking with the reason. The `breaking_watch_paths` warn is a backstop,
    not the judgment.
+   For a multi-platform binary or installer release, keep native Windows and
+   WSL2/Linux evidence separate: the native Windows installer must select its
+   Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
+   success proves compilation and linking only; it never replaces native
+   macOS/Linux/Windows tests or installer canaries. Missing platform evidence
+   blocks publication rather than becoming an inferred pass.
 5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
    the PR narrative. It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.

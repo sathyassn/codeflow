@@ -204,6 +204,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
     let agents = read("assets/base/AGENTS.md.tmpl");
+    let claude = read("assets/base/CLAUDE.md.tmpl");
 
     for required in [
         "Use the duo for every non-trivial repository task.",
@@ -240,6 +241,19 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         assert!(
             agents.contains(required),
             "AGENTS template lost duo entry-point marker: {required}"
+        );
+    }
+
+    for required in [
+        "## Routing gate",
+        "Before repository or external research",
+        "invoke\n`/cf-model-orchestrator`",
+        "Do not inspect first and route later",
+        "one obvious local check",
+    ] {
+        assert!(
+            claude.contains(required),
+            "CLAUDE template lost early routing marker: {required}"
         );
     }
 }

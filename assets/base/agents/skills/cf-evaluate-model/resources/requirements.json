@@ -126,6 +126,41 @@
       ]
     },
     {
+      "id": "CF-SEC-002",
+      "level": "hard",
+      "statement": "Recoverable task-scoped project edits and deletions remain autonomous, while catastrophic system-level actions require authenticated human control; model consensus or automatic review is never authorization, a peer cannot bypass the host boundary, and CodeFlow's non-relaxable class remains operator-only even after approval.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Recoverable, task-scoped project", "Model agreement or", "peer cannot be used", "remains agent-blocked even after approval"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Ordinary task-scoped project", "Model consensus, Claude auto mode", "human operator performs it through a separate"]}
+      ]
+    },
+    {
+      "id": "CF-SEC-003",
+      "level": "hard",
+      "statement": "Before a host-permitted high-blast-radius action, the host requires exact bounded scope, preview or dry-run evidence where supported, a current verified checkpoint or backup, a tested restore path, and explicit authenticated human approval; missing evidence fails closed, and approved execution advances one verified bounded step at a time.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Present the exact bounded action", "current verified checkpoint or backup", "Missing evidence, an untested restore path", "execute one bounded step at a time"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["exact scope and command/tool input", "current checkpoint/backup and tested restore path", "postcondition verification"]}
+      ]
+    },
+    {
+      "id": "CF-PLAT-001",
+      "level": "hard",
+      "statement": "Platform handling distinguishes native Windows from WSL2, selects the compatible native shell and installer, records the effective sandbox boundary, and never treats native-Windows Claude hooks or prompts as OS isolation.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["prefer WSL2 for Linux-equivalent tooling", "Native Windows Codex must use its elevated sandbox", "Claude Code has no native-Windows OS sandbox", "Record the actual platform and effective boundary"]},
+        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["keep native Windows and WSL2/Linux evidence separate", "native Windows installer must select its Windows binary", "WSL2 uses the Linux installer and binary"]}
+      ]
+    },
+    {
+      "id": "CF-SHIP-002",
+      "level": "hard",
+      "statement": "Cross-compilation is compile/link evidence only; release readiness requires native platform tests and installer canaries, and missing native evidence remains an explicit blocker rather than an inferred pass.",
+      "sources": [
+        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["Cross-build success proves compilation and linking only", "never replaces native macOS/Linux/Windows tests or installer canaries", "Missing platform evidence blocks publication"]}
+      ]
+    },
+    {
       "id": "CF-GOV-001",
       "level": "hard",
       "statement": "Evidence outranks agreement and fabricated or unverifiable claims are defects.",
