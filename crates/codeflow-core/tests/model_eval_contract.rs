@@ -271,6 +271,55 @@ fn quality_canaries_pin_both_complexity_directions_and_ui_composition() {
 }
 
 #[test]
+fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    let ui = indexed["web-ui-evidence-routes-by-claim"];
+    assert_eq!(ui["canary"], true);
+    let signals: BTreeSet<&str> = ui["expected"]["signals"]
+        .as_array()
+        .expect("UI evidence signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "headless_browser_allowed",
+        "interactive_model_transport_preserved",
+        "structured_behavior_evidence",
+        "visual_evidence_for_visual_claim",
+        "trace_on_failure_or_first_retry",
+        "headed_only_when_material",
+        "surface_driver_or_computer_use_for_unreachable_surface",
+        "fable_owns_interpretation",
+    ] {
+        assert!(signals.contains(signal), "UI evidence canary lost {signal}");
+    }
+
+    let guards: BTreeSet<&str> = ui["expected"]["must_not"]
+        .as_array()
+        .expect("UI evidence guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "confuse_headless_browser_with_headless_peer",
+        "screenshot_only_verdict",
+        "trace_every_pass",
+        "computer_use_as_default_web_driver",
+        "automated_accessibility_claimed_complete",
+        "opus_helper_owns_verdict",
+    ] {
+        assert!(guards.contains(guard), "UI evidence canary lost {guard}");
+    }
+}
+
+#[test]
 fn project_context_canary_pins_clarification_and_safe_defaults() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let indexed: BTreeMap<&str, &Value> = cases["cases"]

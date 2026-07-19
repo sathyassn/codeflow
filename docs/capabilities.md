@@ -437,6 +437,12 @@ operator uncertainty, consuming-project voice, sycophancy/inflation/formatting,
 medium-appropriate emoji, and false positives for legitimate punctuation,
 terms, and lists.
 
+The hard `CF-QA-002` contract separates browser headlessness from interactive
+peer-model transport and requires claim-matched behavior, visual, runtime,
+trace, and accessibility evidence. Its regression canary rejects
+screenshot-only verdicts, indiscriminate tracing, Computer Use as the default
+web driver, and helper-model ownership of Fable's design judgment.
+
 Canary mode runs selected regressions once while maintaining the corpus. Full
 qualification runs every case three times and is required for promotion. Each
 trial uses a fresh one-commit disposable repository; the materializer removes

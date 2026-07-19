@@ -94,9 +94,9 @@
     {
       "id": "CF-QA-002",
       "level": "hard",
-      "statement": "Verification covers relevant unit, integration, end-to-end, security, and rendered UI behavior; unavailable or not applicable are never reported as passes.",
+      "statement": "Verification covers relevant unit, integration, end-to-end, security, and rendered UI behavior; routine deterministic web E2E may use a headless browser without changing interactive peer-model transport, and behavior, visual, runtime, trace, and accessibility evidence is matched to the claim; unavailable or not applicable are never reported as passes.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["end-to-end tests", "Playwright", "Computer Use", "Tool unavailability is a blocker or declared limitation, not a pass"]}
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["end-to-end tests", "Browser headless mode is valid", "prohibited headless peer-model transport", "Match evidence to the claim", "A screenshot alone does not prove interaction or accessibility", "Tool unavailability is a blocker or declared limitation, not a pass"]}
       ]
     },
     {

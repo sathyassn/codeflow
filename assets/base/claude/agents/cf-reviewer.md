@@ -44,11 +44,17 @@ itself a blocker finding — return changes_requested.
    - the project's coverage command; require at least 80% aggregate
      production-code line coverage where supported and target 90%+, while
      honoring any stronger repository gate (CodeFlow itself enforces 90%)
-5. For a user-facing change, exercise the rendered product with Playwright (web)
-   or Computer Use/a surface-specific driver (native/mobile/desktop). Check the
-   approved design, loading/empty/error/success states, relevant sizes,
-   accessibility, and runtime/console errors. Record UI evidence; otherwise
-   record `UI: N/A — no user-facing surface changed`.
+5. For a user-facing change, follow the UI section of
+   `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. Use
+   Playwright for web behavior; routine deterministic runs may keep the browser
+   headless, while headed mode needs a material visual, chrome, rendering, or
+   debugging reason. Match structured behavior, visual, console/network, and
+   failure/first-retry trace evidence to the claim; screenshots alone are not
+   interaction or accessibility proof. Use Computer Use or a surface-specific
+   driver only beyond the controlled web page. Check the approved design,
+   required user-visible states, relevant sizes, and applicable accessibility
+   behavior. Record the evidence; when no user-facing surface changed, record
+   `UI: N/A — no user-facing surface changed`.
 6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when
    an ADR declares architecture impact, spec frozen at ship); commit subjects

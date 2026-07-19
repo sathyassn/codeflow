@@ -14,6 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Web UI verification now routes browser mode and evidence by claim.**
+  Routine deterministic Playwright E2E may run its browser headless while the
+  Claude/Codex seats remain native interactive sessions. Behavioral assertions,
+  same-environment visual comparisons, console/network evidence, and bounded
+  failure traces are kept distinct; screenshots and automated accessibility
+  checks are not treated as complete proof. Headed mode is reserved for claims
+  that materially need live rendering, browser chrome, or debugging, and
+  Computer Use remains a fallback outside the controlled page. A `CF-QA-002`
+  canary guards this distinction across future model bindings.
 - **Catastrophic-action protection is cross-platform and non-relaxable
   (ADR-0033).** The deterministic shell guard now covers Linux/WSL2, macOS, and
   native Windows Bash/PowerShell events; blocks protected-root deletion plus

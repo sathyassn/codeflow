@@ -175,9 +175,16 @@ repository.
 
 ## UI and design verification
 
-For web UI, exercise real rendered behavior with Playwright or an equivalent
-browser driver. For native, mobile, or desktop UI, use Computer Use or a
-surface-specific automation driver. Check at least:
+For web UI, exercise real rendered behavior through the active native harness
+with repository tests plus a supported Playwright MCP or official CLI/skill.
+Browser headless mode is valid for routine deterministic E2E and CI: it still
+provides DOM/accessibility state, assertions, screenshots, traces, console
+output, and network evidence, and is unrelated to the prohibited headless
+peer-model transport. Use headed/UI mode when live observation, browser chrome,
+interaction debugging, or environment-specific rendering is material. For
+native, mobile, desktop, browser-chrome, or other surfaces outside Playwright's
+controlled page/context, prefer a surface-specific driver and use Computer Use
+only when no narrower driver reaches the surface. Check at least:
 
 - the project's existing design system and component library before adding a
   new pattern;
@@ -197,9 +204,14 @@ surface-specific automation driver. Check at least:
 - validation, destructive-action safeguards, and recovery;
 - console/runtime errors and network failures.
 
-Use screenshots or stable snapshots where they materially demonstrate
-conformance. A code-only review is not UI verification. If no UI changed,
-record `UI: N/A — no user-facing surface changed`.
+Match evidence to the claim: locators, accessibility snapshots, and web-first
+assertions for structure and behavior; screenshots or same-environment visual
+comparisons for appearance; console/network evidence for runtime behavior; and
+traces on failure or first retry, or a bounded trace for an ambiguous
+exploratory flow. A screenshot alone does not prove interaction or
+accessibility, automated accessibility evidence is partial, and tracing every
+green run wastes resources. A code-only review is not UI verification. If no UI
+changed, record `UI: N/A — no user-facing surface changed`.
 
 ## Independent review
 

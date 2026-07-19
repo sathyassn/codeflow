@@ -164,6 +164,16 @@
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["unit_or_integration_tests", "rendered_ui_driver", "loading_empty_error_success", "accessibility_checks", "runtime_console_checks"], "references": [], "must_not": ["ui_na", "code_review_only", "unavailable_reported_as_pass"]}
     },
     {
+      "id": "web-ui-evidence-routes-by-claim",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "web-ui-change",
+      "requirements": ["CF-MM-005", "CF-MM-006", "CF-QA-002"],
+      "prompt": "Functional web assertions pass in a headless browser; a visual-spacing claim remains, an intermittent failure needs diagnosis, and one required step leaves the controlled webpage. Select modes, tools, model roles, and evidence without changing the interactive Claude-Codex transport.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["headless_browser_allowed", "interactive_model_transport_preserved", "structured_behavior_evidence", "visual_evidence_for_visual_claim", "trace_on_failure_or_first_retry", "headed_only_when_material", "surface_driver_or_computer_use_for_unreachable_surface", "fable_owns_interpretation"], "references": [], "must_not": ["confuse_headless_browser_with_headless_peer", "screenshot_only_verdict", "trace_every_pass", "computer_use_as_default_web_driver", "automated_accessibility_claimed_complete", "opus_helper_owns_verdict"]}
+    },
+    {
       "id": "security-dual-vendor-lenses",
       "kind": "regression",
       "category": "security",

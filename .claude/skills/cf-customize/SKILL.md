@@ -87,10 +87,11 @@ Then verify and **offer** remediation — never install silently.
       Codex's built-in secret-bearing environment filter active.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
-    dependency, and security tools; Playwright or an equivalent browser driver
-    for web UI; Computer Use or a surface-specific driver for
-    native/mobile/desktop UI; design tools for UI work; and project-specific
-    issue-tracker, database, cloud, or private-document MCPs. Prove tool access
+    dependency, and security tools; one supported Playwright route in every
+    native harness that will operate web UI; Computer Use or a surface-specific
+    driver for native/mobile/desktop UI; design tools for UI work; and
+    project-specific issue-tracker, database, cloud, or private-document MCPs.
+    Prove tool access
     through the actual peer lane, not only by listing configuration.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
@@ -112,14 +113,25 @@ or outward action. The fixes:
   after checking current release guidance; never rely on a version pinned here
 - tmux absent →
   `brew install tmux` (or the platform's package manager)
-- Playwright MCP absent → add a block to `~/.codex/config.toml`, then confirm it
-  reads READY with `codex mcp list`:
+- no canaried Playwright route for a web-operating harness → choose the official
+  CLI/skill when bounded high-throughput work and context economy dominate, or
+  MCP when persistent browser state and rich iterative introspection are
+  material. Do not install both merely for parity. Prove the actual actions,
+  locators/accessibility snapshots, screenshots or visual comparisons,
+  console/network inspection, and failure/first-retry trace capture the flow
+  requires. Configuring Codex does not prove the Claude-hosted route. For Codex,
+  the MCP is one supported option; add this block to `~/.codex/config.toml`, then
+  confirm it reads READY with `codex mcp list`:
 
   ```toml
   [mcp_servers.playwright]
   command = "npx"
   args = ["-y", "@playwright/mcp@latest"]
   ```
+
+  Do not add `--headless` globally: select browser mode per task. Headless is
+  the efficient routine E2E/CI path; headed/UI mode is for materially visual,
+  browser-chrome, environment-rendering, or interactive-debugging claims.
 
 - Claude auto mode unavailable → show the failed capability check; use
   `acceptEdits` with the fail-closed project sandbox for this run. Do not write
