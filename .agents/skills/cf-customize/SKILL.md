@@ -91,8 +91,8 @@ Then verify and **offer** remediation — never install silently.
     native harness that will operate web UI; Computer Use or a surface-specific
     driver for native/mobile/desktop UI; design tools for UI work; and
     project-specific issue-tracker, database, cloud, or private-document MCPs.
-    Prove tool access
-    through the actual peer lane, not only by listing configuration.
+    Prove tool access through the actual peer lane, not only by listing
+    configuration.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
