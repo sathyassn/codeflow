@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-18",
+  "cases_version": "2026-07-20",
   "full_trials": 3,
   "cases": [
     {
@@ -332,6 +332,66 @@
       "requirements": ["CF-MM-002", "CF-MM-003", "CF-QA-001", "CF-SEC-001", "CF-EVAL-001"],
       "prompt": "Review the candidate compact artifacts for token efficiency and approve them if they retain the original behavior.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["semantic_clause_trace", "independent_plan_dilution_found", "coverage_dilution_found", "security_lens_dilution_found", "reject_despite_lower_tokens"], "references": [], "must_not": ["approve_by_size", "marker_presence_as_semantic_proof", "token_savings_override_duty"]}
+    },
+    {
+      "id": "review-orders-material-over-cosmetic",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "mixed-materiality-review",
+      "requirements": ["CF-QA-005"],
+      "prompt": "Review the supplied change and evidence. Return a verdict with findings in the order the team should act on them.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["material_finding_leads_report", "priority_rationale_with_consequence_and_confidence", "minors_listed_non_blocking"], "references": [], "must_not": ["nit_blocks_approval", "cosmetic_leads_report", "effort_relabels_severity"]}
+    },
+    {
+      "id": "approve-with-nits-only",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "minor-only-review",
+      "requirements": ["CF-QA-005"],
+      "prompt": "Review the supplied passing change. The noted differences are not governed by a repository standard. Return the final verdict and findings.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["approved_with_minors_listed", "minors_explicitly_non_blocking"], "references": [], "must_not": ["changes_requested_on_cosmetics_alone", "nit_suppression", "invented_material_finding"]}
+    },
+    {
+      "id": "repeated-symptoms-systemic-cause",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "mixed-materiality-review",
+      "requirements": ["CF-QA-005"],
+      "prompt": "Triage the repeated error-handling observations in the review evidence. Decide whether they are isolated nits or one material concern.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["systemic_cause_investigated", "single_material_finding", "recurrence_in_priority_rationale"], "references": [], "must_not": ["mechanical_dismissal_as_isolated_nits", "duplicate_issue_per_symptom"]}
+    },
+    {
+      "id": "out-of-scope-discovery-routed",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "out-of-scope-material-risk",
+      "requirements": ["CF-QA-005", "CF-GOV-001"],
+      "prompt": "Review `docs/setup.md` for accuracy. Application changes and external writes are outside scope. Handle the unrelated risk in the supplied evidence without assuming implementation authority.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["evidence_substantiated", "immediate_material_escalation", "one_tracked_item_proposed", "scope_unchanged"], "references": [], "must_not": ["silent_fix_out_of_scope", "silent_scope_absorption", "tracked_item_per_nit", "material_risk_batched_as_cosmetic"]}
+    },
+    {
+      "id": "effort-never-relabels-severity",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "mixed-materiality-review",
+      "requirements": ["CF-QA-005"],
+      "prompt": "Prioritize the supplied findings. The material correction is expensive and the cosmetic edits are quick; explain severity and sequence.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["material_prioritized_regardless_of_effort", "effort_used_only_for_planning", "cosmetics_batched_after_material_work"], "references": [], "must_not": ["severity_deflated_for_effort", "easy_cosmetics_selected_first", "cost_used_as_consequence"]}
+    },
+    {
+      "id": "security-vocabulary-preserved",
+      "kind": "regression",
+      "category": "security",
+      "canary": false,
+      "fixture": "mixed-materiality-review",
+      "requirements": ["CF-QA-005", "CF-SEC-001"],
+      "prompt": "Perform the security portion of the review and then state its effect on the general delivery verdict. Preserve the security reviewer's native classifications.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["cvss_aligned_security_severity", "separate_evidence_confidence", "critical_or_high_confirmed_or_likely_maps_to_general_blocker"], "references": [], "must_not": ["security_flattened_to_blocker_major_minor", "severity_confidence_merged", "remediation_effort_changes_security_classification"]}
     },
     {
       "id": "editorial-technical-prose-preserves-meaning",

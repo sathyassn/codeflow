@@ -291,7 +291,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -420,7 +420,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs"]
 epics: []
-adrs: [ADR-0027, ADR-0032]
+adrs: [ADR-0027, ADR-0032, ADR-0034]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,
@@ -442,6 +442,15 @@ peer-model transport and requires claim-matched behavior, visual, runtime,
 trace, and accessibility evidence. Its regression canary rejects
 screenshot-only verdicts, indiscriminate tracing, Computer Use as the default
 web driver, and helper-model ownership of Fable's design judgment.
+
+The hard `CF-QA-005` contract evaluates materiality-led review and proactive
+routing. Paired cases require consequential findings to lead cosmetic nits,
+approve when only non-blocking preferences remain, recognize repeated symptoms
+as a possible systemic cause, keep remediation effort out of severity, and
+preserve CVSS-aligned security severity and separate confidence before mapping
+the result to the general gate. They also escalate or track evidenced
+out-of-scope risk without silently expanding scope or generating one issue per
+nit.
 
 Canary mode runs selected regressions once while maintaining the corpus. Full
 qualification runs every case three times and is required for promotion. Each

@@ -149,6 +149,11 @@ mirrored `cf-editorial-review` skill rather than expanding the always-loaded
 contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
 audience/medium/task, and requested tone; both seats protect technical meaning,
 and Fable owns the final contextual editorial verdict (ADR-0032).
+Review attention is consequence-led: substantiated material and systemic
+findings precede cosmetics, evidence confidence stays distinct from severity,
+remediation effort affects sequencing only, security retains its CVSS-aligned
+vocabulary, and out-of-scope material risk is routed without silent scope
+expansion or issue farming (ADR-0034).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,

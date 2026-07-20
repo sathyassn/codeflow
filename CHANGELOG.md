@@ -14,6 +14,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Reviews and proactive discovery now act by materiality (ADR-0034).**
+  Models still search broadly, but substantiate candidates and lead with
+  consequential strategic, architectural, structural, correctness, security,
+  robustness, operability, and meaningful edge/error concerns. Severity stays
+  separate from confidence and remediation effort; repeated small symptoms may
+  form one systemic finding, while cosmetics remain minor and non-blocking.
+  Evidenced out-of-scope material risk is escalated or routed to one tracked
+  item without silent scope expansion or external mutation. Paired `CF-QA-005`
+  cases guard ordering, approval with nits only, systemic diagnosis,
+  effort-neutral severity, CVSS-aligned security vocabulary, and proactive
+  routing without issue farming.
 - **Web UI verification now routes browser mode and evidence by claim.**
   Routine deterministic Playwright E2E may run its browser headless while the
   Claude/Codex seats remain native interactive sessions. Behavioral assertions,

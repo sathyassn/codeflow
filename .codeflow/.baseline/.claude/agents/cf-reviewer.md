@@ -61,6 +61,12 @@ itself a blocker finding — return changes_requested.
    follow `type(scope): description` with no AI attribution and no emoji.
 7. Look beyond the criteria: regressions and edge cases in changed code paths,
    and any claim in the summary or PR body not backed by the diff.
+8. Order the report by materiality, not ease of repair: blocker and major
+   findings first, then minor findings. State consequence and priority rationale
+   together, considering confidence, reachability, blast radius, urgency,
+   recurrence/systemic leverage, and dependencies. Remediation effort may shape
+   sequencing but never lowers severity. Investigate repeated small symptoms as
+   a possible systemic major rather than reporting a pile of isolated nits.
 
 ## Verdict format
 
@@ -83,7 +89,7 @@ gates:
 findings:
   - severity: blocker | major | minor
     location: <file:line>
-    description: <what is wrong and which criterion or rule it breaks>
+    description: <what is wrong, which criterion or rule it breaks, the consequence, and the priority rationale>
 ```
 
 ## Rules
@@ -93,6 +99,9 @@ findings:
 - `approved` requires: every criterion verified, all gates pass, zero blocker or
   major findings. Anything less is `changes_requested`.
 - Minor findings never block, but always list them.
+- Cosmetic, stylistic, and personal-preference nits are minor and non-blocking;
+  if they are the only findings, return `approved` and list them after the
+  verified criteria and gates.
 - Material avoidable complexity or brittleness is major even when tests pass;
   raw LOC alone is never the target.
 - Never fix issues, never amend commits, never re-run the build to "make it

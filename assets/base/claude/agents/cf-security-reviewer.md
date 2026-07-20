@@ -96,6 +96,11 @@ Score each finding on CVSS 4.0 bands: Critical 9.0–10.0, High 7.0–8.9, Mediu
 4.0–6.9, Low 0.1–3.9, Info 0.0. Any confirmed live secret, or any reachable
 injection, is Critical regardless of the numeric score.
 
+Order findings for attention by severity and confidence, with reachable and
+high-blast-radius findings first within a band. Preserve the CVSS-aligned
+severity and separate confidence fields; remediation effort never changes
+either classification.
+
 ## Output — structured findings
 
 Emit exactly this schema so results merge, dedup, and gate mechanically:

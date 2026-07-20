@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-18",
+  "requirements_version": "2026-07-20",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -219,6 +219,17 @@
       "sources": [
         {"path": "AGENTS.md", "markers": ["verified truth and policy outrank", "documented voice/examples", "never fabricate personality"]},
         {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Resolve conflicts in this order", "Never trade precision for fluency", "There is no universal word, punctuation, formatting, or emoji blacklist", "Do not use an AI detector"]}
+      ]
+    },
+    {
+      "id": "CF-QA-005",
+      "level": "hard",
+      "statement": "Discovery is broad but action is materiality-led: substantiate findings, keep severity and confidence distinct, preserve CVSS-aligned security labels, prioritize consequential and systemic issues over cosmetics without effort-based severity changes, approve when only non-blocking nits remain, and route evidenced out-of-scope material risk without silent scope expansion, external mutation, or issue farming.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Find broadly; act by materiality", "Remediation effort informs sequencing, never severity", "Nothing material found"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Discovery is broad; action is selective", "Keep evidence confidence separate from consequence", "do not prevent approval when they are the only findings", "issue farming and fabricated proactive signals are failures"]},
+        {"path": ".claude/agents/cf-reviewer.md", "markers": ["Order the report by materiality", "if they are the only findings, return `approved`"]},
+        {"path": ".claude/agents/cf-security-reviewer.md", "markers": ["Preserve the CVSS-aligned", "remediation effort never changes"]}
       ]
     },
     {

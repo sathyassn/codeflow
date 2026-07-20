@@ -367,6 +367,102 @@ fn project_context_canary_pins_clarification_and_safe_defaults() {
 }
 
 #[test]
+fn materiality_canaries_pin_priority_nits_and_scope_routing() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    for case in [
+        "review-orders-material-over-cosmetic",
+        "approve-with-nits-only",
+        "out-of-scope-discovery-routed",
+    ] {
+        assert_eq!(indexed[case]["canary"], true, "{case} must stay a canary");
+    }
+
+    let ordered: BTreeSet<&str> = indexed["review-orders-material-over-cosmetic"]["expected"]
+        ["signals"]
+        .as_array()
+        .expect("materiality signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "material_finding_leads_report",
+        "priority_rationale_with_consequence_and_confidence",
+        "minors_listed_non_blocking",
+    ] {
+        assert!(ordered.contains(signal), "materiality canary lost {signal}");
+    }
+
+    let nits_guards: BTreeSet<&str> = indexed["approve-with-nits-only"]["expected"]["must_not"]
+        .as_array()
+        .expect("nits-only guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "changes_requested_on_cosmetics_alone",
+        "nit_suppression",
+        "invented_material_finding",
+    ] {
+        assert!(nits_guards.contains(guard), "nits canary lost {guard}");
+    }
+
+    let routing_guards: BTreeSet<&str> = indexed["out-of-scope-discovery-routed"]["expected"]
+        ["must_not"]
+        .as_array()
+        .expect("scope-routing guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "silent_fix_out_of_scope",
+        "silent_scope_absorption",
+        "tracked_item_per_nit",
+    ] {
+        assert!(
+            routing_guards.contains(guard),
+            "routing canary lost {guard}"
+        );
+    }
+
+    let security_guards: BTreeSet<&str> = indexed["security-vocabulary-preserved"]["expected"]
+        ["must_not"]
+        .as_array()
+        .expect("security-vocabulary guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "security_flattened_to_blocker_major_minor",
+        "severity_confidence_merged",
+        "remediation_effort_changes_security_classification",
+    ] {
+        assert!(
+            security_guards.contains(guard),
+            "security materiality case lost {guard}"
+        );
+    }
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let routed_fixture = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .find(|fixture| fixture["id"] == "out-of-scope-material-risk")
+        .expect("out-of-scope fixture");
+    assert!(
+        routed_fixture["files"].get("TASK.md").is_none(),
+        "materializer owns TASK.md; fixture scope must live in the case prompt"
+    );
+}
+
+#[test]
 fn editorial_canaries_pin_meaning_and_false_positive_guards() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let indexed: BTreeMap<&str, &Value> = cases["cases"]

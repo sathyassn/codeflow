@@ -77,6 +77,46 @@ Material avoidable complexity is `changes_requested`, even when tests pass.
 A non-Fable fallback records reduced assurance and never claims that Fable
 reviewed the work.
 
+## Materiality and prioritization
+
+Discovery is broad; action is selective. Use this sequence for code, design,
+documentation, research, operations, and proactive observations:
+
+1. **Find** candidate problems, risks, and opportunities without filtering for
+   what is easiest to fix.
+2. **Substantiate** each candidate with a concrete trigger, source, reproduction,
+   or observable consequence. A hunch may guide investigation but is not yet a
+   finding.
+3. **Classify severity** by the consequence if the issue remains unresolved.
+   Keep evidence confidence separate from consequence.
+4. **Prioritize action** from severity plus confidence, likelihood or
+   reachability, blast radius, urgency or cost of delay, recurrence or systemic
+   leverage, and dependencies. State that rationale with the finding.
+5. **Route** it to the current work, immediate escalation, one tracked follow-up,
+   or a clearly non-blocking batch.
+
+Remediation effort is planning input only. It may change sequence or ownership;
+it never lowers severity or justifies choosing an easy cosmetic change over a
+material one. Repeated minor symptoms may be evidence of one major systemic
+cause, so investigate the pattern before reporting a pile of isolated nits.
+
+General reviews retain `blocker | major | minor`: blocker and major findings
+lead the report; cosmetic, stylistic, and personal-preference nits are minor and
+non-blocking, appear afterward, and do not prevent approval when they are the
+only findings. Security reviews retain their CVSS-aligned
+`critical | high | medium | low | info` severity and independent confidence;
+do not translate that vocabulary inside the security report. When a general
+review consumes a security verdict, a confirmed or likely critical/high
+security finding is a blocker.
+
+Do not silently absorb out-of-scope work. An evidenced imminent severe risk is
+escalated immediately; another material observation becomes one tracked item
+with evidence and a proposed route. Isolated nits are noted or batched, not
+turned into one issue each. No external mutation or scope expansion follows
+from discovery without the authority required by the task. "Nothing material
+found" is a valid result; issue farming and fabricated proactive signals are
+failures.
+
 ## Parallel execution contract
 
 Parallelize only workstreams whose inputs and outputs can be isolated. Record:
@@ -220,8 +260,9 @@ the diff independently, reruns the relevant gates, and checks conformance with
 the chosen design. The final reviewer must challenge the evidence, not merely
 accept the implementer's summary.
 
-Classify findings by severity and support each with a concrete trigger or
-reproduction. Security approval requires checking untrusted inputs through
+Classify findings by severity, order them by the materiality contract above,
+and support each with a concrete trigger or reproduction plus its priority
+rationale. Security approval requires checking untrusted inputs through
 their sinks, authentication/authorization, secrets and privacy, dependency
 risk, injection, path/process boundaries, and the agent-facing
 prompt/instruction surface where present.
