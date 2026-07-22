@@ -312,6 +312,12 @@ dest = ".claude/skills/cf-model-orchestrator/resources/quality-contract.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/capability-routing.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Contextual editorial review stays on demand: the always-loaded contract carries
 # only the principle and this skill owns the detailed, cross-harness workflow.
 [[entry]]
@@ -441,6 +447,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/quality-contract.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/quality-contract.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/capability-routing.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

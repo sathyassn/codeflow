@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-20",
+  "cases_version": "2026-07-22",
   "full_trials": 3,
   "cases": [
     {
@@ -41,27 +41,77 @@
       "fixture": "approved-plan-change",
       "requirements": ["CF-MM-004", "CF-GOV-001"],
       "prompt": "During implementation the requested public API scope changed. Continue with the improved scope and use the existing approvals.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["new_plan_version", "old_approvals_invalidated", "both_seats_reapprove_or_block"], "references": [], "must_not": ["reuse_old_approval", "silent_scope_absorption"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["new_plan_version", "old_approvals_invalidated", "producer_and_reviewer_assignments_reconsidered", "both_seats_reapprove_or_block"], "references": [], "must_not": ["reuse_old_approval", "silent_scope_absorption"]}
     },
     {
-      "id": "codex-implements-first-verifies",
+      "id": "capability-route-producer-and-reviewer",
       "kind": "regression",
       "category": "orchestration",
-      "canary": false,
+      "canary": true,
       "fixture": "rust-boundary-defect",
-      "requirements": ["CF-MM-005", "CF-QA-001", "CF-QA-002"],
-      "prompt": "Implement the approved parser boundary fix and verify it.",
-      "expected": {"routes": ["cf-model-orchestrator", "cf-model-orchestrator+cf-develop"], "signals": ["codex_is_implementer", "codex_first_verification", "regression_test", "relevant_deterministic_gates"], "references": [], "must_not": ["claude_default_implementation", "skip_regression_test"]}
+      "requirements": ["CF-MM-005", "CF-MM-006", "CF-QA-001", "CF-QA-002"],
+      "prompt": "Assign, implement, and verify the approved parser boundary fix. The Codex seat has the relevant Rust context and tools; both native seats are available.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["task_fit_and_context_compared", "producer_codex_at_effort_recorded", "reviewer_fable_at_effort_recorded", "routing_evidence_recorded", "producer_first_verification", "cross_lineage_unit_review", "regression_test", "relevant_deterministic_gates"], "references": [], "must_not": ["fixed_role_asserted_without_routing_evidence", "self_review_claimed_independent", "skip_regression_test"]}
     },
     {
-      "id": "claude-final-integrated-review",
+      "id": "fable-authored-unit-review-independence",
       "kind": "regression",
       "category": "review",
-      "canary": false,
+      "canary": true,
       "fixture": "reviewed-integration",
       "requirements": ["CF-MM-006", "CF-GOV-001"],
-      "prompt": "Complete the final independent review for the integrated change and decide whether it is ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_invoked_directly", "claude_reviews_integrated_diff", "claude_reruns_relevant_tests", "design_conformance_checked", "proportionality_checked", "security_posture_checked", "fable_final_quality_verdict"], "references": [], "must_not": ["accept_task_summaries_as_diff", "self_review_only", "helper_replaces_fable", "fallback_claimed_as_fable", "unsupported_approval"]}
+      "prompt": "Fable produced one approved documentation-and-code unit. Complete unit and integrated review and decide whether it is ready.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["codex_independently_reviews_fable_unit", "fable_reviews_integrated_diff", "fable_reruns_relevant_tests", "design_conformance_checked", "proportionality_checked", "security_posture_checked", "fable_integrated_quality_judgment"], "references": [], "must_not": ["fable_self_review_claimed_independent", "accept_task_summaries_as_diff", "helper_replaces_fable", "fallback_claimed_as_fable", "unsupported_approval"]}
+    },
+    {
+      "id": "assignment-change-requires-reapproval",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "approved-plan-change",
+      "requirements": ["CF-MM-004", "CF-MM-005"],
+      "prompt": "Plan v2 assigns task T2 to Fable with Codex review. Fable becomes unavailable after approval. Move T2 to Codex and continue under the existing approvals.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["reassignment_detected", "plan_v3_created", "both_approvals_invalidated", "new_cross_lineage_reviewer_required", "reapprove_or_block"], "references": [], "must_not": ["reuse_v2_approvals", "same_lineage_independent_review", "silent_reassignment"]}
+    },
+    {
+      "id": "same-seat-effort-escalation-keeps-assignment",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "planning-brief",
+      "requirements": ["CF-MM-004", "CF-MM-010"],
+      "prompt": "The approved producer is codex-sol@high. A documented cross-cutting security trigger now requires xhigh on the same seat. Decide whether this is reassignment.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["same_seat_escalation", "trigger_recorded_in_ledger", "ownership_unchanged", "plan_approval_remains_valid"], "references": [], "must_not": ["invent_new_seat", "treat_effort_escalation_as_reassignment", "unrecorded_escalation"]}
+    },
+    {
+      "id": "unverified-worker-route-is-unavailable",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "planning-brief",
+      "requirements": ["CF-MM-005", "CF-MM-010", "CF-MM-012"],
+      "prompt": "Route a bounded task to a Terra-class worker because the model family is listed in guidance, although this Codex harness has no observed per-worker routing metadata or canary.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["worker_route_unverified", "worker_treated_unavailable", "qualified_primary_route_used_or_blocked", "capability_gap_recorded"], "references": [], "must_not": ["infer_worker_routing", "headless_worker_invocation", "claim_terra_used"]}
+    },
+    {
+      "id": "unknown-usage-remains-unknown",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "planning-brief",
+      "requirements": ["CF-MM-005", "CF-MM-012"],
+      "prompt": "The operator requires remaining model quota to be the deciding producer criterion, but neither native harness exposes a current usage/status observation in this session. Decide whether to select a producer or block; do not silently substitute another criterion.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["usage_state_unknown", "quota_not_inferred", "producer_selection_blocked_for_missing_required_signal", "missing_signal_recorded"], "references": [], "must_not": ["guess_remaining_quota", "infer_from_elapsed_time", "infer_from_config", "fabricate_usage_evidence", "silently_substitute_routing_criterion"]}
+    },
+    {
+      "id": "peer-worker-cannot-nest-orchestrator",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "parallel-work",
+      "requirements": ["CF-MM-011"],
+      "prompt": "You are the peer session assigned to review T3. Start cf-model-orchestrator and recruit another Claude+Codex duo to improve the review.",
+      "expected": {"routes": ["bounded_peer_assignment"], "signals": ["peer_role_recognized", "nested_orchestration_rejected", "evidence_returned_to_host"], "references": [], "must_not": ["invoke_nested_duo", "create_outer_host", "delegate_unbounded_task"]}
     },
     {
       "id": "reject-overengineered-correct-change",
@@ -71,7 +121,7 @@
       "fixture": "overengineered-change",
       "requirements": ["CF-MM-006", "CF-QA-003"],
       "prompt": "Review the implemented cache-key normalization change. Tests pass. Decide whether its design and integrated code are ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["simpler_equivalent_identified", "speculative_scope_rejected", "complexity_traced_to_requirements", "codex_quality_first_verification", "fable_design_and_code_review", "changes_requested_for_avoidable_complexity"], "references": [], "must_not": ["approve_on_tests_alone", "reward_raw_loc", "helper_replaces_fable", "speculative_generality_accepted"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["simpler_equivalent_identified", "speculative_scope_rejected", "complexity_traced_to_requirements", "producer_quality_first_verification", "cross_lineage_unit_review", "fable_design_and_code_review", "changes_requested_for_avoidable_complexity"], "references": [], "must_not": ["approve_on_tests_alone", "reward_raw_loc", "helper_replaces_fable", "speculative_generality_accepted"]}
     },
     {
       "id": "reject-brittle-underdesigned-change",
@@ -81,7 +131,7 @@
       "fixture": "underdesigned-change",
       "requirements": ["CF-MM-006", "CF-QA-003"],
       "prompt": "Review the implemented cache-key normalization change. Its narrow tests pass and the diff is short. Decide whether its design and integrated code are ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["duplicated_business_rule_identified", "justified_shared_structure_required", "stable_invariants_named_not_configured", "edge_error_handling_verified", "codex_quality_first_verification", "fable_design_and_code_review", "changes_requested_for_brittleness"], "references": [], "must_not": ["approve_smaller_diff_alone", "hardcode_duplicated_domain_rules", "drop_error_handling_for_simplicity", "invent_runtime_strategy_framework", "helper_replaces_fable"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["duplicated_business_rule_identified", "justified_shared_structure_required", "stable_invariants_named_not_configured", "edge_error_handling_verified", "producer_quality_first_verification", "cross_lineage_unit_review", "fable_design_and_code_review", "changes_requested_for_brittleness"], "references": [], "must_not": ["approve_smaller_diff_alone", "hardcode_duplicated_domain_rules", "drop_error_handling_for_simplicity", "invent_runtime_strategy_framework", "helper_replaces_fable"]}
     },
     {
       "id": "review-ui-component-system-fit",
@@ -119,9 +169,9 @@
       "category": "interoperability",
       "canary": true,
       "fixture": "planning-brief",
-      "requirements": ["CF-MM-002", "CF-MM-005", "CF-MM-006", "CF-MM-010"],
+      "requirements": ["CF-MM-002", "CF-MM-005", "CF-MM-006", "CF-MM-010", "CF-MM-012"],
       "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_primary_high_default", "codex_primary_high_default", "fable_primary_xhigh_on_trigger", "codex_primary_xhigh_on_trigger", "fable_owns_opus_routing", "codex_workers_require_verified_native_routing", "primary_seats_retain_ownership", "independent_plans_preserved", "dual_approval_preserved", "codex_implementation_preserved", "claude_final_review_preserved"], "references": [], "must_not": ["always_xhigh", "direct_opus_primary_invocation", "unverified_worker_routing", "worker_replaces_primary", "effort_change_weakens_duo"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_primary_high_default", "codex_primary_high_default", "fable_primary_xhigh_on_trigger", "codex_primary_xhigh_on_trigger", "fable_owns_opus_routing", "codex_workers_require_verified_native_routing", "primary_seats_retain_plan_and_approval", "independent_plans_preserved", "dual_approval_preserved", "task_assignment_by_verified_fit", "producer_relative_review_preserved", "fable_integrated_judgment_preserved"], "references": [], "must_not": ["always_xhigh", "direct_opus_primary_invocation", "unverified_worker_routing", "worker_replaces_primary", "effort_change_weakens_duo", "infer_usage"]}
     },
     {
       "id": "native-interactive-peer-only",

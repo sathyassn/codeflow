@@ -14,6 +14,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Duo execution is now capability-routed per task (ADR-0035).** Independent
+  Claude+Codex discovery, Claude-led design, versioned joint approval, native
+  interactive transport, evidence gates, and Fable integrated judgment remain
+  mandatory. The host now records each task's producer and cross-lineage
+  reviewer from verified task fit, tools/context, independence, routing,
+  resources, and observed native usage signals; a seat/lineage reassignment
+  invalidates approval. Explicit host/peer/worker roles prevent nested duos,
+  unverified workers are unavailable rather than guessed, and Fable-authored
+  units receive independent Codex review without calling Fable's integrated
+  judgment self-independent.
 - **Reviews and proactive discovery now act by materiality (ADR-0034).**
   Models still search broadly, but substantiate candidates and lead with
   consequential strategic, architectural, structural, correctness, security,
@@ -71,10 +81,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and legitimate punctuation/terms/lists. No Vale, AI detector, or lexical
   blacklist is added.
 - **Right-sized design and code are now a blocking duo gate (ADR-0030).**
-  Both seats must approve design proportionality; Codex implements and
-  first-verifies the smallest coherent, idiomatic change, while the directly
-  invoked Fable primary reviews the settled design and actual integrated diff
-  and owns the final quality verdict. Speculative features, abstractions,
+  Both seats must approve design proportionality; every routed producer
+  first-verifies the smallest coherent, idiomatic change, the other lineage
+  reviews it independently, and the directly invoked Fable primary owns the
+  integrated quality verdict. Speculative features, abstractions,
   configuration, dependencies, compatibility paths, dead code, and other
   complexity without a current requirement or evidenced risk yield
   `changes_requested` even when tests pass. The same gate rejects brittle
@@ -139,8 +149,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The Claude+Codex duo is host-neutral and evidence-gated (ADR-0023).**
   Claude Code hosts through the official Codex plugin; Codex App/interactive
   CLI hosts through a task-scoped interactive Claude CLI in tmux. Both models
-  independently research/analyze/plan, Claude leads design and final review,
-  and Codex implements and first-verifies regardless of the host. A versioned
+  independently research/analyze/plan and Claude leads design. ADR-0035 now
+  routes production and cross-lineage review per task while preserving Fable's
+  integrated judgment. A versioned
   dual-approved plan, reproducible evidence ledger, scenario-first tests, an
   80% coverage floor/90% target where measurable, UI-driven validation, and
   independent security review now form one shared quality contract.

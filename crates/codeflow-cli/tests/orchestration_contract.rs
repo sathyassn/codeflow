@@ -18,9 +18,12 @@ fn normalize_whitespace(value: &str) -> String {
 }
 
 #[test]
-fn orchestrator_is_host_neutral_with_fixed_roles() {
+fn orchestrator_is_host_neutral_with_capability_routed_execution() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
     ));
 
     for required in [
@@ -30,17 +33,23 @@ fn orchestrator_is_host_neutral_with_fixed_roles() {
         "Other harness, including Hermes",
         "**Both think independently.**",
         "**Claude leads design.**",
-        "**Codex implements.**",
-        "**Claude final-reviews.**",
-        "directly invoked primary Fable seat independently reviews",
+        "**Host routes execution.**",
+        "**Review is producer-relative.**",
+        "**Fable owns integrated Claude judgment.**",
+        "task fit",
+        "observed native usage signals only",
+        "Codex supplies independent review",
         "owns the final quality verdict",
         "latest Fable-class Claude model directly",
         "directly at high effort by default",
-        "Escalate the primary Fable seat to xhigh",
+        "Escalate either primary to xhigh",
         "Opus-class workers at medium",
-        "GPT-5.6 Sol or the strongest supported successor Codex coding seat",
-        "the primary Codex seat still owns implementation and first verification",
+        "GPT-5.6 Sol or its strongest supported successor Codex coding seat",
+        "qualified Terra-class workers",
+        "Fable alone owns Claude-side internal routing",
         "never let an internal worker replace either duo seat",
+        "**One orchestration owner.**",
+        "never starts a nested duo",
         "**Evidence outranks agreement.**",
         "**Bounded parallelism.**",
         "Plan v1",
@@ -49,6 +58,29 @@ fn orchestrator_is_host_neutral_with_fixed_roles() {
         assert!(
             skill.contains(required),
             "orchestrator lost required behavior marker: {required}"
+        );
+    }
+
+    for required in [
+        "TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort",
+        "verified native availability and routing",
+        "Unknown remains unknown",
+        "never infer quota, availability, or a worker route",
+        "is reassignment: create Plan vN+1",
+        "same-seat high→xhigh escalation",
+        "A model cannot independently review its own authored unit",
+        "Peer and worker prompts explicitly forbid nested orchestration",
+    ] {
+        assert!(
+            routing.contains(required),
+            "capability-routing contract lost marker: {required}"
+        );
+    }
+
+    for superseded in ["**Codex implements.**", "Fixed role binding"] {
+        assert!(
+            !skill.contains(superseded),
+            "orchestrator retained superseded fixed-role marker: {superseded}"
         );
     }
 
@@ -94,7 +126,7 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
 
     assert!(
         normalize_whitespace(&agents).contains(
-            "both independently research/analyze/plan; Claude leads design and final review"
+            "both independently research/analyze/plan; Claude leads design; the host assigns each task"
         ),
         "always-loaded AGENTS contract must expose independent planning"
     );
@@ -118,8 +150,8 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     for required in [
         "unless the brief already fixes a clear direction, compares 2–3 viable options",
         "When the brief already dictates one clear design direction, record that constraint and why option exploration was waived.",
-        "Codex performs the first evidence pass and Claude owns the final verdict.",
-        "they do not replace Claude's cross-vendor review of Codex's work.",
+        "independent inspection without self-review → Fable integrated verdict",
+        "they do not replace the required other-lineage review or Fable judgment.",
         "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
     ] {
         assert!(
@@ -260,12 +292,16 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
 
 #[test]
 fn quality_contract_pins_evidence_coverage_and_ui() {
-    let contract = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    let contract = normalize_whitespace(&format!(
+        "{}\n{}",
+        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md"),
+        read("assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md")
     ));
 
     for required in [
         "PLAN_VERSION:",
+        "TASK_ASSIGNMENTS:",
+        "CROSS_LINEAGE_REVIEWER seat@effort",
         "CLAUDE_APPROVAL:",
         "CODEX_APPROVAL:",
         "Model agreement is not evidence.",
@@ -289,6 +325,7 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "existing design system",
         "accessible primitives",
         "not the fewest lines",
+        "A model cannot independently review its own authored unit",
     ] {
         assert!(
             contract.contains(required),

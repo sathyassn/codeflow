@@ -291,7 +291,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
 epics: []
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -303,20 +303,27 @@ Both seats independently research, analyze risks, and draft complete plans from
 the same immutable brief before either sees the other's conclusions. This is an
 anti-anchoring requirement: Codex must not be reduced to critiquing a plan
 Claude has already supplied. After both drafts exist,
-Claude leads design and final independent review, while Codex implements and
-first-verifies regardless of which harness hosts. The coordinator reconciles a
-versioned plan and detailed tasks that both approve before implementation.
+Claude leads design. The host reconciles a versioned plan whose task rows name
+the producer and cross-lineage reviewer from verified capability, context,
+resources, and observed native usage evidence. Both seats approve those
+assignments before implementation; changing a named seat or lineage invalidates
+the approvals. Each producer first-verifies its unit, the other lineage reviews
+it independently, and Fable owns the integrated Claude quality judgment without
+claiming independent review of its own authored unit.
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
-CLI reaches Claude through an interactive task-scoped tmux session. A capable
-other host, including Hermes, may coordinate only if it preserves both native
-sessions and their tools. The shared quality resource requires reproducible
+CLI reaches Claude through an interactive task-scoped tmux session. Another
+harness, including Hermes, normally delegates the repository task to one native
+CodeFlow host; direct coordination requires both native lanes and the full
+contract. Explicit host/peer/worker roles prevent recursive orchestration. The
+shared quality and routing resources require reproducible
 evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
 coverage floor where measurable (90% normal target), security review, and
 bounded rework. It also blocks material avoidable complexity: both seats review
-design proportionality, Codex first-verifies the smallest coherent implementation,
-and the directly invoked Fable primary reviews the settled design and actual
-integrated diff for the final quality verdict. Substantial prose additionally
+design proportionality, every producer first-verifies the smallest coherent
+implementation, the other lineage independently reviews it, and the directly
+invoked Fable primary reviews the settled design and actual integrated diff for
+the final quality verdict. Substantial prose additionally
 loads `cf-editorial-review`: both seats protect technical meaning and evidence,
 while Fable owns the final contextual voice and editorial verdict. Cross-model
 callers invoke the latest Fable-class seat directly at high by default and
@@ -325,9 +332,10 @@ route bounded deterministic tool evidence to Opus medium and ambiguous or
 multi-step tool operation to Opus high, but retains interpretation and judgment.
 They invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat
 directly at high by default and xhigh on equivalent triggers; verified native
-Sol-class medium/high workers may assist, but the primary retains implementation
-and first verification. Each run records actual model versions, effort, and
-escalation rationale rather than freezing exact version pins in doctrine.
+Sol-class medium/high or qualified Terra-class workers may assist. Primary seats
+retain their plan and approval duties, and Fable owns Claude-side routing. Each
+run records actual model versions, effort, routing evidence, and escalation
+rationale rather than freezing exact version pins or inferring usage state.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, serialized

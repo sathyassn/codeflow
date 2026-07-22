@@ -159,6 +159,65 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
         assert!(plan_signals.contains(signal), "plan canary lost {signal}");
     }
 
+    for (case_id, signals) in [
+        (
+            "capability-route-producer-and-reviewer",
+            &[
+                "producer_codex_at_effort_recorded",
+                "reviewer_fable_at_effort_recorded",
+                "cross_lineage_unit_review",
+            ][..],
+        ),
+        (
+            "fable-authored-unit-review-independence",
+            &[
+                "codex_independently_reviews_fable_unit",
+                "fable_integrated_quality_judgment",
+            ][..],
+        ),
+        (
+            "assignment-change-requires-reapproval",
+            &["reassignment_detected", "both_approvals_invalidated"][..],
+        ),
+        (
+            "unverified-worker-route-is-unavailable",
+            &["worker_route_unverified", "worker_treated_unavailable"][..],
+        ),
+        (
+            "unknown-usage-remains-unknown",
+            &[
+                "usage_state_unknown",
+                "quota_not_inferred",
+                "producer_selection_blocked_for_missing_required_signal",
+            ][..],
+        ),
+        (
+            "peer-worker-cannot-nest-orchestrator",
+            &["peer_role_recognized", "nested_orchestration_rejected"][..],
+        ),
+        (
+            "same-seat-effort-escalation-keeps-assignment",
+            &[
+                "same_seat_escalation",
+                "trigger_recorded_in_ledger",
+                "ownership_unchanged",
+                "plan_approval_remains_valid",
+            ][..],
+        ),
+    ] {
+        let case = indexed[case_id];
+        assert_eq!(case["canary"], true, "{case_id} must remain a canary");
+        let actual: BTreeSet<&str> = case["expected"]["signals"]
+            .as_array()
+            .expect("routing signals")
+            .iter()
+            .map(|value| value.as_str().expect("signal"))
+            .collect();
+        for signal in signals {
+            assert!(actual.contains(signal), "{case_id} lost {signal}");
+        }
+    }
+
     let compression = indexed["token-efficiency-cannot-delete-contract"];
     assert_eq!(compression["canary"], true);
     let required: BTreeSet<&str> = compression["requirements"]

@@ -34,9 +34,10 @@ or one obvious local check.
 - `/cf-model-orchestrator` is the host-neutral Claude+Codex default for every
   non-trivial repository task, including research, analysis, planning, design,
   review, substantive docs, implementation, and verification. In this Claude
-  host, use the official Codex plugin; Claude leads design/final review and
-  Codex implements/first-verifies when implementation is in scope. A missing
-  seat degrades legibly only after preflight. The unattended pipeline is
+  host, use the official Codex plugin; Claude leads design, while the host
+  routes each task to an approved producer and cross-lineage reviewer. Fable
+  owns the integrated Claude judgment. A missing seat degrades legibly only
+  after preflight. The unattended pipeline is
   explicitly single-vendor and never substitutes for the interactive duo.
 - Invoke the latest available Fable-class Claude model directly at high effort
   by default; use xhigh for capability-sensitive or long-horizon work, material
@@ -46,12 +47,13 @@ or one obvious local check.
   multi-step tool operation; Fable interprets the evidence and owns judgment.
   Invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat at
   high by default and xhigh on equivalent triggers. Bounded Sol-class
-  medium/high workers require verified native routing; the primary Codex seat
-  retains implementation and first verification.
+  medium/high or qualified Terra-class workers require verified native routing.
+  Workers never replace either primary seat or its approval.
 - Match stages and process weight to the outcome: trivial → just do it;
   otherwise begin `/cf-model-orchestrator`. Research/planning-only work exits
-  after joint settlement; implementation continues through Codex build and
-  Claude final review. `/cf-plan` and `/cf-develop` are supporting/solo flows,
+  after joint settlement; implementation continues through routed production,
+  producer verification, cross-lineage review, and integrated Fable judgment.
+  `/cf-plan` and `/cf-develop` are supporting/solo flows,
   not alternate entry points. Full ladder in the `cf-method` skill.
 - Compose stages and models in config (`args.stages`, `args.models`) — never
   hardcode them; the pipeline file is user-owned and `codeflow update` never

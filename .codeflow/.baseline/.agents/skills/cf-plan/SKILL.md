@@ -36,9 +36,10 @@ You are planning work, not building it.
    integration-branch flow, `integration/<epic-id>-<slug>` (see cf-method,
    "Managing a body of work").
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
-   every non-trivial repository task, with Claude as design lead/final reviewer
-   and Codex as implementer/first verifier when implementation is in scope,
-   regardless of the host. Solo `/cf-develop` appears only as the noted fallback
+   every non-trivial repository task: both seats plan independently, Claude leads
+   design, and each implementation task records its approved producer and
+   cross-lineage reviewer. Fable owns the integrated Claude judgment regardless
+   of the host. Solo `/cf-develop` appears only as the noted fallback
    when a required interactive seat is unavailable.
 8. Run `codeflow validate`, then present the plan for approval. Do not start
    building — that is `cf-develop`.

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-20",
+  "requirements_version": "2026-07-22",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -30,25 +30,28 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve the exact plan and task version; any change invalidates both approvals.",
+      "statement": "Both seats approve the exact plan and task assignments; a changed plan or named producer/reviewer seat or lineage invalidates both approvals, while a same-seat trigger-based effort escalation is evidence rather than reassignment.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["A changed plan invalidates both approvals", "CLAUDE_APPROVAL:", "CODEX_APPROVAL:"]}
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["A changed plan invalidates both approvals", "TASK_ASSIGNMENTS:", "CLAUDE_APPROVAL:", "CODEX_APPROVAL:"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["is reassignment: create Plan vN+1", "same-seat high→xhigh escalation"]}
       ]
     },
     {
       "id": "CF-MM-005",
       "level": "hard",
-      "statement": "Codex implements and first-verifies the approved work regardless of the host harness.",
+      "statement": "The host assigns every task a producer and cross-lineage reviewer by task fit, tools/context, independence, verified availability/routing, resources, and observed native usage signals only.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Codex implements.**", "Codex implementation and first verification"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Host routes execution.**", "task fit", "observed native usage signals only"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["TASK_ID | PRODUCER seat@effort", "verified native availability and routing"]}
       ]
     },
     {
       "id": "CF-MM-006",
       "level": "hard",
-      "statement": "The directly invoked primary Fable seat independently reviews the settled design and integrated code for correctness, proportionality, maintainability, security, and evidence, and owns the final quality verdict; a fallback is recorded without claiming Fable review.",
+      "statement": "Each producer first-verifies its unit, the named other-lineage seat reviews it independently, and the directly invoked primary Fable seat owns the integrated design/code judgment without claiming independent review of a Fable-authored unit; a fallback is recorded without claiming Fable review.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Claude final-reviews.**", "directly invoked primary Fable seat", "owns the final code and design quality verdict", "never report that Fable reviewed the work"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Review is producer-relative.**", "**Fable owns integrated Claude judgment.**", "Codex supplies independent review", "never report that Fable reviewed the work"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["A model cannot independently review its own authored unit", "do not label Fable's integrated judgment"]}
       ]
     },
     {
@@ -56,7 +59,8 @@
       "level": "hard",
       "statement": "The directly invoked Fable-class seat owns Claude judgment; it may route deterministic UI/MCP collection to Opus medium and ambiguous multi-step tool operation to Opus high, but workers never settle the judgment.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Fable-class Claude model directly", "Opus-class workers at medium", "ambiguous/multi-step tool operation", "Fable interprets their evidence"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Fable-class Claude model directly", "Opus-class workers at medium/high", "Fable alone owns Claude-side internal routing"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Opus-class workers at medium for deterministic evidence collection", "high for ambiguous/multi-step operation"]}
       ]
     },
     {
@@ -78,9 +82,27 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke the Fable and Codex primary seats directly at high by default, escalate to xhigh only on defined demand or failure triggers, and never transfer primary ownership to internal workers.",
+      "statement": "Cross-model callers invoke the Fable and Codex primary seats directly at high by default, escalate to xhigh only on defined triggers, preserve primary plan/approval duties, leave Claude-side routing to Fable, and use Codex workers only through verified native routing.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["directly at high effort by default", "Escalate the primary Fable seat to xhigh", "Codex coding seat directly at", "the primary Codex seat still owns implementation and first verification", "never let an internal worker replace either duo seat"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["directly at high effort by default", "Escalate either primary to xhigh", "Codex coding seat directly", "qualified Terra-class workers", "Fable alone owns Claude-side internal routing", "never let an internal worker replace either duo seat"]}
+      ]
+    },
+    {
+      "id": "CF-MM-011",
+      "level": "hard",
+      "statement": "Exactly one host owns top-level orchestration; peer and worker sessions declare their bounded role and cannot recursively start another duo.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**One orchestration owner.**", "Only the host runs this top-level flow", "never starts a nested duo"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Every native session declares one role", "Peer and worker prompts explicitly forbid nested orchestration"]}
+      ]
+    },
+    {
+      "id": "CF-MM-012",
+      "level": "hard",
+      "statement": "Routing may use only observed native usage/route evidence; unknown state remains unknown and quota, availability, or worker routing is never inferred.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["observed native usage signal", "unknown remains unknown", "Never infer quota or availability"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Admissible usage evidence", "never infer quota, availability, or a worker route", "missing signal blocks assignment", "Do not silently substitute another criterion"]}
       ]
     },
     {
@@ -139,7 +161,7 @@
       "level": "hard",
       "statement": "Before a host-permitted high-blast-radius action, the host requires exact bounded scope, preview or dry-run evidence where supported, a current verified checkpoint or backup, a tested restore path, and explicit authenticated human approval; missing evidence fails closed, and approved execution advances one verified bounded step at a time.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Present the exact bounded action", "current verified checkpoint or backup", "Missing evidence, an untested restore path", "execute one bounded step at a time"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Present the exact bounded action", "current verified checkpoint or backup", "missing evidence, an untested restore path", "execute one bounded step at a time"]},
         {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["exact scope and command/tool input", "current checkpoint/backup and tested restore path", "postcondition verification"]}
       ]
     },

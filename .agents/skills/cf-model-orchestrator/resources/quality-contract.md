@@ -17,7 +17,8 @@ ASSUMPTIONS_OR_UNRESOLVED:
 DESIGN_OPTIONS:
 CHOSEN_DESIGN_AND_RATIONALE:
 COMPLEXITY_JUSTIFICATION:
-TASKS_AND_OWNERS:
+TASK_ASSIGNMENTS:
+  TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort | ROUTING_EVIDENCE | DEPENDENCIES
 ACCEPTANCE_CRITERIA:
 EDGE_AND_ERROR_CASES:
 SECURITY_AND_PRIVACY:
@@ -32,7 +33,7 @@ Use a content digest or durable link for the immutable brief. Approvals must nam
 the same plan version. A changed plan invalidates both approvals until each seat
 reviews the new version.
 
-For research/analysis-only work, `TASKS_AND_OWNERS`, `TEST_AND_UI_PLAN`,
+For research/analysis-only work, `TASK_ASSIGNMENTS`, `TEST_AND_UI_PLAN`,
 `COVERAGE_PLAN`, and `ROLLBACK_OR_RECOVERY` may be `N/A` only with a concrete
 reason. For planning-only work they describe the future implementation rather
 than work performed in the current run. Never imply that proposed evidence was
@@ -68,11 +69,13 @@ settled design, clarify it before approval; if clarification is unavailable,
 state the assumption and prefer established safe practices with reversible
 boundaries, without speculative generality.
 
-Both seats grade design proportionality before approval. Codex first-verifies
-the implementation for necessity, clarity, idiomatic structure, maintainability,
-failure behavior, and security. The directly invoked primary Fable seat reviews
+Both seats grade design proportionality before approval. Each producer
+first-verifies its implementation for necessity, clarity, idiomatic structure,
+maintainability, failure behavior, and security; the named other-lineage seat
+reviews that unit independently. The directly invoked primary Fable seat reviews
 the settled design and actual integrated diff and owns the final quality verdict;
-helpers may collect evidence but cannot replace that judgment.
+helpers may collect evidence but cannot replace that judgment. Fable's integrated
+judgment is not independent review of a unit Fable authored.
 Material avoidable complexity is `changes_requested`, even when tests pass.
 A non-Fable fallback records reduced assurance and never claims that Fable
 reviewed the work.
@@ -255,10 +258,12 @@ changed, record `UI: N/A — no user-facing surface changed`.
 
 ## Independent review
 
-Codex performs the first verification after implementation. Claude then reviews
-the diff independently, reruns the relevant gates, and checks conformance with
-the chosen design. The final reviewer must challenge the evidence, not merely
-accept the implementer's summary.
+Each producer first-verifies its unit. The approved cross-lineage reviewer then
+reviews the actual unit, reruns relevant gates, and checks conformance with the
+chosen design. Fable separately reviews the integrated diff and owns the Claude
+quality verdict. For a Fable-authored unit, Codex is the independent reviewer;
+Fable's integrated pass is not described as independent review of that unit.
+Every reviewer challenges the evidence rather than accepting a summary.
 
 Classify findings by severity, order them by the materiality contract above,
 and support each with a concrete trigger or reproduction plus its priority
@@ -276,7 +281,8 @@ Completion requires:
 - required deterministic gates are green;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
-- the independent Claude review is approved;
+- every unit has approved cross-lineage review and Fable has approved the
+  integrated design/code judgment;
 - design and implementation proportionality are approved;
 - substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.

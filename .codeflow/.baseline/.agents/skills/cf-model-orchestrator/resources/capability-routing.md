@@ -1,0 +1,87 @@
+# Capability-routing contract
+
+This resource defines who may produce and independently review each approved
+task. It changes execution assignment, not the duo's independent discovery,
+Claude-led design, versioned joint approval, evidence gates, or safety boundary.
+
+## Session roles
+
+Every native session declares one role:
+
+- `host` — the single coordinator that owns the brief, Plan vN, assignments,
+  integration, evidence ledger, degradation, and closeout;
+- `peer` — a primary cross-lineage reasoning/review seat with plan and approval
+  duties; it completes the bounded request and returns evidence;
+- `worker` — a bounded native subtask seat owned by its primary; it cannot
+  approve the plan or replace a named reviewer.
+
+Only `host` invokes `cf-model-orchestrator`. Peer and worker prompts explicitly
+forbid nested orchestration. A non-Claude/Codex harness normally hands the whole
+repository task to one native CodeFlow host instead of becoming an outer host
+around a second inner duo.
+
+## Assignment record
+
+Plan vN records one row per task:
+
+```text
+TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort | ROUTING_EVIDENCE | DEPENDENCIES
+```
+
+The host and both primary seats select the producer and reviewer from:
+
+1. task fit;
+2. required tools and current context;
+3. independence from the producer's lineage and authored work;
+4. verified native availability and routing;
+5. observed host resources and bounded concurrency; and
+6. observed native usage signals only.
+
+Admissible usage evidence is native usage/status output, actual model/effort or
+worker-routing metadata, a scoped live canary, or an explicit harness/rate-limit
+error. Record its source and observation time. Unknown remains unknown: never
+infer quota, availability, or a worker route from model family, config, elapsed
+time, silence, or a different harness's state. Cost and remaining usage may
+break a tie among qualified routes; they never excuse a weaker quality gate.
+If the brief makes a usage signal necessary to decide, a missing signal blocks
+assignment until evidence arrives or the operator changes that constraint. Do
+not silently substitute another criterion.
+
+A change to the producer or cross-lineage reviewer seat or lineage is
+reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
+work continues. A same-seat high→xhigh escalation on a documented trigger is
+ledger evidence, not reassignment. A worker change within the approved primary
+seat remains internal routing unless it changes the named producer or reviewer.
+
+## Native host routes
+
+- Claude host: the primary Fable-class seat coordinates at high by default,
+  escalates to xhigh on the shared triggers, may route bounded native operations
+  to current Opus-class workers at medium for deterministic evidence collection
+  or high for ambiguous/multi-step operation, and calls the primary Codex coding
+  seat at high by default. Fable owns Claude-side routing and judgment.
+- Codex host: the primary Sol-class seat coordinates at high by default,
+  escalates to xhigh on the shared triggers, may use verified native Sol
+  medium/high or qualified Terra-class workers for bounded work, and calls the
+  primary Fable-class seat at high by default. Fable owns all Claude-side
+  internal routing; Codex does not select Opus directly.
+
+Model names are routing classes, not frozen version pins. Record the actual
+model, effort, route, and canary evidence. An unverified worker route is
+unavailable, not an invitation to guess or invoke it headlessly.
+
+## Review and degradation
+
+Each producer first-verifies its unit. The named other-lineage seat then reviews
+the actual unit and evidence independently. A model cannot independently review
+its own authored unit. The primary Fable seat still reviews the integrated
+design/code and owns the final Claude quality judgment; for a Fable-authored
+unit, record Codex as the independent reviewer and do not label Fable's
+integrated judgment an independent unit review.
+
+If a planned seat, route, or required tool is unavailable before approval,
+select another qualified assignment and settle a new plan version. Mid-run loss
+gets one bounded retry and diagnosis; changing a named seat requires
+reassignment and fresh approval. If no cross-lineage route remains, use the
+documented solo fallback with separate read-only review where possible, record
+the missing capability and reduced assurance, and never claim duo completion.

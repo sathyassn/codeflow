@@ -57,9 +57,12 @@ named human release decision.
       the currently supported model/harness bindings.
 - [ ] Both native interactive directions complete a scoped tool/MCP canary;
       evidence records versions, effort, tool access, and graceful degradation.
-- [ ] Fable owns the final design/code quality review and Codex owns the
-      implementation/first-verification review; every blocking finding is
-      resolved or explicitly stops the release.
+- [ ] Each task records its producer and cross-lineage reviewer with verified
+      routing evidence; producers first-verify, the other lineage reviews each
+      unit independently, and Fable owns the integrated design/code judgment.
+      Every blocking finding is resolved or explicitly stops the release.
+- [ ] Host/peer/worker role canaries reject nested orchestration, usage state is
+      observed rather than inferred, and reassignment forces fresh dual approval.
 
 ## 5. Publish, canary, and rollback
 

@@ -1,35 +1,28 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex duo for every non-trivial repository task from either Claude Code, Codex, or another capable host. Both models independently research, analyze, and plan; Claude leads design and final independent review; Codex implements and first-verifies when implementation is in scope; the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex duo for every non-trivial repository task from either Claude Code, Codex, or another capable host. Both models independently research, analyze, and plan; Claude leads design; the host routes each approved task to a capable producer and cross-lineage reviewer; Fable owns the integrated Claude judgment; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
 
-Use the duo for every non-trivial repository task. Harness choice changes the
-transport and coordinator, not the roles or quality bar. A conversational
-answer or one obvious local edit needs no duo; uncertainty, material judgment,
-external or repository research, multiple affected surfaces, or evidence beyond
-one obvious check makes the task non-trivial.
+Use the duo for every non-trivial repository task. Harness choice changes
+transport/coordinator, not duties or quality. One obvious local edit needs no
+duo; material judgment, research, multiple surfaces, or deeper evidence does.
 
-Read [resources/quality-contract.md](resources/quality-contract.md) before
-planning. It is the shared, harness-neutral contract for plans, evidence,
-testing, coverage, UI validation, security, and final review. Harness-specific
-agents are adapters to that contract, not alternate sources of truth.
+Read [resources/quality-contract.md](resources/quality-contract.md) and
+[resources/capability-routing.md](resources/capability-routing.md) before
+planning. They are the shared contracts for quality and task assignment.
+Harness-specific agents are adapters, not alternate sources of truth.
 
 ## Outcome modes
 
 Select the smallest complete stage set before starting; do not manufacture an
 implementation stage for an analysis-only request.
 
-- **Research / analysis:** independent discovery → evidence comparison → joint
-  settled findings and recommendations → closeout.
-- **Plan / design:** independent discovery → Claude-led options → versioned
-  dual-approved plan and detailed tasks → closeout without edits.
-- **Implementation:** full workflow through Codex implementation, first
-  verification, Claude final review, and joint closeout.
-- **Review / verification:** both inspect independently; Codex performs the
-  first evidence pass and Claude owns the final verdict. Findings return to the
-  designated implementer; review authority does not imply edit authority.
+- **Research / analysis:** independent discovery → evidence comparison → joint settled findings → closeout.
+- **Plan / design:** independent discovery → Claude-led options → versioned dual-approved plan/tasks → closeout without edits.
+- **Implementation:** routed production/verification → cross-lineage unit review → Fable integrated judgment → closeout.
+- **Review / verification:** independent inspection without self-review → Fable integrated verdict; review grants no edit authority.
 - **Substantive documentation:** use research/plan mode when only the proposed
   content is requested; use implementation mode when repository docs will be
   changed and verified. Apply `cf-editorial-review` before final approval.
@@ -43,47 +36,44 @@ implementation stage for an analysis-only request.
 - **Claude leads design.** Claude proposes the primary design and, unless the
   brief already fixes a clear direction, compares 2–3 viable options. Codex
   challenges feasibility, operability, security, and implementation detail.
-- **Codex implements.** Once both approve the same versioned plan, Codex owns
-  the implementation and first verification regardless of which harness hosts.
-- **Claude final-reviews.** The directly invoked primary Fable seat independently
-  reviews the settled design and actual integrated diff for correctness,
-  right-sizing, clarity, maintainability, security, conformance, and test
-  evidence, reruns relevant tests, and owns the final quality verdict.
+- **Host routes execution.** Once both approve the same versioned plan, the host
+  assigns every task a producer and cross-lineage reviewer by task fit, tools/
+  context, independence, verified availability/routing, resources, and observed
+  native usage signals only. Seat/lineage reassignment invalidates approvals.
+- **Review is producer-relative.** The producer first-verifies its own unit; the
+  other lineage reviews it independently. Self-review is never independent.
+- **Fable owns integrated Claude judgment.** The directly invoked primary Fable
+  seat reviews the settled design and integrated diff, reruns relevant tests,
+  and owns the final quality verdict. Codex supplies independent review for a
+  Fable-authored unit; Fable's integrated pass is not independent unit review.
 - **Evidence-routed reasoning seats.** Cross-model callers invoke the latest
-  Fable-class Claude model directly at high effort by default. Escalate the
-  primary Fable seat to xhigh for capability-sensitive or long-horizon work,
-  material ambiguity, cross-cutting architecture/security, unresolved duo
-  disagreement, or a failed/stalled high run. Fable owns its native session and
-  may delegate bounded deterministic browser/UI/MCP evidence collection to
-  current Opus-class workers at medium, or ambiguous/multi-step tool operation
-  at high; Fable interprets their evidence and owns every judgment. Invoke
-  GPT-5.6 Sol or the strongest supported successor Codex coding seat directly at
-  high by default, with xhigh on the same triggers. Codex may use bounded
-  Sol-class medium workers for localized deterministic work and high workers
-  for complex independent work only through verified native per-worker routing;
-  the primary Codex seat still owns implementation and first verification.
-  Never assume worker routing exists, and never let an internal worker replace
-  either duo seat or its approval.
+  Fable-class Claude model directly at high effort by default. Invoke GPT-5.6
+  Sol or its strongest supported successor Codex coding seat directly at high.
+  Escalate either primary to xhigh for capability-sensitive/long-horizon work,
+  material ambiguity, cross-cutting architecture/security, unresolved
+  disagreement, or failed/stalled high work. Fable may route Opus-class workers
+  at medium/high; Codex may use verified Sol medium/high or qualified Terra-class
+  workers. Fable alone owns Claude-side internal routing.
+  Primaries retain plan/approval duties; never assume worker routing or usage
+  state, and never let an internal worker replace either duo seat.
+- **One orchestration owner.** Every invoked session declares `host`, `peer`, or
+  `worker`. Only the host runs this top-level flow. A peer or worker completes
+  its bounded assignment and returns evidence; it never starts a nested duo.
 - **Evidence outranks agreement.** A model claim, consensus, or approval never
   substitutes for a source, file:line, command result, rendered UI observation,
   or other reproducible evidence.
 - **Catastrophic actions remain human-gated.** Ordinary task-scoped project
-  edits and deletions are autonomous when the workspace sandbox and version
-  control, a verified backup, or a scratch area make them recoverable. Before
-  any system-level, cross-boundary, credential/IAM, production, destructive
-  disk, security-weakening, or otherwise irreversible/high-blast-radius action,
-  both seats independently assess scope and recovery, then the host stops for
-  explicit authenticated human approval. Model consensus, Claude auto mode,
-  Codex auto-review, or peer approval is never that authorization. Present the
-  exact bounded action, affected resources, preview/dry-run evidence where the
-  tool supports it, a current verified checkpoint or backup, and the rollback
-  or restore procedure. Missing evidence, an untested restore path, or scope
-  ambiguity fails closed. The non-relaxable deterministic command class remains
-  agent-blocked after approval; a human operator performs it through a separate
-  controlled channel while the models prepare and verify evidence. For other
-  high-blast-radius actions that effective host policy permits after approval,
-  execute one bounded step at a time and verify it. Never route through the peer
-  to evade the host's stricter guard.
+  edits and deletions stay autonomous when recoverable. For a system-level,
+  cross-boundary, credential/IAM, production, destructive-disk, security-
+  weakening, irreversible, or high-blast-radius action, both seats assess risk
+  and the host stops. Model consensus, Claude auto mode, Codex auto-review, or
+  peer approval is never human authorization. Present the exact bounded action,
+  preview where supported, current verified checkpoint or backup, and tested
+  restore path; missing evidence, an untested restore path, or ambiguity fails
+  closed. The non-relaxable class remains agent-blocked: a human operator
+  performs it through a separate controlled channel. For another host-permitted
+  high-risk action, execute one bounded step at a time and verify it; never use
+  the peer to evade the host boundary. The quality contract owns full evidence.
 - **Native interactive sessions only.** Each model runs in its own vendor
   harness with its configured tools and MCP servers. Never use `codex exec`,
   `claude -p` / `--print`, or another headless peer invocation.
@@ -91,39 +81,35 @@ implementation stage for an analysis-only request.
   to at most two rounds. Unresolved disagreement or a red deterministic gate
   stops for the human; no model talks it green.
 - **Bounded parallelism.** Parallelize independent discovery and implementation
-  workstreams when it shortens the critical path. Give each implementation task
-  one owner, branch, and worktree; serialize shared contracts and integration.
-  The host sets and revises a concurrency cap from available memory, CPU, disk,
-  context, and tool limits—reserve headroom and reduce fan-out before swapping,
-  duplicate heavyweight builds, browser fleets, or context sprawl erode
-  quality. Parallel output is provisional until the integrated diff is green.
+  only when it shortens the critical path. Use one owner/branch/worktree per
+  task; serialize shared contracts and integration. Cap concurrency from
+  observed memory, CPU, disk, context, and tool limits, preserve headroom, and
+  reduce fan-out before pressure erodes evidence. Task output is provisional
+  until the integrated diff and gates are green.
 
 ## Seat and transport matrix
-
 Detect capabilities, not model identity.
 
-| Active host | Peer lane | Coordinator | Fixed role binding |
+| Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|
-| Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Claude design/final review; Codex implementation/first verification |
-| Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Claude design/final review; Codex implementation/first verification |
-| Other harness, including Hermes | Only if it can attach to both sanctioned native interactive lanes and preserve their tools, sessions, and approvals | Other host | Same fixed Claude/Codex roles |
+| Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Per-task producer/reviewer assignment; Fable leads design and integrated judgment |
+| Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Per-task producer/reviewer assignment; Fable leads design and integrated judgment |
+| Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
-The desktop applications are not general automation endpoints for each other.
-Claude Code reaches Codex through the official plugin/app-server integration.
-Codex reaches Claude through the interactive Claude Code CLI; use tmux to keep
-that TTY session durable and resumable. Do not automate either desktop GUI as a
-peer protocol.
-
-A non-Claude/Codex host may coordinate only when it can prove both seats and
-their tool access. Otherwise run the harness-native solo flow and report which
-seat or lane was absent. Never simulate a missing vendor with another instance
-of the host model.
+Desktop apps are not peer automation endpoints. Claude Code reaches Codex via
+the official plugin/app-server; Codex reaches Claude via interactive Claude CLI
+in durable tmux. Another harness normally delegates the whole repository task
+to one native host; direct coordination requires both seats, tools, and the
+full contract. Otherwise report the missing lane and use the solo fallback.
+Never simulate a missing vendor with another host-model instance.
 
 ## Preflight
 
 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
    non-goals. If any are missing, run the `cf-plan` clarity gate first.
-2. Identify the active host and required lane from the matrix.
+2. Identify the active host and required lane from the matrix. Set the current
+   session role to `host`; every delegated prompt declares `peer` or `worker`
+   and prohibits recursive orchestration.
 3. Verify command and tool readiness:
    - Codex: `codex` is present, `codex login status` succeeds, and
      `codex mcp list` shows the tools required by the task.
@@ -147,29 +133,19 @@ of the host model.
      fail-closed sandbox; replace `high` with `xhigh` when an escalation trigger
      applies. Never fall through to bypass mode on an ordinary host.
 4. Verify the autonomy boundary through the effective settings, not prose:
-   - Claude: sandbox enabled, `failIfUnavailable: true`, sandboxed Bash
-     auto-allowed, and a sandbox failure may request one auto-classified
-     unsandboxed retry only for a trusted installed tool that requires host
-     state, such as the official Codex plugin. Arbitrary unsandboxed commands
-     remain out of bounds; destructive and privileged actions are still
-     classified or prompted, and raw secret reads are denied. A
-     repository cannot set `defaultMode: auto` or classifier policy; select
-     auto and `classifyAllShell` at CLI/user scope and canary the effective mode.
-   - Codex: the named permission profile is active without a competing legacy
-     `sandbox_mode`, public network and live search are enabled, approvals use
-     `on-request`, and ordinary eligible escalations route to a reviewer
-     subagent. Auto-review is a safety reviewer, not human authorization. For a
-     catastrophic action, select `user` in the project or launch override and
-     verify the effective reviewer plus any managed constraint before asking
-     the operator to approve the staged action.
-   - Platform assurance: use the native sandbox on macOS and Linux. On Windows,
-     prefer WSL2 for Linux-equivalent tooling and Claude sandbox enforcement.
-     Native Windows Codex must use its elevated sandbox; CodeFlow's shell guard
-     must cover PowerShell as well as Bash. Claude Code has no native-Windows OS
-     sandbox, so a hook or permission prompt is not equivalent isolation: move
-     catastrophic work to WSL2 or a container and fail closed if that boundary
-     is unavailable. Record the actual platform and effective boundary rather
-     than inferring either from the host name.
+   - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
+     autonomy, raw-secret denies, and CLI/user-scope auto + `classifyAllShell`.
+     Only a trusted installed tool may receive one classified unsandboxed retry;
+     arbitrary unsandboxed commands remain out of bounds.
+   - Codex: require the named profile, no competing legacy `sandbox_mode`,
+     `on-request`, public network and live search are enabled, and eligible
+     escalation goes to auto-review. Auto-review is not human authorization;
+     catastrophic work selects `user` and verifies the effective boundary.
+   - Platform: use native macOS/Linux sandboxes; on Windows, prefer WSL2 for
+     Linux-equivalent tooling. Native Windows Codex must use its elevated
+     sandbox and the guard must cover PowerShell/Bash. Claude Code has no
+     native-Windows OS sandbox; move catastrophic work to WSL2/container or fail
+     closed. Record the actual platform and effective boundary.
 5. Verify task-specific capabilities before promising their evidence: live web
    research and authoritative docs; GitHub/source control; the stack format,
    lint, test, coverage, dependency, and security tools; Playwright/browser for
@@ -177,10 +153,10 @@ of the host model.
    any design, issue-tracker, database, cloud, or private-doc MCP the task needs.
    Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
    tokens never enter prompts, logs, repository files, or arbitrary commands.
-6. Record the selected models, reasoning levels, escalation reasons, permission
-   modes, tool inventories, and live-canary evidence. Model family names above
-   are routing classes; record the actual current versions at run time rather
-   than freezing them into a plan.
+6. Record models, effort/escalation, permissions, tools, live canaries, and any
+   observed native usage signal used. Native status, routing metadata/canaries,
+   and explicit harness errors are admissible; unknown remains unknown. Never
+   infer quota or availability. Record actual versions at run time.
 
 An absent seat at preflight degrades legibly to the harness-native solo
 `/cf-develop` flow with a separate read-only review pass. A mid-run failure
@@ -219,14 +195,16 @@ approve the same version, stop for the human.
 
 After dual approval, the host expands the agreed plan into ordered tasks with:
 
-- owner and dependencies;
+- task id, producer/reviewer seat@effort, routing evidence, and dependencies;
 - files/interfaces expected to change;
 - happy-path and edge/error acceptance criteria;
 - unit, integration, end-to-end, UI, coverage, and security evidence required;
 - rollback or recovery considerations where relevant.
 
-Claude reviews design fidelity; Codex reviews executability. Both approve the
-task breakdown before implementation begins.
+Claude reviews design fidelity; Codex reviews executability. Both approve tasks
+and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
+and requires both approvals; same-seat high→xhigh on a documented trigger is
+ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
@@ -241,24 +219,25 @@ Do not parallelize a short task when coordination costs more than it saves.
 Never use concurrent writers in one worktree or rebase a shared integration
 branch.
 
-### 4. Codex implementation and first verification
+### 4. Routed production and producer verification
 
 Skip this stage when implementation is outside the selected outcome mode.
-Otherwise Codex works in the scoped feature worktree—or coordinates the
-approved bounded set of task worktrees—implements the smallest clear, idiomatic,
-durable diff that satisfies the approved tasks without speculative scope,
-preserves justified reuse and modular boundaries, and handles accepted failure
-and edge cases. It keeps the evidence ledger current and runs formatting, static checks, unit and
+Otherwise each approved producer works in its scoped feature worktree and
+implements the smallest clear, idiomatic, durable diff that satisfies the task
+without speculative scope, preserves justified reuse and modular boundaries,
+and handles accepted failure and edge cases. The producer keeps the evidence
+ledger current and runs formatting, static checks, unit and
 integration tests, relevant end-to-end tests, coverage, dependency/security
 checks, and UI-driven checks required by the quality contract. Task branches
 are not final evidence: integrate them in the approved order, rerun affected
 checks after each landing, and run the aggregate suite on the combined diff.
 
-For a Claude host, use the official plugin:
+For a Claude host, use the official plugin for Codex-produced or Codex-reviewed
+units:
 
 - `/codex:review` or `/codex:adversarial-review` for read-only critiques;
-- `/codex:rescue --effort high` for ordinary implementation and first
-  verification, replacing `high` with `xhigh` only on a recorded trigger;
+- `/codex:rescue --effort high` for ordinary production and verification,
+  replacing `high` with `xhigh` only on a recorded trigger;
 - `/codex:transfer` for a persistent task visible in Codex App/TUI.
 
 Apply the same explicit `--effort high|xhigh` selection to every plugin task
@@ -266,22 +245,28 @@ that starts a primary Codex reasoning turn. Record the plugin result's observed
 model and effort; a project-level high default is a fallback, not evidence that
 the requested turn used it.
 
-For a Codex host, implementation stays in the current Codex worktree and
-session; the Claude tmux session remains the design/review peer.
+For a Codex host, Codex-produced work stays in the current worktree and session;
+Fable- or Opus-produced units stay in their native Claude session. In either
+direction, the approved other-lineage reviewer independently inspects the unit
+and its evidence before integration. Workers return to their primary seat;
+workers never approve plans or replace the named reviewer.
 
-### 5. Claude independent final review
+### 5. Cross-lineage review and integrated Fable judgment
 
-For implementation/review modes, the directly invoked primary Fable seat
-reviews the actual integrated diff rather than task summaries. It reruns
-relevant tests, grades every acceptance criterion with evidence, rejects
-unnecessary or non-idiomatic complexity and brittle under-design, checks design
-and design-system conformance plus UX/UI behavior, performs the independent
-security pass, applies `cf-editorial-review` to substantial changed prose and
-user-facing copy, and owns the final code and design quality verdict. In Claude
-Code, `cf-reviewer` and
-`cf-security-reviewer` may deepen the pass; they do not replace Claude's
-cross-vendor review of Codex's work. For research/analysis/plan modes, Claude
-instead final-reviews the settled artifact and its source/evidence coverage.
+For implementation/review modes, each unit carries the named other-lineage
+review and any finding returns to that unit's producer. Then the directly
+invoked primary Fable seat reviews the actual integrated diff rather than task
+summaries. It reruns relevant tests, grades every acceptance criterion with
+evidence, rejects unnecessary or non-idiomatic complexity and brittle
+under-design, checks design and design-system conformance plus UX/UI behavior,
+performs the independent security pass, applies `cf-editorial-review` to
+substantial changed prose and user-facing copy, and owns the final code and
+design quality verdict. In Claude Code, `cf-reviewer` and
+`cf-security-reviewer` may deepen the pass; they do not replace the required
+other-lineage review or Fable judgment. For a Fable-authored unit, record the
+Codex independent review and describe Fable's pass only as integrated judgment.
+For research/analysis/plan modes, Claude instead final-reviews the settled
+artifact and its source/evidence coverage.
 
 From a Codex host, this test-running review uses a separate interactive Claude
 session in auto mode under the same fail-closed sandbox—not plan or bypass
@@ -291,7 +276,7 @@ inspection actions, explicitly prohibit source edits, and require the worktree
 diff to remain unchanged after review. This is verification authority, not an
 implementation handoff.
 
-Any confirmed issue returns to Codex. Rework is bounded to two rounds and
+Any confirmed issue returns to its designated producer. Rework is bounded to two rounds and
 requires fresh evidence. A deterministic failure or unverified criterion blocks
 completion. If Fable is unavailable, record the fallback and reduced assurance;
 never report that Fable reviewed the work.
@@ -301,6 +286,7 @@ never report that Fable reviewed the work.
 Both seats approve the final diff and evidence ledger. The host reports:
 
 - final plan version and both approvals;
+- session roles and every producer/reviewer assignment with routing evidence;
 - design option chosen (or the recorded waiver);
 - acceptance criteria with reproducible evidence;
 - exact test, coverage, security, and UI results;

@@ -136,15 +136,17 @@ vendor-maintained/native adapters: Claude Code reaches Codex through the
 official plugin/app-server integration, while Codex reaches an interactive
 Claude CLI through a task-scoped tmux session. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
-stages the requested outcome needs. Fixed model-class roles, evidence-routed
-effort, the versioned
-plan/evidence contract, bounded worktree/resource/integration rules, and quality
-gates live in the shared skill resource; harness-specific reviewer agents only
+stages the requested outcome needs. Claude-led design, capability-routed
+producer/cross-lineage-review assignments, evidence-routed effort, explicit
+host/peer/worker roles, the versioned plan/evidence contract, bounded
+worktree/resource/integration rules, and quality gates live in shared skill
+resources; harness-specific reviewer agents only
 deepen that contract. Quality includes proportionate design and implementation:
 every material new surface maps to a current requirement or evidenced risk,
-Codex first-verifies the smallest coherent implementation, and the directly
-invoked Fable primary owns the final design/code quality verdict on the actual
-integrated diff (ADR-0023, ADR-0024, ADR-0030). Substantial prose loads the
+each producer first-verifies its unit, the other lineage reviews it independently,
+and the directly invoked Fable primary owns the integrated design/code quality
+verdict without claiming independent review of its own work (ADR-0030,
+ADR-0035). Substantial prose loads the
 mirrored `cf-editorial-review` skill rather than expanding the always-loaded
 contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
 audience/medium/task, and requested tone; both seats protect technical meaning,

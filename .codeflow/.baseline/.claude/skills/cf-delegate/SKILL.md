@@ -169,7 +169,7 @@ tmux capture-pane -p -J -t delegate -S -200
 - **Test-running review:** use a separate auto-mode interactive session with
   the same fail-closed sandbox. Instruct Claude to edit no source files and
   require a clean before/after worktree-diff comparison. If a fix is needed,
-  return it to the Codex implementer.
+  return it to the task's approved producer.
 - **Multiline prompts:** `set-buffer` + `paste-buffer -p`, then a separate
   `send-keys Enter`.
 - **Interactive prompts:** classifier escalations, ambiguity, and other user

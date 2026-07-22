@@ -20,8 +20,8 @@ a stage, not a courtesy, and self-review is not review. Selecting the stage set
 is itself an orchestration decision, orthogonal to weight: the rungs below set
 how much *process*. The duo is the default for every non-trivial repository task
 and is host-neutral: both models independently research/analyze/plan; Claude
-leads design and final review; Codex implements and first-verifies when
-implementation is in scope; the active harness coordinates. Solo is only the
+leads design; the active host assigns each task a producer and cross-lineage
+reviewer by verified capability; Fable owns integrated Claude judgment. Solo is only the
 legible degradation when a required interactive seat is unavailable
 (`cf-model-orchestrator`). Research- or planning-only work stops after its
 jointly settled artifact. Make the weight call inside the orchestrator and
@@ -30,8 +30,8 @@ materialize it with `cf-plan`, not mid-build.
 - **No workflow** for conversational or trivial changes — answer, edit, done.
 - **Interactive `/cf-model-orchestrator` loop** for non-trivial work — the
   default path: parallel discovery → versioned dual-approved result; when edits
-  are in scope, continue through Codex build/first verification and independent
-  Claude review, with bounded rework.
+  are in scope, continue through routed production, producer verification,
+  cross-lineage unit review, and integrated Fable judgment, with bounded rework.
 - **Inline `/cf-develop` loop** for the solo fallback: build → independent
   review → verify, with bounded rework.
 - **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`, Claude Code) for
