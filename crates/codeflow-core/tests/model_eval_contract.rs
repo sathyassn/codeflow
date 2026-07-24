@@ -747,7 +747,7 @@ fn assert_canary_signals_and_guards(cases: &Value, expectations: &[(&str, &[&str
 }
 
 #[test]
-fn worktree_provenance_and_presentation_canaries_pin_doctrine() {
+fn worktree_and_provenance_canaries_pin_doctrine() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     assert_canary_signals_and_guards(
         &cases,
@@ -812,25 +812,6 @@ fn worktree_provenance_and_presentation_canaries_pin_doctrine() {
                     "completion_signal_treated_as_result",
                 ][..],
             ),
-            (
-                "complex-structure-prefers-compact-diagram",
-                &[
-                    "visual_materially_clearer_recognized",
-                    "smallest_useful_ascii_diagram",
-                    "one_line_caption_present",
-                ][..],
-                &["decorative_extra_diagrams", "oversized_diagram_beyond_need"][..],
-            ),
-            (
-                "simple-answer-not-overformatted",
-                &["direct_simple_answer", "formatting_proportionate"][..],
-                &[
-                    "forced_diagram",
-                    "decorative_headings",
-                    "table_for_single_fact",
-                    "redundant_recap",
-                ][..],
-            ),
         ],
     );
 
@@ -844,6 +825,40 @@ fn worktree_provenance_and_presentation_canaries_pin_doctrine() {
     assert_eq!(
         bootstrap["state"]["local_origin_main"], true,
         "bootstrap canary needs a fetchable fixture-local origin/main"
+    );
+}
+
+#[test]
+fn presentation_canaries_pin_proportionate_complete_visuals() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "complex-structure-uses-proportionate-diagram",
+                &[
+                    "visual_materially_clearer_recognized",
+                    "diagram_scope_matches_explanation",
+                    "necessary_detail_preserved",
+                    "caption_or_legend_when_helpful",
+                ][..],
+                &[
+                    "decorative_extra_diagrams",
+                    "information_lost_to_compactness",
+                    "oversized_beyond_explanatory_need",
+                ][..],
+            ),
+            (
+                "simple-answer-not-overformatted",
+                &["direct_simple_answer", "formatting_proportionate"][..],
+                &[
+                    "forced_diagram",
+                    "decorative_headings",
+                    "table_for_single_fact",
+                    "redundant_recap",
+                ][..],
+            ),
+        ],
     );
 }
 

@@ -484,14 +484,14 @@
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["native_provenance_required", "unproven_output_reclassified_author_lineage", "cross_review_redone_or_blocked", "launch_verification_required", "returned_diff_and_evidence_verification_required", "idle_signal_rejected_as_evidence"], "references": ["PEER_RESULT.md", "DISPATCH_LOG.md"], "must_not": ["relay_credited_as_author", "same_lineage_worker_credited_other_lineage", "vendor_self_simulation", "idle_notification_treated_as_running", "completion_signal_treated_as_result", "unproven_output_counted_cross_lineage"]}
     },
     {
-      "id": "complex-structure-prefers-compact-diagram",
+      "id": "complex-structure-uses-proportionate-diagram",
       "kind": "regression",
       "category": "outputs",
       "canary": true,
       "fixture": "conflicting-authority",
       "requirements": ["CF-OUT-003", "CF-REF-001"],
       "prompt": "Explain how a configuration write flows through the service boundary and which decision governs each hop, so a new contributor can follow it at a glance.",
-      "expected": {"routes": ["cf-model-orchestrator", "direct"], "signals": ["visual_materially_clearer_recognized", "smallest_useful_ascii_diagram", "one_line_caption_present", "diagram_reflects_verified_sources"], "references": ["docs/architecture.md", "docs/decisions/"], "must_not": ["prose_wall_for_structural_flow", "decorative_extra_diagrams", "oversized_diagram_beyond_need"]}
+      "expected": {"routes": ["cf-model-orchestrator", "direct"], "signals": ["visual_materially_clearer_recognized", "diagram_scope_matches_explanation", "necessary_detail_preserved", "caption_or_legend_when_helpful", "diagram_reflects_verified_sources"], "references": ["docs/architecture.md", "docs/decisions/"], "must_not": ["prose_wall_for_structural_flow", "decorative_extra_diagrams", "information_lost_to_compactness", "oversized_beyond_explanatory_need"]}
     },
     {
       "id": "simple-answer-not-overformatted",

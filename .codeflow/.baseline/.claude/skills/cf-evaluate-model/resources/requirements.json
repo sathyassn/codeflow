@@ -292,11 +292,11 @@
     {
       "id": "CF-OUT-003",
       "level": "hard",
-      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, the smallest useful ASCII diagram with a one-line caption is preferred; decorative or forced diagrams, headings, tables, and recaps are defects.",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["Presentation is contextual and proportionate", "smallest useful ASCII diagram with a one-line caption", "Never add decorative or forced diagrams, headings, tables, or recaps"]},
-        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Keep formatting proportionate", "smallest useful ASCII diagram with a one-line caption", "decorative or forced diagram, heading, table, or recap is a defect"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["proportionality in both directions", "smallest useful ASCII diagram"]}
+        {"path": "AGENTS.md", "markers": ["Presentation is contextual and proportionate", "scope and detail fit the explanation", "least complicated form that remains complete, not the physically smallest", "Never add decorative or forced diagrams, headings, tables, or recaps"]},
+        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Keep formatting proportionate", "scope and detail fit the explanation", "complex subjects may need a larger, layered, or multi-view diagram", "decorative or forced diagram, heading, table, or recap is a defect"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["proportionality in both directions", "scope and detail fit the explanation", "brief caption or legend when it aids orientation"]}
       ]
     },
     {

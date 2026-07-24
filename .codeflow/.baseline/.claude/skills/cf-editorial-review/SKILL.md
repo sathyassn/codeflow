@@ -51,11 +51,13 @@ misrepresent the author or project.
    punctuation, and emoji only when they fit the information, documented voice,
    medium, and repository policy. Keep formatting proportionate: a simple
    answer needs no apparatus, and when relationships, hierarchy, state,
-   timelines, mappings, or a decision are materially clearer drawn, the
-   smallest useful ASCII diagram with a one-line caption beats prose — but a
-   decorative or forced diagram, heading, table, or recap is a defect, not
-   polish. There is no universal word, punctuation,
-   formatting, or emoji blacklist.
+   timelines, mappings, or a decision are materially clearer drawn, use an
+   ASCII diagram whose scope and detail fit the explanation. Prefer the least
+   complicated form that remains complete, not the physically smallest;
+   complex subjects may need a larger, layered, or multi-view diagram. Add a
+   brief caption or legend when it aids orientation. A decorative or forced
+   diagram, heading, table, or recap is a defect, not polish. There is no
+   universal word, punctuation, formatting, or emoji blacklist.
 7. **Verify the revision.** Compare original and revision for lost meaning,
    changed certainty, dropped caveats, altered terminology, unsupported new
    claims, and accidental policy violations. For review-only work, report

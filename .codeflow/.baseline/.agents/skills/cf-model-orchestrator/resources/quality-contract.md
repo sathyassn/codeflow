@@ -203,9 +203,12 @@ short response, and do not let tone override truth, policy, or precision.
 
 Presentation is graded for proportionality in both directions: simple content
 stays simply formatted, while a structure that is materially clearer visually
-— relationships, hierarchy, state, timelines, mappings, decisions — prefers
-the smallest useful ASCII diagram with a one-line caption. Decorative or
-forced diagrams, headings, tables, and recaps are findings, not polish.
+— relationships, hierarchy, state, timelines, mappings, decisions — uses an
+ASCII diagram whose scope and detail fit the explanation. Prefer the least
+complicated form that remains complete, not the physically smallest; complex
+subjects may need a larger, layered, or multi-view diagram. Add a brief caption
+or legend when it aids orientation. Decorative or forced diagrams, headings,
+tables, and recaps are findings, not polish.
 Verified truth and policy come first, then the consuming project's documented
 voice and context.
 
