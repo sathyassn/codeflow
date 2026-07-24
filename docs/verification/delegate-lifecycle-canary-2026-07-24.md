@@ -38,13 +38,14 @@ after a timeout or to harvest the dedicated canary's final display.
 | Unicode and LF exact-byte delivery | Pass. Canonical UTF-8 prompts with internal LF, including combining characters, multiline input, and a 1 MiB prompt, completed through the PTY suite. |
 | CRLF delivery | Initial live canary correctly exposed a contract defect: Claude's input editor transformed each CRLF into two LF characters, so raw bytes did not survive to `UserPromptSubmit`. The correction rejects CR, invalid UTF-8, and NUL before any turn record is created; focused core, CLI, and PTY regressions pass. |
 | Terminal LF delivery | Initial blind-eval delivery of the one-line `TASK.md` was blocked because Claude consumed its terminal LF instead of including it in `UserPromptSubmit`. The same text without that terminal delimiter matched digest `28a3c24c46a8a8535ba81635a3558339cadfb5c54bf67a34ab865bd63f2404f0` and completed. `arm` now rejects a terminal line break before creating turn state. |
+| Empty/control input | An empty prompt cannot produce a usable submission. A live tab canary in Fable session `d073eb97-acb7-4865-8a27-9f33723703d9` transformed the literal tab into spaces and was blocked on prompt-digest mismatch. `arm` now rejects empty prompts and all control characters before creating turn state; core, CLI, and PTY regressions cover the boundary. |
 | Paste submission race | Initial live attempts showed the paste attachment could remain in Claude's editor when Enter followed immediately. A bounded 300 ms input-settle then one Enter was reliable in the later canaries. Guidance permits one diagnosis-bound retry only when the dedicated pane explicitly shows an unsent paste; blind retries remain prohibited. |
-| Fake-TUI/PTTY stress | Pass: 11 tests cover delayed readiness/acceptance, Unicode/internal-LF/multiline/1 MiB input, early CRLF and terminal-LF rejection, duplicate Enter, two concurrent sessions, wrong-pane digest rejection, spinner/silence, kill at each nonterminal stage, malformed terminal input, dialog-not-completion, and sibling Stop preflight. |
+| Fake-TUI/PTTY stress | Pass: 11 tests cover delayed readiness/acceptance, Unicode/internal-LF/multiline/1 MiB input, early empty/CRLF/terminal-LF/control rejection, duplicate Enter, two concurrent sessions, wrong-pane digest rejection, spinner/silence, kill at each nonterminal stage, malformed terminal input, and dialog-not-completion. The operator-owned sibling Stop-hook preflight is pinned by a deterministic decision-table fixture, not claimed as product or live-hook execution. |
 
 The CRLF and terminal-LF results close normalization question U4 by narrowing
-the supported prompt boundary to canonical UTF-8 text with internal LF and no
-terminal line break instead of pretending the target TUI preserves arbitrary
-bytes or editor delimiters.
+the supported prompt boundary to non-empty canonical UTF-8 text with internal
+LF, no terminal line break, and no other control characters instead of pretending
+the target TUI preserves arbitrary bytes or editor delimiters.
 
 ## Forward lane: Claude host to Codex
 
@@ -168,8 +169,20 @@ mechanically pinned. Fable then approved both fixes with no remaining finding.
 After the blind eval exposed the terminal-LF edge, three accepted review
 requests (two in the reused session and one fresh session) ended in native
 `StopFailure: server_error`, including the one allowed same-session retry. They
-produced no judgment and are not counted as approval. The final
-terminal-LF delta is instead supported by the successful blind native Fable
-diagnostic, full deterministic gates, and the earlier integrated review of the
-same canonicalization design. A final post-delta Fable verdict remains an
-explicit pre-PR availability gate rather than being silently inferred.
+produced no judgment and are not counted as approval.
+
+When the service recovered, Fable xhigh reviewed the full three-commit branch
+in native session `d073eb97-acb7-4865-8a27-9f33723703d9`, prompt
+`203f2b76-392f-4e6a-81a4-543d84d04dff`. It independently reproduced the
+1,685-test all-feature workspace result, 11/11 PTY suite, fmt, clippy, rustdoc,
+doc validation, and mirror parity, then approved with four minor findings.
+Those findings caused the sibling-preflight evidence qualification, CAP-014
+evidence links, empty-prompt rejection, and the control-character boundary.
+The tab canary above supplied the missing live transport evidence.
+
+Fable high then reviewed only those corrections in native session
+`f5eb164f-325f-443a-93b4-76224d5ef04b`, prompt
+`424dcbb9-3de0-486f-8c82-7884ebdf4a85`, reran the focused gates, and approved
+with no finding. Model and effort are recorded as requested because the native
+surface did not expose applied values. Codex reran the full all-feature and
+strict local gates after the corrections.

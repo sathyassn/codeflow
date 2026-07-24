@@ -490,7 +490,7 @@ id: CAP-014
 name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
-verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md"]
+verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "codeflow-cli tests/delegate_pty_stress.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md", "docs/verification/delegate-lifecycle-canary-2026-07-24.md"]
 epics: [EPC-002]
 adrs: [ADR-0036, ADR-0037]
 ```
@@ -508,8 +508,9 @@ Claude settings it generates, wiring SessionStart, UserPromptSubmit, Stop,
 and StopFailure back to the hook. The host launches the harness with those
 settings and the caller runs `wait --until ready` (a `startup` SessionStart;
 any other source — resume, clear, compact, fork — poisons the run). `arm`
-accepts canonical UTF-8 text with internal LF line endings, no terminal line
-break, and no NUL bytes, then records one turn as the SHA-256 of those exact
+accepts non-empty canonical UTF-8 text with internal LF line endings, no
+terminal line break, and no other control characters, then records one turn as the
+SHA-256 of those exact
 prompt bytes (≤ 1 MiB). The
 host delivers that same file after a bounded input-settle, and acceptance
 requires a session-bound `UserPromptSubmit` whose hook-payload prompt matches

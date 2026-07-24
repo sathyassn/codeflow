@@ -250,8 +250,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte-compatible and unchanged. State lives outside Git
   worktrees, carries digests instead of prompt text, caps raw hook input before
   parsing, and fails closed on native Windows (use WSL2). ADR-0037 narrows the
-  transportable prompt boundary to canonical UTF-8 text with internal LF, no
-  terminal line break, and no NUL bytes, rejected before turn creation, and
+  transportable prompt boundary to non-empty canonical UTF-8 text with
+  internal LF, no terminal line break, and no other control characters, rejected
+  before turn creation, and
   pins a bounded paste-to-Enter settle with only one diagnosis-proven retry.
   `codeflow doctor`
   gains a thirteenth,

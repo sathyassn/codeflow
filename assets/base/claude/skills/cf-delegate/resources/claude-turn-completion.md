@@ -64,8 +64,9 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
 Invoke the latest available Fable-class model directly at high, or xhigh on
 the escalation triggers in `cf-model-orchestrator`. Delivery must be
 **exact-byte after one canonicalization boundary**: the prompt file must
-already be UTF-8 text with internal LF line endings, no terminal line break,
-and no NUL bytes. `arm` rejects noncanonical input before creating durable turn
+already be non-empty UTF-8 text with internal LF line endings, no terminal line
+break, and no other control characters. `arm` rejects noncanonical input before
+creating durable turn
 state, then records the
 SHA-256 of the accepted file bytes. Deliver that same file through a uniquely
 named tmux buffer with a literal paste into the exact pane, wait a bounded

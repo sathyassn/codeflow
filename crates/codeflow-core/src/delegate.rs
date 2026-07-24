@@ -273,15 +273,15 @@ pub fn arm(
 }
 
 fn validate_prompt_bytes(prompt: &[u8]) -> Result<(), DelegateError> {
-    let text = std::str::from_utf8(prompt).map_err(|_| {
-        DelegateError::invalid(
-            "delegate prompt must be canonical UTF-8 text with internal LF line endings, no terminal line break, and no NUL bytes; normalize it before arm",
-        )
-    })?;
-    if prompt.contains(&b'\r') || prompt.contains(&b'\0') || text.ends_with('\n') {
-        return Err(DelegateError::invalid(
-            "delegate prompt must be canonical UTF-8 text with internal LF line endings, no terminal line break, and no NUL bytes; normalize it before arm",
-        ));
+    const MESSAGE: &str = "delegate prompt must be non-empty canonical UTF-8 text with internal LF line endings, no terminal line break, and no other control characters; normalize it before arm";
+    let text = std::str::from_utf8(prompt).map_err(|_| DelegateError::invalid(MESSAGE))?;
+    if text.is_empty()
+        || text.ends_with('\n')
+        || text
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    {
+        return Err(DelegateError::invalid(MESSAGE));
     }
     Ok(())
 }
@@ -1731,8 +1731,12 @@ mod tests {
     #[test]
     fn arm_rejects_prompt_bytes_the_interactive_tui_cannot_preserve() {
         for prompt in [
+            b"".as_slice(),
             b"first\r\nsecond".as_slice(),
             b"terminal line break\n".as_slice(),
+            b"tab\tbecomes spaces".as_slice(),
+            b"escape\x1bsequence".as_slice(),
+            b"delete\x7fcharacter".as_slice(),
             b"embedded\0nul".as_slice(),
             b"\xffinvalid".as_slice(),
         ] {

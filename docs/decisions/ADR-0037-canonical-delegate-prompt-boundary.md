@@ -4,7 +4,7 @@ title: require a canonical delegate prompt boundary
 date: 2026-07-24
 status: accepted
 superseded_by: null
-architecture_impact: delegate arm validates canonical UTF-8 prompt text with internal LF and no terminal line break before creating turn state; the host still owns transport and exact delivery
+architecture_impact: delegate arm validates non-empty canonical UTF-8 prompt text with internal LF, no terminal line break, and no editor control characters before creating turn state; the host still owns transport and exact delivery
 ---
 
 # ADR-0037 — canonical delegate prompt boundary
@@ -30,10 +30,10 @@ blind Enter retries would instead risk duplicate or unintended turns.
 
 Amend ADR-0036 at the host-to-harness input boundary:
 
-- `delegate arm` accepts only canonical UTF-8 text with internal LF line
-  endings, no terminal line break, and no NUL bytes. It validates this before
-  creating durable turn state, then records the digest of those exact
-  canonical bytes.
+- `delegate arm` accepts only non-empty canonical UTF-8 text with internal LF
+  line endings, no terminal line break, and no other control characters. It
+  validates this before creating durable turn state, then records the digest
+  of those exact canonical bytes.
 - The host normalizes once before arming and delivers that same file. For the
   current tmux adapter it uses literal paste, a bounded 300 ms input-settle,
   then one separate Enter.
@@ -49,8 +49,9 @@ Amend ADR-0036 at the host-to-harness input boundary:
 - Canonical UTF-8 prompts with internal LF retain ADR-0036's digest, session,
   and prompt-ID correlation without claiming support for bytes the target TUI
   rewrites or consumes as editor control.
-- CRLF, terminal-line-break, invalid UTF-8, and NUL-bearing prompt files fail
-  before an armed turn exists and can be normalized explicitly by the host.
+- Empty, CRLF, terminal-line-break, invalid UTF-8, and control-bearing prompt
+  files fail before an armed turn exists and can be normalized explicitly by
+  the host.
 - The current adapter gains a small bounded submission delay, while lifecycle
   waiting and terminal observation remain tmux-free.
 - Other future transports may use a different delivery mechanism, but they

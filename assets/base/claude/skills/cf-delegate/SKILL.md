@@ -153,8 +153,9 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
   settings file is **immutable** — every later call revalidates it against
   exactly (run id, state-dir spelling) and rejects any difference. Arming
   records the SHA-256 of canonical UTF-8 prompt bytes with internal LF line
-  endings, no terminal line break, and no NUL bytes; `arm` rejects other input
-  before durable turn state is created. Normalize once before arming, then
+  endings, no terminal line break, and no other control characters; `arm` rejects
+  empty or other noncanonical input before durable turn state is created.
+  Normalize once before arming, then
   deliver that same file exactly
   (buffer paste, a bounded 300 ms input-settle, then one separate Enter);
   acceptance and terminal records bind

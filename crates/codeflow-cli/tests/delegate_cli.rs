@@ -83,8 +83,12 @@ fn arm_bytes(state: &Path, turn: &str, prompt: &[u8]) -> Output {
 #[test]
 fn arm_rejects_noncanonical_prompt_files_before_creating_turn_state() {
     for (turn, prompt) in [
+        ("empty", b"".as_slice()),
         ("crlf", b"first\r\nsecond".as_slice()),
         ("terminal-lf", b"terminal line break\n".as_slice()),
+        ("tab", b"tab\tbecomes spaces".as_slice()),
+        ("escape", b"escape\x1bsequence".as_slice()),
+        ("delete", b"delete\x7fcharacter".as_slice()),
         ("nul", b"embedded\0nul".as_slice()),
         ("invalid-utf8", b"\xffinvalid".as_slice()),
     ] {

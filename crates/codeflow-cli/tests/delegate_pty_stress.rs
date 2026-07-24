@@ -293,14 +293,17 @@ fn delayed_lifecycle_preserves_unicode_lf_multiline_and_large_prompts() {
 }
 
 #[test]
-fn arm_rejects_noncanonical_line_endings_before_delivery() {
+fn arm_rejects_noncanonical_or_editor_control_input_before_delivery() {
     for (label, prompt) in [
+        ("reject-empty", b"".as_slice()),
         ("reject-crlf", b"first\r\nsecond".as_slice()),
         ("reject-terminal-lf", b"first\nsecond\n".as_slice()),
+        ("reject-tab", b"tab\tbecomes spaces".as_slice()),
+        ("reject-escape", b"escape\x1bsequence".as_slice()),
     ] {
         let fixture = LifecycleFixture::new(label);
         let prompt_path = fixture.root.path().join("turn-1.prompt");
-        std::fs::write(&prompt_path, prompt).expect("write line-ending fixture");
+        std::fs::write(&prompt_path, prompt).expect("write noncanonical fixture");
         let output = run_codeflow(&[
             "delegate",
             "arm",
