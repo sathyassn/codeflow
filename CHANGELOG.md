@@ -253,9 +253,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Fail-severity `delegate-roundtrip` check that runs the installed binary
   through the full synthetic lifecycle — rebuild and reinstall the CLI
   (`cargo install --path crates/codeflow-cli`) before it can pass.
-  Sibling-Stop hook inspection, the prompt-normalization pin, live
-  `prompt_id` binding, the UI-answer canary, and broader native-platform
-  evidence remain PR1/PR2 verification gates.
+  The dated PR1 canary record covers the active Stop-hook set, a Unicode
+  normalization case, live `prompt_id` binding, AskUserQuestion, and
+  permission-response routing on the available macOS arm64 host. The reusable
+  sibling-hook rejection procedure, full fake-TUI stress matrix, and broader
+  native-platform evidence remain PR2/release gates.
 - **Native-interactive model/harness qualification (ADR-0027).** Standard/full
   scaffolds gain `/cf-evaluate-model`: stable requirement-to-source-to-case
   traceability, balanced regression/capability cases, exact disposable fixture

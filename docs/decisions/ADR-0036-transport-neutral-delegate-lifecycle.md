@@ -92,10 +92,12 @@ The invariants, each enforced in code rather than convention:
 
 `codeflow doctor` gains a deterministic `delegate-roundtrip` check that drives
 the installed binary through the full synthetic lifecycle at Fail severity.
-Deliberately outstanding: sibling-Stop hook-source inspection (U1), the prompt
-normalization pin (U4), live `Stop.prompt_id` binding (U5), the UI-answer
-canary, and broader native-platform evidence are PR1/PR2 verification gates,
-not delivered facts.
+The dated PR1 canary record verifies the effective Stop-hook set, one live
+Unicode prompt, `Stop.prompt_id` binding across three turns, and both
+AskUserQuestion and permission-response routing on Claude Code 2.1.218 for the
+available macOS arm64 host. The reusable sibling-hook rejection procedure,
+the full normalization/fake-TUI stress matrix, and broader native-platform
+evidence remain PR2 and release gates, not delivered facts.
 
 ## Rejected options
 
@@ -127,9 +129,10 @@ not delivered facts.
 - The legacy `--result` mode carries a dual-mode hook surface until its
   removal at a later major release.
 - The lifecycle is only as trustworthy as its event adapter; the PR1/PR2
-  gates (sibling-Stop rejection, normalization, live `prompt_id` binding, the
-  UI-answer canary, native-platform evidence) must land before the lane is
-  claimed verified.
+  canaries are recorded in
+  `docs/verification/delegate-lifecycle-canary-2026-07-23.md`, while the
+  reusable sibling-Stop rejection procedure, full stress matrix, and native
+  platform evidence must land before the lane is claimed release-verified.
 
 ## Architecture impact
 

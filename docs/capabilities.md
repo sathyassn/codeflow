@@ -490,7 +490,7 @@ id: CAP-014
 name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
-verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "cargo test doctor::tests::test_delegate_roundtrip"]
+verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md"]
 epics: []
 adrs: [ADR-0036]
 ```
@@ -535,7 +535,9 @@ write-once; recovery is a new run in a fresh directory.
 
 Status is building: the engine surface and its unit/CLI/doctor tests landed,
 and the `delegate-roundtrip` doctor check requires the rebuilt CLI to be
-installed before it can pass. Sibling-Stop hook-source inspection (U1), the
-prompt-normalization pin (U4), live `Stop.prompt_id` binding (U5), the
-UI-answer fail-closed canary, and broader native-platform evidence remain
-PR1/PR2 verification gates and are not claimed complete.
+installed before it can pass. The dated PR1 canary record covers the active
+Stop-hook set, a live Unicode normalization case, `Stop.prompt_id` binding,
+AskUserQuestion, and permission-response routing on the available macOS arm64
+host. The reusable sibling-hook rejection procedure, full fake-TUI stress
+matrix, and broader native-platform evidence remain PR2/release gates and are
+not claimed complete.
