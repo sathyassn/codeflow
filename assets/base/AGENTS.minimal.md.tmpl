@@ -87,6 +87,24 @@ softening the commit rules quietly breaks it.
 - **Protected branches** (`main`/`master`): never commit, merge, push,
   force-push, delete, or hard-reset on them — land work through a branch and a
   reviewed PR.
+- **Work-start check:** before a task's first branch, worktree, commit, merge,
+  rebase, push, or delete mutation, assert in order: **IDENTITY** (the worktree
+  and branch you are actually on, read from git, not memory),
+  **INTENT-MATCH** (the branch/worktree this task was assigned — on a
+  mismatch, stop and surface it; never silently adapt, and never accept name
+  resemblance as a match), **CURRENCY** (fetch; new work starts from the
+  current tip of the repository's configured target branch unless the task
+  explicitly pins an older base).
+  Wrong-branch is the failure to prevent; it outranks stale-branch. Only an
+  assignment that explicitly calls for creating a not-yet-existing worktree
+  lets the protected root create that exact worktree after currency; do no task
+  edits there and rerun the check in the new worktree. Absence alone never
+  authorizes repair.
+- **Post-landing cleanup:** remove a landed branch or worktree only with proof
+  of merge. Ancestry never proves a squash merge — require PR state `MERGED`
+  and a matching recorded head SHA, or no unapplied `+` entry from `git cherry`
+  against the updated target, before branch force-delete. Never force-remove a
+  dirty worktree; preserve or harvest dirty or untracked work first.
 
 ## Workflow discipline
 
@@ -144,8 +162,11 @@ to reason from, not a rote checklist.
   established safe practices and the least speculative reversible choice.
 - **Shape the deliverable.** Layer it concept → detail, each layer complete at
   its own altitude — condense by layering, never by cutting key information.
-  Bullets for the enumerable, prose that earns its place, visuals where they
-  explain better. Before done, take the audience's seat: structured, logical,
+  Keep presentation proportionate: a simple answer stays simple. Bullets for
+  the enumerable, prose that earns its place, and the smallest useful ASCII
+  diagram with a one-line caption when structure, state, or a decision is
+  materially clearer drawn — never decorative or forced diagrams, headings,
+  tables, or recaps. Before done, take the audience's seat: structured, logical,
   progressive? Sloppy work is a defect, not a style. In prose, verified truth
   and policy outrank documented project voice, audience/medium/task, and
   requested tone; preserve technical meaning and never invent personality,

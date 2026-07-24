@@ -1,6 +1,6 @@
 ---
 name: cf-evaluate-model
-description: Qualify a new model, model version, harness release, permission profile, or material CodeFlow instruction change against CodeFlow's regression and capability contracts. Use for deliberate model-readiness evaluations, periodic artifact maintenance, or reproducing an observed model-behavior regression. Runs repeated trials in disposable repositories through native interactive Codex or Claude harness sessions, preserves traces and environment metadata, compares a candidate with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
+description: Qualify a model, harness release, permission profile, or material CodeFlow instruction change against CodeFlow's regression and capability contracts. Use for model readiness, periodic suite maintenance, or reproducing an observed behavior regression. Runs repeated native-interactive Codex or Claude trials in disposable fixture repositories, preserves traces and environment metadata, compares a candidate with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
 ---
 
 # cf-evaluate-model — qualify a model/harness binding
@@ -64,7 +64,10 @@ fixture overlays in [resources/fixtures.json](resources/fixtures.json).
    Each command creates an opaque trial path with a neutral `repository`
    basename, applies exact registry overlays, keeps evaluator-only state outside
    the subject tree, removes grader material, rebuilds a one-commit history,
-   and prints its tree digest. Never reuse a fixture between trials.
+   and prints its tree digest. Cases that exercise remote or cleanup behavior
+   may add only their declared bare origin or control worktree inside that same
+   marked opaque workspace; they never use an external remote. Never reuse a
+   fixture between trials.
 5. **Run the subject naturally.** Open the required native interactive harness
    rooted at that fixture, put the exact CodeFlow binary under test first on the
    session `PATH`, and give it only `TASK.md` as the task. Preserve its session

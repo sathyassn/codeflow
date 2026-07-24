@@ -122,7 +122,11 @@ still applies on every branch; only the merge-into-`main` step is deferred.
 6. **Finish.** After the last task lands, run the ship flow *on the integration
    branch* (full suite, `validate --docs`, capability/doc/epic-record updates as
    the final commits), then raise **one** PR `integration → main` with the epic
-   summary. The human reviews and merges; delete the integration branch after.
+   summary. The human reviews and merges; delete the integration branch only
+   after the merge is proven. Apply cf-ship's same post-landing proof: inspect
+   dirty or untracked state first; require ancestry for a normal merge; for a
+   squash, require a `MERGED` PR with matching head SHA or no unapplied `+`
+   entry from `git cherry` before branch force-delete.
 
 Boundaries are unchanged: `main` and every protected branch stay
 human-merge-only. The integration branch is not a backdoor — its content reaches

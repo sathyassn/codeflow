@@ -49,7 +49,12 @@ misrepresent the author or project.
 6. **Shape for use.** Lead with the outcome or decision, then supply the context
    and evidence needed at that altitude. Use prose, lists, tables, headings,
    punctuation, and emoji only when they fit the information, documented voice,
-   medium, and repository policy. There is no universal word, punctuation,
+   medium, and repository policy. Keep formatting proportionate: a simple
+   answer needs no apparatus, and when relationships, hierarchy, state,
+   timelines, mappings, or a decision are materially clearer drawn, the
+   smallest useful ASCII diagram with a one-line caption beats prose — but a
+   decorative or forced diagram, heading, table, or recap is a defect, not
+   polish. There is no universal word, punctuation,
    formatting, or emoji blacklist.
 7. **Verify the revision.** Compare original and revision for lost meaning,
    changed certainty, dropped caveats, altered terminology, unsupported new

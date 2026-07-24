@@ -273,6 +273,7 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
             errors.append(f"{case_id}: canary must be boolean")
 
     for fixture_id, fixture in fixtures.items():
+        validated_untracked_files: list[str] = []
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", fixture_id):
             errors.append(f"{fixture_id}: unsafe fixture id")
         if fixture.get("tier") not in {"standard", "full"}:
@@ -284,6 +285,53 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
             branch = state.get("branch", "fixture/base")
             if not isinstance(branch, str) or not SAFE_BRANCH.fullmatch(branch):
                 errors.append(f"{fixture_id}: unsafe branch {branch!r}")
+            local_origin_main = state.get("local_origin_main") is True
+            squash_cleanup = state.get("squash_cleanup_worktree") is True
+            if local_origin_main and branch != "main":
+                errors.append(
+                    f"{fixture_id}: local_origin_main requires state.branch to be main"
+                )
+            if local_origin_main and squash_cleanup:
+                errors.append(
+                    f"{fixture_id}: local_origin_main and "
+                    "squash_cleanup_worktree are mutually exclusive"
+                )
+            if "untracked_files" in state:
+                try:
+                    validated_untracked_files = string_list(
+                        state.get("untracked_files"),
+                        f"{fixture_id}.state.untracked_files",
+                    )
+                except EvalError as error:
+                    errors.append(str(error))
+                for relative in validated_untracked_files:
+                    try:
+                        safe_relative_path(relative)
+                    except EvalError as error:
+                        errors.append(f"{fixture_id}: {error}")
+            if squash_cleanup:
+                if branch in {"main", "master"}:
+                    errors.append(
+                        f"{fixture_id}: cleanup task branch must not be protected"
+                    )
+                landed_change = state.get("landed_change")
+                if not isinstance(landed_change, dict):
+                    errors.append(f"{fixture_id}: landed_change must be an object")
+                else:
+                    landed_path = landed_change.get("path")
+                    if not isinstance(landed_path, str):
+                        errors.append(
+                            f"{fixture_id}: landed_change.path must be a string"
+                        )
+                    else:
+                        try:
+                            safe_relative_path(landed_path)
+                        except EvalError as error:
+                            errors.append(f"{fixture_id}: {error}")
+                    if not isinstance(landed_change.get("content"), str):
+                        errors.append(
+                            f"{fixture_id}: landed_change.content must be a string"
+                        )
         files = fixture.get("files")
         if not isinstance(files, dict) or not files:
             errors.append(f"{fixture_id}: files must be a nonempty object")
@@ -304,6 +352,12 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 errors.append(f"{fixture_id}: overlay restores grader material: {rel_path}")
             if safe_path in GRADER_ROUTE_FILES and EVALUATION_ROUTE_PREFIX in content:
                 errors.append(f"{fixture_id}: overlay restores evaluation route: {rel_path}")
+        for relative in validated_untracked_files:
+            if relative not in files:
+                errors.append(
+                    f"{fixture_id}: untracked fixture file missing from files: "
+                    f"{relative}"
+                )
 
     hard = {
         requirement_id
@@ -472,7 +526,14 @@ def write_fixture_file(root: Path, relative: str, content: str) -> None:
     target.write_text(content, encoding="utf-8")
 
 
-def reset_fixture_history(root: Path, branch: str) -> None:
+def configure_fixture_hooks(root: Path) -> None:
+    if (root / ".codeflow/git-hooks").is_dir():
+        run_command(["git", "config", "core.hooksPath", ".codeflow/git-hooks"], root)
+
+
+def reset_fixture_history(
+    root: Path, branch: str, *, install_hooks: bool = True
+) -> None:
     if not SAFE_BRANCH.fullmatch(branch):
         raise EvalError(f"unsafe fixture branch: {branch!r}")
     git_dir = root / ".git"
@@ -485,8 +546,41 @@ def reset_fixture_history(root: Path, branch: str) -> None:
     run_command(["git", "config", "user.email", "eval@codeflow.invalid"], root)
     run_command(["git", "add", "-A"], root)
     run_command(["git", "commit", "-m", "chore: materialize evaluation fixture"], root)
-    if (root / ".codeflow/git-hooks").is_dir():
-        run_command(["git", "config", "core.hooksPath", ".codeflow/git-hooks"], root)
+    if install_hooks:
+        configure_fixture_hooks(root)
+
+
+def configure_local_origin_main(root: Path, origin: Path) -> None:
+    """Add a fixture-local bare origin whose main tip matches the subject HEAD."""
+
+    if origin.exists() or origin.is_symlink():
+        raise EvalError(f"fixture origin already exists: {origin}")
+    origin.parent.mkdir(parents=True, exist_ok=True)
+    run_command(["git", "clone", "--bare", str(root), str(origin)], origin.parent)
+    run_command(["git", "remote", "add", "origin", str(origin)], root)
+    run_command(["git", "fetch", "origin"], root)
+    run_command(["git", "branch", "--set-upstream-to=origin/main", "main"], root)
+
+
+def configure_squash_cleanup_worktree(root: Path, state: dict) -> None:
+    """Turn a primary task checkout into a removable squash-landed worktree."""
+
+    task_branch = state["branch"]
+    landed_change = state["landed_change"]
+    write_fixture_file(root, landed_change["path"], landed_change["content"])
+    run_command(["git", "add", "--", landed_change["path"]], root)
+    run_command(["git", "commit", "-m", "fix: task branch parser boundary"], root)
+    run_command(["git", "branch", "main", "HEAD~1"], root)
+    run_command(["git", "switch", "main"], root)
+    run_command(["git", "cherry-pick", "--no-commit", task_branch], root)
+    run_command(["git", "commit", "-m", "fix: landed parser boundary (squash)"], root)
+
+    control = root.parent / "control"
+    if control.exists() or control.is_symlink():
+        raise EvalError(f"fixture control checkout already exists: {control}")
+    root.rename(control)
+    configure_local_origin_main(control, root.parent / "origin.git")
+    run_command(["git", "worktree", "add", str(root), task_branch], control)
 
 
 def tree_digest(root: Path) -> str:
@@ -502,6 +596,8 @@ def tree_digest(root: Path) -> str:
             if path.is_symlink():
                 raise EvalError(f"fixture tree contains symlink: {path}")
             relative = path.relative_to(root).as_posix()
+            if relative == ".git":
+                continue
             executable = bool(
                 path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             )
@@ -551,8 +647,24 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         write_fixture_file(output, relative, content)
     write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
     assert_no_grader_material(output)
-    branch = fixture["state"].get("branch", "fixture/base")
-    reset_fixture_history(output, branch)
+    state = fixture["state"]
+    post_history_files: dict[str, str] = {}
+    for relative in state.get("untracked_files", []):
+        safe = safe_relative_path(relative)
+        target = output / safe
+        if not target.is_file():
+            raise EvalError(f"untracked fixture file is missing: {relative}")
+        post_history_files[relative] = target.read_text(encoding="utf-8")
+        target.unlink()
+    branch = state.get("branch", "fixture/base")
+    reset_fixture_history(output, branch, install_hooks=False)
+    if state.get("squash_cleanup_worktree") is True:
+        configure_squash_cleanup_worktree(output, state)
+    elif state.get("local_origin_main") is True:
+        configure_local_origin_main(output, output.parent / "origin.git")
+    for relative, content in post_history_files.items():
+        write_fixture_file(output, relative, content)
+    configure_fixture_hooks(output)
     digest = tree_digest(output)
     trial_record = {
         "schema_version": 1,

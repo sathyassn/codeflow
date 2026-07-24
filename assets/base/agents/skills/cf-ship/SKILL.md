@@ -53,3 +53,15 @@ description: Land finished work — docs and capability updates, then a PR throu
    (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 8. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.
+9. Clean up after the human merge, with proof. From outside the task worktree:
+   - fetch the remote and inspect `git -C <path> status --short`; if it is
+     dirty or untracked, stop and preserve or harvest the work — never use
+     `git worktree remove --force`;
+   - for a normal merge, require `git merge-base --is-ancestor <branch>
+     origin/<target>`; for a squash merge, require `gh pr view <n> --json
+     state,headRefOid` to report `MERGED` and the branch-tip SHA, or require
+     `git cherry origin/<target> <branch>` to contain no unapplied `+` entry;
+   - remove the clean worktree, then use `git branch -d` after ancestry proof
+     or `git branch -D` only after the squash proof above.
+   Retain anything unproven. Name resemblance, a closed PR, or a green check is
+   not landing evidence.

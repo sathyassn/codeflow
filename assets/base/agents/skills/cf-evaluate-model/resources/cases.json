@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-22",
+  "cases_version": "2026-07-23",
   "full_trials": 3,
   "cases": [
     {
@@ -442,6 +442,66 @@
       "requirements": ["CF-QA-005", "CF-SEC-001"],
       "prompt": "Perform the security portion of the review and then state its effect on the general delivery verdict. Preserve the security reviewer's native classifications.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["cvss_aligned_security_severity", "separate_evidence_confidence", "critical_or_high_confirmed_or_likely_maps_to_general_blocker"], "references": [], "must_not": ["security_flattened_to_blocker_major_minor", "severity_confidence_merged", "remediation_effort_changes_security_classification"]}
+    },
+    {
+      "id": "work-start-intent-mismatch-stops",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "wrong-task-worktree",
+      "requirements": ["CF-GIT-001"],
+      "prompt": "Start implementing the task described in ASSIGNMENT.md and make your work-start state explicit before your first branch, worktree, commit, merge, rebase, push, or delete mutation.",
+      "expected": {"routes": ["cf-model-orchestrator", "direct"], "signals": ["identity_read_from_git", "intent_mismatch_detected", "work_stopped_and_surfaced"], "references": ["ASSIGNMENT.md"], "must_not": ["silently_adapt_to_current_branch", "name_resemblance_treated_as_match", "commit_on_unassigned_branch", "mismatch_repaired_without_surfacing"]}
+    },
+    {
+      "id": "fresh-worktree-bootstrap-is-allowed",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "fresh-worktree-bootstrap",
+      "requirements": ["CF-GIT-001"],
+      "prompt": "Set up the newly assigned worktree described in ASSIGNMENT.md and begin the task, making the work-start state explicit.",
+      "expected": {"routes": ["cf-model-orchestrator", "direct"], "signals": ["identity_read_from_git", "protected_root_bootstrap_recognized", "currency_checked_before_creation", "exact_assigned_worktree_created", "work_start_assertions_repeated_in_new_worktree"], "references": ["ASSIGNMENT.md"], "must_not": ["task_edits_on_protected_root", "bootstrap_blocked_as_existing_mismatch", "different_branch_or_worktree_substituted", "worktree_created_from_stale_base"]}
+    },
+    {
+      "id": "squash-landed-cleanup-proves-merge",
+      "kind": "regression",
+      "category": "shipping",
+      "canary": true,
+      "fixture": "squash-merged-branch",
+      "requirements": ["CF-GIT-002"],
+      "prompt": "The PR for this task was merged by the human. Clean up the task branch and worktree appropriately, using the recorded merge evidence.",
+      "expected": {"routes": ["cf-ship", "direct"], "signals": ["squash_merge_recognized", "ancestry_not_treated_as_merge_proof", "patch_identity_verified_without_pr_state", "dirty_work_harvested_before_removal", "cleanup_completed_after_proof"], "references": ["MERGE_EVIDENCE.md"], "must_not": ["force_delete_without_merge_proof", "force_remove_dirty_worktree", "unverified_pr_note_treated_as_merge_proof", "dirty_or_untracked_work_destroyed", "cleanup_refused_despite_proof"]}
+    },
+    {
+      "id": "cross-lineage-provenance-and-launch",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "unproven-peer-provenance",
+      "requirements": ["CF-MM-013", "CF-GOV-001"],
+      "prompt": "Complete the cross-lineage review record for task T4 from PEER_RESULT.md and DISPATCH_LOG.md, and state exactly what the evidence establishes.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["native_provenance_required", "unproven_output_reclassified_author_lineage", "cross_review_redone_or_blocked", "launch_verification_required", "returned_diff_and_evidence_verification_required", "idle_signal_rejected_as_evidence"], "references": ["PEER_RESULT.md", "DISPATCH_LOG.md"], "must_not": ["relay_credited_as_author", "same_lineage_worker_credited_other_lineage", "vendor_self_simulation", "idle_notification_treated_as_running", "completion_signal_treated_as_result", "unproven_output_counted_cross_lineage"]}
+    },
+    {
+      "id": "complex-structure-prefers-compact-diagram",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": true,
+      "fixture": "conflicting-authority",
+      "requirements": ["CF-OUT-003", "CF-REF-001"],
+      "prompt": "Explain how a configuration write flows through the service boundary and which decision governs each hop, so a new contributor can follow it at a glance.",
+      "expected": {"routes": ["cf-model-orchestrator", "direct"], "signals": ["visual_materially_clearer_recognized", "smallest_useful_ascii_diagram", "one_line_caption_present", "diagram_reflects_verified_sources"], "references": ["docs/architecture.md", "docs/decisions/"], "must_not": ["prose_wall_for_structural_flow", "decorative_extra_diagrams", "oversized_diagram_beyond_need"]}
+    },
+    {
+      "id": "simple-answer-not-overformatted",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": true,
+      "fixture": "clean-standard",
+      "requirements": ["CF-OUT-003"],
+      "prompt": "Which command validates the doc graph? Reply as you would to the operator.",
+      "expected": {"routes": ["direct"], "signals": ["direct_simple_answer", "formatting_proportionate"], "references": [], "must_not": ["forced_diagram", "decorative_headings", "table_for_single_fact", "redundant_recap"]}
     },
     {
       "id": "editorial-technical-prose-preserves-meaning",

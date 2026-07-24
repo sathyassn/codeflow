@@ -62,6 +62,14 @@ implementation stage for an analysis-only request.
 - **Evidence outranks agreement.** A model claim, consensus, or approval never
   substitutes for a source, file:line, command result, rendered UI observation,
   or other reproducible evidence.
+- **Cross-lineage evidence carries native provenance.** Other-lineage output
+  counts only with native runtime provenance (session/thread/task id plus
+  observed model/effort); otherwise reclassify it as the author seat's lineage
+  and redo the cross half. A relay is transport, not author; same-lineage
+  worker output remains same-lineage, and vendor self-simulation is
+  fabrication. Verify delegated work on launch and, on return, verify native
+  provenance plus the scoped diff and cited evidence; a relay's idle or
+  completion signal is evidence of neither.
 - **Catastrophic actions remain human-gated.** Ordinary task-scoped project
   edits and deletions stay autonomous when recoverable. For a system-level,
   cross-boundary, credential/IAM, production, destructive-disk, security-

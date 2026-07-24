@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-22",
+  "requirements_version": "2026-07-23",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -260,6 +260,43 @@
       "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",
       "sources": [
         {"path": "AGENTS.md", "markers": ["Protected branches", "merged by a human"]}
+      ]
+    },
+    {
+      "id": "CF-GIT-001",
+      "level": "hard",
+      "statement": "Before a task's first branch, worktree, commit, merge, rebase, push, or delete mutation the agent asserts IDENTITY, INTENT-MATCH, and CURRENCY in order; an existing assignment mismatch stops and surfaces rather than silently adapting, while a protected root may create the exact assigned worktree after currency only when the assignment explicitly calls for creating it, then must rerun the assertions there.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["**IDENTITY** — establish where you actually are", "**INTENT-MATCH** — confirm this is the worktree and branch *this task* was assigned", "stop and surface it — never silently adapt", "never accept name resemblance as a match", "**CURRENCY** — fetch, then check the base against the repository's configured target branch", "assignment explicitly calls for creating a worktree", "Absence alone never authorizes repair", "rerun all three assertions inside the new worktree"]}
+      ]
+    },
+    {
+      "id": "CF-GIT-002",
+      "level": "hard",
+      "statement": "A landed task's worktree and branch are removed only after dirty-state inspection and proof of merge; a squash merge requires MERGED PR state with a matching head SHA or no unapplied git-cherry entry before branch force-delete, and worktree force-removal is prohibited.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Ancestry never proves a squash merge", "require PR state `MERGED`", "no unapplied `+` entry", "Never force-remove a dirty worktree", "Unproven work is retained"]},
+        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["Clean up after the human merge, with proof", "never use `git worktree remove --force`", "to report `MERGED` and the branch-tip SHA", "no unapplied `+` entry", "Retain anything unproven"]},
+        {"path": ".agents/skills/cf-method/SKILL.md", "markers": ["delete the integration branch only after the merge is proven", "require a `MERGED` PR with matching head SHA"]}
+      ]
+    },
+    {
+      "id": "CF-MM-013",
+      "level": "hard",
+      "statement": "Cross-lineage evidence requires native runtime provenance; unproven attribution is reclassified as the author seat's lineage and the cross half redone; relays are transports while genuine workers remain authors in their own lineage; vendor self-simulation is prohibited; delegated work is verified on launch and its provenance, scoped diff, and cited evidence are verified on return; idle or completion signals are never evidence.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Cross-lineage evidence carries native provenance.**", "A relay is transport, not author", "same-lineage worker output remains same-lineage", "vendor self-simulation is fabrication", "scoped diff and cited evidence", "idle or completion signal is evidence of neither"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["## Admissible cross-lineage evidence", "only with native runtime provenance", "reclassified as the author seat's own lineage", "same-lineage worker that produces work remains same-lineage", "Verify a delegated task on launch", "scoped worktree diff, and cited evidence"]}
+      ]
+    },
+    {
+      "id": "CF-OUT-003",
+      "level": "hard",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, the smallest useful ASCII diagram with a one-line caption is preferred; decorative or forced diagrams, headings, tables, and recaps are defects.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Presentation is contextual and proportionate", "smallest useful ASCII diagram with a one-line caption", "Never add decorative or forced diagrams, headings, tables, or recaps"]},
+        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Keep formatting proportionate", "smallest useful ASCII diagram with a one-line caption", "decorative or forced diagram, heading, table, or recap is a defect"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["proportionality in both directions", "smallest useful ASCII diagram"]}
       ]
     },
     {

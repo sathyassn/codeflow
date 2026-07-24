@@ -201,6 +201,14 @@ The primary Fable seat owns the final contextual editorial verdict; both seats
 still verify technical meaning and evidence. Do not invoke the skill for every
 short response, and do not let tone override truth, policy, or precision.
 
+Presentation is graded for proportionality in both directions: simple content
+stays simply formatted, while a structure that is materially clearer visually
+— relationships, hierarchy, state, timelines, mappings, decisions — prefers
+the smallest useful ASCII diagram with a one-line caption. Decorative or
+forced diagrams, headings, tables, and recaps are findings, not polish.
+Verified truth and policy come first, then the consuming project's documented
+voice and context.
+
 ## Coverage
 
 Scenario coverage comes first: happy paths, boundaries, malformed input,

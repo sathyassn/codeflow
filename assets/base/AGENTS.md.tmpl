@@ -153,6 +153,32 @@ Develop in a worktree per session (native worktree support). Protected branches
 stay checked out only at the repo root, so git itself refuses a second checkout —
 structural protection for free.
 
+Before a task's first branch, worktree, commit, merge, rebase, push, or delete
+mutation, make three ordered work-start assertions:
+
+1. **IDENTITY** — establish where you actually are: the worktree path and
+   checked-out branch, read from `git worktree list` and
+   `git branch --show-current`, never from memory or the prompt.
+2. **INTENT-MATCH** — confirm this is the worktree and branch *this task* was
+   assigned. On a mismatch, stop and surface it — never silently adapt to
+   where you happen to be, and never accept name resemblance as a match.
+   Wrong-branch is the failure to prevent; it outranks stale-branch. If the
+   assignment explicitly calls for creating a worktree that does not exist
+   yet, the protected root may only create that exact named branch/worktree
+   after the currency check; do no task edits there, then rerun all three
+   assertions inside the new worktree. Absence alone never authorizes repair.
+3. **CURRENCY** — fetch, then check the base against the repository's
+   configured target branch (normally `origin/main` or `origin/master`). New
+   work starts in a fresh worktree off its current tip; build on an older base
+   only when the task explicitly pins it.
+
+A landed task ends with cleanup that proves the merge and inspects worktree
+state first. Ancestry never proves a squash merge: require PR state `MERGED`
+and match the branch tip to its recorded head SHA, or show that `git cherry`
+against the updated target has no unapplied `+` entry, before any branch
+force-delete. Never force-remove a dirty worktree; preserve or harvest dirty
+or untracked work first. Unproven work is retained, never guessed safe.
+
 Parallelize independent work when it shortens the critical path, but make the
 dependency graph, file ownership, and integration order explicit first. Each
 parallel task gets one owner, branch, and worktree; never let two sessions write
@@ -257,8 +283,12 @@ to reason from, not a rote checklist.
   established safe practices and the least speculative reversible choice.
 - **Shape the deliverable.** Layer it concept → detail, each layer complete at
   its own altitude; reveal depth progressively — never dump, and never cut key
-  information to condense. Bullets for the enumerable; prose only where it
-  earns its place; visuals where they explain better. Presentation creative,
+  information to condense. Presentation is contextual and proportionate: a
+  simple answer stays a simple answer. Bullets for the enumerable; prose only
+  where it earns its place; and when relationships, hierarchy, state,
+  timelines, mappings, or a decision are materially clearer drawn, prefer the
+  smallest useful ASCII diagram with a one-line caption. Never add decorative
+  or forced diagrams, headings, tables, or recaps. Presentation creative,
   elegant, modern, fit to the domain; web artifacts componentized, never
   monolithic. Then take the audience's seat: structured, logical, progressive,
   the sought depth findable? Craft lives in the details — sloppy work is a

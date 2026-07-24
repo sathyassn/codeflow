@@ -53,6 +53,20 @@ work continues. A same-seat high→xhigh escalation on a documented trigger is
 ledger evidence, not reassignment. A worker change within the approved primary
 seat remains internal routing unless it changes the named producer or reviewer.
 
+## Admissible cross-lineage evidence
+
+Output attributed to the other lineage is admissible cross-lineage evidence
+only with native runtime provenance: the vendor session/thread/task id plus
+the observed model and effort. Unproven attribution is reclassified as the
+author seat's own lineage and the cross-lineage half of the work is redone.
+A relay — plugin, adapter, relay subagent, or transport session — is transport,
+not author. A same-lineage worker that produces work remains same-lineage; a
+relay answering in the other vendor's name is evidence fabrication, and no
+seat may simulate a missing vendor. Verify a delegated task on launch (a
+process, session artifact, or first output within a bounded window). On return,
+verify the native provenance, scoped worktree diff, and cited evidence; a
+relay's idle or completion signal is evidence of neither.
+
 ## Native host routes
 
 - Claude host: the primary Fable-class seat coordinates at high by default,

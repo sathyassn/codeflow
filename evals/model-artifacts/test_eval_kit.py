@@ -176,6 +176,96 @@ class SuiteContractTests(unittest.TestCase):
             with self.assertRaises(eval_kit.EvalError):
                 eval_kit.reset_fixture_history(root, "../escape")
 
+    def test_local_fixture_origin_exposes_current_head_as_origin_main(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            root = workspace / "repository"
+            root.mkdir()
+            (root / "README.md").write_text("fixture\n", encoding="utf-8")
+            eval_kit.reset_fixture_history(root, "main")
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            origin = workspace / "origin.git"
+            eval_kit.configure_local_origin_main(root, origin)
+            remote = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            origin_main = subprocess.run(
+                ["git", "rev-parse", "origin/main"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            self.assertEqual(str(origin), remote)
+            self.assertEqual(head, origin_main)
+            with self.assertRaisesRegex(eval_kit.EvalError, "already exists"):
+                eval_kit.configure_local_origin_main(root, origin)
+
+    def test_squash_cleanup_fixture_has_real_worktree_and_patch_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            root = workspace / "repository"
+            root.mkdir()
+            (root / "README.md").write_text("fixture\n", encoding="utf-8")
+            eval_kit.reset_fixture_history(
+                root, "fixture/landed-task", install_hooks=False
+            )
+
+            eval_kit.configure_squash_cleanup_worktree(
+                root,
+                {
+                    "branch": "fixture/landed-task",
+                    "landed_change": {
+                        "path": "src/parser-boundary.txt",
+                        "content": "landed\n",
+                    },
+                },
+            )
+            eval_kit.configure_fixture_hooks(root)
+
+            worktrees = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            cherry = subprocess.run(
+                ["git", "cherry", "origin/main", "fixture/landed-task"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            ancestry = subprocess.run(
+                [
+                    "git",
+                    "merge-base",
+                    "--is-ancestor",
+                    "fixture/landed-task",
+                    "origin/main",
+                ],
+                cwd=root,
+                check=False,
+            )
+
+            self.assertIn(str(workspace / "control"), worktrees)
+            self.assertIn(str(root), worktrees)
+            self.assertRegex(cherry, r"^- [0-9a-f]{40}$")
+            self.assertNotEqual(0, ancestry.returncode)
+
     def test_dangling_fixture_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -201,6 +291,43 @@ class SuiteContractTests(unittest.TestCase):
                     eval_kit.write_json(resource_dir / name, document)
                 errors = eval_kit.validate_suite(project_root(), resource_dir)
             self.assertTrue(any("restores" in error for error in errors), path)
+
+    def test_suite_rejects_invalid_fixture_git_state_before_materialize(self) -> None:
+        requirements, cases, fixtures = eval_kit.suite_documents()
+        invalid_states = (
+            (
+                {"untracked_files": "notes.md"},
+                "untracked_files must be an array",
+            ),
+            (
+                {"branch": "fixture/not-main", "local_origin_main": True},
+                "local_origin_main requires state.branch to be main",
+            ),
+            (
+                {
+                    "branch": "fixture/task",
+                    "local_origin_main": True,
+                    "squash_cleanup_worktree": True,
+                },
+                "mutually exclusive",
+            ),
+        )
+        for state_update, expected in invalid_states:
+            mutated = copy.deepcopy(fixtures)
+            mutated["fixtures"][0]["state"].update(state_update)
+            with tempfile.TemporaryDirectory() as temp:
+                resource_dir = Path(temp)
+                for name, document in (
+                    ("requirements.json", requirements),
+                    ("cases.json", cases),
+                    ("fixtures.json", mutated),
+                ):
+                    eval_kit.write_json(resource_dir / name, document)
+                errors = eval_kit.validate_suite(project_root(), resource_dir)
+            self.assertTrue(
+                any(expected in error for error in errors),
+                (state_update, errors),
+            )
 
     def test_existing_run_root_must_match_current_suite(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -228,6 +355,19 @@ class SuiteContractTests(unittest.TestCase):
             self.assertEqual(first, eval_kit.tree_digest(root))
             file.chmod(0o755)
             self.assertNotEqual(first, eval_kit.tree_digest(root))
+
+    def test_fixture_digest_ignores_linked_worktree_git_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "fixture.txt").write_text("same\n", encoding="utf-8")
+            (root / ".git").write_text(
+                "gitdir: /one/temporary/location\n", encoding="utf-8"
+            )
+            first = eval_kit.tree_digest(root)
+            (root / ".git").write_text(
+                "gitdir: /another/temporary/location\n", encoding="utf-8"
+            )
+            self.assertEqual(first, eval_kit.tree_digest(root))
 
 
 class ResultScoringTests(unittest.TestCase):
