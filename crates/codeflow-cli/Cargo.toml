@@ -21,5 +21,9 @@ serde_json.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
+portable-pty.workspace = true
+
 [lints]
 workspace = true
