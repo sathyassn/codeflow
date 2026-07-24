@@ -24,17 +24,23 @@ independent.
      `/codex:adversarial-review` for the security lens). Preflight: the
      `/codex:*` commands exist and `codex login status` exits 0.
    - **From codex → claude**, by driving the interactive `claude` CLI in a
-     dedicated, worktree-scoped tmux session. Use task-scoped Claude `Stop` and
-     `StopFailure` hooks as the completion/failure signals; consume
-     `last_assistant_message` from the Stop input. Use `capture-pane` only for
-     the dedicated task pane after completion or bounded diagnosis—never as a
-     stability heuristic and never against unrelated sessions. Launch the
+     dedicated, worktree-scoped tmux session through CodeFlow's schema-v2
+     delegate lifecycle: `delegate init` → wait-ready → `arm` → exact-byte
+     delivery → wait-accepted → wait-terminal, with bounded cleanup
+     (CodeFlow ADR-0036; the `cf-delegate` skill carries the full contract).
+     Run the sibling Stop-hook preflight from `cf-delegate` before delivery.
+     Consume `last_assistant_message` from the terminal result record and
+     branch on the stable exit states — never on pane appearance. Use
+     `capture-pane` only for the dedicated task pane for bounded diagnosis or
+     an explicit dialog—never as a stability heuristic and never against
+     unrelated sessions. Launch the
      consult by invoking the latest Fable-class model directly at high effort,
      escalating to xhigh only for the triggers in `cf-model-orchestrator`, using
      `claude --model fable --effort high --permission-mode auto --settings
-     /path/to/task-settings.json` (replace `high` with `xhigh` when escalating);
-     the task settings must set
-     `autoMode.classifyAllShell: true` and add the Stop hooks. Keep "read and
+     <state-dir>/settings.json` (replace `high` with `xhigh` when escalating);
+     the generated settings file carries only the lifecycle hooks and is
+     immutable — make `autoMode.classifyAllShell` effective at user or CLI
+     scope. Keep "read and
      reason only; edit nothing" in the prompt, require the effective project
      settings to enable the OS sandbox with `sandbox.failIfUnavailable: true`
      and permits an auto-classified unsandboxed retry only for a trusted
@@ -55,7 +61,11 @@ independent.
 4. Synthesize: compare the second opinion against your own analysis point by
    point, citing where you **agree** and **disagree** and why — with your own
    evidence (file:line, command output). Branch on the verdict line, then
-   re-derive the findings. Never paste the delegate's reply as your finding;
-   an unverified claim is a defect.
+   re-derive the findings. Meet the `cf-delegate` five-obligation evidence
+   contract (launch/provenance/return/failure/recheck): a Codex reply counts
+   only with its native thread ID, and a Claude reply only with its lifecycle
+   records. Never paste the delegate's reply as your finding; an unverified
+   claim is a defect.
 5. Offer a follow-up in the same session — the plugin thread is resumable, and
-   the tmux pane keeps its context: send the next question to the same pane.
+   the lifecycle session keeps its context: arm the next turn and deliver to
+   the same pane.

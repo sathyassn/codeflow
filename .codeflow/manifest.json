@@ -5,25 +5,25 @@
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
       "ownership": "managed",
-      "sha256": "1f62263192b72188facd5071ed7ebb06fda6290e128e3b764088097d1f411e1e",
+      "sha256": "43eda037e398a55a8e2d586a6a7a0ad657c6b8845eecbb8a8ff43a098d4e2725",
       "exec": false
     },
     ".agents/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "3c655d708885a8a7347fc3e86d71ad018d1e0f75c4d197067ea9efe257d88325",
+      "sha256": "5f8222eee638fc8676013012f54619b0bdebd2cfdbebb2c3b0b7bbbe4188459a",
       "exec": false
     },
     ".agents/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "9aa713f977712e8b3029d491d89d5137ae40f5677996435eff88a0ba9ae4a8f7",
+      "sha256": "94233b8f5a2d7483dcb1a9bc7932f83da05a30b89c5e451f30645b5a8e448668",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "118153819925f91e6b00adc310e69cf9fac30d72d49619da1b40b85588330905",
+      "sha256": "6314fce06d925cc17f3f8de0f69845f17c7eac024ef29af742797eb3da0ab016",
       "exec": false
     },
     ".agents/skills/cf-develop/SKILL.md": {
@@ -77,7 +77,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "efd35bdc048b99b91ed26bcb7e5410260728bb6437de03367beadf5f01d149fa",
+      "sha256": "ca67c51b024e8a0d07e1b323404faab960594ed53d699aeea8fb69d88f893ca9",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
@@ -95,13 +95,13 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "69a20c5eb73addce9ab3e3de46f395121f0537d56a817b9029c46af8647b2353",
+      "sha256": "87c7f17bd810e277051c6af1c2ed8827ab094c2293089c5d5bd268722451cb5c",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/capability-routing.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
       "ownership": "managed",
-      "sha256": "d9f3c1fa2bbaded65e382a3f6b1cfa0b2274d3857bf1dabecf649aaadc7dce10",
+      "sha256": "c86f580c93d78003b9d1af3cc14377ea18cc058a077f0b16e779937023612a8a",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -149,25 +149,25 @@
     ".claude/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
       "ownership": "managed",
-      "sha256": "1f62263192b72188facd5071ed7ebb06fda6290e128e3b764088097d1f411e1e",
+      "sha256": "43eda037e398a55a8e2d586a6a7a0ad657c6b8845eecbb8a8ff43a098d4e2725",
       "exec": false
     },
     ".claude/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "3c655d708885a8a7347fc3e86d71ad018d1e0f75c4d197067ea9efe257d88325",
+      "sha256": "5f8222eee638fc8676013012f54619b0bdebd2cfdbebb2c3b0b7bbbe4188459a",
       "exec": false
     },
     ".claude/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "9aa713f977712e8b3029d491d89d5137ae40f5677996435eff88a0ba9ae4a8f7",
+      "sha256": "94233b8f5a2d7483dcb1a9bc7932f83da05a30b89c5e451f30645b5a8e448668",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "118153819925f91e6b00adc310e69cf9fac30d72d49619da1b40b85588330905",
+      "sha256": "6314fce06d925cc17f3f8de0f69845f17c7eac024ef29af742797eb3da0ab016",
       "exec": false
     },
     ".claude/skills/cf-develop/SKILL.md": {
@@ -221,7 +221,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "efd35bdc048b99b91ed26bcb7e5410260728bb6437de03367beadf5f01d149fa",
+      "sha256": "ca67c51b024e8a0d07e1b323404faab960594ed53d699aeea8fb69d88f893ca9",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
@@ -239,13 +239,13 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "69a20c5eb73addce9ab3e3de46f395121f0537d56a817b9029c46af8647b2353",
+      "sha256": "87c7f17bd810e277051c6af1c2ed8827ab094c2293089c5d5bd268722451cb5c",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/capability-routing.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
       "ownership": "managed",
-      "sha256": "d9f3c1fa2bbaded65e382a3f6b1cfa0b2274d3857bf1dabecf649aaadc7dce10",
+      "sha256": "c86f580c93d78003b9d1af3cc14377ea18cc058a077f0b16e779937023612a8a",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -347,7 +347,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "5cf6f16df2206551a5e1932c7b47f0ea7b68137c4a1f96f2b2d4e21e1241fc44",
+      "sha256": "6bcf53fbf0804288b8f1591b161a5712b0981756ca3582fd847fba66bcbd170f",
       "exec": false
     },
     "CLAUDE.md": {

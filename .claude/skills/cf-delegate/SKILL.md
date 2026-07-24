@@ -1,6 +1,6 @@
 ---
 name: cf-delegate
-description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, deterministic reverse-lane completion, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023).
+description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023).
 ---
 
 # cf-delegate — cross-vendor consult and delegate
@@ -39,7 +39,7 @@ reversible; an edit handoff is neither.
 
 ```text
 Claude Code ──codex-plugin-cc plugin──▶ codex
-codex ──tmux-driven interactive claude CLI──▶ claude
+codex ──durable delegate lifecycle over interactive claude CLI──▶ claude
 ```
 
 - **Claude Code → codex: the official `codex-plugin-cc` plugin, only.** It
@@ -47,10 +47,12 @@ codex ──tmux-driven interactive claude CLI──▶ claude
   delegated task gets codex's full MCP toolset (Playwright verified with 24
   browser tools on codex-cli 0.144.1, 2026-07-11), a resumable thread, and
   in-band approvals.
-- **codex → claude: the interactive `claude` CLI driven via tmux, only**
-  (pattern below). The account and interactive response must be verified with a
-  scoped TTY canary; verify the full tmux + completion-signal round trip on
-  install and whenever the Claude CLI or hook configuration changes.
+- **codex → claude: the interactive `claude` CLI driven through CodeFlow's
+  schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036; pattern below). The
+  lifecycle owns startup, acceptance, and terminal correlation; tmux is only
+  the host-side delivery mechanic. The account and interactive response must
+  be verified with a scoped TTY canary; verify the full lifecycle round trip
+  on install and whenever the Claude CLI or hook configuration changes.
 
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
@@ -104,41 +106,70 @@ Codex may use bounded Sol-class medium/high workers only through verified native
 routing; the invoked primary retains the task, implementation, verification,
 and verdict.
 
+**Output counts as Codex only with a native Codex thread behind it.** Every
+plugin exchange must yield the native thread ID, recheckable afterward
+through the plugin or the native Codex surface. A generic Claude subagent, an
+unverified relay, or any surface that cannot show that thread never counts as
+Codex. Record model and effort as *observed* only when the transport exposes
+the actual values; otherwise record them as *requested* — never silently
+upgrade requested to observed. When completion is inferred from thread state
+rather than an explicit result, grade it explicitly as inferred and verify it
+through the thread before relying on it.
+
 Ask every consult for a closing `VERDICT: approved|changes_requested` line so
 the reply is checkable, and branch on it — then re-derive the findings
 yourself (see Guardrails).
 
-## Lane 2 — from codex, tmux-driving the interactive claude CLI
+## Lane 2 — from codex, the durable lifecycle over the interactive claude CLI
 
-The transport pattern, compactly:
+CodeFlow's schema-v2 lifecycle proves what a terminal signal alone cannot:
+the session started cleanly, the delivered prompt was accepted as the armed
+turn, and the terminal event belongs to that turn. The sequence, compactly:
 
 ```sh
-tmux new-session -d -s delegate -x 220 -y 50 -c /path/to/worktree 'claude --model fable --effort high --permission-mode auto --settings /path/to/task-settings.json'
-tmux send-keys -t delegate -l 'Review src/foo.rs for correctness. Cite line numbers. Read and reason only - edit nothing. End with VERDICT: approved|changes_requested.'
-tmux send-keys -t delegate Enter
-# The task-scoped Stop/StopFailure hooks signal completion. Read the pane only
-# for bounded diagnostics or to collect interactive output after that signal.
-tmux capture-pane -p -J -t delegate -S -200
+codeflow delegate init --run-id run-42 --state-dir "$STATE"  # prints generated settings.json
+tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
+  "claude --model fable --effort high --permission-mode auto --settings $STATE/settings.json"
+codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
+codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
+tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
+tmux send-keys -t cf-run-42 Enter
+codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --turn-id turn-1 --timeout-seconds 120
+codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
-- **Turn detection:** use a task-scoped Claude `Stop` hook as the primary
-  completion signal and a `StopFailure` hook as the failure signal. Give the
-  run a unique id and owner-only status path; on `Stop`, persist the hook
-  input's `last_assistant_message` with the run id and signal the matching
-  `tmux wait-for` channel. On `StopFailure`, persist only the structured
-  error type/message needed for diagnosis and signal failure. Bound every wait
-  with a timeout and clean up the task session. Claude's hook contract fires
-  `Stop` once after a completed turn and explicitly provides
-  `last_assistant_message`; do not scrape the transcript or treat a visually
-  stable pane as proof of completion. See
-  <https://code.claude.com/docs/en/hooks#stop> and
-  <https://code.claude.com/docs/en/hooks#stopfailure>.
-  Use the shipped [turn-completion adapter](resources/claude-turn-completion.md)
-  for the exact settings, launch, wait, result-validation, and cleanup
-  contract; do not improvise a different parser or signal protocol.
-- **Pane access:** capture only the dedicated task pane, after the completion
-  signal or on bounded failure diagnosis. Never enumerate or capture unrelated
-  tmux sessions; they may contain secrets or other users' work.
+- **Turn detection is the lifecycle, not the pane.** `init` creates an
+  owner-only state directory outside every Git worktree and generates the
+  task settings that wire `SessionStart`, `UserPromptSubmit`, `Stop`, and
+  `StopFailure` to `codeflow hook delegate-turn --state-dir`. The generated
+  settings file is **immutable** — every later call revalidates it against
+  exactly (run id, state-dir spelling) and rejects any difference. Arming
+  records the SHA-256 of the exact prompt bytes; delivery must be exact-byte
+  (buffer paste plus a separate Enter); acceptance and terminal records bind
+  session and `prompt_id`. Waits are bounded with stable exit states —
+  `0` observed (a completed terminal prints the result JSON), `10` failed
+  terminal, `11` poison/unsafe, `124` timeout, `130` interrupt. Restarts,
+  mis-correlated events, and interrupted waits after acceptance poison the
+  run; recovery is a new run id in a fresh state directory. Turns are
+  sequential — one outstanding armed turn per run; arm the next turn id in
+  the same session after each terminal result. Use the shipped
+  [turn lifecycle adapter](resources/claude-turn-completion.md) for the exact
+  contract; do not improvise a different parser or signal protocol, and do
+  not scrape transcripts or treat a visually stable pane as completion.
+- **Sibling Stop-hook preflight.** Before delivery, enumerate the effective
+  Stop-hook set from every source the session loads (user/project/local
+  settings, enabled plugins, task settings). Reject any sibling Stop hook
+  whose nonblocking behavior you do not deterministically know. The one
+  currently known-safe sibling is the official Codex plugin's
+  `stop-review-gate-hook.mjs`, and only when the operator confirms its
+  effective `stopReviewGate` is off through the plugin's own surface.
+  CodeFlow never reads or infers plugin-private state; an unknown or
+  unverified sibling fails the preflight.
+- **Pane access is diagnosis-only.** Capture only the dedicated task pane,
+  and only for bounded diagnosis when a wait times out or a result is
+  malformed, or to answer an explicit in-turn dialog. Never enumerate or
+  capture unrelated tmux sessions; they may contain secrets or other users'
+  work.
 - **Effective autonomy is layered:** invoke the latest available Fable-class
   model directly at high by default, or xhigh for capability-sensitive,
   long-horizon, materially ambiguous, cross-cutting architecture/security,
@@ -146,16 +177,18 @@ tmux capture-pane -p -J -t delegate -S -200
   session and may use Opus medium for bounded deterministic tool/UI/MCP evidence
   collection or Opus high for ambiguous/multi-step tool operation; Fable
   interprets the evidence and owns the judgment. Launch with the selected
-  effort, `--permission-mode auto`, and task-scoped settings containing
-  `autoMode.classifyAllShell: true`. Require the effective
-  project settings to keep the OS sandbox enabled, set
-  `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash, and permit an
-  auto-classified unsandboxed retry only for a trusted installed tool that
-  requires host state. Arbitrary unsandboxed commands remain out of bounds.
-  This preserves native tools, MCP servers, and broad public-network research
-  while keeping secret stores, private-network access, destructive operations,
-  and privilege changes behind explicit controls. Never use bypass mode on an
-  ordinary host. See <https://code.claude.com/docs/en/permission-modes> and
+  effort, `--permission-mode auto`, and the generated task settings; make
+  `autoMode.classifyAllShell` effective at user or CLI scope (Claude ignores
+  it at project scope, and the generated file carries only the lifecycle
+  hooks). Require the effective project settings to keep the OS sandbox
+  enabled, set `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
+  and permit an auto-classified unsandboxed retry only for a trusted
+  installed tool that requires host state. Arbitrary unsandboxed commands
+  remain out of bounds. This preserves native tools, MCP servers, and broad
+  public-network research while keeping secret stores, private-network
+  access, destructive operations, and privilege changes behind explicit
+  controls. Never use bypass mode on an ordinary host. See
+  <https://code.claude.com/docs/en/permission-modes> and
   <https://code.claude.com/docs/en/sandboxing>.
 - **Read-only consults:** keep "read and reason only; edit nothing" in the
   prompt, record the worktree state before launch, and compare the diff after
@@ -170,21 +203,53 @@ tmux capture-pane -p -J -t delegate -S -200
   the same fail-closed sandbox. Instruct Claude to edit no source files and
   require a clean before/after worktree-diff comparison. If a fix is needed,
   return it to the task's approved producer.
-- **Multiline prompts:** `set-buffer` + `paste-buffer -p`, then a separate
-  `send-keys Enter`.
 - **Interactive prompts:** classifier escalations, ambiguity, and other user
   questions are handled in the same dedicated session. They never authorize a
-  write silently, and a visible question never substitutes for the terminal
-  hook result.
-- **Follow-ups:** the pane keeps its context — send the next prompt to the
-  same session.
+  write silently, and a visible dialog never substitutes for the terminal
+  lifecycle result.
+- **Follow-ups:** the session keeps its context — arm the next turn and
+  deliver to the same pane.
+- **Cleanup:** after harvesting the bounded result and the evidence
+  verification needs, kill the task session and remove the state directory
+  and private prompt files.
+- **Legacy:** `codeflow hook delegate-turn --result` remains only as
+  byte-compatible compatibility for existing callers until a later major
+  release; the two hook modes are mutually exclusive and never fall back to
+  one another. New work always uses the lifecycle.
+
+## Evidence contract — five obligations, both lanes
+
+The two adapters stay distinct — the plugin lane is vendor-owned forward
+transport; the lifecycle lane is CodeFlow-owned reverse protocol — but every
+delegated exchange meets the same five obligations:
+
+1. **Launch.** Verify the delegated session actually started: `wait --until
+   ready` on the reverse lane; a created native thread or first output within
+   a bounded window on the forward lane. Silence is not a launch.
+2. **Provenance.** Attribute output only with native runtime provenance: the
+   schema-v2 records binding session, digest, and `prompt_id` on the reverse
+   lane; the native Codex thread ID plus model/effort labeled by source
+   (`observed` when exposed, otherwise `requested`) on the forward lane. A
+   relay is transport, not author.
+3. **Return.** Verify the returned work itself — the bounded terminal message
+   or thread result, the scoped worktree diff, and the cited evidence,
+   re-derived by you.
+4. **Failure.** Failure is legible and bounded: stable exit states, durable
+   poison, or an explicit plugin/harness error, then one bounded retry with
+   diagnosis — never silent substitution, never completion inferred from
+   silence.
+5. **Recheck.** Evidence stays recheckable after the fact: durable state
+   records until cleanup on the reverse lane; the resumable native thread on
+   the forward lane. Record model/effort as observed only when the transport
+   exposes actual values, otherwise as requested — never silently upgrade —
+   and grade inferred completion explicitly as inferred.
 
 ## Edit-access doctrine (delegate tier)
 
 A delegate that edits works **only** inside a worktree on a feature branch —
 the same worktree-per-session discipline that binds every agent here. From
-Claude Code, scope `/codex:rescue` to the worktree; from codex, start the tmux
-claude session in the worktree. Let it commit conventionally.
+Claude Code, scope `/codex:rescue` to the worktree; from codex, start the
+lifecycle claude session in the worktree. Let it commit conventionally.
 
 Never grant edit access on the root checkout or a protected branch. The point
 of the doctrine: a delegate's commits pass through **CodeFlow's existing gates

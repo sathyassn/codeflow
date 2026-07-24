@@ -57,7 +57,7 @@ it as non-trivial.
 
 | Intent | Use |
 |---|---|
-| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; Fable owns the integrated Claude judgment. Claude Code hosts through the official Codex plugin; Codex hosts through interactive Claude CLI + tmux. Missing seats degrade legibly after preflight |
+| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; Fable owns the integrated Claude judgment. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
 | Materialize an agreed plan | `/cf-plan` — supporting flow for acceptance criteria, epic/spec/ADR artifacts, used inside the duo or after a recorded solo degradation |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
@@ -311,7 +311,10 @@ to reason from, not a rote checklist.
 - **Unverifiable or fabricated claims are defects (zero tolerance).** Every claim
   needs evidence — file:line, command output, or a reproducible check; never
   invent a fact, number, result, or citation. Say explicitly what was *not*
-  verified.
+  verified. Work attributed to another model or harness counts only with
+  native, recheckable provenance — verified launch, native identity, a
+  verified return, and legible failure — never from a relay or an ungraded,
+  unrechecked inferred completion.
 - **Match the gate to the blast radius.** Recoverable, task-scoped project
   edits and deletions are ordinary work. A system-level, cross-boundary,
   credential/IAM, production, destructive-disk, security-weakening, or other

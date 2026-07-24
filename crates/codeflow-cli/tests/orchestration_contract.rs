@@ -399,30 +399,33 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     let delegate = read("assets/base/claude/skills/cf-delegate/SKILL.md");
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");
 
-    assert!(delegate.contains("task-scoped Claude"));
+    assert!(delegate.contains("codeflow delegate init"));
     assert!(delegate.contains("StopFailure"));
-    assert!(delegate.contains("last_assistant_message"));
+    assert!(delegate.contains("--until terminal"));
     assert!(delegate.contains("--model fable --effort high --permission-mode auto"));
     assert!(delegate.contains("xhigh for capability-sensitive"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));
-    assert!(delegate.contains("Never enumerate or capture unrelated"));
+    assert!(delegate.contains("capture unrelated tmux sessions"));
     assert!(!delegate.contains("two identical captures"));
+    assert!(!delegate.contains("tmux wait-for"));
 
     for required in [
         "codeflow hook delegate-turn",
         "owner-only",
-        "tmux wait-for codeflow-delegate-review-42",
-        "\"classifyAllShell\": true",
+        "--until terminal",
+        "last_assistant_message",
+        "autoMode.classifyAllShell",
         "--permission-mode auto",
         "schema_version",
-        "dedicated pane only for bounded diagnosis",
+        "only for bounded diagnosis",
     ] {
         assert!(
             adapter.contains(required),
             "completion adapter lost required marker: {required}"
         );
     }
+    assert!(!adapter.contains("tmux wait-for"));
 }
 
 #[test]

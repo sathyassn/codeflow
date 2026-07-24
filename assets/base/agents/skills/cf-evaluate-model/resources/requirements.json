@@ -286,7 +286,7 @@
       "statement": "Cross-lineage evidence requires native runtime provenance; unproven attribution is reclassified as the author seat's lineage and the cross half redone; relays are transports while genuine workers remain authors in their own lineage; vendor self-simulation is prohibited; delegated work is verified on launch and its provenance, scoped diff, and cited evidence are verified on return; idle or completion signals are never evidence.",
       "sources": [
         {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Cross-lineage evidence carries native provenance.**", "A relay is transport, not author", "same-lineage worker output remains same-lineage", "vendor self-simulation is fabrication", "scoped diff and cited evidence", "idle or completion signal is evidence of neither"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["## Admissible cross-lineage evidence", "only with native runtime provenance", "reclassified as the author seat's own lineage", "same-lineage worker that produces work remains same-lineage", "Verify a delegated task on launch", "scoped worktree diff, and cited evidence"]}
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["## Admissible cross-lineage evidence", "only with native runtime provenance", "reclassified as the author seat's own lineage", "same-lineage worker that produces work remains same-lineage", "verify the delegated task started", "scoped worktree diff, and cited evidence"]}
       ]
     },
     {

@@ -64,12 +64,18 @@ implementation stage for an analysis-only request.
   or other reproducible evidence.
 - **Cross-lineage evidence carries native provenance.** Other-lineage output
   counts only with native runtime provenance (session/thread/task id plus
-  observed model/effort); otherwise reclassify it as the author seat's lineage
-  and redo the cross half. A relay is transport, not author; same-lineage
+  model/effort labeled `observed` or `requested` by its actual evidence
+  source); otherwise reclassify it as the author seat's lineage and redo the
+  cross half. A relay is transport, not author; same-lineage
   worker output remains same-lineage, and vendor self-simulation is
-  fabrication. Verify delegated work on launch and, on return, verify native
-  provenance plus the scoped diff and cited evidence; a relay's idle or
-  completion signal is evidence of neither.
+  fabrication. Every delegated exchange meets the `cf-delegate` five-obligation
+  evidence contract — launch, provenance, return, failure, recheck: verify the
+  launch; on return verify native provenance plus the scoped diff and cited
+  evidence (a relay's idle or completion signal is evidence of neither); keep
+  the evidence recheckable through the native surface — the resumable Codex
+  thread ID forward, the durable lifecycle records reverse. Record model and
+  effort as observed only when the transport exposes actual values, otherwise
+  as requested, and grade inferred completion explicitly as inferred.
 - **Catastrophic actions remain human-gated.** Ordinary task-scoped project
   edits and deletions stay autonomous when recoverable. For a system-level,
   cross-boundary, credential/IAM, production, destructive-disk, security-
@@ -135,7 +141,11 @@ Never simulate a missing vendor with another host-model instance.
      --settings '{"autoMode":{"classifyAllShell":true}}'` and complete one
      scoped interactive canary. The explicit CLI settings scope makes every
      shell action reach the auto-mode classifier; Claude intentionally ignores
-     `autoMode` from repository settings. If Fable or auto mode is
+     `autoMode` from repository settings. Delegated work turns then run
+     through the schema-v2 delegate lifecycle — `delegate init` → wait-ready →
+     `arm` → exact-byte delivery → wait-accepted → wait-terminal with bounded
+     cleanup — using the generated immutable hook settings and the
+     `cf-delegate` sibling Stop-hook preflight. If Fable or auto mode is
      unavailable, record the exact capability gap and use the strongest
      supported Claude reasoning model with `acceptEdits` plus the same
      fail-closed sandbox; replace `high` with `xhigh` when an escalation trigger
@@ -249,9 +259,13 @@ units:
 - `/codex:transfer` for a persistent task visible in Codex App/TUI.
 
 Apply the same explicit `--effort high|xhigh` selection to every plugin task
-that starts a primary Codex reasoning turn. Record the plugin result's observed
-model and effort; a project-level high default is a fallback, not evidence that
-the requested turn used it.
+that starts a primary Codex reasoning turn. Every plugin exchange must yield a
+native Codex thread ID, recheckable through the plugin or the native Codex
+surface — a generic Claude subagent or an unverified relay never counts as
+Codex. Record model and effort as observed only when the transport exposes the
+actual values; otherwise label them requested — a project-level high default is
+a fallback, not evidence that the requested turn used it, and requested is
+never silently upgraded to observed.
 
 For a Codex host, Codex-produced work stays in the current worktree and session;
 Fable- or Opus-produced units stay in their native Claude session. In either

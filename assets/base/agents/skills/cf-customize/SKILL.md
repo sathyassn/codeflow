@@ -58,9 +58,13 @@ Then verify and **offer** remediation — never install silently.
     environment-variable denies), `tmux`, and `claude mcp list`, followed by
     authenticated interactive Fable-class high and xhigh TTY canaries in auto
     mode with `autoMode.classifyAllShell: true` supplied through `--settings`,
-    plus a
-    task-scoped tmux round trip using Stop/StopFailure hook completion. Never
-    use `claude -p` or pane stability as the work protocol. If Fable/auto is
+    plus one schema-v2 delegate lifecycle round trip — `delegate init` →
+    wait-ready → `arm` → exact-byte delivery → wait-accepted → wait-terminal
+    with bounded cleanup (`codeflow doctor --check delegate-roundtrip` drives
+    the synthetic path; the live canary proves the real session) — including
+    the `cf-delegate` sibling Stop-hook preflight over the effective Stop-hook
+    set. Never use `claude -p`, bare `tmux wait-for` signalling, or pane
+    stability as the work protocol. If Fable/auto is
     unavailable, record it and canary the strongest reasoning model with
     `acceptEdits`; never select bypass on an ordinary host.
   - **Autonomy settings** — parse and inspect the effective files rather than
