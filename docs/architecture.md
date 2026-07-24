@@ -10,9 +10,10 @@
 
 A two-crate Cargo workspace that builds one binary with the scaffold embedded.
 `codeflow-core` is the engine library — all mechanics live here. `codeflow-cli`
-is a thin dispatcher: `main.rs` is a clap command surface over 16 subcommands
+is a thin dispatcher: `main.rs` is a clap command surface over 17 subcommands
 (`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
-`status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`) — most a small handler in `cmd/` that
+`status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`,
+`delegate`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
 read `assets/` from disk for instant scaffold iteration). The consuming repo is
@@ -26,20 +27,23 @@ Core modules grouped by responsibility:
 
 - **Scaffold** (`scaffold/`): `init`, `update`, manifest, 3-way merge, and the
   ownership classes below; sourced from the rust-embed asset provider.
-- **Enforcement** (`hooks/`, `security/`, `git/`, `integrate.rs`, `remote.rs`):
-  the `git-guard` and `exec-guard` PreToolUse handlers and git-client hook
-  stages, the owner-only `delegate-turn` Stop/StopFailure completion adapter,
-  the secret scanner, git conflict detection + CI wait, the flock-guarded
-  `integrate` primitive with its gate-context token, and the GitHub remote-
-  protect adapter.
+- **Enforcement** (`hooks/`, `security/`, `git/`, `delegate.rs`,
+  `integrate.rs`, `remote.rs`): the `git-guard` and `exec-guard` PreToolUse
+  handlers and git-client hook stages, the dual-mode `delegate-turn` adapter
+  (legacy `--result` record-and-signal plus the schema-v2 lifecycle backed by
+  the transport-neutral `delegate.rs` state machine — ADR-0036), the secret
+  scanner, git conflict detection + CI wait, the flock-guarded `integrate`
+  primitive with its gate-context token, and the GitHub remote-protect
+  adapter.
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity
   lint), the capability registry parser, FTS5 recall, and the cross-repo
   registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (12 checks — hooks, claude, codex, config,
-  permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift,
+  `error.rs`): the doctor check table (13 checks — hooks, claude, codex, config,
+  permissions, network, delegates, delegate-roundtrip, repo-integrity,
+  ci-perimeter, managed-drift,
   customization, test-config), including bidirectional delegate readiness
   (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive
   canaries remain outside the binary) and a sentinel-based consuming-project
@@ -118,6 +122,27 @@ interactive Codex session opens with — and re-orients after a compaction from 
 the same orientation digest Claude gets. PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
+
+Delegation has two engine surfaces. The legacy `delegate-turn --result`
+adapter writes immutable `0600` terminal evidence and signals its scoped tmux
+waiter, byte-compatible with the ADR-0023 lanes. The schema-v2 lifecycle
+(`delegate.rs`, surfaced as `codeflow delegate init|arm|wait` and
+`hook delegate-turn --state-dir`) is a transport-neutral state machine over
+write-once JSON records in an owner-only state directory outside any Git
+worktree: `init` generates task-scoped Claude hook settings binding
+SessionStart/UserPromptSubmit/Stop/StopFailure back to the hook; the host —
+not the binary — launches the harness and delivers the armed prompt bytes;
+ordinary `wait` polling is lock-free file reads with zero tmux involvement,
+while every state mutation — including poisoning an interrupted wait after
+acceptance — serializes on a single bounded run lock; a duplicate or
+digest-mismatched prompt submission is blocked (hook exit 2, run state
+preserved); and every true ambiguity (non-startup session source,
+mis-correlated terminal event, ambiguous retry, interrupt after acceptance)
+fails closed via a durable poison record. The `delegate-roundtrip` doctor
+check drives the installed binary through the full synthetic lifecycle at
+Fail severity.
+Rationale, the full invariant set, and outstanding verification gates:
+ADR-0036.
 
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite

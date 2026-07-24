@@ -236,6 +236,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Transport-neutral durable delegate lifecycle (ADR-0036).** New
+  `codeflow delegate init|arm|wait` commands and a schema-v2
+  `hook delegate-turn --state-dir` mode drive a delegated harness turn through
+  durable owner-only records — ready, armed, accepted, terminal — with SHA-256
+  prompt binding, one outstanding turn, deterministic terminal correlation,
+  and durable poisoning for session restarts, interrupts after acceptance,
+  and ambiguous retries; a duplicate or digest-mismatched prompt submission
+  is instead blocked (hook exit 2) with run state preserved. The binary
+  never launches a harness or delivers a prompt; the host keeps transport,
+  and the current event adapter is Claude hooks. Schema-v2 waiting is
+  file-polled and tmux-free, while the legacy `--result` mode is
+  byte-compatible and unchanged. State lives outside Git
+  worktrees, carries digests instead of prompt text, and fails closed on
+  native Windows (use WSL2). `codeflow doctor` gains a thirteenth,
+  Fail-severity `delegate-roundtrip` check that runs the installed binary
+  through the full synthetic lifecycle — rebuild and reinstall the CLI
+  (`cargo install --path crates/codeflow-cli`) before it can pass.
+  Sibling-Stop hook inspection, the prompt-normalization pin, live
+  `prompt_id` binding, the UI-answer canary, and broader native-platform
+  evidence remain PR1/PR2 verification gates.
 - **Native-interactive model/harness qualification (ADR-0027).** Standard/full
   scaffolds gain `/cf-evaluate-model`: stable requirement-to-source-to-case
   traceability, balanced regression/capability cases, exact disposable fixture

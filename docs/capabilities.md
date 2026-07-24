@@ -241,14 +241,17 @@ adrs: [ADR-0002, ADR-0007, ADR-0025]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs twelve health checks — hooks, Claude wiring, codex wiring, config,
-permissions, network, delegates, repo integrity, CI perimeter, managed-region
+`codeflow doctor` runs thirteen health checks — hooks, Claude wiring, codex wiring, config,
+permissions, network, delegates, delegate round-trip, repo integrity, CI
+perimeter, managed-region
 drift, consuming-project customization, and test config. The customization
 check remains quiet for minimal/non-method repos, warns while product,
 architecture, or AGENTS sentinels remain, and points to `/cf-customize`. The
 delegates check inspects both directions:
 Codex auth/MCP, Claude plugin/MCP, and tmux; it explicitly leaves live
-interactive account/tool canaries to the harness (ADR-0023).
+interactive account/tool canaries to the harness (ADR-0023). The
+delegate-roundtrip check drives the installed binary through a synthetic
+schema-v2 lifecycle (CAP-014) and fails when any transition breaks.
 
 ## CAP-009 — cross-vendor-delegation
 
@@ -271,7 +274,10 @@ the interactive `claude` CLI driven via task-scoped tmux, with Stop and
 StopFailure hook completion rather than pane stability. The
 `codeflow hook delegate-turn` adapter validates a unique run and private path,
 writes immutable `0600` terminal evidence, and signals only its scoped waiter;
-exact retries recover signalling without rewriting. Headless task execution
+exact retries recover signalling without rewriting. The transport-neutral
+schema-v2 lifecycle (CAP-014, ADR-0036) is this adapter's file-polled
+successor under verification; the legacy `--result` mode described here
+remains byte-compatible until a later major release. Headless task execution
 (`codex exec`, `claude -p`) is prohibited; the earlier headless tier and the
 Antigravity `agy` delegate tier (headless-only) are retired. It ships as the
 `cf-delegate` and `cf-consult` skills (mirrored to `.agents/skills`), and an
@@ -476,3 +482,60 @@ validity and grader findings, complete full-suite evidence, and explicit human
 approval. Token/latency improvements are diagnostics and never compensate for
 lost behavior. The feature adds no CLI subcommand, model runtime, headless peer
 execution, CI model call, or generic cleanup surface (ADR-0027).
+
+## CAP-014 — transport-neutral-delegate-lifecycle
+
+```yaml
+id: CAP-014
+name: transport-neutral-delegate-lifecycle
+area: engine
+status: building
+verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "cargo test doctor::tests::test_delegate_roundtrip"]
+epics: []
+adrs: [ADR-0036]
+```
+
+`codeflow delegate init|arm|wait` plus the schema-v2 `hook delegate-turn
+--state-dir` mode drive a delegated harness turn through durable, owner-only
+protocol records instead of tmux signalling. The binary never launches a
+harness or delivers a prompt — host delivery stays outside CodeFlow; the
+current event adapter is Claude hooks, and the legacy `--result` mode
+(CAP-009) remains byte-compatible.
+
+The operational sequence: `init` creates the `0700` state directory (which
+must sit outside any Git worktree) and prints the path of the task-scoped
+Claude settings it generates, wiring SessionStart, UserPromptSubmit, Stop,
+and StopFailure back to the hook. The host launches the harness with those
+settings and the caller runs `wait --until ready` (a `startup` SessionStart;
+any other source — resume, clear, compact, fork — poisons the run). `arm`
+records one turn as the SHA-256 of the exact prompt bytes (≤ 1 MiB); the
+host must deliver exactly those bytes, and acceptance requires a
+session-bound `UserPromptSubmit` whose hook-payload prompt matches the
+digest — whether harness delivery reaches the hook byte-exact is the open
+U4 normalization pin. `wait --until terminal`
+returns the turn's result record on stdout — Stop with the bounded assistant
+message, or StopFailure with bounded error payloads — after which the host
+consumes it and removes the state directory. Request and acceptance records
+carry digests and identifiers, never the prompt text itself.
+
+The exit contract is stable: `wait` exits 0 on the observed state (terminal
+completed), 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
+run, 124 on timeout, and 130 when interrupted — an interrupt after
+acceptance poisons the run; the hook exits 2 to make the harness block a
+rejected prompt submission and exits 1 on other failures; `init`/`arm` exit
+0 or 1. Every command must reuse
+the exact state-directory path string given to `init` — run binding
+regenerates the task settings and requires exact equality with the stored
+ones — and every state mutation serializes on a single run lock with bounded
+(one-second) acquisition. `prompt_id` is
+validated and must agree across acceptance and terminal records; a session
+without one takes the recorded pre-2.1.196 compatibility path, limited to a
+single turn. Native Windows fails closed (use WSL2). Poison is durable and
+write-once; recovery is a new run in a fresh directory.
+
+Status is building: the engine surface and its unit/CLI/doctor tests landed,
+and the `delegate-roundtrip` doctor check requires the rebuilt CLI to be
+installed before it can pass. Sibling-Stop hook-source inspection (U1), the
+prompt-normalization pin (U4), live `Stop.prompt_id` binding (U5), the
+UI-answer fail-closed canary, and broader native-platform evidence remain
+PR1/PR2 verification gates and are not claimed complete.

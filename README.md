@@ -82,7 +82,7 @@ ordinary task execution and adds no model-running CLI command.
 |---|---|
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
 | `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
-| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`) |
+| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate; `test setup` safely detects root stacks, lists/applies embedded templates, or appends explicit targets |
@@ -90,12 +90,13 @@ ordinary task execution and adds no model-running CLI command.
 | `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
-| `doctor` | Health checks (12): hooks, claude, codex, config, permissions, network, delegates, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
+| `doctor` | Health checks (13): hooks, claude, codex, config, permissions, network, delegates, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
 | `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
 | `remote` | Remote provider operations (branch protection) |
 | `epic new` | Allocate the next `EPC-NNN` and scaffold the epic from the template |
 | `task new` | Allocate the next `TSK-NNN-MMM` under an epic and scaffold it |
+| `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal — the host launches the harness and delivers the prompt (ADR-0036) |
 
 `codeflow test setup` with no options detects only stack markers at the project
 root and fills an absent or empty config; it never replaces a populated or
