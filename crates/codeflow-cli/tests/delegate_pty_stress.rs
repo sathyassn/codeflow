@@ -177,6 +177,8 @@ impl FakeTui {
         writer.write_all(PASTE_START).expect("write paste start");
         writer.write_all(bytes).expect("write prompt");
         writer.write_all(PASTE_END).expect("write paste end");
+        writer.flush().expect("flush literal paste");
+        thread::sleep(Duration::from_millis(25));
         for _ in 0..enter_count {
             writer.write_all(b"\r").expect("write Enter");
         }
@@ -259,7 +261,7 @@ fn parse_json(output: &Output) -> Value {
 }
 
 #[test]
-fn delayed_lifecycle_preserves_unicode_crlf_multiline_and_large_prompts() {
+fn delayed_lifecycle_preserves_unicode_lf_multiline_and_large_prompts() {
     let fixture = LifecycleFixture::new("special-inputs");
     let started = Instant::now();
     let mut tui = FakeTui::spawn(&fixture, "delay-ready-and-accept", 3);
@@ -272,7 +274,7 @@ fn delayed_lifecycle_preserves_unicode_crlf_multiline_and_large_prompts() {
         "naïve café — नमस्ते — e\u{301}\nsecond line"
             .as_bytes()
             .to_vec(),
-        b"first\r\nsecond\r\nthird\n".to_vec(),
+        b"first\nsecond\nthird".to_vec(),
         vec![b'x'; 1024 * 1024],
     ];
     for (index, prompt) in prompts.iter().enumerate() {
@@ -288,6 +290,43 @@ fn delayed_lifecycle_preserves_unicode_crlf_multiline_and_large_prompts() {
     }
 
     tui.finish(true);
+}
+
+#[test]
+fn arm_rejects_noncanonical_line_endings_before_delivery() {
+    for (label, prompt) in [
+        ("reject-crlf", b"first\r\nsecond".as_slice()),
+        ("reject-terminal-lf", b"first\nsecond\n".as_slice()),
+    ] {
+        let fixture = LifecycleFixture::new(label);
+        let prompt_path = fixture.root.path().join("turn-1.prompt");
+        std::fs::write(&prompt_path, prompt).expect("write line-ending fixture");
+        let output = run_codeflow(&[
+            "delegate",
+            "arm",
+            "--run-id",
+            &fixture.run_id,
+            "--state-dir",
+            fixture.state.to_str().expect("utf8 state path"),
+            "--turn-id",
+            "turn-1",
+            "--prompt-file",
+            prompt_path.to_str().expect("utf8 prompt path"),
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("canonical UTF-8 text"),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            std::fs::read_dir(fixture.state.join("turns"))
+                .expect("read turns")
+                .next()
+                .is_none(),
+            "rejected prompt created durable turn state"
+        );
+    }
 }
 
 #[test]
@@ -681,17 +720,26 @@ impl FrameReader {
 
     fn next(&mut self) -> std::io::Result<Vec<u8>> {
         let mut started = false;
+        let mut pasted = None;
         loop {
-            if !started {
+            if !started && pasted.is_none() {
                 if let Some(position) = find_bytes(&self.pending, PASTE_START) {
                     self.pending.drain(..position + PASTE_START.len());
                     started = true;
                 }
             }
-            if started {
+            if started && pasted.is_none() {
                 if let Some(position) = find_bytes(&self.pending, PASTE_END) {
-                    let frame = self.pending[..position].to_vec();
+                    pasted = Some(self.pending[..position].to_vec());
                     self.pending.drain(..position + PASTE_END.len());
+                }
+            }
+            if self
+                .pending
+                .first()
+                .is_some_and(|byte| *byte == b'\r' || *byte == b'\n')
+            {
+                if let Some(frame) = pasted.take() {
                     while self
                         .pending
                         .first()
@@ -708,7 +756,7 @@ impl FrameReader {
             if count == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
-                    "PTY closed before a complete paste frame",
+                    "PTY closed before a pasted frame was submitted with Enter",
                 ));
             }
             self.pending.extend_from_slice(&chunk[..count]);

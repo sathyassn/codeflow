@@ -15,10 +15,13 @@ Every native session declares one role:
 - `worker` — a bounded native subtask seat owned by its primary; it cannot
   approve the plan or replace a named reviewer.
 
-Only `host` invokes `cf-model-orchestrator`. Peer and worker prompts explicitly
-forbid nested orchestration. A non-Claude/Codex harness normally hands the whole
-repository task to one native CodeFlow host instead of becoming an outer host
-around a second inner duo.
+Only `host` invokes `cf-model-orchestrator`. The first line of every
+cross-harness task declares `ROLE: peer` or `ROLE: worker`; the prompt limits
+the session to that bounded assignment and explicitly forbids starting the
+top-level orchestrator or delegating back to the host lineage. A generic
+same-lineage subagent cannot satisfy a named cross-lineage assignment. A
+non-Claude/Codex harness normally hands the whole repository task to one native
+CodeFlow host instead of becoming an outer host around a second inner duo.
 
 ## Assignment record
 

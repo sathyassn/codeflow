@@ -812,6 +812,22 @@ fn worktree_and_provenance_canaries_pin_doctrine() {
                     "completion_signal_treated_as_result",
                 ][..],
             ),
+            (
+                "cross-harness-dispatch-declares-bounded-role",
+                &[
+                    "dispatch_starts_with_role_peer",
+                    "bounded_assignment_declared",
+                    "top_level_orchestrator_prohibited",
+                    "delegation_back_to_host_prohibited",
+                    "native_codex_thread_required",
+                ][..],
+                &[
+                    "generic_claude_subagent_substitution",
+                    "nested_duo",
+                    "unbounded_delegation",
+                    "relay_credited_as_codex",
+                ][..],
+            ),
         ],
     );
 

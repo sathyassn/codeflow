@@ -141,8 +141,8 @@ mis-correlated terminal event, ambiguous retry, interrupt after acceptance)
 fails closed via a durable poison record. The `delegate-roundtrip` doctor
 check drives the installed binary through the full synthetic lifecycle at
 Fail severity.
-Rationale, the full invariant set, and outstanding verification gates:
-ADR-0036.
+Rationale, the full invariant set, and the canonical prompt-boundary amendment:
+ADR-0036 and ADR-0037.
 
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite

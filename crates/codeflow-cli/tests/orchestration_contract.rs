@@ -69,7 +69,9 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "is reassignment: create Plan vN+1",
         "same-seat high→xhigh escalation",
         "A model cannot independently review its own authored unit",
-        "Peer and worker prompts explicitly forbid nested orchestration",
+        "The first line of every cross-harness task declares",
+        "delegating back to the host lineage",
+        "generic same-lineage subagent cannot satisfy",
     ] {
         assert!(
             routing.contains(required),
@@ -250,7 +252,8 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "replace `high` with `xhigh`",
         "/codex:rescue --effort high",
         "do not inherit an unobserved user default",
-        "--settings '{\"autoMode\":{\"classifyAllShell\":true}}'",
+        "Make `autoMode.classifyAllShell` effective at user scope",
+        "repeated `--settings` flags are not a supported merge contract",
         "Never fall through to bypass mode on an ordinary host",
         "session in auto mode under the same fail-closed sandbox",
         "not plan or bypass",

@@ -492,7 +492,7 @@ area: engine
 status: building
 verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md"]
 epics: [EPC-002]
-adrs: [ADR-0036]
+adrs: [ADR-0036, ADR-0037]
 ```
 
 `codeflow delegate init|arm|wait` plus the schema-v2 `hook delegate-turn
@@ -508,11 +508,12 @@ Claude settings it generates, wiring SessionStart, UserPromptSubmit, Stop,
 and StopFailure back to the hook. The host launches the harness with those
 settings and the caller runs `wait --until ready` (a `startup` SessionStart;
 any other source — resume, clear, compact, fork — poisons the run). `arm`
-records one turn as the SHA-256 of the exact prompt bytes (≤ 1 MiB); the
-host must deliver exactly those bytes, and acceptance requires a
-session-bound `UserPromptSubmit` whose hook-payload prompt matches the
-digest — whether harness delivery reaches the hook byte-exact is the open
-U4 normalization pin. `wait --until terminal`
+accepts canonical UTF-8 text with internal LF line endings, no terminal line
+break, and no NUL bytes, then records one turn as the SHA-256 of those exact
+prompt bytes (≤ 1 MiB). The
+host delivers that same file after a bounded input-settle, and acceptance
+requires a session-bound `UserPromptSubmit` whose hook-payload prompt matches
+the digest. `wait --until terminal`
 returns the turn's result record on stdout — Stop with the bounded assistant
 message, or StopFailure with bounded error payloads — after which the host
 consumes it and removes the state directory. Request and acceptance records

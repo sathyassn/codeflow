@@ -114,6 +114,16 @@
       "expected": {"routes": ["bounded_peer_assignment"], "signals": ["peer_role_recognized", "nested_orchestration_rejected", "evidence_returned_to_host"], "references": [], "must_not": ["invoke_nested_duo", "create_outer_host", "delegate_unbounded_task"]}
     },
     {
+      "id": "cross-harness-dispatch-declares-bounded-role",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "planning-brief",
+      "requirements": ["CF-MM-011", "CF-MM-013"],
+      "prompt": "Draft the exact first lines of the bounded prompt a Claude host should send through the official Codex plugin for an independent T3 review. Explain what native evidence must return.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-delegate"], "signals": ["dispatch_starts_with_role_peer", "bounded_assignment_declared", "top_level_orchestrator_prohibited", "delegation_back_to_host_prohibited", "native_codex_thread_required"], "references": [], "must_not": ["generic_claude_subagent_substitution", "nested_duo", "unbounded_delegation", "relay_credited_as_codex"]}
+    },
+    {
       "id": "reject-overengineered-correct-change",
       "kind": "regression",
       "category": "code_quality",

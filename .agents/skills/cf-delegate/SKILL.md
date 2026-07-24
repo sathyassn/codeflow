@@ -98,6 +98,13 @@ The plugin's commands cover both modes:
 - **Multi-round:** `/codex:transfer` — a persistent codex thread for the
   back-and-forth; follow-ups resume it instead of starting fresh.
 
+Start every delegated plugin prompt with an explicit bounded role, for example
+`ROLE: peer. Complete only this bounded assignment. Do not start the top-level
+model orchestrator or delegate back to the host lineage (Claude).` Use `worker` instead of `peer`
+only for a primary-owned subtask. A generic Claude subagent is not a Codex
+delegate, and a native Codex thread that recursively starts another duo has
+violated the assignment rather than completed it.
+
 Invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat
 directly at high effort by default. Escalate the primary to xhigh only for
 capability-sensitive or long-horizon work, material ambiguity, cross-cutting
@@ -133,6 +140,7 @@ tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
 codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
 tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
+sleep 0.3  # bounded TUI input-settle; this is not completion detection
 tmux send-keys -t cf-run-42 Enter
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --turn-id turn-1 --timeout-seconds 120
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
@@ -144,8 +152,12 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
   `StopFailure` to `codeflow hook delegate-turn --state-dir`. The generated
   settings file is **immutable** — every later call revalidates it against
   exactly (run id, state-dir spelling) and rejects any difference. Arming
-  records the SHA-256 of the exact prompt bytes; delivery must be exact-byte
-  (buffer paste plus a separate Enter); acceptance and terminal records bind
+  records the SHA-256 of canonical UTF-8 prompt bytes with internal LF line
+  endings, no terminal line break, and no NUL bytes; `arm` rejects other input
+  before durable turn state is created. Normalize once before arming, then
+  deliver that same file exactly
+  (buffer paste, a bounded 300 ms input-settle, then one separate Enter);
+  acceptance and terminal records bind
   session and `prompt_id`. Waits are bounded with stable exit states —
   `0` observed (a completed terminal prints the result JSON), `10` failed
   terminal, `11` poison/unsafe, `124` timeout, `130` interrupt. Restarts,
@@ -169,7 +181,9 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
   and only for bounded diagnosis when a wait times out or a result is
   malformed, or to answer an explicit in-turn dialog. Never enumerate or
   capture unrelated tmux sessions; they may contain secrets or other users'
-  work.
+  work. If acceptance times out and the dedicated pane explicitly shows the
+  paste attachment still waiting in the input editor, send Enter once more and
+  re-wait once. Never issue blind or repeated Enter retries.
 - **Effective autonomy is layered:** invoke the latest available Fable-class
   model directly at high by default, or xhigh for capability-sensitive,
   long-horizon, materially ambiguous, cross-cutting architecture/security,
@@ -178,9 +192,10 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
   collection or Opus high for ambiguous/multi-step tool operation; Fable
   interprets the evidence and owns the judgment. Launch with the selected
   effort, `--permission-mode auto`, and the generated task settings; make
-  `autoMode.classifyAllShell` effective at user or CLI scope (Claude ignores
-  it at project scope, and the generated file carries only the lifecycle
-  hooks). Require the effective project settings to keep the OS sandbox
+  `autoMode.classifyAllShell` effective at user scope (Claude ignores it at
+  project scope, and repeated `--settings` flags are not a supported merge
+  contract; the generated task file carries only the lifecycle hooks). Require
+  the effective project settings to keep the OS sandbox
   enabled, set `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
   installed tool that requires host state. Arbitrary unsandboxed commands

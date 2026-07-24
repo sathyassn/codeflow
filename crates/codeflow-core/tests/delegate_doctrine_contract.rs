@@ -61,7 +61,7 @@ fn assert_ordered(relative: &str, markers: &[&str]) {
 }
 
 const LIFECYCLE_ARROW: &str =
-    "`delegate init` → wait-ready → `arm` → exact-byte delivery → wait-accepted → wait-terminal";
+    "`delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal";
 
 #[test]
 fn lifecycle_sequence_is_ordered_across_delegate_assets() {
@@ -117,6 +117,42 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
             "stable exit states",
         ],
     );
+}
+
+#[test]
+fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
+    for asset in [DELEGATE_SKILL, ADAPTER] {
+        assert_contains(
+            asset,
+            &[
+                "UTF-8",
+                "internal LF line endings",
+                "no terminal line break",
+                "no NUL bytes",
+                "300 ms",
+                "send Enter once more",
+                "Never",
+                "repeated Enter",
+            ],
+        );
+    }
+    for asset in [DELEGATE_SKILL, ADAPTER, ORCHESTRATOR, CONSULT] {
+        assert_contains(asset, &["user scope"]);
+        assert!(
+            !read(asset).contains("user or CLI scope"),
+            "{asset} incorrectly promises lifecycle settings composition through repeated CLI flags"
+        );
+    }
+}
+
+#[test]
+fn every_cross_harness_dispatch_declares_a_bounded_role() {
+    for asset in [DELEGATE_SKILL, ORCHESTRATOR, CONSULT, ROUTING] {
+        assert_contains(asset, &["ROLE: peer", "top-level", "host lineage"]);
+    }
+    for asset in [DELEGATE_SKILL, ORCHESTRATOR, ROUTING] {
+        assert_contains(asset, &["generic", "subagent"]);
+    }
 }
 
 #[test]

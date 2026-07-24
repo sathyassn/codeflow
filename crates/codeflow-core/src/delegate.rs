@@ -207,7 +207,8 @@ pub fn init(run_id: &str, state_dir: &Path) -> Result<PathBuf, DelegateError> {
 ///
 /// Returns an error when the run is invalid or poisoned, another turn is
 /// outstanding, the compatibility session has already been used, the prompt
-/// is too large, or the durable request cannot be committed safely.
+/// is not canonical UTF-8/LF text, is too large, or the durable request cannot
+/// be committed safely.
 pub fn arm(
     run_id: &str,
     state_dir: &Path,
@@ -223,6 +224,7 @@ pub fn arm(
             "prompt exceeds the {MAX_PROMPT_BYTES}-byte limit"
         )));
     }
+    validate_prompt_bytes(prompt)?;
     let _lock = acquire_run_lock(state_dir)?;
     validate_run_binding(run_id, state_dir)?;
     ensure_not_poisoned(run_id, state_dir)?;
@@ -268,6 +270,20 @@ pub fn arm(
         prompt_sha256: hex_sha256(prompt),
     };
     install_json(&current_turn_dir.join("request.json"), &record)
+}
+
+fn validate_prompt_bytes(prompt: &[u8]) -> Result<(), DelegateError> {
+    let text = std::str::from_utf8(prompt).map_err(|_| {
+        DelegateError::invalid(
+            "delegate prompt must be canonical UTF-8 text with internal LF line endings, no terminal line break, and no NUL bytes; normalize it before arm",
+        )
+    })?;
+    if prompt.contains(&b'\r') || prompt.contains(&b'\0') || text.ends_with('\n') {
+        return Err(DelegateError::invalid(
+            "delegate prompt must be canonical UTF-8 text with internal LF line endings, no terminal line break, and no NUL bytes; normalize it before arm",
+        ));
+    }
+    Ok(())
 }
 
 /// Process one Claude hook event in schema-v2 state mode.
@@ -1710,6 +1726,22 @@ mod tests {
         arm("run-1", &path, "turn-1", b"hello").unwrap();
         let error = arm("run-1", &path, "turn-2", b"other").unwrap_err();
         assert!(error.message.contains("still outstanding"));
+    }
+
+    #[test]
+    fn arm_rejects_prompt_bytes_the_interactive_tui_cannot_preserve() {
+        for prompt in [
+            b"first\r\nsecond".as_slice(),
+            b"terminal line break\n".as_slice(),
+            b"embedded\0nul".as_slice(),
+            b"\xffinvalid".as_slice(),
+        ] {
+            let (_temp, path) = state();
+            let error = arm("run-1", &path, "turn-1", prompt).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Invalid);
+            assert!(error.message.contains("canonical UTF-8 text"));
+            assert!(inspect_turns("run-1", &path).unwrap().is_empty());
+        }
     }
 
     #[test]

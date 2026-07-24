@@ -17,7 +17,10 @@ independent.
 1. Frame the ask: state exactly what to review (paths, diff, or question) and
    the criteria to judge against, and ask for an explicit closing verdict line
    (`VERDICT: approved|changes_requested`) so the reply is checkable. Do your
-   own analysis first — the consult sharpens it, it does not replace it.
+   own analysis first — the consult sharpens it, it does not replace it. Start
+   the delegated prompt with `ROLE: peer`, bound it to this consult, and
+   explicitly prohibit starting the top-level orchestrator or delegating back
+   to the host lineage.
 2. Pick the lane by your seat:
    - **From Claude Code → codex**, through the official `codex-plugin-cc`
      plugin: `/codex:review` is the diff/design read (read-only;
@@ -25,8 +28,9 @@ independent.
      `/codex:*` commands exist and `codex login status` exits 0.
    - **From codex → claude**, by driving the interactive `claude` CLI in a
      dedicated, worktree-scoped tmux session through CodeFlow's schema-v2
-     delegate lifecycle: `delegate init` → wait-ready → `arm` → exact-byte
-     delivery → wait-accepted → wait-terminal, with bounded cleanup
+     delegate lifecycle: `delegate init` → wait-ready → `arm` → canonical
+     UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal,
+     with bounded cleanup
      (CodeFlow ADR-0036; the `cf-delegate` skill carries the full contract).
      Run the sibling Stop-hook preflight from `cf-delegate` before delivery.
      Consume `last_assistant_message` from the terminal result record and
@@ -39,8 +43,8 @@ independent.
      `claude --model fable --effort high --permission-mode auto --settings
      <state-dir>/settings.json` (replace `high` with `xhigh` when escalating);
      the generated settings file carries only the lifecycle hooks and is
-     immutable — make `autoMode.classifyAllShell` effective at user or CLI
-     scope. Keep "read and
+     immutable — make `autoMode.classifyAllShell` effective at user scope.
+     Keep "read and
      reason only; edit nothing" in the prompt, require the effective project
      settings to enable the OS sandbox with `sandbox.failIfUnavailable: true`
      and permits an auto-classified unsandboxed retry only for a trusted

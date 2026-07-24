@@ -21,8 +21,9 @@ transcripts, and it makes zero tmux calls — waiting is pure file polling.
    (run id, state-dir spelling) and rejects any difference as unsafe. Never
    edit it or merge other keys into it. Select auto mode with
    `--permission-mode auto` and make `autoMode.classifyAllShell` effective at
-   user or CLI scope — Claude ignores it at project scope — then prove the
-   composed boundary with the preflight canary.
+   user scope — Claude ignores it at project scope, and repeated `--settings`
+   flags are not a supported composition mechanism — then prove the composed
+   boundary with the preflight canary.
 
 ## Sibling Stop-hook preflight
 
@@ -52,6 +53,7 @@ codeflow delegate arm --run-id run-42 --state-dir "$STATE" \
   --turn-id turn-1 --prompt-file "$RUN_TMP/turn-1.prompt"
 tmux load-buffer -b cf-run-42-turn-1 "$RUN_TMP/turn-1.prompt"
 tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
+sleep 0.3  # bounded TUI input-settle; not a completion heuristic
 tmux send-keys -t cf-run-42 Enter
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until accepted --turn-id turn-1 --timeout-seconds 120
@@ -61,12 +63,19 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
 
 Invoke the latest available Fable-class model directly at high, or xhigh on
 the escalation triggers in `cf-model-orchestrator`. Delivery must be
-**exact-byte**: arm records the SHA-256 of the prompt file's bytes, and
-acceptance requires a `UserPromptSubmit` whose prompt matches that digest —
-so deliver the same file through a uniquely named tmux buffer with a literal
-paste into the exact pane and a separate Enter. A mismatched, unarmed, or
-duplicate submission is blocked at the harness (hook exit 2) with run state
-preserved. Prompts are capped at 1 MiB.
+**exact-byte after one canonicalization boundary**: the prompt file must
+already be UTF-8 text with internal LF line endings, no terminal line break,
+and no NUL bytes. `arm` rejects noncanonical input before creating durable turn
+state, then records the
+SHA-256 of the accepted file bytes. Deliver that same file through a uniquely
+named tmux buffer with a literal paste into the exact pane, wait a bounded
+300 ms for the TUI to attach it, and send one separate Enter. Acceptance
+requires a `UserPromptSubmit` whose prompt matches the digest. If acceptance
+times out, inspect only the dedicated pane; when it explicitly shows the paste
+attachment still waiting in the editor, send Enter once more and re-wait once.
+Never send blind or repeated Enter retries. A mismatched, unarmed, or duplicate
+submission is blocked at the harness (hook exit 2) with run state preserved.
+Prompts are capped at 1 MiB.
 
 ## Stable exit states
 

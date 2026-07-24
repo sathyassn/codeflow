@@ -59,9 +59,10 @@ Then verify and **offer** remediation — never install silently.
     authenticated interactive Fable-class high and xhigh TTY canaries in auto
     mode with `autoMode.classifyAllShell: true` supplied through `--settings`,
     plus one schema-v2 delegate lifecycle round trip — `delegate init` →
-    wait-ready → `arm` → exact-byte delivery → wait-accepted → wait-terminal
-    with bounded cleanup (`codeflow doctor --check delegate-roundtrip` drives
-    the synthetic path; the live canary proves the real session) — including
+    wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery →
+    wait-accepted → wait-terminal with bounded cleanup (`codeflow doctor
+    --check delegate-roundtrip` drives the synthetic path; the live canary
+    proves the real session) — including
     the `cf-delegate` sibling Stop-hook preflight over the effective Stop-hook
     set. Never use `claude -p`, bare `tmux wait-for` signalling, or pane
     stability as the work protocol. If Fable/auto is
@@ -76,9 +77,9 @@ Then verify and **offer** remediation — never install silently.
       destinations denied, destructive/privileged operations asked or
       classified, secret reads denied, and the shipped raw Anthropic/OpenAI/AWS
       variables absent from sandboxed Bash. Claude ignores project
-      `defaultMode: auto` and `autoMode`, so offer the user-level setting or
-      select auto plus `classifyAllShell` through CLI `--settings`, then prove
-      both with a live canary.
+      `defaultMode: auto` and `autoMode`, so use the user-level setting for a
+      lifecycle session (its one immutable CLI settings file carries the
+      hooks), then prove the composed boundary with a live canary.
     - `.codex/config.toml`: `default_permissions` selects the guarded workspace
       profile, no legacy `sandbox_mode` shadows it, public network and live web
       search are enabled, and `on-request` approvals route eligible requests to
@@ -140,9 +141,11 @@ or outward action. The fixes:
 - Claude auto mode unavailable → show the failed capability check; use
   `acceptEdits` with the fail-closed project sandbox for this run. Do not write
   `defaultMode: auto` into `.claude/settings.json`—Claude ignores it at project
-  scope. Offer the user-level setting only with approval. For an interactive
-  peer run, pass `--settings '{"autoMode":{"classifyAllShell":true}}'` so the
-  classifier setting is effective without changing global configuration.
+  scope. Offer the user-level setting only with approval. A lifecycle peer run
+  already uses its one immutable CLI settings file for hooks, so repeated
+  `--settings` flags are not a supported composition mechanism; when user-scope
+  auto is absent, use the documented `acceptEdits` fallback and record the
+  reduced autonomy.
 - a tool needs a credential → prefer its OAuth/keychain/app connector or MCP
   authentication. For Claude CLI subprocesses that require an environment
   token, offer user/CLI-level credential masking with an exact `injectHosts`

@@ -67,6 +67,10 @@ fn make_ready(state: &Path) {
 }
 
 fn arm(state: &Path, turn: &str, prompt: &str) -> Output {
+    arm_bytes(state, turn, prompt.as_bytes())
+}
+
+fn arm_bytes(state: &Path, turn: &str, prompt: &[u8]) -> Output {
     let prompt_file = state.parent().unwrap().join(format!("{turn}.txt"));
     std::fs::write(&prompt_file, prompt).unwrap();
     run(codeflow()
@@ -74,6 +78,26 @@ fn arm(state: &Path, turn: &str, prompt: &str) -> Output {
         .arg(state)
         .args(["--turn-id", turn, "--prompt-file"])
         .arg(prompt_file))
+}
+
+#[test]
+fn arm_rejects_noncanonical_prompt_files_before_creating_turn_state() {
+    for (turn, prompt) in [
+        ("crlf", b"first\r\nsecond".as_slice()),
+        ("terminal-lf", b"terminal line break\n".as_slice()),
+        ("nul", b"embedded\0nul".as_slice()),
+        ("invalid-utf8", b"\xffinvalid".as_slice()),
+    ] {
+        let (_temp, state) = initialized();
+        let output = arm_bytes(&state, turn, prompt);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("canonical UTF-8 text"),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!state.join("turns").join(turn).exists());
+    }
 }
 
 fn wait(state: &Path, turn: Option<&str>, until: &str, seconds: &str) -> Output {

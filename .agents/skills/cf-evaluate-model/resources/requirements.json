@@ -90,10 +90,10 @@
     {
       "id": "CF-MM-011",
       "level": "hard",
-      "statement": "Exactly one host owns top-level orchestration; peer and worker sessions declare their bounded role and cannot recursively start another duo.",
+      "statement": "Exactly one host owns top-level orchestration; every cross-harness task starts with an explicit peer or worker role, stays bounded, forbids delegating back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**One orchestration owner.**", "Only the host runs this top-level flow", "never starts a nested duo"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Every native session declares one role", "Peer and worker prompts explicitly forbid nested orchestration"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**One orchestration owner.**", "Only the host runs this top-level flow", "the first line of every cross-harness task declares", "generic same-lineage subagent never satisfies"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Every native session declares one role", "The first line of every cross-harness task declares", "delegating back to the host lineage", "generic same-lineage subagent cannot satisfy"]}
       ]
     },
     {

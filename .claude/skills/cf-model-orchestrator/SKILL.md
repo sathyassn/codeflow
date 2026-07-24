@@ -122,8 +122,11 @@ Never simulate a missing vendor with another host-model instance.
 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
    non-goals. If any are missing, run the `cf-plan` clarity gate first.
 2. Identify the active host and required lane from the matrix. Set the current
-   session role to `host`; every delegated prompt declares `peer` or `worker`
-   and prohibits recursive orchestration.
+   session role to `host`; the first line of every cross-harness task declares
+   `ROLE: peer` or `ROLE: worker`, limits the task to that bounded assignment,
+   and explicitly prohibits starting the top-level orchestrator or delegating
+   back to the host lineage. A generic same-lineage subagent never satisfies
+   the named cross-lineage assignment.
 3. Verify command and tool readiness:
    - Codex: `codex` is present, `codex login status` succeeds, and
      `codex mcp list` shows the tools required by the task.
@@ -137,14 +140,16 @@ Never simulate a missing vendor with another host-model instance.
      applies; do not inherit an unobserved user default.
    - Codex-host lane: choose Fable high/xhigh by the invariant above, then start
      Claude directly in a dedicated tmux session rooted at the worktree with
-     `--model fable --effort high --permission-mode auto
-     --settings '{"autoMode":{"classifyAllShell":true}}'` and complete one
-     scoped interactive canary. The explicit CLI settings scope makes every
-     shell action reach the auto-mode classifier; Claude intentionally ignores
-     `autoMode` from repository settings. Delegated work turns then run
+     `--model fable --effort high --permission-mode auto --settings
+     <state-dir>/settings.json` and complete one scoped interactive canary.
+     Make `autoMode.classifyAllShell` effective at user scope; Claude
+     intentionally ignores it from repository settings, and repeated
+     `--settings` flags are not a supported merge contract. Delegated work then
+     runs
      through the schema-v2 delegate lifecycle — `delegate init` → wait-ready →
-     `arm` → exact-byte delivery → wait-accepted → wait-terminal with bounded
-     cleanup — using the generated immutable hook settings and the
+     `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted →
+     wait-terminal with bounded cleanup — using the generated immutable hook
+     settings and the
      `cf-delegate` sibling Stop-hook preflight. If Fable or auto mode is
      unavailable, record the exact capability gap and use the strongest
      supported Claude reasoning model with `acceptEdits` plus the same
@@ -152,7 +157,7 @@ Never simulate a missing vendor with another host-model instance.
      applies. Never fall through to bypass mode on an ordinary host.
 4. Verify the autonomy boundary through the effective settings, not prose:
    - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
-     autonomy, raw-secret denies, and CLI/user-scope auto + `classifyAllShell`.
+     autonomy, raw-secret denies, and user-scope auto + `classifyAllShell`.
      Only a trusted installed tool may receive one classified unsandboxed retry;
      arbitrary unsandboxed commands remain out of bounds.
    - Codex: require the named profile, no competing legacy `sandbox_mode`,
