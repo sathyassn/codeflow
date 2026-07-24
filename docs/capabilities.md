@@ -234,7 +234,7 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001]
+epics: [EPC-001, EPC-002]
 adrs: [ADR-0002, ADR-0007, ADR-0025]
 ```
 
@@ -261,7 +261,7 @@ name: cross-vendor-delegation
 area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "docs/verification/host-neutral-duo-canary-2026-07-15.md"]
-epics: []
+epics: [EPC-002]
 adrs: [ADR-0005, ADR-0018, ADR-0023]
 ```
 
@@ -296,7 +296,7 @@ name: duo-model-orchestration
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
-epics: []
+epics: [EPC-002]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035]
 ```
 
@@ -491,7 +491,7 @@ name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
 verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md"]
-epics: []
+epics: [EPC-002]
 adrs: [ADR-0036]
 ```
 
@@ -516,14 +516,16 @@ U4 normalization pin. `wait --until terminal`
 returns the turn's result record on stdout — Stop with the bounded assistant
 message, or StopFailure with bounded error payloads — after which the host
 consumes it and removes the state directory. Request and acceptance records
-carry digests and identifiers, never the prompt text itself.
+carry digests and identifiers, never the prompt text itself. Raw schema-v2
+hook input is capped at 32 MiB before parsing, in addition to the smaller
+decoded-field limits.
 
 The exit contract is stable: `wait` exits 0 on the observed state (terminal
 completed), 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
 run, 124 on timeout, and 130 when interrupted — an interrupt after
 acceptance poisons the run; the hook exits 2 to make the harness block a
-rejected prompt submission and exits 1 on other failures; `init`/`arm` exit
-0 or 1. Every command must reuse
+rejected prompt submission or any unreadable/oversized schema-v2 input, and
+exits 1 on other failures; `init`/`arm` exit 0 or 1. Every command must reuse
 the exact state-directory path string given to `init` — run binding
 regenerates the task settings and requires exact equality with the stored
 ones — and every state mutation serializes on a single run lock with bounded

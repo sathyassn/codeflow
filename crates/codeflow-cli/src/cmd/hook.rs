@@ -21,6 +21,10 @@ use codeflow_core::hooks::{
     delegate_turn, exec_guard, git_guard, orient, policy::Policy, session_summary,
 };
 
+// Large enough for the maximum decoded terminal message even when every byte
+// uses JSON's longest escape, while still bounding allocation before parsing.
+const MAX_SCHEMA_HOOK_INPUT_BYTES: usize = 32 * 1024 * 1024;
+
 /// Which Claude-layer hook to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum HookName {
@@ -61,10 +65,23 @@ pub struct HookArgs {
 /// Run the hook; returns the process exit code.
 #[must_use]
 pub fn run(args: &HookArgs) -> i32 {
-    let mut stdin = String::new();
-    // Hooks always receive a JSON payload on stdin; an unreadable stream is
-    // treated as empty (degrade legibly, never crash the session).
-    let _ = std::io::stdin().read_to_string(&mut stdin);
+    let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
+        match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
+            Ok(stdin) => stdin,
+            Err(error) => {
+                // A schema-v2 input that cannot be inspected must not advance
+                // the harness or the lifecycle. Exit 2 is the fail-closed hook
+                // outcome; terminal callers recover through the bounded waiter.
+                eprintln!("codeflow delegate-turn: {error}");
+                return 2;
+            }
+        }
+    } else {
+        let mut stdin = String::new();
+        // Preserve the existing advisory behavior for every legacy hook.
+        let _ = std::io::stdin().read_to_string(&mut stdin);
+        stdin
+    };
 
     match args.name {
         HookName::GitGuard => git_guard(&stdin),
@@ -77,6 +94,21 @@ pub fn run(args: &HookArgs) -> i32 {
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
     }
+}
+
+fn read_bounded_utf8(reader: impl Read, max_bytes: usize) -> Result<String, &'static str> {
+    let limit = u64::try_from(max_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+    reader
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot read schema-v2 hook payload")?;
+    if bytes.len() > max_bytes {
+        return Err("schema-v2 hook payload exceeds the 32 MiB input limit");
+    }
+    String::from_utf8(bytes).map_err(|_| "schema-v2 hook payload is not valid UTF-8")
 }
 
 fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
@@ -257,5 +289,25 @@ fn session_summary(stdin: &str) -> i32 {
             eprintln!("codeflow session-summary: warning: {e} — session unaffected");
             0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_bounded_utf8;
+    use std::io::Cursor;
+
+    #[test]
+    fn schema_hook_input_is_bounded_and_requires_utf8() {
+        assert_eq!(
+            read_bounded_utf8(Cursor::new(b"hello"), 5).unwrap(),
+            "hello"
+        );
+        assert!(read_bounded_utf8(Cursor::new(b"longer"), 5)
+            .unwrap_err()
+            .contains("input limit"));
+        assert!(read_bounded_utf8(Cursor::new([0xff]), 5)
+            .unwrap_err()
+            .contains("UTF-8"));
     }
 }

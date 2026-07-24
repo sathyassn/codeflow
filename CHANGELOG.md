@@ -248,8 +248,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the current event adapter is Claude hooks. Schema-v2 waiting is
   file-polled and tmux-free, while the legacy `--result` mode is
   byte-compatible and unchanged. State lives outside Git
-  worktrees, carries digests instead of prompt text, and fails closed on
-  native Windows (use WSL2). `codeflow doctor` gains a thirteenth,
+  worktrees, carries digests instead of prompt text, caps raw hook input before
+  parsing, and fails closed on native Windows (use WSL2). `codeflow doctor`
+  gains a thirteenth,
   Fail-severity `delegate-roundtrip` check that runs the installed binary
   through the full synthetic lifecycle — rebuild and reinstall the CLI
   (`cargo install --path crates/codeflow-cli`) before it can pass.

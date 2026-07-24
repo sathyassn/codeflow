@@ -642,7 +642,7 @@ fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
         return fail("codeflow binary not found in PATH".to_string());
     };
     let root = std::env::temp_dir().join(format!("codeflow-doctor-{}", ulid::Ulid::new()));
-    if let Err(error) = std::fs::create_dir(&root) {
+    if let Err(error) = create_private_roundtrip_root(&root) {
         return fail(format!("cannot create round-trip workspace: {error}"));
     }
     let state = root.join("state");
@@ -669,6 +669,16 @@ fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
         },
         Err(error) => fail(error),
     }
+}
+
+fn create_private_roundtrip_root(root: &Path) -> std::io::Result<()> {
+    let mut root_builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        root_builder.mode(0o700);
+    }
+    root_builder.create(root)
 }
 
 struct DelegateDoctorContext<'a> {
@@ -1809,6 +1819,20 @@ mod tests {
         let result = check_delegate_roundtrip(&opts);
         assert_eq!(result.status, Status::Fail);
         assert!(result.message.contains("failed at arm"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_delegate_roundtrip_workspace_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("roundtrip");
+        create_private_roundtrip_root(&root).unwrap();
+        assert_eq!(
+            std::fs::metadata(root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]

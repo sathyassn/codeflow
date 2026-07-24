@@ -19,8 +19,9 @@ cannot tell the host that the harness started cleanly, that the delivered
 prompt was accepted as the armed turn rather than swallowed, altered, or
 duplicated, or that a terminal event belongs to the turn the host believes is
 outstanding — and its signalling is welded to tmux, so no tmux-free lane can
-reuse it. Workstream A (WSA plan v3/v4, settled 2026-07-23 with both seats'
-approval) required a lifecycle any host can drive: durable correlation from
+reuse it. Workstream A — settled 2026-07-23 with both seats' approval and
+recorded durably as EPC-002 and SPC-002 — required a lifecycle any host can
+drive: durable correlation from
 startup through acceptance to terminal, ambiguity treated as poison rather
 than guessed through, and no new harness-launching responsibility inside the
 binary.
@@ -87,8 +88,10 @@ The invariants, each enforced in code rather than convention:
   are load-bearing, not decorative.
 - **Privacy and removal.** Records carry digests, identifiers, and the
   bounded terminal payload — never the prompt text; sizes are capped
-  (1 MiB prompt, 4 MiB message, 1 MiB error). The host removes the state
-  directory after consuming the result.
+  (1 MiB prompt, 4 MiB message, 1 MiB error), and raw schema-v2 hook input is
+  capped at 32 MiB before parsing. An unreadable or oversized schema-v2 input
+  fails closed without a record. The host removes the state directory after
+  consuming the result.
 
 `codeflow doctor` gains a deterministic `delegate-roundtrip` check that drives
 the installed binary through the full synthetic lifecycle at Fail severity.

@@ -379,9 +379,7 @@ fn session_start(
     state_dir: &Path,
     payload: HookPayload,
 ) -> Result<(), DelegateError> {
-    let source = payload
-        .source
-        .ok_or_else(|| DelegateError::invalid("SessionStart payload omitted source"))?;
+    let source = required_nonempty(payload.source, "SessionStart source")?;
     ensure_not_poisoned(run_id, state_dir)?;
     if source != "startup" {
         poison(
@@ -1752,6 +1750,19 @@ mod tests {
                 ErrorKind::Invalid
             );
         }
+        let oversized_source = serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "source": "x".repeat(4097),
+            "session_id": "s1",
+            "cwd": "/tmp"
+        });
+        assert_eq!(
+            handle_hook("run-1", &path, &oversized_source.to_string())
+                .unwrap_err()
+                .kind,
+            ErrorKind::Invalid
+        );
+        assert!(!path.join("poison.json").exists());
         ready(&path);
         arm("run-1", &path, "turn-1", b"hello").unwrap();
         for payload in [

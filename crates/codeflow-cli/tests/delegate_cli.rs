@@ -122,6 +122,27 @@ fn lifecycle_reports_ready_accepted_and_completed_without_tmux() {
 
 #[cfg(unix)]
 #[test]
+fn doctor_roundtrip_drives_the_real_binary() {
+    let binary = std::path::PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    let path = std::env::join_paths(paths).unwrap();
+    let output = run(codeflow()
+        .args(["doctor", "--check", "delegate-roundtrip"])
+        .env("PATH", path));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("delegate-roundtrip"));
+}
+
+#[cfg(unix)]
+#[test]
 fn schema_v2_hooks_make_zero_tmux_calls_including_retries() {
     use std::os::unix::fs::PermissionsExt;
 
