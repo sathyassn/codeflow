@@ -50,6 +50,8 @@ enum Command {
     },
     /// Claude-layer hooks, wired by the settings presets (charter §3.3).
     Hook(cmd::hook::HookArgs),
+    /// Transport-neutral lifecycle for interactive delegate turns.
+    Delegate(cmd::delegate::DelegateArgs),
     /// Git client hook target — the .git/hooks shims exec this.
     GitHook(cmd::git_hook::GitHookArgs),
     /// Print the session-start digest (pointers, not content).
@@ -142,6 +144,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Command::Hook(args) => std::process::exit(cmd::hook::run(&args)),
+        Command::Delegate(args) => std::process::exit(cmd::delegate::run(&args)),
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
         Command::Orient => std::process::exit(cmd::orient::run()),
         Command::Test(args) => std::process::exit(cmd::test::run(&args)),

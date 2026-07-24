@@ -2,6 +2,7 @@
 //! so `main.rs` stays a thin dispatcher (charter §3.1).
 
 pub mod ci;
+pub mod delegate;
 pub mod doctor;
 pub mod git_hook;
 pub mod hook;

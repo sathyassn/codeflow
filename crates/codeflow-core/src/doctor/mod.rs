@@ -7,7 +7,9 @@
 //! `.codeflow/` config validity and writability, and network reachability.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -59,6 +61,9 @@ type LookPathFn = fn(&str) -> Result<String, String>;
 /// Callback to execute a command with arguments.
 type ExecCommandFn = fn(&str, &[&str]) -> Result<String, String>;
 
+/// Callback to execute a command with UTF-8 stdin.
+type ExecCommandStdinFn = fn(&str, &[&str], &str) -> Result<String, String>;
+
 /// Configuration for doctor checks.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -68,6 +73,8 @@ pub struct Options {
     pub look_path: Option<LookPathFn>,
     /// Runs a command and returns its output.
     pub exec_command: Option<ExecCommandFn>,
+    /// Runs a command with text on stdin and returns its output.
+    pub exec_command_stdin: Option<ExecCommandStdinFn>,
 }
 
 impl Options {
@@ -89,6 +96,34 @@ impl Options {
                 .args(args)
                 .output()
                 .map_err(|e| e.to_string())?;
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).to_string())
+            }
+        }
+    }
+
+    fn do_exec_stdin(&self, cmd: &str, args: &[&str], stdin: &str) -> Result<String, String> {
+        if let Some(f) = self.exec_command_stdin {
+            f(cmd, args, stdin)
+        } else {
+            let mut child = std::process::Command::new(cmd)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            child
+                .stdin
+                .as_mut()
+                .ok_or_else(|| "command stdin was not piped".to_string())?
+                .write_all(stdin.as_bytes())
+                .map_err(|error| error.to_string())?;
+            let output = child
+                .wait_with_output()
+                .map_err(|error| error.to_string())?;
             if output.status.success() {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
@@ -132,6 +167,7 @@ const CHECK_NAMES: &[&str] = &[
     "permissions",
     "network",
     "delegates",
+    "delegate-roundtrip",
     "repo-integrity",
     "ci-perimeter",
     "managed-drift",
@@ -158,6 +194,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
     m.insert("delegates", check_delegates);
+    m.insert("delegate-roundtrip", check_delegate_roundtrip);
     m.insert("repo-integrity", check_repo_integrity);
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("managed-drift", check_managed_drift);
@@ -590,6 +627,187 @@ fn codex_plugin_enabled(json: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Synthetic schema-v2 lifecycle through the installed binary. Unlike the
+/// optional harness prerequisite check, this is a deterministic product
+/// capability and therefore fails doctor when any transition is broken.
+fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let fail = |message: String| CheckResult {
+        name: "delegate-roundtrip".into(),
+        status: Status::Fail,
+        message,
+        duration: start.elapsed(),
+    };
+    let Ok(codeflow_bin) = opts.do_look_path("codeflow") else {
+        return fail("codeflow binary not found in PATH".to_string());
+    };
+    let root = std::env::temp_dir().join(format!("codeflow-doctor-{}", ulid::Ulid::new()));
+    if let Err(error) = std::fs::create_dir(&root) {
+        return fail(format!("cannot create round-trip workspace: {error}"));
+    }
+    let state = root.join("state");
+    let prompt = root.join("prompt.txt");
+    if let Err(error) = std::fs::write(&prompt, b"doctor delegate round trip") {
+        let _ = std::fs::remove_dir_all(&root);
+        return fail(format!("cannot create round-trip prompt: {error}"));
+    }
+    let context = DelegateDoctorContext {
+        opts,
+        binary: &codeflow_bin,
+        state: state.to_string_lossy().into_owned(),
+        prompt: prompt.to_string_lossy().into_owned(),
+    };
+    let result = context.run();
+    let _ = std::fs::remove_dir_all(&root);
+
+    match result {
+        Ok(()) => CheckResult {
+            name: "delegate-roundtrip".into(),
+            status: Status::Pass,
+            message: "schema-v2 init → ready → arm → accepted → terminal round trip passed".into(),
+            duration: start.elapsed(),
+        },
+        Err(error) => fail(error),
+    }
+}
+
+struct DelegateDoctorContext<'a> {
+    opts: &'a Options,
+    binary: &'a str,
+    state: String,
+    prompt: String,
+}
+
+impl DelegateDoctorContext<'_> {
+    const PROMPT_ID: &'static str = "123e4567-e89b-12d3-a456-426614174000";
+
+    fn run(&self) -> Result<(), String> {
+        self.ready()?;
+        self.turn()
+    }
+
+    fn ready(&self) -> Result<(), String> {
+        self.step(
+            &[
+                "delegate",
+                "init",
+                "--run-id",
+                "doctor",
+                "--state-dir",
+                &self.state,
+            ],
+            "",
+            "init",
+        )?;
+        self.step(
+            &[
+                "hook",
+                "delegate-turn",
+                "--run-id",
+                "doctor",
+                "--state-dir",
+                &self.state,
+            ],
+            r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"doctor-session","cwd":"/tmp"}"#,
+            "ready hook",
+        )?;
+        self.step(
+            &[
+                "delegate",
+                "wait",
+                "--run-id",
+                "doctor",
+                "--state-dir",
+                &self.state,
+                "--until",
+                "ready",
+                "--timeout-seconds",
+                "1",
+            ],
+            "",
+            "ready wait",
+        )
+    }
+
+    fn turn(&self) -> Result<(), String> {
+        self.step(
+            &[
+                "delegate",
+                "arm",
+                "--run-id",
+                "doctor",
+                "--state-dir",
+                &self.state,
+                "--turn-id",
+                "turn-1",
+                "--prompt-file",
+                &self.prompt,
+            ],
+            "",
+            "arm",
+        )?;
+        let accepted = format!(
+            r#"{{"hook_event_name":"UserPromptSubmit","session_id":"doctor-session","prompt_id":"{}","prompt":"doctor delegate round trip"}}"#,
+            Self::PROMPT_ID
+        );
+        self.hook_and_wait(&accepted, "accepted", "accepted hook")?;
+        let terminal = format!(
+            r#"{{"hook_event_name":"Stop","session_id":"doctor-session","prompt_id":"{}","last_assistant_message":"round trip complete"}}"#,
+            Self::PROMPT_ID
+        );
+        self.hook_and_wait(&terminal, "terminal", "terminal hook")
+    }
+
+    fn hook_and_wait(&self, payload: &str, until: &str, stage: &str) -> Result<(), String> {
+        self.step(
+            &[
+                "hook",
+                "delegate-turn",
+                "--run-id",
+                "doctor",
+                "--state-dir",
+                &self.state,
+            ],
+            payload,
+            stage,
+        )?;
+        self.step(
+            &[
+                "delegate",
+                "wait",
+                "--run-id",
+                "doctor",
+                "--state-dir",
+                &self.state,
+                "--turn-id",
+                "turn-1",
+                "--until",
+                until,
+                "--timeout-seconds",
+                "1",
+            ],
+            "",
+            &format!("{until} wait"),
+        )
+    }
+
+    fn step(&self, args: &[&str], stdin: &str, stage: &str) -> Result<(), String> {
+        exec_doctor_step(self.opts, self.binary, args, stdin, stage)
+    }
+}
+
+fn exec_doctor_step(
+    opts: &Options,
+    binary: &str,
+    args: &[&str],
+    stdin: &str,
+    stage: &str,
+) -> Result<(), String> {
+    opts.do_exec_stdin(binary, args, stdin)
+        .map(|_| ())
+        .map_err(|error| format!("schema-v2 round trip failed at {stage}: {}", error.trim()))
+}
+
 /// Repository structural integrity (ADR-0007). Two failure signatures, both
 /// reproduced from a `gh pr merge --delete-branch` / worktree mishap:
 ///
@@ -974,7 +1192,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 12);
+        assert_eq!(check_names().len(), 13);
     }
 
     #[test]
@@ -1561,6 +1779,36 @@ mod tests {
             "got: {}",
             result.message
         );
+    }
+
+    #[test]
+    fn test_delegate_roundtrip_passes_all_binary_steps() {
+        let mut opts = test_opts();
+        opts.look_path = Some(|name| {
+            (name == "codeflow")
+                .then(|| "/usr/local/bin/codeflow".to_string())
+                .ok_or_else(|| "not found".to_string())
+        });
+        opts.exec_command_stdin = Some(|_, _, _| Ok(String::new()));
+        let result = check_delegate_roundtrip(&opts);
+        assert_eq!(result.status, Status::Pass);
+        assert!(result.message.contains("round trip passed"));
+    }
+
+    #[test]
+    fn test_delegate_roundtrip_is_fail_severity() {
+        let mut opts = test_opts();
+        opts.look_path = Some(|_| Ok("/usr/local/bin/codeflow".to_string()));
+        opts.exec_command_stdin = Some(|_, args, _| {
+            if args.contains(&"arm") {
+                Err("synthetic arm failure".to_string())
+            } else {
+                Ok(String::new())
+            }
+        });
+        let result = check_delegate_roundtrip(&opts);
+        assert_eq!(result.status, Status::Fail);
+        assert!(result.message.contains("failed at arm"));
     }
 
     #[test]

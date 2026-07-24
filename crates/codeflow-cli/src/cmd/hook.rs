@@ -10,13 +10,13 @@
 //! - `session-orient`: digest on stdout, always 0.
 //! - `session-summary`: always 0 — a failed summary must never fail the
 //!   session (warn on stderr instead).
-//! - `delegate-turn`: 0 only after an owner-only terminal result is written
-//!   and its task-scoped tmux waiter is signalled; otherwise 1.
+//! - `delegate-turn`: schema-v2 state mode handles the full lifecycle without
+//!   tmux; legacy result mode preserves its existing terminal signal contract.
 
 use std::io::Read;
 use std::path::PathBuf;
 
-use clap::Args;
+use clap::{ArgGroup, Args};
 use codeflow_core::hooks::{
     delegate_turn, exec_guard, git_guard, orient, policy::Policy, session_summary,
 };
@@ -38,6 +38,11 @@ pub enum HookName {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("delegate_output")
+        .args(["result", "state_dir"])
+        .multiple(false)
+))]
 pub struct HookArgs {
     /// Hook to run (reads the Claude Code hook payload from stdin).
     #[arg(value_enum)]
@@ -48,6 +53,9 @@ pub struct HookArgs {
     /// Absolute owner-only result path for `delegate-turn`.
     #[arg(long, value_name = "FILE")]
     pub result: Option<PathBuf>,
+    /// Absolute owner-only lifecycle directory for schema-v2 `delegate-turn`.
+    #[arg(long, value_name = "DIR")]
+    pub state_dir: Option<PathBuf>,
 }
 
 /// Run the hook; returns the process exit code.
@@ -76,15 +84,38 @@ fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
         eprintln!("codeflow delegate-turn: --run-id is required");
         return 1;
     };
-    let Some(result) = args.result.clone() else {
-        eprintln!("codeflow delegate-turn: --result is required");
-        return 1;
-    };
-    let config = delegate_turn::TurnConfig { run_id, result };
-    match delegate_turn::record_and_signal(&config, stdin) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("codeflow delegate-turn: {error}");
+    match (&args.result, &args.state_dir) {
+        (Some(result), None) => {
+            let config = delegate_turn::TurnConfig {
+                run_id,
+                result: result.clone(),
+            };
+            match delegate_turn::record_and_signal(&config, stdin) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("codeflow delegate-turn: {error}");
+                    1
+                }
+            }
+        }
+        (None, Some(state_dir)) => {
+            match codeflow_core::delegate::handle_hook(&run_id, state_dir, stdin) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("codeflow delegate-turn: {error}");
+                    if codeflow_core::delegate::is_prompt_submission(stdin) {
+                        2
+                    } else {
+                        1
+                    }
+                }
+            }
+        }
+        _ => {
+            eprintln!(
+                "codeflow delegate-turn: --result is required unless --state-dir is used; \
+                 exactly one must be provided"
+            );
             1
         }
     }

@@ -4,6 +4,7 @@
 //! testing, workgraph/ledger, guards, scaffold, recall.
 
 pub mod capability;
+pub mod delegate;
 pub mod doctor;
 pub mod error;
 pub mod file_lock;
