@@ -13,6 +13,11 @@ Read [resources/protocol.md](resources/protocol.md) before a run. The source of
 truth is [resources/requirements.json](resources/requirements.json), with
 behavioral cases in [resources/cases.json](resources/cases.json) and exact
 fixture overlays in [resources/fixtures.json](resources/fixtures.json).
+[resources/harnesses.json](resources/harnesses.json) owns the minimum native
+harness capability contract and capability-supported harnesses; diagnostic compositions
+live in [resources/packs.json](resources/packs.json). The compact
+[harness evidence index](resources/harness-evidence.md) preserves the basis and
+limits of catalog support in consuming scaffolds.
 
 ## Non-negotiable boundaries
 
@@ -51,7 +56,9 @@ fixture overlays in [resources/fixtures.json](resources/fixtures.json).
    the corpus or for a quick regression smoke. Use `full` for a new production
    model/harness binding, a permission change, or promotion. Canary runs each
    selected canary case once; full runs every case three times. Never present
-   canary evidence as a full qualification.
+   canary evidence as a full qualification. For a focused diagnostic, resolve
+   `list-cases --pack <pack-id>` and run those cases explicitly. Packs may
+   compose other packs, but even `release-smoke` is not a promotion suite.
 4. **Materialize each trial.** Use an explicit temporary run root and the exact
    CodeFlow binary under test:
 
@@ -86,7 +93,23 @@ fixture overlays in [resources/fixtures.json](resources/fixtures.json).
    Promotion requires no hard-case regression, no unresolved validity threat,
    complete full-suite evidence, and explicit human approval. Improvements in
    latency or token use never compensate for a lost semantic duty.
-9. **Preserve, then clean.** Retain results, comparison, grader notes, fixture
+9. **Record an approved binding.** After a full result passes promotion
+   validation, write a compact local record outside the repository:
+
+   ```text
+   python3 .agents/skills/cf-evaluate-model/scripts/eval_kit.py record-binding \
+     <approved-result.json> --binding-id <id> --role primary --role reviewer \
+     --settings-file <effective-settings-file> \
+     --output "${CODEFLOW_HOME:-$HOME/.codeflow}/qualified-bindings/<id>.json"
+   ```
+
+   Add only roles the evidence qualifies. The record retains requested and
+   observed model/effort, content digests, harness metadata, and approval—not
+   prompts, settings contents, credentials, or arbitrary trace text. Run
+   `codeflow doctor --check model-bindings`; harness-version or declared
+   settings drift requires requalification, while live model/effort remains a
+   native-session observation.
+10. **Preserve, then clean.** Retain results, comparison, grader notes, fixture
    digests, and permitted session references outside the fixture root. Cleanup
    requires the materializer's marker and an exact confirmation string; it
    refuses unmarked paths, symlinks, roots, repositories, and mismatched IDs.
@@ -99,12 +122,13 @@ fixture overlays in [resources/fixtures.json](resources/fixtures.json).
 - Keep capability cases difficult enough to provide signal; graduate saturated
   cases into the near-100% regression set instead of deleting history.
 - Re-run the reference solution and inspect sample traces whenever a case,
-  fixture, grader, harness, or artifact changes. A green score from a broken
+  fixture, pack, grader, harness, or artifact changes. A green score from a broken
   problem is invalid.
 - Review token and latency metrics as diagnostics. Token consciousness means
   reliable adherence per loaded token; it never authorizes deleting a duty.
 - Treat an effort-policy change as a controlled binding experiment: prove the
-  requested and observed high/xhigh seat, hold every other subject and peer
-  field fixed, and reject any loss of a duo duty regardless of cost savings.
+  requested and observed candidate effort named by the current ensemble, hold
+  every other subject and peer field fixed, and reject any loss of a duo duty
+  regardless of cost savings.
 - Keep cleanup inside this skill. Do not create a broad repository-cleanup
   skill whose deletion boundary is harder to prove.

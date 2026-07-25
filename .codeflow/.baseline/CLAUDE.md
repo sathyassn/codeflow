@@ -39,16 +39,12 @@ or one obvious local check.
   owns the integrated Claude judgment. A missing seat degrades legibly only
   after preflight. The unattended pipeline is
   explicitly single-vendor and never substitutes for the interactive duo.
-- Invoke the latest available Fable-class Claude model directly at high effort
-  by default; use xhigh for capability-sensitive or long-horizon work, material
-  ambiguity, cross-cutting architecture/security, unresolved duo disagreement,
-  or failed/stalled high work. Fable owns internal Opus delegation: medium for
-  bounded deterministic UI/MCP evidence collection, high for ambiguous or
-  multi-step tool operation; Fable interprets the evidence and owns judgment.
-  Invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat at
-  high by default and xhigh on equivalent triggers. Bounded Sol-class
-  medium/high or qualified Terra-class workers require verified native routing.
-  Workers never replace either primary seat or its approval.
+- Load the concrete primary selectors, effort defaults/escalations, and
+  permitted worker classes from
+  `.claude/skills/cf-model-orchestrator/resources/current-ensemble.json`.
+  Invoke each primary directly; the Claude primary owns Claude-side internal
+  routing and judgment. Workers require verified native routing and never
+  replace either primary seat, its approval, or a named cross-lineage reviewer.
 - Match stages and process weight to the outcome: trivial → just do it;
   otherwise begin `/cf-model-orchestrator`. Research/planning-only work exits
   after joint settlement; implementation continues through routed production,

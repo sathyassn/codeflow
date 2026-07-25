@@ -41,8 +41,8 @@ Core modules grouped by responsibility:
   lint), the capability registry parser, FTS5 recall, and the cross-repo
   registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (13 checks — hooks, claude, codex, config,
-  permissions, network, delegates, delegate-roundtrip, repo-integrity,
+  `error.rs`): the doctor check table (14 checks — hooks, claude, codex, config,
+  permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
   ci-perimeter, managed-drift,
   customization, test-config), including bidirectional delegate readiness
   (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive
@@ -205,22 +205,20 @@ protected-branch hook backstops for grammar gaps, file
 secret denies, and exact raw model/cloud environment-variable denies. A failed
 sandboxed command may request an auto-classified unsandboxed retry only for a
 trusted installed tool requiring host state; arbitrary bypass remains outside
-the contract. The
-interactive Codex→Claude launch supplies Fable with a recorded high/xhigh
-selection, auto mode, and `classifyAllShell` through CLI settings because Claude
-intentionally ignores classifier policy from a repository. Codex's project
-config selects the guarded workspace profile, public egress/live search,
-auto-reviewed escalations, and a high-effort primary-seat fallback. Official
-plugin turns still pass the selected high/xhigh effort explicitly and retain
-the observed binding.
+the contract. The interactive Codex→Claude launch supplies the current
+ensemble's Claude selector and effort, auto mode, and `classifyAllShell`
+through CLI settings because Claude intentionally ignores classifier policy
+from a repository. Codex's project config selects the guarded workspace
+profile, public egress/live search, auto-reviewed escalations, and the current
+primary-seat fallback. Official plugin turns still pass the ensemble-selected
+model and effort explicitly and retain the observed binding.
 `cf-customize` verifies the effective modes, tools, authentication paths, and
 live canaries; the binary neither mutates global settings nor authenticates
-services. Cross-model callers invoke Fable and Codex primary seats directly at
-high by default and escalate to xhigh for capability-sensitive, long-horizon,
-materially ambiguous, cross-cutting architecture/security, unresolved
-disagreement, or failed/stalled-high work. Native internal workers may reduce
-mechanical cost, but cannot replace the primary seats' judgments,
-implementation, verification, or approvals (ADR-0025, ADR-0026, ADR-0028).
+services. Cross-model callers invoke both primaries directly using the concrete
+selectors, default/escalation efforts, and permitted worker classes in the
+current ensemble record. Native internal workers may reduce mechanical cost,
+but cannot replace the primary seats' judgments, implementation, verification,
+or approvals (ADR-0025, ADR-0026, ADR-0028, ADR-0039).
 
 `cf-evaluate-model` is the deliberate maintenance path for a new model, harness,
 permission profile, or material instruction revision (ADR-0027). Stable hard
@@ -233,6 +231,17 @@ outcomes, compares a candidate with a pinned baseline, and cleans only an
 explicitly marked run root. Subject trials remain supervised native interactive
 Codex or Claude sessions with their configured tools; no engine model router,
 headless peer runner, CI model call, or general-purpose cleanup command is added.
+
+Fast-changing binding facts are isolated from durable orchestration doctrine
+(ADR-0039). `current-ensemble.json` owns concrete primary selectors, effort
+policy, permitted worker classes, and escalation triggers.
+`harnesses.json` is a qualification catalog, not executable provider
+configuration: every entry must prove the universal native-session,
+provenance/tool, scoped-work, bounded-failure, permission, recheck, and git
+capabilities. `packs.json` composes existing eval cases for diagnosis only.
+Approved full results can produce compact user-owned records under
+`~/.codeflow/qualified-bindings/`; doctor checks their structure and observable
+harness/settings drift without launching models or routing work.
 
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the

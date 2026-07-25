@@ -40,9 +40,10 @@ at a higher tier is an additive upgrade.
 The harness starters are executable policy, not prompt-only guidance. Codex
 ships one current-schema guarded permission profile with public research,
 loopback UI testing, reviewer-subagent escalation review, workspace key-file
-denies, the primary seat's high-effort fallback, and the default secret-bearing
-environment filter pinned on. Claude-hosted plugin turns pass high/xhigh
-explicitly so they cannot inherit a different user default. Claude
+denies, the current primary seat's configured fallback, and the default
+secret-bearing environment filter pinned on. Claude-hosted plugin turns pass
+the current ensemble's model and effort explicitly so they cannot inherit a
+different user default. Claude
 ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
 raw model/cloud credential removal for sandboxed Bash, and ask rules for
 destructive source-control operations. A sandbox failure may request an
@@ -241,8 +242,8 @@ adrs: [ADR-0002, ADR-0007, ADR-0025]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs thirteen health checks — hooks, Claude wiring, codex wiring, config,
-permissions, network, delegates, delegate round-trip, repo integrity, CI
+`codeflow doctor` runs fourteen health checks — hooks, Claude wiring, codex wiring, config,
+permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
 drift, consuming-project customization, and test config. The customization
 check remains quiet for minimal/non-method repos, warns while product,
@@ -252,6 +253,10 @@ Codex auth/MCP, Claude plugin/MCP, and tmux; it explicitly leaves live
 interactive account/tool canaries to the harness (ADR-0023). The
 delegate-roundtrip check drives the installed binary through a synthetic
 schema-v2 lifecycle (CAP-014) and fails when any transition breaks.
+The binding check validates user-owned approved full-suite records against the
+trusted harness capability catalog, compares externally observable harness
+versions and declared settings-source digests, and keeps live model/effort
+unknown unless native evidence proves it (ADR-0039).
 
 ## CAP-009 — cross-vendor-delegation
 
@@ -332,16 +337,12 @@ invoked Fable primary reviews the settled design and actual integrated diff for
 the final quality verdict. Substantial prose additionally
 loads `cf-editorial-review`: both seats protect technical meaning and evidence,
 while Fable owns the final contextual voice and editorial verdict. Cross-model
-callers invoke the latest Fable-class seat directly at high by default and
-xhigh on defined complexity/failure triggers; Fable may
-route bounded deterministic tool evidence to Opus medium and ambiguous or
-multi-step tool operation to Opus high, but retains interpretation and judgment.
-They invoke GPT-5.6 Sol or the strongest supported successor Codex coding seat
-directly at high by default and xhigh on equivalent triggers; verified native
-Sol-class medium/high or qualified Terra-class workers may assist. Primary seats
-retain their plan and approval duties, and Fable owns Claude-side routing. Each
-run records actual model versions, effort, routing evidence, and escalation
-rationale rather than freezing exact version pins or inferring usage state.
+callers invoke both primary seats directly using the selectors, default and
+escalation effort, triggers, and permitted internal routes in the current
+ensemble record. Primary seats retain their plan and approval duties, the
+owning primary controls internal routing, and Fable owns Claude-side judgment.
+Each run records actual model versions, effort, routing evidence, and escalation
+rationale rather than inferring usage state.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, serialized
@@ -432,9 +433,9 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs"]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs"]
 epics: []
-adrs: [ADR-0027, ADR-0032, ADR-0034]
+adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,
@@ -444,6 +445,21 @@ requirement IDs, source-marker traceability, balanced regression/capability
 cases, exact fixture overlays, a native-interactive run protocol, and a
 standard-library tool for deterministic validation, materialization, scoring,
 baseline comparison, and fail-closed cleanup.
+
+The kit separates durable doctrine from fast-changing bindings. A
+source-controlled harness catalog marks a harness `capability-supported` only
+after evidence of native-interactive execution, runtime provenance, configured
+tools, scoped work, bounded failure, recheckable results, an effective
+permission boundary, and the git backstop. Catalog status does not qualify a
+concrete model binding. One current
+ensemble record owns concrete primary selectors, effort policy, worker classes,
+and escalation triggers. A new harness or model name is not usable merely
+because it parses; the harness needs catalog evidence and the concrete binding
+needs approved native full qualification.
+Composable diagnostic packs select existing cases without changing graders or
+promotion. Approved full results can emit non-secret local binding records;
+doctor detects record contradictions and observable harness/settings drift
+without launching, inferring, promoting, or routing a model (ADR-0039).
 
 The hard `CF-OUT-002` contract evaluates contextual editorial quality without
 surface-cue policing. Its cases cover technical semantic preservation,

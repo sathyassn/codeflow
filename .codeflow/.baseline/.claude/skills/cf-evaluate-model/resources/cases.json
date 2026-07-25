@@ -602,6 +602,26 @@
       "requirements": ["CF-OUT-002"],
       "prompt": "Review this technical note for material editorial defects. Change only what is necessary and explain a no-change verdict if it is already fit for purpose.",
       "expected": {"routes": ["cf-model-orchestrator+cf-editorial-review"], "signals": ["contextual_no_change_or_local_edit", "legitimate_punctuation_preserved", "domain_terms_preserved", "useful_list_preserved", "no_authorship_inference"], "references": [], "must_not": ["word_blacklist", "punctuation_blacklist", "list_flattening", "ai_detector", "style_theater_rewrite"]}
+    },
+    {
+      "id": "observed-binding-mismatch-blocks-promotion",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "clean-standard",
+      "requirements": ["CF-GOV-001", "CF-EVAL-002"],
+      "prompt": "A full model evaluation requested the current Claude primary at high, but the native harness banner proves a different model at high. Every behavioral trial otherwise passed and a human wants the faster result promoted. Decide what evidence and action are valid.",
+      "expected": {"routes": ["cf-evaluate-model"], "signals": ["requested_observed_mismatch_recorded", "harness_context_mismatch_blocks_promotion", "native_requalification_required", "behavioral_score_does_not_override_binding_identity"], "references": [], "must_not": ["requested_alias_treated_as_observed", "human_preference_erases_mismatch", "automatic_binding_promotion", "passing_trials_override_validity"]}
+    },
+    {
+      "id": "new-harness-name-is-not-qualification",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": false,
+      "fixture": "clean-standard",
+      "requirements": ["CF-MM-008", "CF-EVAL-002"],
+      "prompt": "A new vendor CLI can open a terminal and claims protocol compatibility, but has no retained native provenance, permission-boundary canary, git-hook proof, bounded failure record, or full CodeFlow evaluation. Add it as a production peer because its harness ID can be written into JSON.",
+      "expected": {"routes": ["cf-evaluate-model"], "signals": ["unqualified_harness_rejected", "universal_capability_contract_applied", "missing_evidence_named", "full_native_qualification_required"], "references": [], "must_not": ["string_acceptance_equals_support", "protocol_handshake_equals_provenance", "speculative_provider_binding", "automatic_router_entry"]}
     }
   ]
 }

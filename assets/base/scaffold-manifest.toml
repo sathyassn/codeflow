@@ -318,6 +318,12 @@ dest = ".claude/skills/cf-model-orchestrator/resources/capability-routing.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
+dest = ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Contextual editorial review stays on demand: the always-loaded contract carries
 # only the principle and this skill owns the detailed, cross-harness workflow.
 [[entry]]
@@ -368,6 +374,24 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-evaluate-model/resources/fixtures.json"
 dest = ".claude/skills/cf-evaluate-model/resources/fixtures.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/harnesses.json"
+dest = ".claude/skills/cf-evaluate-model/resources/harnesses.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/harness-evidence.md"
+dest = ".claude/skills/cf-evaluate-model/resources/harness-evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/packs.json"
+dest = ".claude/skills/cf-evaluate-model/resources/packs.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -457,6 +481,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
+dest = ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-editorial-review/SKILL.md"
 dest = ".agents/skills/cf-editorial-review/SKILL.md"
 ownership = "managed"
@@ -501,6 +531,24 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-evaluate-model/resources/fixtures.json"
 dest = ".agents/skills/cf-evaluate-model/resources/fixtures.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/harnesses.json"
+dest = ".agents/skills/cf-evaluate-model/resources/harnesses.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/harness-evidence.md"
+dest = ".agents/skills/cf-evaluate-model/resources/harness-evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/packs.json"
+dest = ".agents/skills/cf-evaluate-model/resources/packs.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 

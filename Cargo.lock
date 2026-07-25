@@ -188,6 +188,7 @@ dependencies = [
  "fs2",
  "git2",
  "glob",
+ "libc",
  "quick-xml",
  "regex",
  "rusqlite",

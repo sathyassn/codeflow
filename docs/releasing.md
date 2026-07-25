@@ -93,6 +93,14 @@ git push -u origin chore/release   # then open the PR
     Claude through task-scoped tmux with Stop/StopFailure hook completion.
     Record versions, exact commands, and observed tool access. Do not accept
     auth status output in place of a working interactive session.
+  - The current ensemble record names only bindings qualified for this release;
+    every `capability-supported` harness catalog entry still proves the full
+    capability contract without being mistaken for concrete binding
+    qualification.
+    Run `codeflow doctor --check model-bindings` for retained local promotion
+    records and resolve requested/observed, harness-version, or declared
+    settings drift. A diagnostic pack or parseable harness name is not
+    promotion evidence.
   - `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
     locally; CI billing/availability never substitutes for this evidence.
   - `cargo dist plan --output-format=json` lists all four archives, both

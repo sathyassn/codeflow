@@ -26,7 +26,7 @@ trials and recomputes each status and the summary from observations.
   "system": {
     "model": "actual model version",
     "effort": "high",
-    "harness": "codex-app | codex-cli | claude-code",
+    "harness": "qualified id from harnesses.json",
     "harness_version": "actual version",
     "codeflow_revision": "commit",
     "settings_digest": "sha256:...",
@@ -83,6 +83,57 @@ observed binding evidence and an experiment declaration. When requested and
 observed model or effort differ, record `harness_context_mismatch`; that run is
 evidence of a mismatch, never promotion evidence. A duo case records the
 subject in the normal system fields and every fixed other seat in `peer_seats`.
+Promotion additionally requires `system.observed`; a requested-only binding is
+useful diagnostic evidence but cannot become a production qualification.
+
+## Harness capability contract
+
+`harnesses.json` is a source-controlled qualification catalog, not a plugin
+registry or launch configuration. Every listed harness must satisfy all
+contract capabilities: a native interactive session, native runtime
+provenance, configured tool access, a scoped workspace, bounded failure,
+recheckable results, an effective permission boundary, and the git backstop.
+Adding a harness requires evidence for every capability plus the full model
+suite; a name in a vendor catalog or protocol handshake is insufficient.
+The catalog maps each capability to retained repository evidence, and suite
+validation fails when a capability is unmapped or its reference is missing.
+The scaffolded `harness-evidence.md` is the portable index of CodeFlow's dated
+source canaries, decisions, tests, and platform limits; it is not live
+installation evidence.
+
+The catalog may name a code-allowlisted version-probe ID; it cannot supply an
+executable or arguments. The probe lets `codeflow doctor` compare an externally
+visible installed version with an approved binding. Adding another live probe
+requires a reviewed binary change and tests. A harness without such a surface
+remains explicitly unobservable and needs a native canary; doctor never
+launches a model merely to turn that unknown into a pass.
+
+## Diagnostic packs
+
+`packs.json` groups existing cases and may include other acyclic packs.
+`list-cases --pack <id>` resolves an ordered, de-duplicated case list for
+focused diagnosis or pre-release smoke work. Packs do not define new graders,
+weaken a case, or create a promotion shortcut. Only the complete `full` suite
+with three trials per case may qualify a binding.
+
+## Promoted binding record
+
+`record-binding` accepts only a human-approved full result with every hard case
+passing, no error/not-run trial, no validity flag, and native evidence that
+requested and observed model/effort match. It derives provider and lineage from
+the capability-supported harness catalog and writes only:
+
+- binding ID and eligible roles;
+- requested and observed model/effort plus evidence content digests;
+- harness/version, CodeFlow revision, suite/result digests, and approval;
+- optional absolute settings-source paths and their current content digests.
+
+The user-owned record belongs under
+`${CODEFLOW_HOME:-~/.codeflow}/qualified-bindings/`; it is not scaffold state,
+runtime routing config, or permission to auto-promote a newer model. Do not put
+prompts, trace bodies, settings contents, secrets, tokens, or credentials in
+it. A requested/observed mismatch fails closed. Harness or settings drift
+requires a new native evaluation and human approval.
 
 `status` is derived:
 

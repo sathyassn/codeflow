@@ -43,9 +43,12 @@ configuration, and an unknown or unverified sibling fails the preflight.
 ## Launch and drive one turn
 
 ```sh
+# Read these two values from current-ensemble.json before launch.
+CLAUDE_MODEL="<claude-primary native selector>"
+CLAUDE_EFFORT="<default or triggered escalation effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
-  "claude --model fable --effort high --permission-mode auto --settings $STATE/settings.json"
+  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json"
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until ready --timeout-seconds 120
 printf '%s' "$PROMPT" > "$RUN_TMP/turn-1.prompt"   # outside the repo
@@ -61,8 +64,8 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
-Invoke the latest available Fable-class model directly at high, or xhigh on
-the escalation triggers in `cf-model-orchestrator`. Delivery must be
+Invoke the Claude primary using the selector and default or escalation effort
+from `../../cf-model-orchestrator/resources/current-ensemble.json`. Delivery must be
 **exact-byte after one canonicalization boundary**: the prompt file must
 already be non-empty UTF-8 text with internal LF line endings, no terminal line
 break, and no other control characters. `arm` rejects noncanonical input before

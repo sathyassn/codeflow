@@ -38,10 +38,10 @@ independent.
      `capture-pane` only for the dedicated task pane for bounded diagnosis or
      an explicit dialog—never as a stability heuristic and never against
      unrelated sessions. Launch the
-     consult by invoking the latest Fable-class model directly at high effort,
-     escalating to xhigh only for the triggers in `cf-model-orchestrator`, using
-     `claude --model fable --effort high --permission-mode auto --settings
-     <state-dir>/settings.json` (replace `high` with `xhigh` when escalating);
+     consult with the Claude primary selector and default or escalation effort
+     from `../cf-model-orchestrator/resources/current-ensemble.json`, using
+     `claude --model <selector> --effort <effort> --permission-mode auto
+     --settings <state-dir>/settings.json`;
      the generated settings file carries only the lifecycle hooks and is
      immutable — make `autoMode.classifyAllShell` effective at user scope.
      Keep "read and

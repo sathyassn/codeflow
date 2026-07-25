@@ -95,6 +95,22 @@ def valid_result(suite: str = "canary") -> dict:
     return result
 
 
+def promotable_result() -> dict:
+    result = valid_result("full")
+    result["system"]["observed"] = {
+        "model": result["system"]["model"],
+        "effort": result["system"]["effort"],
+        "evidence": [
+            {
+                "kind": "ui",
+                "ref": "sessions/promoted/banner",
+                "digest": "sha256:" + "d" * 64,
+            }
+        ],
+    }
+    return result
+
+
 def strict_effort_pair() -> tuple[dict, dict]:
     baseline = valid_result("full")
     baseline["run_id"] = "baseline"
@@ -141,6 +157,17 @@ class SuiteContractTests(unittest.TestCase):
     def test_shipped_suite_is_valid(self) -> None:
         self.assertEqual([], eval_kit.validate_suite(project_root()))
 
+    def test_composed_release_pack_is_ordered_and_unique(self) -> None:
+        cases = eval_kit.resolve_pack("release-smoke")
+        self.assertEqual(len(cases), len(set(cases)))
+        self.assertEqual("model-independent-plans", cases[0])
+        self.assertIn("security-dual-vendor-lenses", cases)
+        self.assertIn("reject-brittle-underdesigned-change", cases)
+
+    def test_unknown_pack_is_rejected(self) -> None:
+        with self.assertRaisesRegex(eval_kit.EvalError, "unknown evaluation pack"):
+            eval_kit.resolve_pack("not-a-pack")
+
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
         hard = {
@@ -159,6 +186,34 @@ class SuiteContractTests(unittest.TestCase):
         for value in ("../escape", "/absolute", "a/../../escape", ""):
             with self.assertRaises(eval_kit.EvalError):
                 eval_kit.safe_relative_path(value)
+
+    def test_harness_evidence_is_confined_to_regular_project_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            evidence = root / "docs" / "evidence.md"
+            evidence.parent.mkdir()
+            evidence.write_text("retained\n", encoding="utf-8")
+            self.assertEqual(
+                evidence.resolve(),
+                eval_kit.project_evidence_file(root, "docs/evidence.md"),
+            )
+            for reference in ("/etc/hosts", "../outside.md", "docs/../evidence.md"):
+                with self.assertRaises(eval_kit.EvalError):
+                    eval_kit.project_evidence_file(root, reference)
+
+    @unittest.skipIf(sys.platform == "win32", "symlink creation may require elevation")
+    def test_harness_evidence_rejects_symlink_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            outside = root.parent / f"{root.name}-outside.md"
+            outside.write_text("outside\n", encoding="utf-8")
+            alias = root / "evidence.md"
+            alias.symlink_to(outside)
+            try:
+                with self.assertRaisesRegex(eval_kit.EvalError, "symlink"):
+                    eval_kit.project_evidence_file(root, "evidence.md")
+            finally:
+                outside.unlink()
 
     def test_main_branch_is_preserved_and_unsafe_branch_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -287,6 +342,8 @@ class SuiteContractTests(unittest.TestCase):
                     ("requirements.json", requirements),
                     ("cases.json", cases),
                     ("fixtures.json", mutated),
+                    ("harnesses.json", eval_kit.qualification_documents()[0]),
+                    ("packs.json", eval_kit.qualification_documents()[1]),
                 ):
                     eval_kit.write_json(resource_dir / name, document)
                 errors = eval_kit.validate_suite(project_root(), resource_dir)
@@ -321,6 +378,8 @@ class SuiteContractTests(unittest.TestCase):
                     ("requirements.json", requirements),
                     ("cases.json", cases),
                     ("fixtures.json", mutated),
+                    ("harnesses.json", eval_kit.qualification_documents()[0]),
+                    ("packs.json", eval_kit.qualification_documents()[1]),
                 ):
                     eval_kit.write_json(resource_dir / name, document)
                 errors = eval_kit.validate_suite(project_root(), resource_dir)
@@ -373,7 +432,123 @@ class SuiteContractTests(unittest.TestCase):
 class ResultScoringTests(unittest.TestCase):
     def test_complete_canary_and_full_results_pass(self) -> None:
         self.assertEqual([], eval_kit.validate_result(valid_result("canary")))
-        self.assertEqual([], eval_kit.validate_result(valid_result("full"), require_approval=True))
+        self.assertEqual(
+            [],
+            eval_kit.validate_result(
+                promotable_result(), require_approval=True
+            ),
+        )
+
+    def test_approval_timestamp_requires_strict_rfc3339(self) -> None:
+        result = promotable_result()
+        result["human_approval"]["reviewed_at"] = "2026-07-17 00:00:00+00:00"
+        errors = eval_kit.validate_result(result, require_approval=True)
+        self.assertTrue(any("reviewed_at must be RFC 3339" in error for error in errors))
+
+    def test_rfc3339_accepts_arbitrary_fraction_precision_portably(self) -> None:
+        for value in (
+            "2026-07-17T00:00:00.1Z",
+            "2026-07-17T00:00:00.123456789+05:30",
+        ):
+            self.assertTrue(eval_kit.is_rfc3339(value), value)
+        for value in (
+            "2026-02-30T00:00:00Z",
+            "2026-07-17T25:00:00Z",
+            "2026-07-17T00:00:00+25:00",
+            "٢٠٢٦-٠٧-١٧T٠٠:٠٠:٠٠Z",
+        ):
+            self.assertFalse(eval_kit.is_rfc3339(value), value)
+
+    def test_binding_record_requires_observed_match_and_omits_evidence_refs(self) -> None:
+        result = promotable_result()
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Path(temp) / "settings.json"
+            settings.write_text('{"sandbox": true}\n', encoding="utf-8")
+            record = eval_kit.qualified_binding_record(
+                result,
+                binding_id="codex-primary-high",
+                roles=["primary", "reviewer", "reviewer"],
+                settings_files=[settings],
+            )
+        self.assertEqual("openai", record["provider"])
+        self.assertEqual("codex", record["lineage"])
+        self.assertEqual(["primary", "reviewer"], record["eligible_roles"])
+        self.assertEqual(
+            result["system"]["observed"]["model"], record["observed"]["model"]
+        )
+        self.assertNotIn("ref", record["observed"]["evidence"][0])
+        self.assertEqual(1, len(record["settings_sources"]))
+
+        mismatch = promotable_result()
+        mismatch["system"]["observed"]["effort"] = "high"
+        with self.assertRaisesRegex(eval_kit.EvalError, "unqualified binding"):
+            eval_kit.qualified_binding_record(
+                mismatch,
+                binding_id="bad-binding",
+                roles=["primary"],
+                settings_files=[],
+            )
+
+    def test_binding_record_rejects_oversized_settings_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Path(temp) / "settings.json"
+            settings.write_bytes(b"12345")
+            original_limit = eval_kit.MAX_SETTINGS_BYTES
+            eval_kit.MAX_SETTINGS_BYTES = 4
+            try:
+                with self.assertRaisesRegex(eval_kit.EvalError, "exceeds 4 bytes"):
+                    eval_kit.qualified_binding_record(
+                        promotable_result(),
+                        binding_id="codex-primary-high",
+                        roles=["primary"],
+                        settings_files=[settings],
+                    )
+            finally:
+                eval_kit.MAX_SETTINGS_BYTES = original_limit
+
+    def test_binding_output_is_confined_to_codeflow_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "codeflow-home"
+            original = eval_kit.os.environ.get("CODEFLOW_HOME")
+            eval_kit.os.environ["CODEFLOW_HOME"] = str(home)
+            try:
+                accepted = eval_kit.qualified_binding_output(
+                    home / "qualified-bindings" / "binding.json"
+                )
+                self.assertEqual(
+                    (home / "qualified-bindings" / "binding.json").resolve(),
+                    accepted,
+                )
+                with self.assertRaisesRegex(eval_kit.EvalError, "direct .json child"):
+                    eval_kit.qualified_binding_output(
+                        home / "qualified-bindings" / "nested" / "binding.json"
+                    )
+                with self.assertRaisesRegex(eval_kit.EvalError, "direct .json child"):
+                    eval_kit.qualified_binding_output(Path(temp) / "repository.json")
+            finally:
+                if original is None:
+                    eval_kit.os.environ.pop("CODEFLOW_HOME", None)
+                else:
+                    eval_kit.os.environ["CODEFLOW_HOME"] = original
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission bits")
+    def test_binding_record_is_written_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "codeflow-home"
+            output = home / "qualified-bindings" / "binding.json"
+            original = eval_kit.os.environ.get("CODEFLOW_HOME")
+            eval_kit.os.environ["CODEFLOW_HOME"] = str(home)
+            try:
+                eval_kit.write_qualified_binding(
+                    output, {"schema_version": 1}
+                )
+                self.assertEqual(0o700, output.parent.stat().st_mode & 0o777)
+                self.assertEqual(0o600, output.stat().st_mode & 0o777)
+            finally:
+                if original is None:
+                    eval_kit.os.environ.pop("CODEFLOW_HOME", None)
+                else:
+                    eval_kit.os.environ["CODEFLOW_HOME"] = original
 
     def test_schema_one_result_without_experiment_fields_remains_valid(self) -> None:
         result = valid_result()

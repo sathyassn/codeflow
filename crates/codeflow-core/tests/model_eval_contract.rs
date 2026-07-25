@@ -14,6 +14,107 @@ fn read(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("read {relative}: {error}"))
 }
 
+#[test]
+fn capability_supported_harnesses_satisfy_one_universal_contract() {
+    let catalog = json("assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json");
+    assert_eq!(catalog["schema_version"], 1);
+    let required: BTreeSet<&str> = catalog["capability_contract"]
+        .as_array()
+        .expect("capability contract")
+        .iter()
+        .map(|value| value.as_str().expect("capability"))
+        .collect();
+    for capability in [
+        "native_interactive_session",
+        "native_runtime_provenance",
+        "configured_tool_access",
+        "scoped_workspace",
+        "bounded_failure",
+        "recheckable_result",
+        "effective_permission_boundary",
+        "git_backstop",
+    ] {
+        assert!(required.contains(capability), "missing {capability}");
+    }
+    let mut ids = BTreeSet::new();
+    for harness in catalog["harnesses"].as_array().expect("harnesses") {
+        let id = harness["id"].as_str().expect("harness id");
+        assert!(ids.insert(id), "duplicate harness {id}");
+        assert_eq!(harness["status"], "capability-supported");
+        let capabilities: BTreeSet<&str> = harness["capabilities"]
+            .as_array()
+            .expect("harness capabilities")
+            .iter()
+            .map(|value| value.as_str().expect("capability"))
+            .collect();
+        assert!(
+            required.is_subset(&capabilities),
+            "{id} does not meet the universal contract"
+        );
+        let evidence = harness["evidence"].as_object().expect("harness evidence");
+        assert_eq!(
+            evidence.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            capabilities,
+            "{id} evidence does not map every declared capability"
+        );
+        assert!(
+            evidence.values().all(|references| !references
+                .as_array()
+                .expect("evidence references")
+                .is_empty()),
+            "{id} has incomplete capability evidence"
+        );
+        assert!(
+            harness["version_probe"].is_null() || harness["version_probe"].is_string(),
+            "{id} must name a probe id, never executable command configuration"
+        );
+    }
+    assert_eq!(
+        ids,
+        BTreeSet::from(["claude-code", "codex-app", "codex-cli"])
+    );
+}
+
+#[test]
+fn diagnostic_packs_only_compose_existing_cases() {
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let case_ids: BTreeSet<&str> = cases["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|case| case["id"].as_str().expect("case id"))
+        .collect();
+    let pack_entries = packs["packs"].as_array().expect("packs");
+    let pack_ids: BTreeSet<&str> = pack_entries
+        .iter()
+        .map(|pack| pack["id"].as_str().expect("pack id"))
+        .collect();
+    for pack in pack_entries {
+        let id = pack["id"].as_str().expect("pack id");
+        for included in pack["includes"].as_array().expect("includes") {
+            assert!(
+                pack_ids.contains(included.as_str().expect("included pack")),
+                "{id} includes an unknown pack"
+            );
+        }
+        for case in pack["cases"].as_array().expect("pack cases") {
+            assert!(
+                case_ids.contains(case.as_str().expect("case")),
+                "{id} contains an unknown case"
+            );
+        }
+    }
+    let release = pack_entries
+        .iter()
+        .find(|pack| pack["id"] == "release-smoke")
+        .expect("release-smoke pack");
+    assert!(
+        !release["includes"].as_array().expect("includes").is_empty(),
+        "release-smoke should prove composition rather than duplicate cases"
+    );
+}
+
 fn json(relative: &str) -> Value {
     serde_json::from_str(&read(relative))
         .unwrap_or_else(|error| panic!("parse {relative}: {error}"))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate, materialize, score, compare, and clean CodeFlow model evaluations."""
+"""Validate, materialize, score, compare, qualify, and clean model evaluations."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 RESOURCE_DIR = SKILL_DIR / "resources"
 RUN_MARKER = ".codeflow-eval-run.json"
+MAX_SETTINGS_BYTES = 16 * 1024 * 1024
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
 EVIDENCE_KINDS = frozenset({"session", "tool", "file", "command", "ui"})
@@ -49,6 +50,14 @@ KNOWN_VALIDITY_FLAGS = {
 }
 EVALUATION_ROUTE_PREFIX = "| Qualify a model or harness change |"
 SAFE_BRANCH = re.compile(r"^(?:main|master|fixture/[a-z0-9][a-z0-9-]*)$")
+SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+RFC3339 = re.compile(
+    r"^(?P<date_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]+))?(?P<offset>Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+QUALIFIED_ROLES = frozenset(
+    {"primary", "producer", "reviewer", "evidence-worker"}
+)
 GRADER_MATERIAL_DIRS = (
     ".agents/skills/cf-evaluate-model",
     ".claude/skills/cf-evaluate-model",
@@ -122,10 +131,25 @@ def suite_documents(resource_dir: Path = RESOURCE_DIR) -> tuple[dict, dict, dict
     return requirements, cases, fixtures
 
 
+def qualification_documents(resource_dir: Path = RESOURCE_DIR) -> tuple[dict, dict]:
+    harnesses = load_json(resource_dir / "harnesses.json")
+    packs = load_json(resource_dir / "packs.json")
+    if not all(isinstance(item, dict) for item in (harnesses, packs)):
+        raise EvalError("harnesses and packs must be JSON objects")
+    return harnesses, packs
+
+
 def suite_digest(resource_dir: Path = RESOURCE_DIR) -> str:
     requirements, cases, fixtures = suite_documents(resource_dir)
+    harnesses, packs = qualification_documents(resource_dir)
     return canonical_digest(
-        {"requirements": requirements, "cases": cases, "fixtures": fixtures}
+        {
+            "requirements": requirements,
+            "cases": cases,
+            "fixtures": fixtures,
+            "harnesses": harnesses,
+            "packs": packs,
+        }
     )
 
 
@@ -158,6 +182,25 @@ def evidence_errors(value: Any, label: str, *, allow_empty: bool = False) -> lis
     return errors
 
 
+def is_rfc3339(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    matched = RFC3339.fullmatch(value)
+    if matched is None:
+        return False
+    offset = "+00:00" if matched["offset"] == "Z" else matched["offset"]
+    # datetime validates the calendar, clock, and offset. Omitting the
+    # fractional component keeps arbitrary RFC 3339 precision portable across
+    # supported Python versions instead of depending on fromisoformat's
+    # version-specific precision handling.
+    candidate = matched["date_time"] + offset
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
 def unique_objects(items: Any, label: str) -> dict[str, dict]:
     if not isinstance(items, list):
         raise EvalError(f"{label} must be an array")
@@ -172,23 +215,184 @@ def unique_objects(items: Any, label: str) -> dict[str, dict]:
     return indexed
 
 
+def harness_catalog(resource_dir: Path = RESOURCE_DIR) -> dict[str, dict]:
+    harnesses_doc, _ = qualification_documents(resource_dir)
+    return unique_objects(harnesses_doc.get("harnesses"), "harnesses")
+
+
+def pack_catalog(resource_dir: Path = RESOURCE_DIR) -> dict[str, dict]:
+    _, packs_doc = qualification_documents(resource_dir)
+    return unique_objects(packs_doc.get("packs"), "packs")
+
+
+def resolve_pack(
+    pack_id: str, resource_dir: Path = RESOURCE_DIR
+) -> list[str]:
+    packs = pack_catalog(resource_dir)
+    cases = unique_objects(
+        suite_documents(resource_dir)[1].get("cases"), "cases"
+    )
+    resolved: list[str] = []
+    seen_cases: set[str] = set()
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(current: str) -> None:
+        if current not in packs:
+            raise EvalError(f"unknown evaluation pack {current!r}")
+        if current in visiting:
+            raise EvalError(f"evaluation pack cycle contains {current!r}")
+        if current in visited:
+            return
+        visiting.add(current)
+        pack = packs[current]
+        for included in string_list(
+            pack.get("includes"), f"{current}.includes", allow_empty=True
+        ):
+            visit(included)
+        for case_id in string_list(
+            pack.get("cases"), f"{current}.cases", allow_empty=True
+        ):
+            if case_id not in cases:
+                raise EvalError(f"{current}: unknown case {case_id!r}")
+            if case_id not in seen_cases:
+                resolved.append(case_id)
+                seen_cases.add(case_id)
+        visiting.remove(current)
+        visited.add(current)
+
+    visit(pack_id)
+    if not resolved:
+        raise EvalError(f"evaluation pack {pack_id!r} resolves to no cases")
+    return resolved
+
+
 def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
     errors: list[str] = []
     try:
         requirements_doc, cases_doc, fixtures_doc = suite_documents(resource_dir)
+        harnesses_doc, packs_doc = qualification_documents(resource_dir)
         if requirements_doc.get("schema_version") != 1:
             errors.append("requirements schema_version must be 1")
         if cases_doc.get("schema_version") != 1:
             errors.append("cases schema_version must be 1")
         if fixtures_doc.get("schema_version") != 1:
             errors.append("fixtures schema_version must be 1")
+        if harnesses_doc.get("schema_version") != 1:
+            errors.append("harnesses schema_version must be 1")
+        if packs_doc.get("schema_version") != 1:
+            errors.append("packs schema_version must be 1")
         requirements = unique_objects(
             requirements_doc.get("requirements"), "requirements"
         )
         cases = unique_objects(cases_doc.get("cases"), "cases")
         fixtures = unique_objects(fixtures_doc.get("fixtures"), "fixtures")
+        harnesses = unique_objects(harnesses_doc.get("harnesses"), "harnesses")
+        packs = unique_objects(packs_doc.get("packs"), "packs")
     except EvalError as error:
         return [str(error)]
+
+    try:
+        capability_contract_list = string_list(
+            harnesses_doc.get("capability_contract"),
+            "harnesses.capability_contract",
+        )
+        capability_contract = set(capability_contract_list)
+        if len(capability_contract) != len(capability_contract_list):
+            errors.append("harnesses.capability_contract contains a duplicate")
+    except EvalError as error:
+        errors.append(str(error))
+        capability_contract = set()
+    for harness_id, harness in harnesses.items():
+        if not SAFE_ID.fullmatch(harness_id):
+            errors.append(f"{harness_id}: unsafe harness id")
+        for field in ("provider", "lineage"):
+            if not isinstance(harness.get(field), str) or not harness[field].strip():
+                errors.append(f"{harness_id}: missing {field}")
+        if harness.get("status") != "capability-supported":
+            errors.append(
+                f"{harness_id}: only capability-supported harnesses may be listed"
+            )
+        try:
+            capabilities = set(
+                string_list(
+                    harness.get("capabilities"), f"{harness_id}.capabilities"
+                )
+            )
+        except EvalError as error:
+            errors.append(str(error))
+            capabilities = set()
+        if isinstance(harness.get("capabilities"), list) and len(capabilities) != len(
+            harness["capabilities"]
+        ):
+            errors.append(f"{harness_id}: duplicate capability")
+        missing_capabilities = capability_contract - capabilities
+        if missing_capabilities:
+            errors.append(
+                f"{harness_id}: missing contract capabilities: "
+                + ", ".join(sorted(missing_capabilities))
+            )
+        probe = harness.get("version_probe")
+        if probe is not None and (
+            not isinstance(probe, str) or not SAFE_ID.fullmatch(probe)
+        ):
+            errors.append(
+                f"{harness_id}.version_probe must be null or a safe probe id"
+            )
+        evidence = harness.get("evidence")
+        if not isinstance(evidence, dict):
+            errors.append(f"{harness_id}.evidence must be an object")
+        else:
+            if set(evidence) != capabilities:
+                errors.append(
+                    f"{harness_id}.evidence must map every declared capability exactly"
+                )
+            for capability in sorted(capabilities):
+                try:
+                    references = string_list(
+                        evidence.get(capability),
+                        f"{harness_id}.evidence.{capability}",
+                    )
+                    for reference in references:
+                        try:
+                            project_evidence_file(root, reference)
+                        except EvalError as error:
+                            errors.append(
+                                f"{harness_id}.evidence.{capability}: "
+                                f"{error}"
+                            )
+                except EvalError as error:
+                    errors.append(str(error))
+
+    for pack_id, pack in packs.items():
+        if not SAFE_ID.fullmatch(pack_id):
+            errors.append(f"{pack_id}: unsafe pack id")
+        if not isinstance(pack.get("description"), str) or not pack[
+            "description"
+        ].strip():
+            errors.append(f"{pack_id}: missing description")
+        try:
+            includes = string_list(
+                pack.get("includes"), f"{pack_id}.includes", allow_empty=True
+            )
+            selected_cases = string_list(
+                pack.get("cases"), f"{pack_id}.cases", allow_empty=True
+            )
+            for included in includes:
+                if included not in packs:
+                    errors.append(f"{pack_id}: unknown included pack {included!r}")
+            for case_id in selected_cases:
+                if case_id not in cases:
+                    errors.append(f"{pack_id}: unknown case {case_id!r}")
+            if len(selected_cases) != len(set(selected_cases)):
+                errors.append(f"{pack_id}: duplicate case")
+        except EvalError as error:
+            errors.append(str(error))
+    for pack_id in packs:
+        try:
+            resolve_pack(pack_id, resource_dir)
+        except EvalError as error:
+            errors.append(str(error))
 
     covered_requirements: set[str] = set()
     used_fixtures: set[str] = set()
@@ -405,6 +609,25 @@ def refuse_symlink_components(path: Path, stop: Path) -> None:
         if current.is_symlink():
             raise EvalError(f"refusing symlink path component: {current}")
         current = current.parent
+
+
+def project_evidence_file(root: Path, reference: str) -> Path:
+    """Resolve a retained evidence file without leaving or aliasing the project."""
+
+    project = root.resolve()
+    relative = safe_relative_path(reference)
+    candidate = project / relative
+    refuse_symlink_components(candidate, project)
+    if not candidate.is_file():
+        raise EvalError(f"missing project evidence reference {reference!r}")
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(project)
+    except ValueError as error:
+        raise EvalError(
+            f"project evidence reference escapes the project: {reference!r}"
+        ) from error
+    return resolved
 
 
 def run_command(args: list[str], cwd: Path) -> None:
@@ -782,6 +1005,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
         return ["result must be an object"]
     _, cases_doc, _ = suite_documents()
     cases = unique_objects(cases_doc["cases"], "cases")
+    harnesses = harness_catalog()
     if result.get("schema_version") != 1:
         errors.append("result.schema_version must be 1")
     if not isinstance(result.get("run_id"), str) or not result["run_id"].strip():
@@ -820,12 +1044,11 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
         ):
             if not isinstance(system.get(field), str) or not system[field].strip():
                 errors.append(f"result.system.{field} must be a nonempty string")
-        if system.get("harness") not in {
-            "codex-app",
-            "codex-cli",
-            "claude-code",
-        }:
-            errors.append("result.system.harness is not a native interactive harness")
+        harness_id = system.get("harness")
+        if harness_id not in harnesses:
+            errors.append(
+                "result.system.harness is not in the capability-supported harness catalog"
+            )
         settings_digest = system.get("settings_digest")
         if not isinstance(settings_digest, str) or not DIGEST.fullmatch(
             settings_digest
@@ -894,6 +1117,10 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
                         value = peer.get(field)
                         if not isinstance(value, str) or not value.strip():
                             errors.append(f"{label}.{field} must be a nonempty string")
+                    if peer.get("harness") not in harnesses:
+                        errors.append(
+                            f"{label}.harness is not in the capability-supported harness catalog"
+                        )
                     seat = peer.get("seat")
                     if isinstance(seat, str) and seat:
                         if seat in seen_seats:
@@ -1047,16 +1274,22 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
         errors.append("result.human_approval is missing or invalid")
     else:
         if approval.get("decision") == "approved":
-            for field in ("reviewer", "reviewed_at"):
-                if not isinstance(approval.get(field), str) or not approval[
-                    field
-                ].strip():
-                    errors.append(
-                        f"result.human_approval.{field} is required when approved"
-                    )
+            reviewer = approval.get("reviewer")
+            if not isinstance(reviewer, str) or not reviewer.strip():
+                errors.append(
+                    "result.human_approval.reviewer is required when approved"
+                )
+            if not is_rfc3339(approval.get("reviewed_at")):
+                errors.append(
+                    "result.human_approval.reviewed_at must be RFC 3339 when approved"
+                )
         if require_approval and approval.get("decision") != "approved":
             errors.append("promotion validation requires explicit human approval")
     if require_approval:
+        try:
+            verified_observed_binding(result, "promotion result")
+        except (EvalError, KeyError) as error:
+            errors.append(str(error))
         hard_requirements = {
             requirement["id"]
             for requirement in suite_documents()[0]["requirements"]
@@ -1362,6 +1595,129 @@ def compare_results(
     return "\n".join(report) + "\n", not blocking_regressions and not promotion_errors
 
 
+def file_digest(path: Path) -> str:
+    try:
+        with path.open("rb") as source:
+            data = source.read(MAX_SETTINGS_BYTES + 1)
+    except OSError as error:
+        raise EvalError(f"cannot read settings source {path}: {error}") from error
+    if len(data) > MAX_SETTINGS_BYTES:
+        raise EvalError(
+            f"settings source exceeds {MAX_SETTINGS_BYTES} bytes: {path}"
+        )
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def qualified_binding_record(
+    result: dict,
+    *,
+    binding_id: str,
+    roles: list[str],
+    settings_files: list[Path],
+) -> dict:
+    """Build the non-secret local record for a human-approved full result."""
+
+    if not SAFE_ID.fullmatch(binding_id):
+        raise EvalError(
+            "binding id must contain only lowercase letters, digits, dot, dash, "
+            "or underscore and start with a letter or digit"
+        )
+    normalized_roles = sorted(set(roles))
+    if not normalized_roles:
+        raise EvalError("at least one qualified role is required")
+    unknown_roles = set(normalized_roles) - QUALIFIED_ROLES
+    if unknown_roles:
+        raise EvalError(
+            "unknown qualified roles: " + ", ".join(sorted(unknown_roles))
+        )
+    promotion_errors = validate_result(result, require_approval=True)
+    if promotion_errors:
+        raise EvalError(
+            "cannot record an unqualified binding:\n- "
+            + "\n- ".join(promotion_errors)
+        )
+    system = result["system"]
+    harness = harness_catalog()[system["harness"]]
+    observed = system["observed"]
+    sources: list[dict[str, str]] = []
+    seen_paths: set[Path] = set()
+    for supplied in settings_files:
+        path = supplied.expanduser().resolve()
+        if path in seen_paths:
+            continue
+        if not path.is_file():
+            raise EvalError(f"settings source is not a regular file: {path}")
+        seen_paths.add(path)
+        sources.append({"path": str(path), "digest": file_digest(path)})
+    approval = result["human_approval"]
+    return {
+        "schema_version": 1,
+        "binding_id": binding_id,
+        "provider": harness["provider"],
+        "lineage": harness["lineage"],
+        "eligible_roles": normalized_roles,
+        "qualified_at": approval["reviewed_at"],
+        "requested": {
+            "model": system["model"],
+            "effort": system["effort"],
+            "harness": system["harness"],
+            "harness_version": system["harness_version"],
+            "settings_digest": system["settings_digest"],
+        },
+        "observed": {
+            "model": observed["model"],
+            "effort": observed["effort"],
+            "evidence": [
+                {"kind": item["kind"], "digest": item["digest"]}
+                for item in observed["evidence"]
+            ],
+        },
+        "qualification": {
+            "run_id": result["run_id"],
+            "suite": result["suite"],
+            "suite_digest": result["suite_digest"],
+            "result_digest": canonical_digest(result),
+            "codeflow_revision": system["codeflow_revision"],
+        },
+        "settings_sources": sources,
+        "approval": {
+            "reviewer": approval["reviewer"],
+            "reviewed_at": approval["reviewed_at"],
+        },
+    }
+
+
+def qualified_binding_output(path: Path) -> Path:
+    override = os.environ.get("CODEFLOW_HOME", "").strip()
+    home = Path(override).expanduser() if override else Path.home() / ".codeflow"
+    directory = (home / "qualified-bindings").resolve()
+    output = path.expanduser().resolve()
+    if output.parent != directory or output.suffix != ".json":
+        raise EvalError(
+            "binding output must be a direct .json child of "
+            f"{directory}"
+        )
+    return output
+
+
+def write_qualified_binding(path: Path, record: dict) -> None:
+    output = qualified_binding_output(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        output.parent.chmod(0o700)
+    except OSError as error:
+        raise EvalError(
+            f"cannot make qualified-binding directory owner-only: {error}"
+        ) from error
+    write_json_atomic(output, record)
+    try:
+        output.chmod(0o600)
+    except OSError as error:
+        raise EvalError(
+            f"cannot make qualified-binding record owner-only: {error}"
+        ) from error
+
+
 def cleanup_run(run_root: Path, confirmation: str) -> None:
     raw = run_root.expanduser()
     if raw.is_symlink():
@@ -1388,6 +1744,10 @@ def parser() -> argparse.ArgumentParser:
     validate_suite_cmd.add_argument("--project-root", type=Path)
     validate_suite_cmd.add_argument("--resources", type=Path, default=RESOURCE_DIR)
 
+    list_cases_cmd = sub.add_parser("list-cases")
+    list_cases_cmd.add_argument("--pack", required=True)
+    list_cases_cmd.add_argument("--resources", type=Path, default=RESOURCE_DIR)
+
     materialize_cmd = sub.add_parser("materialize")
     materialize_cmd.add_argument("--run-root", required=True, type=Path)
     materialize_cmd.add_argument("--case", required=True)
@@ -1409,6 +1769,18 @@ def parser() -> argparse.ArgumentParser:
     compare_cmd.add_argument("candidate", type=Path)
     compare_cmd.add_argument("--variable")
 
+    record_cmd = sub.add_parser("record-binding")
+    record_cmd.add_argument("result", type=Path)
+    record_cmd.add_argument("--binding-id", required=True)
+    record_cmd.add_argument(
+        "--role",
+        action="append",
+        required=True,
+        choices=sorted(QUALIFIED_ROLES),
+    )
+    record_cmd.add_argument("--settings-file", action="append", type=Path, default=[])
+    record_cmd.add_argument("--output", required=True, type=Path)
+
     cleanup_cmd = sub.add_parser("cleanup")
     cleanup_cmd.add_argument("--run-root", required=True, type=Path)
     cleanup_cmd.add_argument("--confirm", required=True)
@@ -1427,6 +1799,10 @@ def main() -> int:
                     print(f"- {error}")
                 return 1
             print(f"suite valid: {suite_digest(args.resources.resolve())}")
+            return 0
+        if args.command == "list-cases":
+            for case_id in resolve_pack(args.pack, args.resources.resolve()):
+                print(case_id)
             return 0
         if args.command == "materialize":
             print(
@@ -1468,6 +1844,17 @@ def main() -> int:
             )
             print(report, end="")
             return 0 if promotable else 1
+        if args.command == "record-binding":
+            record = qualified_binding_record(
+                load_json(args.result),
+                binding_id=args.binding_id,
+                roles=args.role,
+                settings_files=args.settings_file,
+            )
+            output = qualified_binding_output(args.output)
+            write_qualified_binding(output, record)
+            print(f"qualified binding written: {output}")
+            return 0
         if args.command == "cleanup":
             cleanup_run(args.run_root, args.confirm)
             print("evaluation run root removed")

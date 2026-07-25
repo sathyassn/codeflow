@@ -10,8 +10,12 @@ transport/coordinator, not duties or quality. One obvious local edit needs no
 duo; material judgment, research, multiple surfaces, or deeper evidence does.
 
 Read [resources/quality-contract.md](resources/quality-contract.md) and
-[resources/capability-routing.md](resources/capability-routing.md) before
-planning. They are the shared contracts for quality and task assignment.
+[resources/capability-routing.md](resources/capability-routing.md), then load
+the current concrete seats from
+[resources/current-ensemble.json](resources/current-ensemble.json), before
+planning. The markdown resources own durable quality and task assignment;
+the JSON record owns fast-changing model selectors, effort defaults, internal
+worker classes, and escalation triggers.
 Harness-specific agents are adapters, not alternate sources of truth.
 
 ## Outcome modes
@@ -46,16 +50,14 @@ implementation stage for an analysis-only request.
   seat reviews the settled design and integrated diff, reruns relevant tests,
   and owns the final quality verdict. Codex supplies independent review for a
   Fable-authored unit; Fable's integrated pass is not independent unit review.
-- **Evidence-routed reasoning seats.** Cross-model callers invoke the latest
-  Fable-class Claude model directly at high effort by default. Invoke GPT-5.6
-  Sol or its strongest supported successor Codex coding seat directly at high.
-  Escalate either primary to xhigh for capability-sensitive/long-horizon work,
-  material ambiguity, cross-cutting architecture/security, unresolved
-  disagreement, or failed/stalled high work. Fable may route Opus-class workers
-  at medium/high; Codex may use verified Sol medium/high or qualified Terra-class
-  workers. Fable alone owns Claude-side internal routing.
-  Primaries retain plan/approval duties; never assume worker routing or usage
-  state, and never let an internal worker replace either duo seat.
+- **Qualified reasoning seats.** Use the concrete selectors, default effort,
+  escalation effort/triggers, and permitted internal worker classes in the
+  current ensemble record. The durable rule is unchanged when those bindings
+  evolve: invoke each primary directly, let the owning primary control its
+  internal routing, retain primary planning/approval duties, never infer worker
+  routing or usage state, and never let a worker replace a primary or named
+  cross-lineage reviewer. A concrete binding change is usable only after
+  native-interactive qualification and explicit promotion.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -140,12 +142,14 @@ Never simulate a missing vendor with another host-model instance.
      do not treat a status subcommand as authoritative when it contradicts a
      working authenticated TTY.
    - Claude-host lane: the `codex@openai-codex` plugin is enabled and
-     `/codex:setup` succeeds. Pass `--effort high` on the plugin task/rescue
-     invocation by default, or `--effort xhigh` when an escalation trigger
-     applies; do not inherit an unobserved user default.
-   - Codex-host lane: choose Fable high/xhigh by the invariant above, then start
+     `/codex:setup` succeeds. Pass the Codex primary selector and default
+     effort from the current ensemble record on the plugin task/rescue
+     invocation, or its escalation effort when a recorded trigger applies; do
+     not inherit an unobserved user default.
+   - Codex-host lane: choose the Claude primary selector and effort from the
+     current ensemble record, then start
      Claude directly in a dedicated tmux session rooted at the worktree with
-     `--model fable --effort high --permission-mode auto --settings
+     `--model <selector> --effort <effort> --permission-mode auto --settings
      <state-dir>/settings.json` and complete one scoped interactive canary.
      Make `autoMode.classifyAllShell` effective at user scope; Claude
      intentionally ignores it from repository settings, and repeated
@@ -158,7 +162,7 @@ Never simulate a missing vendor with another host-model instance.
      `cf-delegate` sibling Stop-hook preflight. If Fable or auto mode is
      unavailable, record the exact capability gap and use the strongest
      supported Claude reasoning model with `acceptEdits` plus the same
-     fail-closed sandbox; replace `high` with `xhigh` when an escalation trigger
+     fail-closed sandbox; use the record's escalation effort when a trigger
      applies. Never fall through to bypass mode on an ordinary host.
 4. Verify the autonomy boundary through the effective settings, not prose:
    - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
@@ -270,11 +274,11 @@ For a Claude host, use the official plugin for Codex-produced or Codex-reviewed
 units:
 
 - `/codex:review` or `/codex:adversarial-review` for read-only critiques;
-- `/codex:rescue --effort high` for ordinary production and verification,
-  replacing `high` with `xhigh` only on a recorded trigger;
+- `/codex:rescue --model <selector> --effort <effort>` for production and
+  verification, taking both values from the current ensemble record;
 - `/codex:transfer` for a persistent task visible in Codex App/TUI.
 
-Apply the same explicit `--effort high|xhigh` selection to every plugin task
+Apply the same explicit selector and effort selection to every plugin task
 that starts a primary Codex reasoning turn. Every plugin exchange must yield a
 native Codex thread ID, recheckable through the plugin or the native Codex
 surface — a generic Claude subagent or an unverified relay never counts as

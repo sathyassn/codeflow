@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "capability_contract": [
+    "native_interactive_session",
+    "native_runtime_provenance",
+    "configured_tool_access",
+    "scoped_workspace",
+    "bounded_failure",
+    "recheckable_result",
+    "effective_permission_boundary",
+    "git_backstop"
+  ],
+  "harnesses": [
+    {
+      "id": "claude-code",
+      "provider": "anthropic",
+      "lineage": "claude",
+      "status": "capability-supported",
+      "capabilities": [
+        "native_interactive_session",
+        "native_runtime_provenance",
+        "configured_tool_access",
+        "scoped_workspace",
+        "bounded_failure",
+        "recheckable_result",
+        "effective_permission_boundary",
+        "git_backstop"
+      ],
+      "version_probe": "claude-cli-version",
+      "evidence": {
+        "native_interactive_session": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "native_runtime_provenance": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "configured_tool_access": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "scoped_workspace": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "bounded_failure": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "recheckable_result": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "effective_permission_boundary": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "git_backstop": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"]
+      }
+    },
+    {
+      "id": "codex-cli",
+      "provider": "openai",
+      "lineage": "codex",
+      "status": "capability-supported",
+      "capabilities": [
+        "native_interactive_session",
+        "native_runtime_provenance",
+        "configured_tool_access",
+        "scoped_workspace",
+        "bounded_failure",
+        "recheckable_result",
+        "effective_permission_boundary",
+        "git_backstop"
+      ],
+      "version_probe": "codex-cli-version",
+      "evidence": {
+        "native_interactive_session": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "native_runtime_provenance": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "configured_tool_access": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "scoped_workspace": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "bounded_failure": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "recheckable_result": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "effective_permission_boundary": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "git_backstop": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"]
+      }
+    },
+    {
+      "id": "codex-app",
+      "provider": "openai",
+      "lineage": "codex",
+      "status": "capability-supported",
+      "capabilities": [
+        "native_interactive_session",
+        "native_runtime_provenance",
+        "configured_tool_access",
+        "scoped_workspace",
+        "bounded_failure",
+        "recheckable_result",
+        "effective_permission_boundary",
+        "git_backstop"
+      ],
+      "version_probe": null,
+      "evidence": {
+        "native_interactive_session": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "native_runtime_provenance": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "configured_tool_access": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "scoped_workspace": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "bounded_failure": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "recheckable_result": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "effective_permission_boundary": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "git_backstop": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"]
+      }
+    }
+  ]
+}

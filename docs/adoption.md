@@ -319,6 +319,49 @@ backdoor to it. See cf-method's "Managing a body of work" for the full procedure
 
 ## Model and harness upgrades
 
+CodeFlow separates stable method from changing bindings (ADR-0039):
+
+```text
+durable doctrine
+  -> universal harness capability contract
+    -> approved concrete binding evidence
+      -> current ensemble policy
+```
+
+The orchestrator and quality/routing resources own duties that should survive
+model releases. `harnesses.json` owns the minimum guarantees and evidence for
+each capability-supported native harness; that catalog status does not qualify
+a model. A promoted local record binds one actual model, effort, harness,
+settings digest, and approved full result.
+`current-ensemble.json` alone selects the current primaries, effort defaults,
+worker classes, and escalation triggers.
+
+For a model upgrade on a capability-supported harness, evaluate the new
+concrete binding and update the ensemble record; do not rewrite the doctrine. A
+new harness additionally needs evidence for every universal capability and
+only the transport-specific code or instructions its observed behavior
+requires. It becomes eligible for a concrete binding only after the full
+native evaluation and approval. Removing a harness retires its
+catalog/ensemble entry while keeping graceful degradation. None of these paths
+adds automatic discovery, promotion, routing, or vendor-internal worker
+tracking.
+
+The maintenance boundary is deliberate:
+
+| Change | Update | Re-prove | Do not add |
+|---|---|---|---|
+| New model/version or effort policy on a supported harness | `current-ensemble.json`, then a promoted binding record | Controlled full native evaluation with requested/observed identity | Doctrine rewrites or automatic routing |
+| Material harness release/configuration change | Capability evidence only if the contract changed; refresh the concrete binding | Native capability canary plus full binding qualification where behavior or settings changed | An inferred pass from `--version` alone |
+| Genuinely new harness/provider | One catalog entry and the smallest reviewed transport/probe seam actually required | Every universal capability, then each production binding | Generic plugin machinery, arbitrary catalog commands, or speculative providers |
+| Durable orchestration duty change | Doctrine/quality/routing contract and linked requirement/cases | Regression and over-trigger cases plus both primary judgments | Binding facts duplicated through many skills |
+| Harness/model retirement | Remove its ensemble use and catalog support when no retained binding needs it | Graceful-degradation and remaining-ensemble canaries | Harness-internal worker tracking |
+| Diagnostic case grouping | `packs.json` only | Pack resolution and underlying unchanged cases | A promotion shortcut |
+
+This division keeps model-family upgrades localized while making a new harness
+earn the guarantees CodeFlow depends on. The evaluator and human approval
+promote evidence; neither the catalog, doctor, nor current ensemble promotes
+anything automatically.
+
 Do not promote a new production model, harness release, permission profile, or
 material instruction rewrite from a single successful task. Run
 `/cf-evaluate-model` from the orchestrated maintenance flow: validate the
@@ -327,7 +370,12 @@ the candidate through its native interactive harness with the real tools/MCPs,
 run the full three-trial suite, independently grade retained evidence, and
 compare it with the pinned baseline. A hard semantic regression blocks even
 when the candidate is faster or uses fewer tokens. Preserve the result and
-review evidence, then use the skill's marker+run-ID-gated cleanup for fixtures;
+review evidence. An approved full result may produce a compact non-secret
+record under `~/.codeflow/qualified-bindings/`; `codeflow doctor --check
+model-bindings` reports requested/observed contradictions and observable
+harness/settings drift without inferring live model state. Diagnostic packs
+help isolate failures but never qualify a binding. Then use the skill's
+marker+run-ID-gated cleanup for fixtures;
 never use it against the consuming project itself (ADR-0027).
 
 ## Enforcement planes — who catches what

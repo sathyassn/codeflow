@@ -14,6 +14,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Model and harness evolution now has qualified bindings (ADR-0039).**
+  Durable independent planning, Claude-led design, capability-routed
+  production, cross-lineage review, integrated Claude judgment, and graceful
+  degradation remain unchanged. One current ensemble record now owns concrete
+  model selectors, effort policy, worker classes, and escalation triggers; a
+  universal native-harness capability catalog replaces the evaluator's
+  hard-coded harness enum. Catalog entries mean capability support, not
+  concrete model-binding qualification. Composable diagnostic packs select existing cases
+  without weakening full promotion. Approved full-suite results can emit
+  compact non-secret local binding records, and a fourteenth doctor check
+  reports requested/observed contradictions plus observable harness-version and
+  settings drift without launching, scraping, or automatically routing a
+  model. Catalogs may name only code-allowlisted version probes; they cannot
+  supply commands or arguments.
 - **Critical-path focus now preserves bounded quality work (ADR-0038).**
   Materiality and the dependency presently controlling the accepted outcome are
   treated as related but distinct. Models protect all quality and safety gates,

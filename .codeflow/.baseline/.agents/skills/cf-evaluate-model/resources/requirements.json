@@ -57,10 +57,10 @@
     {
       "id": "CF-MM-007",
       "level": "hard",
-      "statement": "The directly invoked Fable-class seat owns Claude judgment; it may route deterministic UI/MCP collection to Opus medium and ambiguous multi-step tool operation to Opus high, but workers never settle the judgment.",
+      "statement": "The directly invoked primary Fable-class seat owns Claude judgment; only the owning primary may use qualified internal routes from the current ensemble, and workers never settle the judgment.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Fable-class Claude model directly", "Opus-class workers at medium/high", "Fable alone owns Claude-side internal routing"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Opus-class workers at medium for deterministic evidence collection", "high for ambiguous/multi-step operation"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Fable owns integrated Claude judgment", "let the owning primary control its internal routing", "never let a worker replace a primary"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["\"model_class\": \"latest-fable\"", "\"model_class\": \"latest-opus\"", "\"effort\": \"medium\"", "\"effort\": \"high\"", "without transferring judgment"]}
       ]
     },
     {
@@ -82,9 +82,10 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke the Fable and Codex primary seats directly at high by default, escalate to xhigh only on defined triggers, preserve primary plan/approval duties, leave Claude-side routing to Fable, and use Codex workers only through verified native routing.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort, escalate only on its defined triggers, preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["directly at high effort by default", "Escalate either primary to xhigh", "Codex coding seat directly", "qualified Terra-class workers", "Fable alone owns Claude-side internal routing", "never let an internal worker replace either duo seat"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Use the concrete selectors", "invoke each primary directly", "retain primary planning/approval duties", "never let a worker replace a primary"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["\"default_effort\": \"high\"", "\"escalation_effort\": \"xhigh\"", "\"model_class\": \"qualified-terra-worker\"", "Claude-side internal routing belongs to the Claude primary", "Unobserved model, effort, worker routing, availability, and usage remain unknown"]}
       ]
     },
     {
@@ -307,6 +308,16 @@
       "statement": "Token efficiency is evaluated as reliable contract adherence per loaded token and never authorizes removal or weakening of a semantic duty.",
       "sources": [
         {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["Token consciousness means reliable adherence per loaded token", "never authorizes deleting a duty"]}
+      ]
+    },
+    {
+      "id": "CF-EVAL-002",
+      "level": "hard",
+      "statement": "A concrete model binding is promoted only through a capability-supported native harness and an approved full-suite result whose requested and observed model/effort match; catalog support, diagnostic packs, unobserved aliases, protocol presence, and automatic routing never substitute for binding qualification.",
+      "sources": [
+        {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["minimum native harness capability contract", "even `release-smoke` is not a promotion suite", "After a full result passes promotion validation", "live model/effort remains a native-session observation"]},
+        {"path": ".agents/skills/cf-evaluate-model/resources/protocol.md", "markers": ["Adding a harness requires evidence for every capability plus the full model suite", "Promotion additionally requires `system.observed`", "requested and observed model/effort match", "runtime routing config, or permission to auto-promote"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["A changed concrete binding requires native-interactive qualification before promotion"]}
       ]
     }
   ]

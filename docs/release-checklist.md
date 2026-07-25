@@ -55,6 +55,14 @@ named human release decision.
 
 - [ ] The host-neutral Claude+Codex contract and evaluator fixtures pass with
       the currently supported model/harness bindings.
+- [ ] The current ensemble selectors and effort/worker policy match the models
+      actually qualified for this release; every `capability-supported`
+      harness catalog entry still satisfies the universal capability contract.
+      Catalog support is not binding qualification. Any changed concrete
+      binding has an approved full native result, not only a diagnostic pack.
+- [ ] `codeflow doctor --check model-bindings` passes for each retained local
+      promotion record, or records the exact non-probeable native canary needed;
+      requested/observed identity and settings/version drift are resolved.
 - [ ] Both native interactive directions complete a scoped tool/MCP canary;
       evidence records versions, effort, tool access, and graceful degradation.
 - [ ] Each task records its producer and cross-lineage reviewer with verified

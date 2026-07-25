@@ -92,20 +92,17 @@ observed. Grade inferred completion explicitly as inferred.
 
 ## Native host routes
 
-- Claude host: the primary Fable-class seat coordinates at high by default,
-  escalates to xhigh on the shared triggers, may route bounded native operations
-  to current Opus-class workers at medium for deterministic evidence collection
-  or high for ambiguous/multi-step operation, and calls the primary Codex coding
-  seat at high by default. Fable owns Claude-side routing and judgment.
-- Codex host: the primary Sol-class seat coordinates at high by default,
-  escalates to xhigh on the shared triggers, may use verified native Sol
-  medium/high or qualified Terra-class workers for bounded work, and calls the
-  primary Fable-class seat at high by default. Fable owns all Claude-side
-  internal routing; Codex does not select Opus directly.
+The durable route is primary-owned: the active primary coordinates at the
+recorded default effort, invokes the other-lineage primary directly, and may
+use only the bounded internal routes its own seat exposes and has qualified.
+Claude owns Claude-side routing and integrated judgment; a Codex host never
+selects a Claude worker directly. Concrete selectors, model classes, effort
+defaults, and escalation triggers live only in
+[current-ensemble.json](current-ensemble.json).
 
-Model names are routing classes, not frozen version pins. Record the actual
-model, effort, route, and canary evidence. An unverified worker route is
-unavailable, not an invitation to guess or invoke it headlessly.
+Treat model names as qualified current bindings, not permanent doctrine.
+Record actual model, effort, route, and canary evidence. An unverified worker
+route is unavailable, not an invitation to guess or invoke it headlessly.
 
 ## Review and degradation
 

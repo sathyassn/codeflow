@@ -1,6 +1,6 @@
 //! User-level cross-repo state under `~/.codeflow/` (charter §7 layer 3, §8).
 //!
-//! Two files live here:
+//! User-owned state lives here:
 //!
 //! - `registry.json` — the flock-guarded registry of initialized repos
 //!   (path, name, tier, scaffold version, last activity). Upserted by a
@@ -8,6 +8,8 @@
 //!   inside an initialized repo. A view, not a system: no daemon, lazy
 //!   sync at query time.
 //! - `config.toml` — user defaults, read if present, never required.
+//! - `qualified-bindings/` — compact, non-secret indexes of human-approved
+//!   native model+harness evaluations.
 //!
 //! The home directory honors the `CODEFLOW_HOME` environment override so
 //! tests (and unusual setups) can redirect all user-level state.
@@ -72,6 +74,12 @@ pub fn recall_db_path(home: &Path) -> PathBuf {
 #[must_use]
 pub fn user_config_path(home: &Path) -> PathBuf {
     home.join("config.toml")
+}
+
+/// Directory of promoted model+harness binding records.
+#[must_use]
+pub fn qualified_bindings_path(home: &Path) -> PathBuf {
+    home.join("qualified-bindings")
 }
 
 // ---------------------------------------------------------------------------

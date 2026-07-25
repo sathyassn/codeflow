@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "policy_id": "claude-codex-duo",
+  "bindings": [
+    {
+      "seat": "claude-primary",
+      "provider": "anthropic",
+      "lineage": "claude",
+      "model_class": "latest-fable",
+      "native_selectors": {
+        "claude-code": "fable"
+      },
+      "default_effort": "high",
+      "escalation_effort": "xhigh",
+      "responsibilities": [
+        "independent planning",
+        "design leadership",
+        "plan approval",
+        "integrated design and code judgment",
+        "contextual editorial judgment"
+      ],
+      "internal_routes": [
+        {
+          "model_class": "latest-opus",
+          "effort": "medium",
+          "use": "bounded deterministic tool or UI evidence collection"
+        },
+        {
+          "model_class": "latest-opus",
+          "effort": "high",
+          "use": "ambiguous or multi-step tool operation without transferring judgment"
+        }
+      ]
+    },
+    {
+      "seat": "codex-primary",
+      "provider": "openai",
+      "lineage": "codex",
+      "model_class": "latest-strongest-sol-coding",
+      "native_selectors": {
+        "codex-app": "gpt-5.6-sol",
+        "codex-cli": "gpt-5.6-sol"
+      },
+      "default_effort": "high",
+      "escalation_effort": "xhigh",
+      "responsibilities": [
+        "independent planning",
+        "implementation feasibility",
+        "production when assigned",
+        "first verification when producing",
+        "adversarial implementation and security review"
+      ],
+      "internal_routes": [
+        {
+          "model_class": "qualified-sol-worker",
+          "effort": "medium-or-high",
+          "use": "bounded work through observed native routing"
+        },
+        {
+          "model_class": "qualified-terra-worker",
+          "effort": "medium-or-high",
+          "use": "simple bounded work through observed native routing"
+        }
+      ]
+    }
+  ],
+  "xhigh_triggers": [
+    "capability-sensitive or long-horizon work",
+    "material ambiguity",
+    "cross-cutting architecture or security",
+    "unresolved cross-lineage disagreement",
+    "failed or stalled high-effort work"
+  ],
+  "rules": [
+    "Primary seats retain independent planning and approval duties.",
+    "Internal workers never replace a primary or named cross-lineage reviewer.",
+    "Claude-side internal routing belongs to the Claude primary.",
+    "Unobserved model, effort, worker routing, availability, and usage remain unknown.",
+    "A changed concrete binding requires native-interactive qualification before promotion."
+  ]
+}

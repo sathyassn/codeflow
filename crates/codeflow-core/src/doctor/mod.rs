@@ -6,15 +6,16 @@
 //! v2 surface only: the binary's hook subcommands, harness availability,
 //! `.codeflow/` config validity and writability, and network reachability.
 
-use std::collections::HashMap;
-use std::io::Write;
+use std::collections::{BTreeMap, HashMap};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::DoctorError;
+use crate::model_qualification;
 use crate::scaffold::manifest::{Ownership, RegionFormat};
 use crate::scaffold::region;
 use crate::scaffold::sha256_hex;
@@ -75,6 +76,9 @@ pub struct Options {
     pub exec_command: Option<ExecCommandFn>,
     /// Runs a command with text on stdin and returns its output.
     pub exec_command_stdin: Option<ExecCommandStdinFn>,
+    /// User-owned qualified-binding directory. `None` disables the optional
+    /// check; the CLI supplies `CODEFLOW_HOME/qualified-bindings`.
+    pub qualification_dir: Option<PathBuf>,
 }
 
 impl Options {
@@ -101,6 +105,19 @@ impl Options {
             } else {
                 Err(String::from_utf8_lossy(&output.stderr).to_string())
             }
+        }
+    }
+
+    fn do_exec_bounded(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String, String> {
+        if let Some(f) = self.exec_command {
+            f(cmd, args)
+        } else {
+            run_bounded_command(cmd, args, timeout)
         }
     }
 
@@ -157,6 +174,10 @@ const CI_DEFAULT_DEST: &str = ".github/workflows/codeflow-ci.yml";
 /// Sentinel emitted by the scaffolded CI's placeholder install step (the loud
 /// `::error::` that fails the perimeter RED until the real installer is wired).
 const CI_PLACEHOLDER_MARK: &str = "install step is an unwired PLACEHOLDER";
+const MAX_SETTINGS_BYTES: u64 = 16 * 1024 * 1024;
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const VERSION_PROBE_OUTPUT_BYTES: usize = 64 * 1024;
+const VERSION_PROBE_POLL: Duration = Duration::from_millis(10);
 
 /// Ordered list of all check names.
 const CHECK_NAMES: &[&str] = &[
@@ -167,6 +188,7 @@ const CHECK_NAMES: &[&str] = &[
     "permissions",
     "network",
     "delegates",
+    "model-bindings",
     "delegate-roundtrip",
     "repo-integrity",
     "ci-perimeter",
@@ -194,6 +216,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
     m.insert("delegates", check_delegates);
+    m.insert("model-bindings", check_model_bindings);
     m.insert("delegate-roundtrip", check_delegate_roundtrip);
     m.insert("repo-integrity", check_repo_integrity);
     m.insert("ci-perimeter", check_ci_perimeter);
@@ -440,6 +463,300 @@ fn check_config(opts: &Options) -> CheckResult {
         message: "all .codeflow/ JSON files are valid".into(),
         duration: start.elapsed(),
     }
+}
+
+/// Validate promoted model+harness records and the live drift signals that are
+/// externally observable without launching or scraping a model session.
+///
+/// The check never claims to observe a selected model or reasoning effort.
+/// Those values remain native-interactive evaluation evidence.
+fn check_model_bindings(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let Some(directory) = opts.qualification_dir.as_deref() else {
+        return CheckResult {
+            name: "model-bindings".into(),
+            status: Status::Pass,
+            message: "qualified-binding check not configured for this caller".into(),
+            duration: start.elapsed(),
+        };
+    };
+    let records = match model_qualification::load_bindings(directory) {
+        Ok(records) => records,
+        Err(error) => {
+            return CheckResult {
+                name: "model-bindings".into(),
+                status: Status::Fail,
+                message: format!("invalid qualified-binding record: {error}"),
+                duration: start.elapsed(),
+            };
+        }
+    };
+    if records.is_empty() {
+        return CheckResult {
+            name: "model-bindings".into(),
+            status: Status::Pass,
+            message: format!(
+                "no local promoted model bindings in {} (optional; nothing to drift-check)",
+                directory.display()
+            ),
+            duration: start.elapsed(),
+        };
+    }
+    let catalog = match model_qualification::harness_catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return CheckResult {
+                name: "model-bindings".into(),
+                status: Status::Fail,
+                message: format!("embedded harness catalog invalid: {error}"),
+                duration: start.elapsed(),
+            };
+        }
+    };
+    let (drift, unobservable) = observe_binding_drift(opts, &records, &catalog);
+    if !drift.is_empty() {
+        return CheckResult {
+            name: "model-bindings".into(),
+            status: Status::Warn,
+            message: format!(
+                "binding requalification required: {}. Requested model/effort remain native-session observations, never inferred by doctor",
+                drift.join("; ")
+            ),
+            duration: start.elapsed(),
+        };
+    }
+    if !unobservable.is_empty() {
+        return CheckResult {
+            name: "model-bindings".into(),
+            status: Status::Warn,
+            message: format!(
+                "{} approved binding(s) are structurally valid; {}. Re-run a native canary when freshness matters",
+                records.len(),
+                unobservable.join("; ")
+            ),
+            duration: start.elapsed(),
+        };
+    }
+    CheckResult {
+        name: "model-bindings".into(),
+        status: Status::Pass,
+        message: format!(
+            "{} approved binding(s) passed structural, harness-version, and declared-settings drift checks; live model/effort still require native observation",
+            records.len()
+        ),
+        duration: start.elapsed(),
+    }
+}
+
+fn observe_binding_drift(
+    opts: &Options,
+    records: &[model_qualification::QualifiedBinding],
+    catalog: &BTreeMap<String, model_qualification::HarnessMetadata>,
+) -> (Vec<String>, Vec<String>) {
+    let mut drift = Vec::new();
+    let mut unobservable = Vec::new();
+    for record in records {
+        let harness = &catalog[&record.requested.harness];
+        if let Some(probe_id) = &harness.version_probe {
+            let probe = model_qualification::trusted_version_probe(probe_id)
+                .expect("validated embedded harness probe");
+            match opts.do_look_path(probe.command) {
+                Ok(command) => {
+                    match opts.do_exec_bounded(&command, probe.args, VERSION_PROBE_TIMEOUT) {
+                        Ok(observed)
+                            if probe_version(probe_id, observed.trim())
+                                == Some(record.requested.harness_version.as_str()) => {}
+                        Ok(observed) => drift.push(format!(
+                            "{} harness version changed (qualified {:?}, observed {:?})",
+                            record.binding_id,
+                            record.requested.harness_version,
+                            observed.trim()
+                        )),
+                        Err(error) => drift.push(format!(
+                            "{} harness version probe failed: {error}",
+                            record.binding_id
+                        )),
+                    }
+                }
+                Err(_) => drift.push(format!(
+                    "{} harness command {} is unavailable",
+                    record.binding_id, probe.command
+                )),
+            }
+        } else {
+            unobservable.push(format!(
+                "{} {} version has no external probe",
+                record.binding_id, record.requested.harness
+            ));
+        }
+        for source in &record.settings_sources {
+            match read_bounded(&source.path, MAX_SETTINGS_BYTES) {
+                Ok(bytes) => {
+                    let observed = format!("sha256:{}", sha256_hex(&bytes));
+                    if observed != source.digest {
+                        drift.push(format!(
+                            "{} settings changed at {}",
+                            record.binding_id,
+                            source.path.display()
+                        ));
+                    }
+                }
+                Err(error) => drift.push(format!(
+                    "{} settings source {} cannot be checked: {error}",
+                    record.binding_id,
+                    source.path.display()
+                )),
+            }
+        }
+    }
+    (drift, unobservable)
+}
+
+fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let file = std::fs::File::open(path).map_err(|error| format!("open: {error}"))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read: {error}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(format!("exceeds {max_bytes} byte limit"));
+    }
+    Ok(bytes)
+}
+
+fn probe_version<'a>(probe_id: &str, observed: &'a str) -> Option<&'a str> {
+    let mut tokens = observed.split_ascii_whitespace();
+    match probe_id {
+        "claude-cli-version" => tokens.next(),
+        "codex-cli-version" if tokens.next() == Some("codex-cli") => tokens.next(),
+        _ => None,
+    }
+}
+
+struct ProbeCapture {
+    bytes: Vec<u8>,
+}
+
+fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut command = Command::new(cmd);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().map(spawn_probe_reader);
+    let stderr = child.stderr.take().map(spawn_probe_reader);
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            terminate_process_tree(&mut child);
+            let _ = child.wait();
+            return Err(probe_timeout_message(timeout));
+        }
+        std::thread::sleep(VERSION_PROBE_POLL);
+    };
+    let stdout = receive_probe_reader(stdout, started, timeout).map_err(|error| {
+        terminate_process_tree(&mut child);
+        if error == "timed out" {
+            probe_timeout_message(timeout)
+        } else {
+            error
+        }
+    })?;
+    let stderr = receive_probe_reader(stderr, started, timeout).map_err(|error| {
+        terminate_process_tree(&mut child);
+        if error == "timed out" {
+            probe_timeout_message(timeout)
+        } else {
+            error
+        }
+    })?;
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout.bytes).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&stderr.bytes).to_string())
+    }
+}
+
+fn probe_timeout_message(timeout: Duration) -> String {
+    format!(
+        "timed out after {} ms",
+        u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
+    )
+}
+
+fn terminate_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Ok(process_group) = i32::try_from(child.id()) {
+            // SAFETY: the child was placed in a new process group whose id is
+            // its pid. SIGKILL is best-effort; child.kill remains a backstop.
+            unsafe {
+                libc::killpg(process_group, libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Spawn without waiting so an unavailable or wedged helper cannot
+        // extend the probe deadline. The direct-child kill below is immediate.
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+    let _ = child.kill();
+}
+
+fn spawn_probe_reader<R: Read + Send + 'static>(
+    mut pipe: R,
+) -> std::sync::mpsc::Receiver<ProbeCapture> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut retained = Vec::with_capacity(VERSION_PROBE_OUTPUT_BYTES);
+        let mut chunk = [0_u8; 8192];
+        loop {
+            let Ok(read) = pipe.read(&mut chunk) else {
+                break;
+            };
+            if read == 0 {
+                break;
+            }
+            retained.extend_from_slice(&chunk[..read]);
+            if retained.len() > VERSION_PROBE_OUTPUT_BYTES {
+                let excess = retained.len() - VERSION_PROBE_OUTPUT_BYTES;
+                retained.drain(..excess);
+            }
+        }
+        let _ = sender.send(ProbeCapture { bytes: retained });
+    });
+    receiver
+}
+
+fn receive_probe_reader(
+    receiver: Option<std::sync::mpsc::Receiver<ProbeCapture>>,
+    started: Instant,
+    timeout: Duration,
+) -> Result<ProbeCapture, String> {
+    let receiver = receiver.ok_or_else(|| "version probe output was not piped".to_string())?;
+    let remaining = timeout.saturating_sub(started.elapsed());
+    receiver
+        .recv_timeout(remaining)
+        .map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => "timed out".to_string(),
+            std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                "version probe output capture failed".to_string()
+            }
+        })
 }
 
 /// Walk a directory tree and validate JSON files, recording paths relative
@@ -1202,7 +1519,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 13);
+        assert_eq!(check_names().len(), 14);
     }
 
     #[test]
@@ -1211,6 +1528,192 @@ mod tests {
         for &name in CHECK_NAMES {
             assert!(registry.contains_key(name), "missing check: {name}");
         }
+    }
+
+    fn write_binding(directory: &Path, observed_effort: &str) {
+        std::fs::create_dir_all(directory).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let record = serde_json::json!({
+            "schema_version": 1,
+            "binding_id": "claude-fable-high",
+            "provider": "anthropic",
+            "lineage": "claude",
+            "eligible_roles": ["primary", "reviewer"],
+            "qualified_at": "2026-07-25T10:00:00Z",
+            "requested": {
+                "model": "fable-5",
+                "effort": "high",
+                "harness": "claude-code",
+                "harness_version": "2.1.220",
+                "settings_digest": digest
+            },
+            "observed": {
+                "model": "fable-5",
+                "effort": observed_effort,
+                "evidence": [{"kind": "session", "digest": digest}]
+            },
+            "qualification": {
+                "run_id": "full-1",
+                "suite": "full",
+                "suite_digest": digest,
+                "result_digest": digest,
+                "codeflow_revision": "abc123"
+            },
+            "settings_sources": [],
+            "approval": {
+                "reviewer": "operator",
+                "reviewed_at": "2026-07-25T10:00:00Z"
+            }
+        });
+        std::fs::write(
+            directory.join("claude-fable-high.json"),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn model_bindings_missing_is_cleanly_not_applicable() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.qualification_dir = Some(directory.path().join("qualified-bindings"));
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Pass);
+        assert!(result.message.contains("optional; nothing to drift-check"));
+    }
+
+    #[test]
+    fn model_bindings_pass_observable_version_drift_check() {
+        let directory = tempfile::tempdir().unwrap();
+        write_binding(directory.path(), "high");
+        let mut opts = test_opts();
+        opts.qualification_dir = Some(directory.path().to_path_buf());
+        opts.look_path = Some(|name| {
+            (name == "claude")
+                .then(|| "/usr/local/bin/claude".into())
+                .ok_or_else(|| "not found".into())
+        });
+        opts.exec_command = Some(|_, args| {
+            assert_eq!(args, ["--version"]);
+            Ok("2.1.220 (Claude Code)\n".into())
+        });
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Pass, "got: {}", result.message);
+        assert!(result.message.contains("live model/effort"));
+    }
+
+    #[test]
+    fn model_bindings_requested_observed_mismatch_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        write_binding(directory.path(), "xhigh");
+        let mut opts = test_opts();
+        opts.qualification_dir = Some(directory.path().to_path_buf());
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Fail);
+        assert!(result.message.contains("requested and observed"));
+    }
+
+    #[test]
+    fn model_bindings_reports_harness_and_settings_drift_without_guessing_model() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("qualified-bindings");
+        let settings = workspace.path().join("settings.json");
+        std::fs::write(&settings, b"initial").unwrap();
+        write_binding(&directory, "high");
+        let record_path = directory.join("claude-fable-high.json");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+        record["settings_sources"] = serde_json::json!([{
+            "path": settings.to_string_lossy(),
+            "digest": format!("sha256:{}", sha256_hex(b"initial"))
+        }]);
+        std::fs::write(&record_path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        std::fs::write(&settings, b"changed").unwrap();
+
+        let mut opts = test_opts();
+        opts.qualification_dir = Some(directory);
+        opts.look_path = Some(|name| {
+            (name == "claude")
+                .then(|| "/usr/local/bin/claude".into())
+                .ok_or_else(|| "not found".into())
+        });
+        opts.exec_command = Some(|_, _| Ok("2.2.0 (Claude Code)".into()));
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(result.message.contains("harness version changed"));
+        assert!(result.message.contains("settings changed"));
+        assert!(result.message.contains("never inferred by doctor"));
+    }
+
+    #[test]
+    fn model_bindings_bounds_settings_source_reads() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("qualified-bindings");
+        let settings = workspace.path().join("settings.json");
+        let file = std::fs::File::create(&settings).unwrap();
+        file.set_len(MAX_SETTINGS_BYTES + 1).unwrap();
+        write_binding(&directory, "high");
+        let record_path = directory.join("claude-fable-high.json");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+        record["settings_sources"] = serde_json::json!([{
+            "path": settings.to_string_lossy(),
+            "digest": format!("sha256:{}", sha256_hex(b"unused"))
+        }]);
+        std::fs::write(&record_path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+
+        let mut opts = test_opts();
+        opts.qualification_dir = Some(directory);
+        opts.look_path = Some(|name| {
+            (name == "claude")
+                .then(|| "/usr/local/bin/claude".into())
+                .ok_or_else(|| "not found".into())
+        });
+        opts.exec_command = Some(|_, _| Ok("2.1.220 (Claude Code)".into()));
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Warn);
+        assert!(result.message.contains("exceeds 16777216 byte limit"));
+    }
+
+    #[test]
+    fn probe_versions_use_the_allowlisted_banner_position() {
+        assert_eq!(
+            probe_version("claude-cli-version", "2.1.220 (Claude Code)"),
+            Some("2.1.220")
+        );
+        assert_eq!(
+            probe_version("codex-cli-version", "codex-cli 0.144.3"),
+            Some("0.144.3")
+        );
+        assert_ne!(
+            probe_version("claude-cli-version", "3.0.0 (compat 2.1.220)"),
+            Some("2.1.220")
+        );
+        assert_eq!(probe_version("unknown", "1.0.0"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_timeout_terminates_the_process_tree() {
+        let started = Instant::now();
+        let error =
+            run_bounded_command("sh", &["-c", "sleep 2"], Duration::from_millis(50)).unwrap_err();
+        assert!(error.contains("timed out after 50 ms"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_timeout_bounds_inherited_output_pipes() {
+        let started = Instant::now();
+        let error = run_bounded_command(
+            "sh",
+            &["-c", "sleep 2 & printf 'ready\\n'"],
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+        assert!(error.contains("timed out after 50 ms"));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

@@ -56,8 +56,9 @@ Then verify and **offer** remediation — never install silently.
     `codex exec`, a hand-rolled app-server driver, or tmux-driving Codex.
   - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
     environment-variable denies), `tmux`, and `claude mcp list`, followed by
-    authenticated interactive Fable-class high and xhigh TTY canaries in auto
-    mode with `autoMode.classifyAllShell: true` supplied through `--settings`,
+    authenticated interactive TTY canaries for the current ensemble's Claude
+    primary at its default and escalation efforts, in auto mode with
+    `autoMode.classifyAllShell: true` supplied through `--settings`,
     plus one schema-v2 delegate lifecycle round trip — `delegate init` →
     wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery →
     wait-accepted → wait-terminal with bounded cleanup (`codeflow doctor
@@ -210,15 +211,13 @@ confirms the final content.
   the host's actual memory/CPU/tool budget; independent work gets separate
   branches/worktrees, explicit file ownership, and serialized integration. It
   is user-owned; `codeflow update` never touches it.
-- **Harness model/MCP config** — invoke latest available Fable-class Claude
-  directly at high by default and xhigh on the orchestrator's escalation
-  triggers. Let Fable own internal Opus routing: medium for bounded deterministic
-  UI/MCP evidence collection, high for ambiguous/multi-step tool operation, with
-  Fable retaining interpretation and judgment. Invoke GPT-5.6 Sol or the
-  strongest supported successor Codex coding seat at high by default and xhigh
-  on equivalent triggers; allow bounded Sol-class medium/high workers only
-  through verified native routing while the primary retains implementation and
-  verification. Configure the research,
+- **Harness model/MCP config** — read the current primary selectors, effort
+  defaults/escalations, and permitted internal routes from
+  `../cf-model-orchestrator/resources/current-ensemble.json`; do not duplicate
+  or freeze them here. Invoke each primary directly, leave internal routing to
+  that primary, require observed native routing for any worker, and keep
+  planning, approval, interpretation, and judgment with the primaries.
+  Configure the research,
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;
   keep fast-aging version pins out of shared doctrine.

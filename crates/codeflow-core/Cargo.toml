@@ -33,6 +33,9 @@ which.workspace = true
 sha2.workspace = true
 diffy.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

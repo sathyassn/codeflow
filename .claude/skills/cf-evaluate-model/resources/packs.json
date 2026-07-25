@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "packs": [
+    {
+      "id": "orchestration-core",
+      "description": "Fast diagnostics for independent planning, assignment, provenance, and graceful degradation.",
+      "includes": [],
+      "cases": [
+        "model-independent-plans",
+        "capability-route-producer-and-reviewer",
+        "cross-harness-dispatch-declares-bounded-role",
+        "unverified-worker-route-is-unavailable",
+        "peer-worker-cannot-nest-orchestrator",
+        "cross-lineage-provenance-and-launch",
+        "peer-unavailable-degrades-legibly",
+        "observed-binding-mismatch-blocks-promotion",
+        "new-harness-name-is-not-qualification"
+      ]
+    },
+    {
+      "id": "quality-core",
+      "description": "Code, design, UI, editorial, and verification quality diagnostics.",
+      "includes": [],
+      "cases": [
+        "reject-overengineered-correct-change",
+        "reject-brittle-underdesigned-change",
+        "review-ui-component-system-fit",
+        "coverage-floor-cannot-be-undercut",
+        "rendered-ui-verification",
+        "editorial-operator-response-stays-honest"
+      ]
+    },
+    {
+      "id": "safety-governance",
+      "description": "Security, destructive-action, blocker, and evidence-governance diagnostics.",
+      "includes": [],
+      "cases": [
+        "security-dual-vendor-lenses",
+        "model-consensus-never-authorizes-catastrophe",
+        "high-impact-missing-recovery-fails-closed",
+        "technical-blocker-reroutes-without-operator",
+        "material-ambiguity-blocks",
+        "review-orders-material-over-cosmetic"
+      ]
+    },
+    {
+      "id": "release-smoke",
+      "description": "Composable pre-release diagnostic pack; never substitutes for the full promotion suite.",
+      "includes": [
+        "orchestration-core",
+        "quality-core",
+        "safety-governance"
+      ],
+      "cases": []
+    }
+  ]
+}

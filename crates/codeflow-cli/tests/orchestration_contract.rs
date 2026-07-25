@@ -3,6 +3,7 @@
 //! Mirror tests prove byte parity. These assertions pin the semantics that
 //! must survive wording refactors and scaffold updates.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -18,12 +19,84 @@ fn normalize_whitespace(value: &str) -> String {
 }
 
 #[test]
+fn current_ensemble_uses_only_capability_supported_harnesses() {
+    let ensemble: serde_json::Value = serde_json::from_str(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .expect("current ensemble JSON");
+    let harnesses: serde_json::Value = serde_json::from_str(&read(
+        "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
+    ))
+    .expect("harness catalog JSON");
+    assert_eq!(ensemble["schema_version"], 1);
+    let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
+        .as_array()
+        .expect("harnesses")
+        .iter()
+        .map(|harness| {
+            assert_eq!(
+                harness["status"], "capability-supported",
+                "ensemble harnesses require catalog capability support"
+            );
+            (
+                harness["id"].as_str().expect("harness id"),
+                (
+                    harness["provider"].as_str().expect("provider"),
+                    harness["lineage"].as_str().expect("lineage"),
+                ),
+            )
+        })
+        .collect();
+    let bindings = ensemble["bindings"].as_array().expect("bindings");
+    assert_eq!(bindings.len(), 2, "the current duo must have two primaries");
+    let mut seats = BTreeSet::new();
+    let mut lineages = BTreeSet::new();
+    for binding in bindings {
+        let seat = binding["seat"].as_str().expect("seat");
+        let provider = binding["provider"].as_str().expect("provider");
+        let lineage = binding["lineage"].as_str().expect("lineage");
+        assert!(seats.insert(seat), "duplicate ensemble seat {seat}");
+        assert!(
+            lineages.insert(lineage),
+            "duplicate primary lineage {lineage}"
+        );
+        assert!(!binding["responsibilities"]
+            .as_array()
+            .expect("responsibilities")
+            .is_empty());
+        let selectors = binding["native_selectors"]
+            .as_object()
+            .expect("native selectors");
+        assert!(!selectors.is_empty(), "{seat} has no native selector");
+        for (harness, selector) in selectors {
+            assert!(
+                !selector.as_str().unwrap_or_default().is_empty(),
+                "{seat} has an empty selector for {harness}"
+            );
+            assert_eq!(
+                supported.get(harness.as_str()),
+                Some(&(provider, lineage)),
+                "{seat} selects an unsupported or mismatched harness {harness}"
+            );
+        }
+    }
+    assert_eq!(lineages, BTreeSet::from(["claude", "codex"]));
+    assert!(!ensemble["xhigh_triggers"]
+        .as_array()
+        .expect("xhigh triggers")
+        .is_empty());
+}
+
+#[test]
 fn orchestrator_is_host_neutral_with_capability_routed_execution() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
     let routing = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let ensemble = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ));
 
     for required in [
@@ -40,14 +113,11 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "observed native usage signals only",
         "Codex supplies independent review",
         "owns the final quality verdict",
-        "latest Fable-class Claude model directly",
-        "directly at high effort by default",
-        "Escalate either primary to xhigh",
-        "Opus-class workers at medium",
-        "GPT-5.6 Sol or its strongest supported successor Codex coding seat",
-        "qualified Terra-class workers",
-        "Fable alone owns Claude-side internal routing",
-        "never let an internal worker replace either duo seat",
+        "**Qualified reasoning seats.**",
+        "Use the concrete selectors",
+        "invoke each primary directly",
+        "retain primary planning/approval duties",
+        "never let a worker replace a primary",
         "**One orchestration owner.**",
         "never starts a nested duo",
         "**Evidence outranks agreement.**",
@@ -58,6 +128,26 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         assert!(
             skill.contains(required),
             "orchestrator lost required behavior marker: {required}"
+        );
+    }
+
+    for required in [
+        "\"seat\": \"claude-primary\"",
+        "\"model_class\": \"latest-fable\"",
+        "\"model_class\": \"latest-opus\"",
+        "\"seat\": \"codex-primary\"",
+        "\"model_class\": \"latest-strongest-sol-coding\"",
+        "\"model_class\": \"qualified-terra-worker\"",
+        "\"default_effort\": \"high\"",
+        "\"escalation_effort\": \"xhigh\"",
+        "Primary seats retain independent planning and approval duties.",
+        "Internal workers never replace a primary or named cross-lineage reviewer.",
+        "Claude-side internal routing belongs to the Claude primary.",
+        "A changed concrete binding requires native-interactive qualification before promotion.",
+    ] {
+        assert!(
+            ensemble.contains(required),
+            "current ensemble lost binding marker: {required}"
         );
     }
 
@@ -239,6 +329,8 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     ));
     let agents = read("assets/base/AGENTS.md.tmpl");
     let claude = read("assets/base/CLAUDE.md.tmpl");
+    let ensemble =
+        read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
 
     for required in [
         "Use the duo for every non-trivial repository task.",
@@ -248,9 +340,9 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "**Implementation:**",
         "**Review / verification:**",
         "**Substantive documentation:**",
-        "--model fable --effort high --permission-mode auto",
-        "replace `high` with `xhigh`",
-        "/codex:rescue --effort high",
+        "--model <selector> --effort <effort> --permission-mode auto",
+        "use the record's escalation effort",
+        "/codex:rescue --model <selector> --effort <effort>",
         "do not inherit an unobserved user default",
         "Make `autoMode.classifyAllShell` effective at user scope",
         "repeated `--settings` flags are not a supported merge contract",
@@ -263,6 +355,17 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         assert!(
             skill.contains(required),
             "stage/autonomy contract lost marker: {required}"
+        );
+    }
+    for required in [
+        "\"default_effort\": \"high\"",
+        "\"escalation_effort\": \"xhigh\"",
+        "\"claude-code\": \"fable\"",
+        "\"codex-cli\": \"gpt-5.6-sol\"",
+    ] {
+        assert!(
+            ensemble.contains(required),
+            "current ensemble lost effective binding marker: {required}"
         );
     }
 
@@ -405,8 +508,11 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(delegate.contains("codeflow delegate init"));
     assert!(delegate.contains("StopFailure"));
     assert!(delegate.contains("--until terminal"));
-    assert!(delegate.contains("--model fable --effort high --permission-mode auto"));
-    assert!(delegate.contains("xhigh for capability-sensitive"));
+    assert!(
+        delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
+    );
+    assert!(delegate.contains("default or escalation effort"));
+    assert!(delegate.contains("current-ensemble.json"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));
     assert!(delegate.contains("capture unrelated tmux sessions"));

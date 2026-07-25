@@ -4,6 +4,7 @@ use std::io::Write;
 
 use clap::Args;
 use codeflow_core::doctor::{self, Options, Status};
+use codeflow_core::registry;
 
 #[derive(Args)]
 pub struct DoctorArgs {
@@ -19,6 +20,8 @@ pub struct DoctorArgs {
 pub fn run(args: &DoctorArgs) -> i32 {
     let opts = Options {
         project_dir: super::repo_root().to_string_lossy().into_owned(),
+        qualification_dir: registry::codeflow_home()
+            .map(|home| registry::qualified_bindings_path(&home)),
         ..Options::default()
     };
     run_with(args, &opts, &mut std::io::stdout())
@@ -104,6 +107,7 @@ mod tests {
             look_path: Some(|name| Ok(format!("/stub/bin/{name}"))),
             exec_command: Some(|_, _| Ok(String::new())),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
+            qualification_dir: None,
         };
         (dir, opts)
     }
