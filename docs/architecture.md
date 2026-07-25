@@ -180,7 +180,23 @@ Review attention is consequence-led: substantiated material and systemic
 findings precede cosmetics, evidence confidence stays distinct from severity,
 remediation effort affects sequencing only, security retains its CVSS-aligned
 vocabulary, and out-of-scope material risk is routed without silent scope
-expansion or issue farming (ADR-0034).
+expansion or issue farming (ADR-0034). Execution additionally distinguishes
+materiality from the current critical path: the path is the dependency or
+blocker presently controlling the accepted outcome, not a license to weaken
+quality, testing, security, review, documentation, or recovery. Clear, safe,
+in-scope improvements with bounded validation are normally fixed while context
+is warm. Only genuinely uncertain secondary observations are consolidated for
+one natural cross-lineage checkpoint, where both primary seats choose fix now,
+track once, or drop. A tracked item uses the repository's existing planning
+altitude and a deterministic event such as the next touch of that surface, a
+named dependency landing, a release/quality gate, or symptom recurrence—never
+age alone or vague “later” wording. Blocker navigation uses the same
+critical-path model: technical uncertainty is reproduced and tested with a
+changed hypothesis, while an outcome-preserving reversible strategy may change
+without operator ceremony. Escalation is reserved for a true external
+dependency or a choice that changes intent, public contract, scope/authority,
+risk tolerance, or an irreversible tradeoff; deterministic and safety gates
+are fixed or honored rather than talked around (ADR-0038).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,

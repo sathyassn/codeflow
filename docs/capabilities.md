@@ -457,14 +457,26 @@ trace, and accessibility evidence. Its regression canary rejects
 screenshot-only verdicts, indiscriminate tracing, Computer Use as the default
 web driver, and helper-model ownership of Fable's design judgment.
 
-The hard `CF-QA-005` contract evaluates materiality-led review and proactive
-routing. Paired cases require consequential findings to lead cosmetic nits,
-approve when only non-blocking preferences remain, recognize repeated symptoms
-as a possible systemic cause, keep remediation effort out of severity, and
-preserve CVSS-aligned security severity and separate confidence before mapping
-the result to the general gate. They also escalate or track evidenced
-out-of-scope risk without silently expanding scope or generating one issue per
-nit.
+The hard `CF-QA-005` contract evaluates materiality-led review, execution
+focus, and proactive routing. Cases require consequential findings to lead
+cosmetic nits, approve when only non-blocking preferences remain, recognize
+repeated symptoms as a possible systemic cause, keep remediation effort out of
+severity, and preserve CVSS-aligned security severity and separate confidence
+before mapping the result to the general gate. A paired execution fixture
+distinguishes an actionable material blocker from cosmetic bait, then a
+completed critical path from a clear, safe, in-scope improvement: models must
+protect the required gates without reflexively deferring bounded work. Only
+genuinely uncertain observations are consolidated for one natural duo
+checkpoint and, when retained, tracked once with evidence and a deterministic
+revisit event. Other cases escalate or track evidenced out-of-scope risk
+without silently expanding scope or generating one issue per nit.
+
+The paired governance cases separate persistence from assumption. A
+discoverable tool failure must move through a new evidenced hypothesis or an
+accepted-outcome-preserving reversible strategy rather than repeat or ask the
+operator to choose a tactic. Missing product intent or a public contract still
+blocks for a well-framed operator decision. Retry counts alone prove neither
+case.
 
 Canary mode runs selected regressions once while maintaining the corpus. Full
 qualification runs every case three times and is required for promotion. Each

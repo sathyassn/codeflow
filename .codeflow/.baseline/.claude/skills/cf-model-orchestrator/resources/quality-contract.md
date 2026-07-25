@@ -98,6 +98,59 @@ documentation, research, operations, and proactive observations:
 5. **Route** it to the current work, immediate escalation, one tracked follow-up,
    or a clearly non-blocking batch.
 
+Materiality identifies consequence and value; the critical path identifies the
+current dependency or blocker controlling the accepted outcome. For multi-step
+work, keep that focus explicit, allocate capable attention, tools, and bounded
+resources there, and reassess it when evidence, dependencies, blockers,
+integration, or gates change. Allied work belongs in the current run when it
+unblocks or de-risks that path, satisfies this quality contract, or is a clear,
+safe, local, in-scope improvement with bounded validation. Critical-path focus
+never waives accepted quality, testing, security, review, documentation, or
+recovery, and it never licenses unrelated bundling.
+
+Do not postpone an earned improvement merely because it is secondary. Fix and
+verify it while context is warm when the conditions above hold. Collect only
+uncertain deferral candidates instead of interrupting the peer for each
+observation. At the next natural cross-lineage review or closeout checkpoint,
+both primary seats inspect the consolidated batch and choose `fix now`, `track
+once`, or `drop`; an unavailable seat is recorded as reduced assurance, not
+silent agreement. A worthwhile deferral uses one existing tracking altitude
+with its evidence/value and a deterministic event trigger such as the next
+touch of the surface, a named dependency landing, a named release/quality gate,
+or recurrence of the symptom. Age alone, vague "later", one task per nit, and
+preference-only backlog entries are invalid.
+
+Dispatch is not disposition. A background task, notification promise, relay
+idle signal, or transport completion does not close the batch. The host waits
+for the actual bounded peer result and verifies native provenance plus content
+before reporting the checkpoint complete.
+
+## Blocker navigation
+
+Do not confuse missing evidence with missing operator intent. Classify an
+impediment before escalating it:
+
+- a discoverable fact or technical failure is reproduced, isolated, and tested
+  with a bounded probe tied to a new hypothesis;
+- a local reversible implementation choice inside the accepted outcome uses
+  repository evidence and the safest durable route, with the choice disclosed;
+- an external dependency or enforced gate is recorded with the exact evidence
+  or input that clears it; and
+- a choice that changes desired outcome, public contract, scope or authority,
+  risk tolerance, or an irreversible tradeoff belongs to the operator.
+
+Record the last failed attempt and what evidence changed. One bounded
+confirmation of a prior failure is allowed when current provenance or freshness
+materially matters; state that evidence question. If it reproduces the same
+failure, change hypothesis or strategy and never retry it again unchanged. When
+a bounded tactical cycle fails, move up a level: restate the actual constraint
+and current critical path, compare viable strategies, and reroute only if
+accepted outcome, scope, authority, and every quality/safety gate remain intact.
+Ask the operator only for a real external dependency or owner decision, and
+present verified state, attempts, options with consequences, and a
+recommendation. Gate failure is information to fix or honor, not automatic
+evidence that the operator must decide.
+
 Remediation effort is planning input only. It may change sequence or ownership;
 it never lowers severity or justifies choosing an easy cosmetic change over a
 material one. Repeated minor symptoms may be evidence of one major systemic

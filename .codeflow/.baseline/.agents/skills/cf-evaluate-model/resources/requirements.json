@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-23",
+  "requirements_version": "2026-07-24",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -194,9 +194,11 @@
     {
       "id": "CF-GOV-002",
       "level": "hard",
-      "statement": "Missing product intent, public contracts, security boundaries, or irreversible choices block for clarification; local reversible details follow repository evidence without inventing requirements.",
+      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or red gates alone do not transfer an implementation tactic to the operator.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["Ambiguous input is a blocker: ask, never assume", "Treat an unclear requirement, API, or fact as a stop-and-verify"]}
+        {"path": "AGENTS.md", "markers": ["Missing intent, public behavior, security boundaries, authority", "Treat an unclear requirement, API, or fact as a stop-and-verify", "Navigate blockers; do not orbit them", "One bounded confirmation of a prior failure", "never retry it again unchanged", "redness alone does not make it an operator decision"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Do not confuse missing evidence with missing operator intent", "bounded probe tied to a new hypothesis", "One bounded confirmation of a prior failure", "never retry it again unchanged", "reroute only if accepted outcome", "not automatic evidence that the operator must decide"]},
+        {"path": ".agents/skills/cf-develop/SKILL.md", "markers": ["Maximum 3 evidence-moving cycles", "operator-owned decision"]}
       ]
     },
     {
@@ -246,11 +248,11 @@
     {
       "id": "CF-QA-005",
       "level": "hard",
-      "statement": "Discovery is broad but action is materiality-led: substantiate findings, keep severity and confidence distinct, preserve CVSS-aligned security labels, prioritize consequential and systemic issues over cosmetics without effort-based severity changes, approve when only non-blocking nits remain, and route evidenced out-of-scope material risk without silent scope expansion, external mutation, or issue farming.",
+      "statement": "Discovery is broad but action is materiality-led: distinguish consequence from the current dependency or blocker controlling the accepted outcome; protect quality, testing, security, review, documentation, and recovery while prioritizing that path; fix clear safe in-scope improvements when focused validation is bounded; consolidate only genuinely uncertain secondary observations for one natural cross-lineage checkpoint; and track a retained item once with evidence, value, and a deterministic revisit event rather than age or vague later wording. Keep severity and confidence distinct, preserve CVSS-aligned security labels, approve when only non-blocking nits remain, and route evidenced out-of-scope material risk without silent scope expansion, external mutation, or issue farming.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["Find broadly; act by materiality", "Remediation effort informs sequencing, never severity", "Nothing material found"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Discovery is broad; action is selective", "Keep evidence confidence separate from consequence", "do not prevent approval when they are the only findings", "issue farming and fabricated proactive signals are failures"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["Order the report by materiality", "if they are the only findings, return `approved`"]},
+        {"path": "AGENTS.md", "markers": ["Find broadly; act by materiality", "current dependency or blocker controlling the accepted outcome explicit", "Fix a clear, safe, local, in-scope improvement", "event-based revisit trigger", "Remediation effort informs sequencing, never severity", "Nothing material found"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Discovery is broad; action is selective", "current dependency or blocker controlling the accepted outcome", "verify it while context is warm", "deterministic event trigger", "Dispatch is not disposition", "Keep evidence confidence separate from consequence", "do not prevent approval when they are the only findings", "issue farming and fabricated proactive signals are failures"]},
+        {"path": ".claude/agents/cf-reviewer.md", "markers": ["Order the report by materiality", "fix now, track once", "deterministic revisit event", "if they are the only findings, return `approved`"]},
         {"path": ".claude/agents/cf-security-reviewer.md", "markers": ["Preserve the CVSS-aligned", "remediation effort never changes"]}
       ]
     },

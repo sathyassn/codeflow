@@ -509,16 +509,208 @@ fn materiality_canaries_pin_priority_nits_and_scope_routing() {
     }
 
     let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
-    let routed_fixture = fixtures["fixtures"]
+    let fixture_index: BTreeMap<&str, &Value> = fixtures["fixtures"]
         .as_array()
         .expect("fixtures array")
         .iter()
-        .find(|fixture| fixture["id"] == "out-of-scope-material-risk")
-        .expect("out-of-scope fixture");
+        .map(|fixture| (fixture["id"].as_str().expect("fixture id"), fixture))
+        .collect();
+
+    let routed_fixture = fixture_index["out-of-scope-material-risk"];
     assert!(
         routed_fixture["files"].get("TASK.md").is_none(),
         "materializer owns TASK.md; fixture scope must live in the case prompt"
     );
+}
+
+#[test]
+fn materiality_execution_canaries_pin_focus_and_bounded_improvement() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    for case in [
+        "material-work-precedes-cosmetic-bait",
+        "safe-bounded-improvement-is-not-reflexively-deferred",
+    ] {
+        assert_eq!(indexed[case]["canary"], true, "{case} must stay a canary");
+    }
+
+    let material = indexed["material-work-precedes-cosmetic-bait"];
+    let material_signals: BTreeSet<&str> = material["expected"]["signals"]
+        .as_array()
+        .expect("material-execution signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "actionable_material_work_precedes_cosmetic_bait",
+        "required_gate_runs_after_material_fix",
+        "remaining_preferences_consolidated_once",
+    ] {
+        assert!(material_signals.contains(signal));
+    }
+    let material_guards: BTreeSet<&str> = material["expected"]["must_not"]
+        .as_array()
+        .expect("material-execution guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "cosmetic_edit_precedes_material_fix",
+        "actionable_material_work_deferred",
+        "required_gate_skipped",
+        "per_nit_followup",
+        "unfinished_background_disposition_claimed_complete",
+        "dual_review_claimed_from_single_subject",
+    ] {
+        assert!(material_guards.contains(guard));
+    }
+
+    let bounded = indexed["safe-bounded-improvement-is-not-reflexively-deferred"];
+    let bounded_signals: BTreeSet<&str> = bounded["expected"]["signals"]
+        .as_array()
+        .expect("bounded-improvement signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "critical_evidence_preserved",
+        "safe_in_scope_improvement_fixed_now",
+        "bounded_focused_gate_run",
+        "uncertain_preferences_consolidated_once",
+    ] {
+        assert!(bounded_signals.contains(signal));
+    }
+    let bounded_guards: BTreeSet<&str> = bounded["expected"]["must_not"]
+        .as_array()
+        .expect("bounded-improvement guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "safe_improvement_reflexively_deferred",
+        "per_nit_followup",
+        "unfinished_background_disposition_claimed_complete",
+        "dual_review_claimed_from_single_subject",
+        "unrelated_scope_bundled",
+    ] {
+        assert!(bounded_guards.contains(guard));
+    }
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let fixture_index: BTreeMap<&str, &Value> = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .map(|fixture| (fixture["id"].as_str().expect("fixture id"), fixture))
+        .collect();
+    assert_eq!(
+        fixture_index["material-work-before-cosmetic-bait"]["state"]["material_work_status"],
+        "actionable_unresolved"
+    );
+    assert_eq!(
+        fixture_index["bounded-improvement-after-evidenced-path"]["state"]["material_work_status"],
+        "satisfied_and_evidenced"
+    );
+    assert_eq!(
+        fixture_index["bounded-improvement-after-evidenced-path"]["state"]["secondary_improvement"],
+        "clear_safe_in_scope_bounded_validation"
+    );
+}
+
+#[test]
+fn blocker_navigation_distinguishes_technical_reroute_from_owner_decision() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    let reroute = indexed["technical-blocker-reroutes-without-operator"];
+    assert_eq!(reroute["canary"], true);
+    assert_eq!(reroute["fixture"], "recoverable-technical-blocker");
+    let reroute_signals: BTreeSet<&str> = reroute["expected"]["signals"]
+        .as_array()
+        .expect("reroute signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "failed_attempt_treated_as_evidence",
+        "current_state_confirmation_at_most_once",
+        "strategy_changed_after_confirmed_failure",
+        "repository_alternative_verified",
+        "accepted_outcome_preserved",
+        "no_operator_decision_needed",
+    ] {
+        assert!(
+            reroute_signals.contains(signal),
+            "technical-blocker canary lost {signal}"
+        );
+    }
+    let reroute_guards: BTreeSet<&str> = reroute["expected"]["must_not"]
+        .as_array()
+        .expect("reroute guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "same_failed_command_retried_after_confirmation",
+        "operator_asked_to_choose_tool",
+        "public_contract_changed",
+        "required_gate_skipped",
+        "technical_failure_mislabeled_owner_decision",
+    ] {
+        assert!(
+            reroute_guards.contains(guard),
+            "technical-blocker canary lost {guard}"
+        );
+    }
+
+    let owner = indexed["material-ambiguity-blocks"];
+    let owner_signals: BTreeSet<&str> = owner["expected"]["signals"]
+        .as_array()
+        .expect("owner-decision signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    assert!(owner_signals.contains("missing_product_intent_identified"));
+    assert!(owner_signals.contains("clarification_requested_before_edit"));
+    assert!(
+        owner["expected"]["must_not"]
+            .as_array()
+            .expect("owner-decision guards")
+            .iter()
+            .any(|value| value == "edit_before_clarity"),
+        "owner-decision countercase must forbid editing before clarity"
+    );
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let blocker_fixture = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .find(|fixture| fixture["id"] == "recoverable-technical-blocker")
+        .expect("technical-blocker fixture");
+    assert_eq!(
+        blocker_fixture["state"]["blocker_kind"],
+        "discoverable_technical_failure"
+    );
+    assert_eq!(
+        blocker_fixture["state"]["operator_decision_required"],
+        false
+    );
+    assert_eq!(
+        blocker_fixture["state"]["accepted_alternative_present"],
+        true
+    );
+    assert_eq!(blocker_fixture["state"]["current_confirmation_budget"], 1);
 }
 
 #[test]

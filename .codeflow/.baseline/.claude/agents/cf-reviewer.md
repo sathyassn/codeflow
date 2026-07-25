@@ -67,6 +67,13 @@ itself a blocker finding — return changes_requested.
    recurrence/systemic leverage, and dependencies. Remediation effort may shape
    sequencing but never lowers severity. Investigate repeated small symptoms as
    a possible systemic major rather than reporting a pile of isolated nits.
+9. Inspect the task's consolidated secondary-observation batch, if one exists.
+   Challenge deferral of a clear, safe, in-scope improvement whose focused
+   validation is bounded: it should normally be fixed while context is warm.
+   For each genuinely uncertain item, recommend exactly one disposition:
+   fix now, track once at the repository's existing planning altitude with
+   evidence and a deterministic revisit event, or drop as non-actionable.
+   Never require a task, issue, or peer interruption for every preference nit.
 
 ## Verdict format
 

@@ -91,9 +91,14 @@ implementation stage for an analysis-only request.
 - **Native interactive sessions only.** Each model runs in its own vendor
   harness with its configured tools and MCP servers. Never use `codex exec`,
   `claude -p` / `--print`, or another headless peer invocation.
-- **Bounded loops.** Plan reconciliation and post-review rework are each bounded
-  to at most two rounds. Unresolved disagreement or a red deterministic gate
-  stops for the human; no model talks it green.
+- **Bounded, evidence-moving loops.** Plan reconciliation and post-review
+  rework are each bounded to at most two rounds. A repeated attempt without a
+  new hypothesis or changed evidence is not another round. At the bound,
+  diagnose the persistent constraint and either take an
+  approved-outcome-preserving strategic route with fresh evidence or surface a
+  genuine external/owner block. A deterministic or safety gate is fixed or
+  honored; its redness alone neither authorizes bypass nor makes the operator
+  choose an implementation tactic.
 - **Bounded parallelism.** Parallelize independent discovery and implementation
   only when it shortens the critical path. Use one owner/branch/worktree per
   task; serialize shared contracts and integration. Cap concurrency from
@@ -219,6 +224,8 @@ approve the same version, stop for the human.
 After dual approval, the host expands the agreed plan into ordered tasks with:
 
 - task id, producer/reviewer seat@effort, routing evidence, and dependencies;
+- for multi-step work, the current critical dependency or blocker, resource
+  focus, and the evidence event that causes reassessment;
 - files/interfaces expected to change;
 - happy-path and edge/error acceptance criteria;
 - unit, integration, end-to-end, UI, coverage, and security evidence required;
@@ -254,6 +261,10 @@ integration tests, relevant end-to-end tests, coverage, dependency/security
 checks, and UI-driven checks required by the quality contract. Task branches
 are not final evidence: integrate them in the approved order, rerun affected
 checks after each landing, and run the aggregate suite on the combined diff.
+The producer fixes and verifies a clear, safe, local, in-scope improvement when
+validation is bounded rather than reflexively deferring it. Only uncertain
+secondary observations enter the consolidated deferral batch; work does not
+switch to cosmetic bait while actionable material work remains.
 
 For a Claude host, use the official plugin for Codex-produced or Codex-reviewed
 units:
@@ -308,6 +319,18 @@ requires fresh evidence. A deterministic failure or unverified criterion blocks
 completion. If Fable is unavailable, record the fallback and reduced assurance;
 never report that Fable reviewed the work.
 
+Before closeout, both primary seats inspect the consolidated deferral batch
+once. They choose `fix now`, `track once`, or `drop` for each related set,
+challenge any convenience-based postponement, and investigate repeated minor
+symptoms as one possible material cause. A fix returns to its designated
+producer and repeats the affected verification/review. A worthwhile deferral
+uses one existing tracking altitude and an event-based revisit trigger; no
+batch, missing seat, or preference-only note is silently upgraded to agreement
+or durable work. A scheduled/background peer task, notification promise, or
+transport completion is not a disposition: the host waits for the actual
+bounded result, verifies its native provenance and content, and only then
+closes the checkpoint.
+
 ### 6. Joint closeout
 
 Both seats approve the final diff and evidence ledger. The host reports:
@@ -319,6 +342,8 @@ Both seats approve the final diff and evidence ledger. The host reports:
 - exact test, coverage, security, and UI results;
 - any explicit N/A with reason;
 - residual risks or unresolved assumptions;
+- the deferral batch outcome—fix now, one durable home plus event trigger, drop,
+  or `none`—and both primary-seat dispositions or the recorded degradation;
 - the interactive transport used and session/canary evidence.
 
 Only an implementation or repository-editing documentation run hands off to

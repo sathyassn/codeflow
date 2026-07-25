@@ -30,7 +30,11 @@ Drive the planned work to done.
       (`.claude/workflows/pipeline.workflow.js`) composes the same
       build/review/verify stages.
    c. On `changes_requested`: address blocker and major findings, re-review.
-      Maximum 3 cycles — then stop, summarize what is stuck, and ask the user.
+      Maximum 3 evidence-moving cycles. Never repeat the same repair without a
+      new hypothesis or changed evidence. At the bound, diagnose the persistent
+      constraint: take a safe approved-outcome-preserving route when one remains,
+      or surface the genuine external dependency or operator-owned decision with
+      attempts, options, consequences, and a recommendation.
    d. **Verify**: `codeflow test` and `codeflow validate` green.
 5. Report completion with evidence (test output, review verdict, file:line for
    each criterion). Hand off to `cf-ship` to land it.

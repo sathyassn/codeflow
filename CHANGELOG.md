@@ -14,6 +14,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Critical-path focus now preserves bounded quality work (ADR-0038).**
+  Materiality and the dependency presently controlling the accepted outcome are
+  treated as related but distinct. Models protect all quality and safety gates,
+  fix clear safe in-scope improvements when focused validation is bounded, and
+  consolidate only genuinely uncertain secondary observations for one natural
+  Claude+Codex checkpoint. Retained work is tracked once at an existing
+  planning altitude with evidence and a deterministic revisit event; vague
+  time-only deferral and issue-per-nit churn are rejected. Paired `CF-QA-005`
+  fixtures guard both material-first execution and the no-reflexive-deferral
+  case. Blocked work now advances only through changed evidence or a safe
+  outcome-preserving strategy; the operator is asked only for a real external
+  dependency or owner decision, while deterministic and safety gates remain
+  non-bypassable.
 - **Duo execution is now capability-routed per task (ADR-0035).** Independent
   Claude+Codex discovery, Claude-led design, versioned joint approval, native
   interactive transport, evidence gates, and Fable integrated judgment remain
