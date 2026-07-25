@@ -19,6 +19,7 @@ CHOSEN_DESIGN_AND_RATIONALE:
 COMPLEXITY_JUSTIFICATION:
 TASK_ASSIGNMENTS:
   TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort | ROUTING_EVIDENCE | DEPENDENCIES
+TASK_GRAPH:
 ACCEPTANCE_CRITERIA:
 EDGE_AND_ERROR_CASES:
 SECURITY_AND_PRIVACY:
@@ -32,6 +33,14 @@ CODEX_APPROVAL:
 Use a content digest or durable link for the immutable brief. Approvals must name
 the same plan version. A changed plan invalidates both approvals until each seat
 reviews the new version.
+
+For multi-task work, `TASK_GRAPH` follows
+[the settled task graph contract](task-graph.md), covers exactly the assigned
+tasks, and is part of what both seats approve. A material node, edge, decision
+guard, ownership, acceptance/interface, or safety-boundary change creates Plan
+vN+1 before dependent work continues. In-node execution detail remains ledger
+evidence under the resource's explicit non-mutation rules. A single obvious
+task records `TASK_GRAPH: N/A (single task)`.
 
 For research/analysis-only work, `TASK_ASSIGNMENTS`, `TEST_AND_UI_PLAN`,
 `COVERAGE_PLAN`, and `ROLLBACK_OR_RECOVERY` may be `N/A` only with a concrete
@@ -178,7 +187,7 @@ failures.
 Parallelize only workstreams whose inputs and outputs can be isolated. Record:
 
 ```text
-DEPENDENCY_GRAPH:
+SETTLED_TASK_GRAPH:
 PARALLEL_TASKS:
 TASK_BRANCH_WORKTREE_OWNER:
 SHARED_FILE_OWNER:
@@ -188,7 +197,10 @@ PER_TASK_GATES:
 POST_MERGE_GATES:
 ```
 
-Each implementation task has one writer, branch, and worktree. Shared schemas,
+`SETTLED_TASK_GRAPH` references the exact graph already approved in Plan vN; it
+is not a divergent second copy. Parallel eligibility comes from graph topology,
+but fan-out still requires a critical-path benefit and safe isolation. Each
+implementation task has one writer, branch, and worktree. Shared schemas,
 migrations, lockfiles, generated registries, and other conflict hotspots have a
 single integration owner or run sequentially. The coordinator caps concurrent
 heavy builds, browsers, and model sessions from observed CPU, memory, disk, and
@@ -235,6 +247,12 @@ Apply the checks relevant to the changed surface:
 - dependency and vulnerability scanning plus a source-to-sink security review;
 - regression tests for each fixed defect;
 - repository-specific validation, packaging, or migration checks.
+
+Use [the verification-selection contract](verification-selection.md) to decide
+whether evidence earns property/generative tests, targeted mutation testing, or
+project-owned architecture fitness checks. Record the trigger or `none
+selected`; these techniques strengthen the normal checks and never replace
+them.
 
 A skipped category is explicitly `N/A` with the reason and evidence that the
 surface is absent. Tool unavailability is a blocker or declared limitation, not

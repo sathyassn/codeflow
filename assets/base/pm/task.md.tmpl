@@ -5,6 +5,7 @@ epic_id: EPC-{{NNN}}
 title: {{TITLE}}
 status: todo             # todo | blocked | in_progress | complete | cancelled
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
+depends_on: []           # structural predecessors; Plan guards own branch readiness
 created: {{DATE}}
 ---
 

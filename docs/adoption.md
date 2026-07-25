@@ -317,6 +317,54 @@ run concurrent writers in one worktree or rebase the shared integration branch.
 `main` stays human-merge-only throughout — the integration branch is never a
 backdoor to it. See cf-method's "Managing a body of work" for the full procedure.
 
+## Task graphs and verification strength
+
+For one obvious task, the settled plan records
+`TASK_GRAPH: N/A (single task)`. For multi-task work, `/cf-plan` turns the
+approved assignments and real dependencies into one acyclic Plan vN graph.
+Every durable task lists its direct structural predecessors:
+
+```text
+brief
+  |
+  v
+Plan vN task graph ---- genuine decision guards + selection evidence
+  |                                      |
+  v                                      v
+task `depends_on`                 selected / not_selected
+  |
+  v
+codeflow validate --docs
+  |
+  +-- identity, references, duplicates, self-edges, cycles
+```
+
+The metadata preserves topology; it does not execute the plan. Bare active
+predecessors must land. Plan guards select mutually exclusive branches, and a
+later join may list every structural candidate while waiting only for active
+predecessors plus resolution evidence for the alternatives. Missing or
+ambiguous guard evidence creates Plan vN+1 rather than an improvised route.
+Material node, edge, ownership, interface, acceptance, or safety changes also
+require a new version and both approvals. Ordinary steps, bounded rework, extra
+strengthening tests, or another safe topological order inside the same contract
+remain execution-ledger evidence.
+
+Normal stack tests, integration/end-to-end checks, regressions, and coverage
+remain the baseline. The plan adds a stronger technique only when its evidence
+fits:
+
+- property or generative tests need a stable invariant, meaningful input/state
+  space, reproducibility and shrinking, plus a material combination risk;
+- mutation testing is targeted and time-bounded to consequential guard,
+  decision, state, security, or recovery logic after the base suite is reliable;
+  and
+- an architecture fitness check protects a current project-owned invariant
+  through a deterministic observable rule tied to a decision or repeated risk.
+
+`/cf-stack` and `/cf-customize` reuse or propose the consuming project's own
+reviewed commands only when earned. They do not install every technique, create
+whole-repository score targets, or turn architectural taste into a gate.
+
 ## Model and harness upgrades
 
 CodeFlow separates stable method from changing bindings (ADR-0039):

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-24",
+  "requirements_version": "2026-07-25",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -293,6 +293,15 @@
       ]
     },
     {
+      "id": "CF-MM-014",
+      "level": "hard",
+      "statement": "A multi-task Plan vN settles an explicit acyclic task graph covering every assignment, uses evidence guards only for genuine pre-approved decisions beyond ordinary completion, materializes every direct structural candidate predecessor durably without making metadata executable, resolves mutually exclusive alternatives with selected/not-selected evidence, and requires fresh approval from both primary seats for a material node, edge, guard, ownership, acceptance/interface, or safety mutation while ordinary in-node execution evidence and safe topological reordering do not trigger ceremony.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/task-graph.md", "markers": ["Every task assignment appears exactly once as a node", "A guard that merely restates a standard quality", "An observed outcome that matches no approved guard is a graph mutation", "Every unselected alternative records", "non-executable structural topology", "It never interprets guards", "Create Plan vN+1 and obtain fresh approval from both primary seats", "These remain execution evidence inside the approved graph", "different valid topological order", "Classify **and persist** each such occurrence in the execution ledger"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["both approvals cover the same canonical task graph", "Ordinary steps and bounded implementation choices inside an approved node remain ledger evidence"]}
+      ]
+    },
+    {
       "id": "CF-OUT-003",
       "level": "hard",
       "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects.",
@@ -318,6 +327,15 @@
         {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["minimum native harness capability contract", "even `release-smoke` is not a promotion suite", "After a full result passes promotion validation", "live model/effort remains a native-session observation"]},
         {"path": ".agents/skills/cf-evaluate-model/resources/protocol.md", "markers": ["Adding a harness requires evidence for every capability plus the full model suite", "Promotion additionally requires `system.observed`", "requested and observed model/effort match", "runtime routing config, or permission to auto-promote"]},
         {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["A changed concrete binding requires native-interactive qualification before promotion"]}
+      ]
+    },
+    {
+      "id": "CF-QA-006",
+      "level": "hard",
+      "statement": "Property/generative tests, targeted mutation testing, and project-owned architecture fitness checks strengthen normal verification only when named repository evidence satisfies their technique-specific triggers; explicit examples and normal scenario gates remain, none-selected is valid, concrete tools and thresholds stay project-owned, and over-triggering heavyweight or duplicative checks is a quality defect.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/verification-selection.md", "markers": ["`none selected` is a valid and common result", "Select them when all of these hold", "Keep explicit examples for known singular boundaries", "Use a targeted, time-bounded mutation run", "First require a deterministic base suite", "Add a project-owned deterministic fitness check", "Do not duplicate a compiler", "Concrete tools, thresholds, commands, and CI cadence belong to the consuming project"]},
+        {"path": "AGENTS.md", "markers": ["Select property/generative tests, targeted mutation testing, or project-owned architecture fitness checks only from the orchestrator's evidence triggers", "`none selected` is valid", "normal scenario coverage remains mandatory"]}
       ]
     }
   ]

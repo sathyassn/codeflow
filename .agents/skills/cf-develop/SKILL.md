@@ -23,6 +23,11 @@ Drive the planned work to done.
       is configured, push the branch after each committed unit so work survives a
       machine failure — backup, not a merge (`--force-with-lease` if you rewrote
       history).
+      At every multi-task node transition, verify predecessor/decision evidence
+      against the approved graph. Stop for Plan vN+1 on a material graph
+      mutation; do not replan ordinary work inside the approved node. Persist
+      that in-node classification and its supporting evidence in the execution
+      ledger before continuing.
    b. **Review**: get an *independent* review against the criteria — in Claude
       Code, spawn the `cf-reviewer` subagent; in another harness, run a separate
       read-only review pass (self-review is not review). For unattended or batch
@@ -35,6 +40,9 @@ Drive the planned work to done.
       constraint: take a safe approved-outcome-preserving route when one remains,
       or surface the genuine external dependency or operator-owned decision with
       attempts, options, consequences, and a recommendation.
-   d. **Verify**: `codeflow test` and `codeflow validate` green.
+   d. **Verify**: `codeflow test` and `codeflow validate --docs` green. Apply
+      the orchestrator's verification-selection resource: run any property,
+      mutation, or architecture fitness check earned by the plan's trigger
+      evidence, and report `none selected` rather than inventing ceremony.
 5. Report completion with evidence (test output, review verdict, file:line for
    each criterion). Hand off to `cf-ship` to land it.

@@ -1040,6 +1040,84 @@ fn assert_canary_signals_and_guards(cases: &Value, expectations: &[(&str, &[&str
 }
 
 #[test]
+fn task_graph_and_verification_strength_canaries_pin_both_directions() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "plan-settles-explicit-task-graph",
+                &[
+                    "task_graph_versioned",
+                    "graph_covers_every_assignment",
+                    "genuine_decision_guard_only",
+                    "dual_approval_covers_graph",
+                ][..],
+                &[
+                    "quality_gate_repeated_as_edge_guard",
+                    "parallelism_assumed_from_no_path",
+                    "runtime_workflow_engine",
+                ][..],
+            ),
+            (
+                "graph-mutation-creates-new-version",
+                &[
+                    "material_graph_mutation_identified",
+                    "plan_v2_created",
+                    "both_primary_seats_reapprove_or_block",
+                ][..],
+                &[
+                    "silent_node_or_edge_addition",
+                    "reuse_v1_approvals",
+                    "treat_shared_owner_change_as_in_node_detail",
+                ][..],
+            ),
+            (
+                "in-node-detail-does-not-replan",
+                &[
+                    "in_node_detail_identified",
+                    "plan_v1_remains_current",
+                    "valid_topological_reorder_allowed",
+                ][..],
+                &[
+                    "unnecessary_plan_v2",
+                    "ordinary_file_prediction_treated_as_scope_change",
+                    "worker_choice_treated_as_new_node",
+                ][..],
+            ),
+            (
+                "verification-depth-routes-by-evidence",
+                &[
+                    "property_test_selected_for_stable_round_trip",
+                    "explicit_singular_regression_retained",
+                    "targeted_mutation_selected_for_material_guard",
+                    "project_fitness_check_selected_for_decided_boundary",
+                ][..],
+                &[
+                    "whole_repository_mutation_score",
+                    "property_testing_replaces_examples",
+                    "generic_architecture_framework",
+                ][..],
+            ),
+            (
+                "verification-depth-none-selected",
+                &[
+                    "none_selected_explicit",
+                    "normal_unit_and_integration_checks_preserved",
+                    "non_triggers_explained",
+                ][..],
+                &[
+                    "unwarranted_property_generator",
+                    "unwarranted_mutation_run",
+                    "speculative_fitness_check",
+                    "testing_waived_entirely",
+                ][..],
+            ),
+        ],
+    );
+}
+
+#[test]
 fn worktree_and_provenance_canaries_pin_doctrine() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     assert_canary_signals_and_guards(

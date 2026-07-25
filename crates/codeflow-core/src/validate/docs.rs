@@ -11,16 +11,18 @@
 //! * ADR `status` legal (`proposed|accepted|superseded`); superseded ADRs
 //!   carry `superseded_by`
 //! * epic frontmatter `capabilities[]` / `adrs[]` resolve back
+//! * task `depends_on[]` references resolve and form an acyclic graph
 //!
 //! Tier-graceful: an absent layer (no registry, no decisions dir, no
 //! project-management) skips its checks with a note — only references that
 //! point INTO a present layer and miss are errors.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::capability::{parse_capabilities, CAPABILITY_STATUS_VALUES};
 use crate::validate::{get_string_field, parse_frontmatter};
+use crate::workgraph::is_valid_task_format_id;
 
 /// Legal ADR status values (charter §5; ADR template).
 pub const ADR_STATUS_VALUES: &[&str] = &["proposed", "accepted", "superseded"];
@@ -78,6 +80,7 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_capabilities(repo_root, &graph, &mut report);
     lint_adrs(repo_root, &mut report);
     lint_epics(repo_root, &graph, &mut report);
+    lint_tasks(repo_root, &mut report);
 
     report
 }
@@ -329,6 +332,243 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     }
 }
 
+#[derive(Debug)]
+struct TaskGraphRecord {
+    file: PathBuf,
+    format_id: String,
+    depends_on: Vec<String>,
+    dependency_line: usize,
+}
+
+fn lint_tasks(repo_root: &Path, report: &mut DocsLintReport) {
+    let files = task_files(repo_root);
+    if files.is_empty() {
+        if !repo_root.join("project-management/tasks").is_dir() {
+            report
+                .notes
+                .push("project-management/tasks/ absent — task graph checks skipped".to_string());
+        }
+        return;
+    }
+
+    let records: Vec<_> = files
+        .iter()
+        .filter_map(|path| parse_task_graph_record(repo_root, path, report))
+        .collect();
+    lint_task_graph_records(&records, report);
+}
+
+fn parse_task_graph_record(
+    repo_root: &Path,
+    path: &Path,
+    report: &mut DocsLintReport,
+) -> Option<TaskGraphRecord> {
+    let rel = path.strip_prefix(repo_root).unwrap_or(path).to_path_buf();
+    let content = std::fs::read(path).ok()?;
+    let (data, _) = parse_frontmatter(&content).ok()?; // general validation owns malformed YAML
+
+    let format_id = get_string_field(&data, "format_id");
+    if format_id.is_empty() {
+        report.issues.push(DocsLintIssue {
+            file: rel,
+            line: 1,
+            message: "task frontmatter is missing format_id".to_string(),
+        });
+        return None;
+    }
+
+    let format_id_line = find_line(&content, "format_id:").unwrap_or(1);
+    if !is_valid_task_format_id(&format_id) {
+        report.issues.push(DocsLintIssue {
+            file: rel,
+            line: format_id_line,
+            message: format!("task format_id {format_id} is malformed; expected TSK-NNN-NNN"),
+        });
+        return None;
+    }
+
+    let file_stem = path.file_stem().and_then(|stem| stem.to_str());
+    if file_stem != Some(format_id.as_str()) {
+        report.issues.push(DocsLintIssue {
+            file: rel.clone(),
+            line: format_id_line,
+            message: format!(
+                "task format_id {format_id} does not match filename {}.md",
+                file_stem.unwrap_or("<non-utf8>")
+            ),
+        });
+    }
+
+    let canonical = data.get("depends_on");
+    let legacy = data.get("dependencies");
+    if canonical.is_some() && legacy.is_some() {
+        report.issues.push(DocsLintIssue {
+            file: rel,
+            line: find_line(&content, "dependencies:").unwrap_or(1),
+            message: "task defines both depends_on and legacy dependencies — keep only depends_on"
+                .to_string(),
+        });
+        return None;
+    }
+
+    let (field, value) = canonical
+        .map(|value| ("depends_on", value))
+        .or_else(|| legacy.map(|value| ("dependencies", value)))
+        .unzip();
+    let dependency_line = field
+        .and_then(|field| find_line(&content, &format!("{field}:")))
+        .unwrap_or(1);
+    let field_name = field.unwrap_or("depends_on");
+    let depends_on = match value {
+        None => Vec::new(),
+        Some(serde_yaml::Value::Sequence(values)) => values
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .or_else(|| {
+                report.issues.push(DocsLintIssue {
+                    file: rel.clone(),
+                    line: dependency_line,
+                    message: format!(
+                        "task {format_id} {field_name} must contain only task-id strings"
+                    ),
+                });
+                None
+            })?,
+        Some(_) => {
+            report.issues.push(DocsLintIssue {
+                file: rel.clone(),
+                line: dependency_line,
+                message: format!("task {format_id} {field_name} must be a YAML list"),
+            });
+            return None;
+        }
+    };
+
+    Some(TaskGraphRecord {
+        file: rel,
+        format_id,
+        depends_on,
+        dependency_line,
+    })
+}
+
+fn lint_task_graph_records(records: &[TaskGraphRecord], report: &mut DocsLintReport) {
+    let mut graph = BTreeMap::new();
+    let mut files_by_id: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut dependency_lines_by_id = BTreeMap::new();
+    for record in records {
+        if let Some(first) = files_by_id.get(&record.format_id) {
+            report.issues.push(DocsLintIssue {
+                file: record.file.clone(),
+                line: 1,
+                message: format!(
+                    "duplicate task format_id {} also appears in {}",
+                    record.format_id,
+                    first.display()
+                ),
+            });
+            continue;
+        }
+        files_by_id.insert(record.format_id.clone(), record.file.clone());
+        dependency_lines_by_id.insert(record.format_id.clone(), record.dependency_line);
+        graph.insert(record.format_id.clone(), record.depends_on.clone());
+    }
+
+    for record in records {
+        if files_by_id.get(&record.format_id) != Some(&record.file) {
+            continue; // duplicate already reported; keep one graph node
+        }
+        let mut seen = BTreeSet::new();
+        for dependency in &record.depends_on {
+            if !seen.insert(dependency) {
+                report.issues.push(DocsLintIssue {
+                    file: record.file.clone(),
+                    line: record.dependency_line,
+                    message: format!("task {} repeats dependency {dependency}", record.format_id),
+                });
+            } else if dependency == &record.format_id {
+                report.issues.push(DocsLintIssue {
+                    file: record.file.clone(),
+                    line: record.dependency_line,
+                    message: format!("task {} depends on itself", record.format_id),
+                });
+            } else if !graph.contains_key(dependency) {
+                report.issues.push(DocsLintIssue {
+                    file: record.file.clone(),
+                    line: record.dependency_line,
+                    message: format!(
+                        "task {} depends on {dependency}, but no task with that format_id exists",
+                        record.format_id
+                    ),
+                });
+            }
+        }
+    }
+
+    if let Some(cycle) = find_task_cycle(&graph) {
+        let first = cycle.first().expect("cycle is nonempty");
+        report.issues.push(DocsLintIssue {
+            file: files_by_id
+                .get(first)
+                .cloned()
+                .unwrap_or_else(|| PathBuf::from("project-management/tasks")),
+            line: dependency_lines_by_id.get(first).copied().unwrap_or(1),
+            message: format!("task dependency cycle: {}", cycle.join(" -> ")),
+        });
+    }
+}
+
+fn find_task_cycle(graph: &BTreeMap<String, Vec<String>>) -> Option<Vec<String>> {
+    let mut finished = BTreeSet::new();
+
+    for root in graph.keys() {
+        if finished.contains(root) {
+            continue;
+        }
+        let mut stack = vec![(
+            root.clone(),
+            graph.get(root).cloned().unwrap_or_default().into_iter(),
+        )];
+        let mut path = vec![root.clone()];
+        let mut positions = BTreeMap::from([(root.clone(), 0_usize)]);
+
+        while let Some((node, dependencies)) = stack.last_mut() {
+            let Some(dependency) = dependencies.next() else {
+                let completed = node.clone();
+                stack.pop();
+                path.pop();
+                positions.remove(&completed);
+                finished.insert(completed);
+                continue;
+            };
+            if !graph.contains_key(&dependency) || dependency == *node {
+                continue; // dangling/self edges receive their own diagnostics
+            }
+            if let Some(start) = positions.get(&dependency).copied() {
+                let mut cycle = path[start..].to_vec();
+                cycle.push(dependency);
+                return Some(cycle);
+            }
+            if finished.contains(&dependency) {
+                continue;
+            }
+            positions.insert(dependency.clone(), path.len());
+            path.push(dependency.clone());
+            stack.push((
+                dependency.clone(),
+                graph
+                    .get(&dependency)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter(),
+            ));
+        }
+    }
+
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -382,6 +622,38 @@ fn epic_files(dir: &Path) -> Vec<PathBuf> {
     }
     paths.sort();
     paths
+}
+
+/// Task records from the canonical flat directory and optional nested epic
+/// task directories. Directory symlinks are not followed.
+fn task_files(repo_root: &Path) -> Vec<PathBuf> {
+    let mut paths = task_md_files(&repo_root.join("project-management/tasks"));
+    let epics = repo_root.join("project-management/epics");
+    let Ok(entries) = std::fs::read_dir(epics) else {
+        return paths;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // DirEntry::file_type does not follow symlinks, so symlinked
+        // directories are not classified as directories here.
+        if file_type.is_dir() {
+            paths.extend(task_md_files(&entry.path().join("tasks")));
+        }
+    }
+    paths.sort();
+    paths
+}
+
+fn task_md_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(metadata) = std::fs::symlink_metadata(dir) else {
+        return Vec::new();
+    };
+    if !metadata.is_dir() {
+        return Vec::new();
+    }
+    md_files(dir)
 }
 
 /// All `.md` files directly in a directory, sorted.
@@ -460,6 +732,16 @@ mod tests {
             &format!("project-management/epics/{format_id}/{format_id}.md"),
             &format!(
                 "---\nid: {format_id}\ntitle: epic\ncapabilities: {caps}\nadrs: {adrs}\n---\n\n## Intent\n"
+            ),
+        );
+    }
+
+    fn task_file(root: &Path, format_id: &str, dependencies: &str) {
+        write(
+            root,
+            &format!("project-management/tasks/{format_id}.md"),
+            &format!(
+                "---\nid: {format_id}\nformat_id: {format_id}\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: {dependencies}\ncreated: 2026-07-25\n---\n\n## Acceptance Criteria\n"
             ),
         );
     }
@@ -562,8 +844,8 @@ mod tests {
         // A sibling task file inside the epic dir must NOT be treated as an epic.
         write(
             root,
-            "project-management/epics/EPC-001/tasks/TASK-001.md",
-            "---\nid: TASK-001\n---\n",
+            "project-management/epics/EPC-001/tasks/TSK-001-001.md",
+            "---\nid: TSK-001-001\nformat_id: TSK-001-001\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: []\ncreated: 2026-07-25\n---\n",
         );
 
         let report = lint_docs(root);
@@ -774,7 +1056,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let report = lint_docs(dir.path());
         assert!(report.is_clean());
-        assert_eq!(report.notes.len(), 3, "notes: {:?}", report.notes);
+        assert_eq!(report.notes.len(), 4, "notes: {:?}", report.notes);
         assert!(report.notes.iter().any(|n| n.contains("capabilities.md")));
         assert!(report.notes.iter().any(|n| n.contains("decisions")));
         assert!(report
@@ -814,5 +1096,331 @@ mod tests {
         assert_eq!(adr_id_prefix("ADR-0002"), Some("ADR-0002".to_string()));
         assert_eq!(adr_id_prefix("notes"), None);
         assert_eq!(adr_id_prefix("ADR-x"), None);
+    }
+
+    #[test]
+    fn clean_task_dependency_graph_passes() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[]");
+        task_file(dir.path(), "TSK-001-002", "[TSK-001-001]");
+        task_file(dir.path(), "TSK-001-003", "[TSK-001-001, TSK-001-002]");
+
+        let report = lint_docs(dir.path());
+        assert!(report.is_clean(), "issues: {:?}", report.issues);
+    }
+
+    #[test]
+    fn nested_task_dependencies_are_linted() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[]");
+        write(
+            dir.path(),
+            "project-management/epics/EPC-002/tasks/TSK-002-001.md",
+            "---\nid: TSK-002-001\nformat_id: TSK-002-001\nepic_id: EPC-002\ntitle: nested task\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-002-404]\ncreated: 2026-07-25\n---\n",
+        );
+
+        let report = lint_docs(dir.path());
+        let issue = report
+            .issues
+            .iter()
+            .find(|issue| issue.message.contains("TSK-002-404"))
+            .expect("nested task dependency reported");
+        assert_eq!(
+            issue.file,
+            PathBuf::from("project-management/epics/EPC-002/tasks/TSK-002-001.md")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_discovery_does_not_follow_symlinked_epic_directories() {
+        use std::os::unix::fs::symlink;
+
+        let dir = clean_repo();
+        let external = tempfile::tempdir().unwrap();
+        write(
+            external.path(),
+            "tasks/TSK-999-001.md",
+            "---\nid: TSK-999-001\nformat_id: TSK-999-001\nepic_id: EPC-999\ntitle: external task\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-999-404]\ncreated: 2026-07-25\n---\n",
+        );
+        let epics = dir.path().join("project-management/epics");
+        std::fs::create_dir_all(&epics).unwrap();
+        symlink(external.path(), epics.join("EPC-999")).unwrap();
+
+        let report = lint_docs(dir.path());
+        assert!(
+            report
+                .issues
+                .iter()
+                .all(|issue| !issue.message.contains("TSK-999")),
+            "followed symlinked task directory: {:?}",
+            report.issues
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_discovery_does_not_follow_symlinked_flat_task_directory() {
+        use std::os::unix::fs::symlink;
+
+        let dir = clean_repo();
+        let external = tempfile::tempdir().unwrap();
+        write(
+            external.path(),
+            "TSK-999-001.md",
+            "---\nid: TSK-999-001\nformat_id: TSK-999-001\nepic_id: EPC-999\ntitle: external task\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-999-404]\ncreated: 2026-07-25\n---\n",
+        );
+        let project_management = dir.path().join("project-management");
+        std::fs::create_dir_all(&project_management).unwrap();
+        symlink(external.path(), project_management.join("tasks")).unwrap();
+
+        let report = lint_docs(dir.path());
+        assert!(
+            report
+                .issues
+                .iter()
+                .all(|issue| !issue.message.contains("TSK-999")),
+            "followed symlinked flat task directory: {:?}",
+            report.issues
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_discovery_does_not_follow_symlinked_nested_task_directory() {
+        use std::os::unix::fs::symlink;
+
+        let dir = clean_repo();
+        let external = tempfile::tempdir().unwrap();
+        write(
+            external.path(),
+            "TSK-999-001.md",
+            "---\nid: TSK-999-001\nformat_id: TSK-999-001\nepic_id: EPC-999\ntitle: external task\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-999-404]\ncreated: 2026-07-25\n---\n",
+        );
+        let epic = dir.path().join("project-management/epics/EPC-999");
+        std::fs::create_dir_all(&epic).unwrap();
+        symlink(external.path(), epic.join("tasks")).unwrap();
+
+        let report = lint_docs(dir.path());
+        assert!(
+            report
+                .issues
+                .iter()
+                .all(|issue| !issue.message.contains("TSK-999")),
+            "followed symlinked nested task directory: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn legacy_task_dependencies_alias_passes() {
+        let dir = clean_repo();
+        write(
+            dir.path(),
+            "project-management/tasks/TSK-001-001.md",
+            "---\nid: TSK-001-001\nformat_id: TSK-001-001\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndependencies: []\ncreated: 2026-07-25\n---\n",
+        );
+
+        let report = lint_docs(dir.path());
+        assert!(report.is_clean(), "issues: {:?}", report.issues);
+    }
+
+    #[test]
+    fn conflicting_dependency_spellings_fail() {
+        let dir = clean_repo();
+        write(
+            dir.path(),
+            "project-management/tasks/TSK-001-001.md",
+            "---\nid: TSK-001-001\nformat_id: TSK-001-001\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: []\ndependencies: []\ncreated: 2026-07-25\n---\n",
+        );
+
+        let report = lint_docs(dir.path());
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("both depends_on")));
+    }
+
+    #[test]
+    fn malformed_task_dependencies_fail() {
+        let dir = clean_repo();
+        write(
+            dir.path(),
+            "project-management/tasks/TSK-001-001.md",
+            "---\nid: TSK-001-001\nformat_id: TSK-001-001\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: TSK-001-000\ncreated: 2026-07-25\n---\n",
+        );
+
+        let report = lint_docs(dir.path());
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("must be a YAML list")));
+    }
+
+    #[test]
+    fn malformed_task_format_id_fails() {
+        let dir = clean_repo();
+        write(
+            dir.path(),
+            "project-management/tasks/not-a-task-id.md",
+            "---\nid: not-a-task-id\nformat_id: not-a-task-id\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: []\ncreated: 2026-07-25\n---\n",
+        );
+
+        let report = lint_docs(dir.path());
+        let issue = report
+            .issues
+            .iter()
+            .find(|issue| issue.message.contains("expected TSK-NNN-NNN"))
+            .expect("malformed task format id reported");
+        assert_eq!(
+            issue.file,
+            PathBuf::from("project-management/tasks/not-a-task-id.md")
+        );
+        assert_eq!(issue.line, 3);
+    }
+
+    #[test]
+    fn task_identity_and_reference_errors_fail() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[TSK-001-001]");
+        task_file(dir.path(), "TSK-001-002", "[TSK-001-404]");
+        write(
+            dir.path(),
+            "project-management/tasks/wrong-name.md",
+            "---\nid: TSK-001-003\nformat_id: TSK-001-003\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: []\ncreated: 2026-07-25\n---\n",
+        );
+        write(
+            dir.path(),
+            "project-management/tasks/duplicate.md",
+            "---\nid: TSK-001-003\nformat_id: TSK-001-003\nepic_id: EPC-001\ntitle: duplicate\nstatus: todo\nwork_type: feat\ndepends_on: []\ncreated: 2026-07-25\n---\n",
+        );
+
+        let report = lint_docs(dir.path());
+        for marker in [
+            "depends on itself",
+            "no task with that format_id exists",
+            "does not match filename",
+            "duplicate task format_id",
+        ] {
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.message.contains(marker)),
+                "missing {marker}: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn self_dependency_is_not_duplicated_as_a_cycle() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[TSK-001-001]");
+
+        let report = lint_docs(dir.path());
+        assert_eq!(
+            report
+                .issues
+                .iter()
+                .filter(|issue| issue.message.contains("depends on itself"))
+                .count(),
+            1
+        );
+        assert!(report
+            .issues
+            .iter()
+            .all(|issue| !issue.message.contains("task dependency cycle")));
+    }
+
+    #[test]
+    fn task_dependency_cycle_fails_with_path() {
+        let dir = clean_repo();
+        write(
+            dir.path(),
+            "project-management/tasks/TSK-001-001.md",
+            "---\nid: TSK-001-001\nformat_id: TSK-001-001\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\n\n\n\ndepends_on: [TSK-001-003]\ncreated: 2026-07-25\n---\n",
+        );
+        task_file(dir.path(), "TSK-001-002", "[TSK-001-001]");
+        task_file(dir.path(), "TSK-001-003", "[TSK-001-002]");
+
+        let report = lint_docs(dir.path());
+        let issue = report
+            .issues
+            .iter()
+            .find(|issue| issue.message.contains("task dependency cycle"))
+            .expect("cycle reported");
+        assert!(issue.message.matches("TSK-001-").count() >= 4);
+        assert_eq!(issue.line, 11);
+    }
+
+    #[test]
+    fn task_cycle_detector_matches_exhaustive_small_graph_oracle() {
+        for node_count in 0..=4 {
+            let nodes: Vec<String> = (0..node_count).map(|index| format!("T{index}")).collect();
+            let possible_edges: Vec<(usize, usize)> = (0..node_count)
+                .flat_map(|from| {
+                    (0..node_count)
+                        .filter(move |to| *to != from)
+                        .map(move |to| (from, to))
+                })
+                .collect();
+            for mask in 0_u64..(1_u64 << possible_edges.len()) {
+                let mut graph: BTreeMap<String, Vec<String>> = nodes
+                    .iter()
+                    .cloned()
+                    .map(|node| (node, Vec::new()))
+                    .collect();
+                for (bit, (from, to)) in possible_edges.iter().enumerate() {
+                    if mask & (1_u64 << bit) != 0 {
+                        graph
+                            .get_mut(&nodes[*from])
+                            .expect("node")
+                            .push(nodes[*to].clone());
+                    }
+                }
+                let detector_is_acyclic = find_task_cycle(&graph).is_none();
+                let oracle_is_acyclic = has_topological_order(&nodes, &graph);
+                assert_eq!(
+                    detector_is_acyclic, oracle_is_acyclic,
+                    "graph mismatch: {graph:?}"
+                );
+            }
+        }
+    }
+
+    fn has_topological_order(nodes: &[String], graph: &BTreeMap<String, Vec<String>>) -> bool {
+        fn visit(
+            nodes: &[String],
+            graph: &BTreeMap<String, Vec<String>>,
+            order: &mut Vec<String>,
+            used: &mut BTreeSet<String>,
+        ) -> bool {
+            if order.len() == nodes.len() {
+                let positions: BTreeMap<&str, usize> = order
+                    .iter()
+                    .enumerate()
+                    .map(|(index, node)| (node.as_str(), index))
+                    .collect();
+                return order.iter().all(|node| {
+                    graph[node]
+                        .iter()
+                        .all(|dependency| positions[dependency.as_str()] < positions[node.as_str()])
+                });
+            }
+            for node in nodes {
+                if used.insert(node.clone()) {
+                    order.push(node.clone());
+                    if visit(nodes, graph, order, used) {
+                        return true;
+                    }
+                    order.pop();
+                    used.remove(node);
+                }
+            }
+            false
+        }
+
+        visit(nodes, graph, &mut Vec::new(), &mut BTreeSet::new())
     }
 }

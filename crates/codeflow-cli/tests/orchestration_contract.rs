@@ -417,7 +417,7 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "Computer Use",
         "UI: N/A",
         "failing or missing gate cannot be overridden by model consensus",
-        "DEPENDENCY_GRAPH:",
+        "SETTLED_TASK_GRAPH:",
         "TASK_BRANCH_WORKTREE_OWNER:",
         "SHARED_FILE_OWNER:",
         "HOST_RESOURCE_BUDGET:",
@@ -436,6 +436,82 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         assert!(
             contract.contains(required),
             "quality contract lost required marker: {required}"
+        );
+    }
+}
+
+#[test]
+fn task_graph_and_verification_strength_are_proportionate_contracts() {
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    let plan = normalize_whitespace(&read("assets/base/agents/skills/cf-plan/SKILL.md"));
+    let develop = normalize_whitespace(&read("assets/base/agents/skills/cf-develop/SKILL.md"));
+    let graph = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/task-graph.md",
+    ));
+    let verification = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/verification-selection.md",
+    ));
+
+    for required in [
+        "both approvals cover the same canonical task graph",
+        "material node, dependency, decision guard, ownership, acceptance, interface, or safety-boundary change creates Plan vN+1",
+        "Ordinary steps and bounded implementation choices inside an approved node remain ledger evidence",
+        "records `none selected`",
+    ] {
+        assert!(
+            skill.contains(required),
+            "orchestrator lost graph/verification marker: {required}"
+        );
+    }
+
+    for required in [
+        "Every active bare edge means B cannot start or be accepted until A has landed",
+        "A guard that merely restates a standard quality",
+        "Every unselected alternative records `not_selected`",
+        "non-executable structural topology",
+        "It never interprets guards, readiness, completion, or scheduling",
+        "Every task assignment appears exactly once as a node",
+        "The execution graph is acyclic",
+        "eligible for parallel work, not automatically parallel",
+        "TASK_GRAPH: N/A (single task)",
+        "`START` is plan-only and is never written to task metadata",
+        "A root task reached from `START` records `depends_on: []`",
+        "An observed outcome that matches no approved guard is a graph mutation",
+        "Create Plan vN+1 and obtain fresh approval from both primary seats",
+        "different valid topological order",
+        "Classify **and persist** each such occurrence in the execution ledger",
+        "without turning CodeFlow into a scheduler",
+    ] {
+        assert!(
+            graph.contains(required),
+            "task graph lost marker: {required}"
+        );
+    }
+
+    assert!(
+        plan.contains("Run `codeflow validate --docs`"),
+        "planning must run the task-graph validator before approval"
+    );
+    assert!(
+        develop.contains("`codeflow test` and `codeflow validate --docs` green"),
+        "delivery must run the task-graph validator before completion"
+    );
+
+    for required in [
+        "`none selected` is a valid and common result",
+        "Select them when all of these hold",
+        "Keep explicit examples for known singular boundaries",
+        "Use a targeted, time-bounded mutation run",
+        "First require a deterministic base suite",
+        "Add a project-owned deterministic fitness check",
+        "Do not duplicate a compiler",
+        "Concrete tools, thresholds, commands, and CI cadence belong to the consuming project",
+    ] {
+        assert!(
+            verification.contains(required),
+            "verification selection lost marker: {required}"
         );
     }
 }

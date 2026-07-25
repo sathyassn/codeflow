@@ -319,6 +319,18 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/task-graph.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/task-graph.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/verification-selection.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/verification-selection.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
 dest = ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json"
 ownership = "managed"
@@ -477,6 +489,18 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/capability-routing.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/task-graph.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/task-graph.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/verification-selection.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/verification-selection.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

@@ -24,11 +24,17 @@ and decide; `codeflow` verifies the result deterministically.
    eslint + config, ruff, ...). Respect existing config: tighten or extend,
    never silently replace. Wire the lint command into the test config's `full`
    mode if the project gates on it.
-4. Append a `## Stack standards` section to `AGENTS.md` OUTSIDE the
+4. Read the orchestrator's `resources/verification-selection.md`. Configure a
+   project-owned property/generative, mutation, or architecture fitness command
+   only when repository evidence activates its trigger. Put routine checks in
+   the appropriate test mode and keep expensive diagnostics explicit and
+   bounded. Never install a tool, invent a threshold, or add all three for
+   parity. Record `none selected` when no technique is earned.
+5. Append a `## Stack standards` section to `AGENTS.md` OUTSIDE the
    codeflow:managed markers (the managed block is replaced on update): the
    chosen stack, test/lint commands, and any conventions agreed with the user.
    Keep it under ~15 lines.
-5. Verify deterministically and show the evidence: `codeflow test` (targets
+6. Verify deterministically and show the evidence: `codeflow test` (targets
    resolve and run), `codeflow doctor` (wiring healthy). Fix what fails before
    reporting done; say what was not verified. Commit the config in small units;
    when a remote is configured, push the branch for durability — backup, not a

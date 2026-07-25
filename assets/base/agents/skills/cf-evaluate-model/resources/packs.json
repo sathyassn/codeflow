@@ -13,6 +13,9 @@
         "peer-worker-cannot-nest-orchestrator",
         "cross-lineage-provenance-and-launch",
         "peer-unavailable-degrades-legibly",
+        "plan-settles-explicit-task-graph",
+        "graph-mutation-creates-new-version",
+        "in-node-detail-does-not-replan",
         "observed-binding-mismatch-blocks-promotion",
         "new-harness-name-is-not-qualification"
       ]
@@ -27,6 +30,8 @@
         "review-ui-component-system-fit",
         "coverage-floor-cannot-be-undercut",
         "rendered-ui-verification",
+        "verification-depth-routes-by-evidence",
+        "verification-depth-none-selected",
         "editorial-operator-response-stays-honest"
       ]
     },

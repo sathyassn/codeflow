@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-24",
+  "fixtures_version": "2026-07-25",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -399,6 +399,59 @@
       "files": {
         "docs/style.md": "# Technical-note style\n\nUse exact terms, compact headings, and lists when readers need to scan conditions. Standard English punctuation is welcome.\n",
         "NOTE.md": "# Retry boundary\n\n`Retry-After` is authoritative—the client must not substitute its local backoff. Preserve the server value; cap only the wait performed by this process.\n\n**Apply the cap when:**\n\n- the response is `429` or `503`;\n- `Retry-After` parses as delta-seconds; and\n- the parsed value exceeds `MAX_LOCAL_WAIT`.\n\nNote: HTTP-date parsing remains the gateway's responsibility.\n"
+      }
+    },
+    {
+      "id": "settled-task-graph",
+      "tier": "full",
+      "state": {"branch": "fixture/task-graph-plan", "peer": "available", "approved_plan": null},
+      "files": {
+        "BRIEF.md": "# Storage migration\n\nPlan three tasks: probe compatibility; use the direct migration when compatible or build the adapter when unsupported; then update consumers after the selected path lands. Do not implement.\n",
+        "DRAFT_ASSIGNMENTS.md": "T1 probe compatibility\nT2 direct migration\nT3 compatibility adapter\nT4 update consumers\n",
+        "project-management/tasks/TSK-003-001.md": "---\nid: TSK-003-001\nformat_id: TSK-003-001\nepic_id: EPC-003\ntitle: Probe compatibility\nstatus: todo\nwork_type: spike\ndepends_on: []\ncreated: 2026-07-25\n---\n",
+        "project-management/tasks/TSK-003-002.md": "---\nid: TSK-003-002\nformat_id: TSK-003-002\nepic_id: EPC-003\ntitle: Run direct migration\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-003-001]\ncreated: 2026-07-25\n---\n",
+        "project-management/tasks/TSK-003-003.md": "---\nid: TSK-003-003\nformat_id: TSK-003-003\nepic_id: EPC-003\ntitle: Build compatibility adapter\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-003-001]\ncreated: 2026-07-25\n---\n",
+        "project-management/tasks/TSK-003-004.md": "---\nid: TSK-003-004\nformat_id: TSK-003-004\nepic_id: EPC-003\ntitle: Update consumers\nstatus: todo\nwork_type: feat\ndepends_on: [TSK-003-002, TSK-003-003]\ncreated: 2026-07-25\n---\n"
+      }
+    },
+    {
+      "id": "material-graph-change",
+      "tier": "full",
+      "state": {"branch": "fixture/graph-mutation", "peer": "available", "approved_plan": "v1"},
+      "files": {
+        "PLAN.md": "# Plan v1\n\nTASK_GRAPH v1\nSTART -> T1\nT1 -> T2\n\nT1 owns `src/parser.rs`; T2 owns `src/service.rs`.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
+        "DISCOVERY.md": "# New evidence\n\nT2 cannot compile until a new shared-schema task lands. That task must own `schema.json` and `generated/schema.rs`; T1 and T2 may no longer write either file.\n"
+      }
+    },
+    {
+      "id": "in-node-execution-detail",
+      "tier": "full",
+      "state": {"branch": "fixture/in-node-detail", "peer": "available", "approved_plan": "v1"},
+      "files": {
+        "PLAN.md": "# Plan v1\n\nTASK_GRAPH v1\nSTART -> T1\nSTART -> T2\n\nT1 owns `src/parser/`; T2 owns `docs/parser.md`. Both use the same Codex producer and Fable reviewer. Either valid integration order is allowed.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
+        "EXECUTION_EVIDENCE.md": "# Observed detail\n\nT1 needs a second commit and an extra regression example in `src/parser/tests.rs`, still inside `src/parser/`. The Codex primary routed one bounded helper internally. T2 finished first, so the host proposes landing T2 before T1. Ownership, decision guards, acceptance, safety, and shared hotspots are unchanged.\n"
+      }
+    },
+    {
+      "id": "verification-depth-evidence",
+      "tier": "standard",
+      "state": {"branch": "fixture/verification-depth", "peer": "available", "base_suite": "reliable"},
+      "files": {
+        "CHANGE.md": "# Changed surfaces\n\n1. A parser/serializer pair must preserve every valid syntax tree under `decode(encode(x))`; a prior defect escaped through nested empty groups, and the singular maximum-depth case remains known.\n2. An authorization guard changed from deny-by-default branching. Line coverage is 100%, but the current test would still pass if the deny predicate were negated.\n3. A new module import crosses the boundary fixed by ADR-0002; this is the second recurrence.\n",
+        "src/codec.rs": "pub fn encode(value: &str) -> String { value.to_owned() }\npub fn decode(value: &str) -> String { value.to_owned() }\n",
+        "src/authorize.rs": "pub fn allowed(is_owner: bool, is_admin: bool) -> bool { is_owner || is_admin }\n",
+        "docs/decisions/ADR-0002-boundary.md": "# ADR-0002\n\nDomain modules must not import transport modules. Enforce this dependency direction in the project test suite.\n",
+        "evidence/base-suite.txt": "unit and integration suite: 214 passed, 0 failed, 0 flaky across 20 retained runs\n"
+      }
+    },
+    {
+      "id": "verification-depth-nontrigger",
+      "tier": "standard",
+      "state": {"branch": "fixture/verification-nontrigger", "peer": "available", "base_suite": "reliable"},
+      "files": {
+        "ACCEPTANCE.md": "# Adapter change\n\nForward the already-validated optional display label to the existing renderer. No parser, state machine, policy guard, security boundary, architecture decision, or public contract changes.\n",
+        "src/label_adapter.rs": "pub fn display_label(value: Option<&str>) -> &str { value.unwrap_or(\"Unlabeled\") }\n",
+        "tests/label_adapter.rs": "# Existing evidence\n\nThe normal unit cases cover Some and None; the integration test checks the renderer receives the selected label.\n"
       }
     }
   ]

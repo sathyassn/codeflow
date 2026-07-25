@@ -55,6 +55,11 @@ named human release decision.
 
 - [ ] The host-neutral Claude+Codex contract and evaluator fixtures pass with
       the currently supported model/harness bindings.
+- [ ] Any material orchestration, task-graph, or verification-selection change
+      updates its stable requirements, paired positive/non-ceremony cases,
+      fixtures, packs, and managed mirrors. Applicable new behavioral cases
+      have retained native interactive Claude and Codex canary evidence;
+      deterministic corpus validation alone is not reported as model behavior.
 - [ ] The current ensemble selectors and effort/worker policy match the models
       actually qualified for this release; every `capability-supported`
       harness catalog entry still satisfies the universal capability contract.

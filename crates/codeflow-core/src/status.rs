@@ -451,6 +451,35 @@ mod tests {
         git(dir, &["commit", "-m", "chore: initial commit"]);
     }
 
+    fn task_fixture(
+        id: &str,
+        format_id: &str,
+        epic_id: &str,
+        title: &str,
+        status: TaskStatus,
+    ) -> Task {
+        Task {
+            id: id.into(),
+            format_id: format_id.into(),
+            epic_id: epic_id.into(),
+            title: title.into(),
+            description: None,
+            status,
+            work_type: "feat".into(),
+            priority: "normal".into(),
+            estimate: None,
+            acceptance: vec![],
+            tests: vec![],
+            depends_on: vec![],
+            branch: None,
+            pr_number: None,
+            created_at: "2026-07-05T00:00:00Z".into(),
+            updated_at: "2026-07-05T00:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
     #[test]
     fn minimal_tier_is_graceful_with_notes() {
         let dir = tempfile::tempdir().unwrap();
@@ -527,6 +556,7 @@ mod tests {
                 estimate: None,
                 acceptance: vec![],
                 tests: vec![],
+                depends_on: vec![],
                 branch: None,
                 pr_number: None,
                 created_at: "2026-06-11T00:00:00Z".into(),
@@ -626,30 +656,10 @@ mod tests {
         store
             .create_epic(&mk_epic("epic-02b", "EPC-002", "Unrelated"))
             .unwrap();
-
-        let mk_task = |id: &str, fid: &str, epic_id: &str, title: &str, status: TaskStatus| Task {
-            id: id.into(),
-            format_id: fid.into(),
-            epic_id: epic_id.into(),
-            title: title.into(),
-            description: None,
-            status,
-            work_type: "feat".into(),
-            priority: "normal".into(),
-            estimate: None,
-            acceptance: vec![],
-            tests: vec![],
-            branch: None,
-            pr_number: None,
-            created_at: "2026-07-05T00:00:00Z".into(),
-            updated_at: "2026-07-05T00:00:00Z".into(),
-            started_at: None,
-            completed_at: None,
-        };
         // Two tasks under the linked epic (one open, one done) and one task
         // under the unrelated epic.
         store
-            .create_task(&mk_task(
+            .create_task(&task_fixture(
                 "task-01a",
                 "TSK-001-001",
                 "epic-01a",
@@ -658,7 +668,7 @@ mod tests {
             ))
             .unwrap();
         store
-            .create_task(&mk_task(
+            .create_task(&task_fixture(
                 "task-01b",
                 "TSK-001-002",
                 "epic-01a",
@@ -667,7 +677,7 @@ mod tests {
             ))
             .unwrap();
         store
-            .create_task(&mk_task(
+            .create_task(&task_fixture(
                 "task-02a",
                 "TSK-002-001",
                 "epic-02b",
@@ -687,8 +697,10 @@ mod tests {
         let delivery = view.delivery.as_ref().expect("delivery present");
         assert_eq!(delivery.len(), 1);
         let cap = &delivery[0];
-        assert_eq!(cap.id, "CAP-001");
-        assert_eq!(cap.status, "building");
+        assert_eq!(
+            (cap.id.as_str(), cap.status.as_str()),
+            ("CAP-001", "building")
+        );
 
         // Only EPC-001 resolves; its two tasks group here (one open of two),
         // while the unrelated epic's task does not leak in.

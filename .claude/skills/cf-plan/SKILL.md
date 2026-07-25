@@ -26,6 +26,10 @@ You are planning work, not building it.
    a new plan version and returns to both seats for approval. In a recorded solo
    degradation, perform the same clarity/evidence work and name the missing
    cross-vendor assurance.
+   For multi-task work, load the orchestrator's `resources/task-graph.md` and
+   materialize the exact approved topology into canonical `depends_on` task
+   frontmatter. A node, edge, decision guard, ownership, acceptance/interface,
+   or safety-boundary mutation creates Plan vN+1; an in-node step does not.
 6. Draft on a `plan/` branch, matching artifact to work weight. An **epic** (in
    `project-management/epics/`) is warranted only for a body of work that is >1
    PR, >1 session, or spans multiple capabilities; anything smaller is a single
@@ -41,5 +45,9 @@ You are planning work, not building it.
    cross-lineage reviewer. Fable owns the integrated Claude judgment regardless
    of the host. Solo `/cf-develop` appears only as the noted fallback
    when a required interactive seat is unavailable.
-8. Run `codeflow validate`, then present the plan for approval. Do not start
-   building — that is `cf-develop`.
+8. Apply the orchestrator's `resources/verification-selection.md` when drafting
+   the test strategy. Name evidence for each selected property/generative,
+   mutation, or architecture fitness check, or record `none selected`; concrete
+   tools and thresholds remain project-owned.
+9. Run `codeflow validate --docs`, then present the plan for approval. Do not
+   start building — that is `cf-develop`.

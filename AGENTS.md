@@ -185,7 +185,10 @@ force-delete. Never force-remove a dirty worktree; preserve or harvest dirty
 or untracked work first. Unproven work is retained, never guessed safe.
 
 Parallelize independent work when it shortens the critical path, but make the
-dependency graph, file ownership, and integration order explicit first. Each
+settled task graph, file ownership, and integration order explicit first. Use
+the orchestrator's canonical node/edge notation for multi-task work; a material
+graph mutation requires a newly dual-approved plan version, while ordinary
+in-node detail does not. Each
 parallel task gets one owner, branch, and worktree; never let two sessions write
 the same worktree or concurrently edit a shared contract, schema, migration, or
 other merge hotspot. The host sets a bounded concurrency cap from available CPU,
@@ -333,8 +336,11 @@ to reason from, not a rote checklist.
   integration, end-to-end, and user-facing behavior (drive a real UI with a
   browser/computer-use tool when that is the surface) — and check what it affects
   upstream and downstream, not just the lines you changed. Tests ship in the same
-  change; run `codeflow test` before calling it done — the local gate warns, not
-  blocks, so clear what it flags.
+  change. Select property/generative tests, targeted mutation testing, or
+  project-owned architecture fitness checks only from the orchestrator's
+  evidence triggers; `none selected` is valid, and normal scenario coverage
+  remains mandatory. Run `codeflow test` before calling it done — the local
+  gate warns, not blocks, so clear what it flags.
 - **Unverifiable or fabricated claims are defects (zero tolerance).** Every claim
   needs evidence — file:line, command output, or a reproducible check; never
   invent a fact, number, result, or citation. Say explicitly what was *not*

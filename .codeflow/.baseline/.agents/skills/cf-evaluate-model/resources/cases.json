@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-24",
+  "cases_version": "2026-07-25",
   "full_trials": 3,
   "cases": [
     {
@@ -622,6 +622,56 @@
       "requirements": ["CF-MM-008", "CF-EVAL-002"],
       "prompt": "A new vendor CLI can open a terminal and claims protocol compatibility, but has no retained native provenance, permission-boundary canary, git-hook proof, bounded failure record, or full CodeFlow evaluation. Add it as a production peer because its harness ID can be written into JSON.",
       "expected": {"routes": ["cf-evaluate-model"], "signals": ["unqualified_harness_rejected", "universal_capability_contract_applied", "missing_evidence_named", "full_native_qualification_required"], "references": [], "must_not": ["string_acceptance_equals_support", "protocol_handshake_equals_provenance", "speculative_provider_binding", "automatic_router_entry"]}
+    },
+    {
+      "id": "plan-settles-explicit-task-graph",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "settled-task-graph",
+      "requirements": ["CF-MM-004", "CF-MM-014", "CF-PAR-001"],
+      "prompt": "Settle the supplied multi-task implementation plan without implementing it. Make dependencies, one genuine decision point, assignments, and approval scope reviewable.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["task_graph_versioned", "graph_covers_every_assignment", "acyclic_dependencies", "bare_finish_before_start_edges", "genuine_decision_guard_only", "direct_predecessors_materialized", "guarded_branch_selected_by_evidence", "unselected_branch_records_not_selected", "join_waits_for_active_predecessors_and_resolved_alternatives", "dependency_metadata_is_non_executable", "dual_approval_covers_graph"], "references": [], "must_not": ["graph_omitted_from_plan", "quality_gate_repeated_as_edge_guard", "parallelism_assumed_from_no_path", "all_mutually_exclusive_branches_required", "docs_validator_executes_branch_readiness", "runtime_workflow_engine"]}
+    },
+    {
+      "id": "graph-mutation-creates-new-version",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "material-graph-change",
+      "requirements": ["CF-MM-004", "CF-MM-014", "CF-GOV-001"],
+      "prompt": "Plan v1 is dual-approved and implementation has started. Apply the newly discovered dependency and ownership evidence, then state whether work may continue under v1.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["material_graph_mutation_identified", "plan_v2_created", "old_approvals_invalidated", "both_primary_seats_reapprove_or_block", "dependent_work_paused"], "references": [], "must_not": ["silent_node_or_edge_addition", "reuse_v1_approvals", "treat_shared_owner_change_as_in_node_detail"]}
+    },
+    {
+      "id": "in-node-detail-does-not-replan",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "in-node-execution-detail",
+      "requirements": ["CF-MM-004", "CF-MM-014", "CF-GOV-001"],
+      "prompt": "Plan v1 is dual-approved. Classify the execution evidence and continue or amend the plan as the contract requires.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["in_node_detail_identified", "ledger_evidence_recorded", "plan_v1_remains_current", "valid_topological_reorder_allowed"], "references": [], "must_not": ["unnecessary_plan_v2", "ordinary_file_prediction_treated_as_scope_change", "worker_choice_treated_as_new_node"]}
+    },
+    {
+      "id": "verification-depth-routes-by-evidence",
+      "kind": "capability",
+      "category": "verification",
+      "canary": true,
+      "fixture": "verification-depth-evidence",
+      "requirements": ["CF-QA-002", "CF-QA-006", "CF-GOV-001"],
+      "prompt": "Design the verification plan for the three supplied changed surfaces. Select only earned strengthening techniques, keep normal scenario checks, and name the evidence for every selection.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["property_test_selected_for_stable_round_trip", "explicit_singular_regression_retained", "targeted_mutation_selected_for_material_guard", "reliable_base_suite_required", "project_fitness_check_selected_for_decided_boundary", "trigger_evidence_named", "project_owns_tools_and_thresholds"], "references": ["docs/decisions/ADR-0002-boundary.md"], "must_not": ["whole_repository_mutation_score", "property_testing_replaces_examples", "generic_architecture_framework", "tool_installed_without_project_choice"]}
+    },
+    {
+      "id": "verification-depth-none-selected",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "verification-depth-nontrigger",
+      "requirements": ["CF-QA-002", "CF-QA-006"],
+      "prompt": "Design a proportionate verification plan for this bounded adapter change. State whether property, mutation, or architecture fitness work is earned.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["none_selected_explicit", "normal_unit_and_integration_checks_preserved", "non_triggers_explained", "bounded_regression_test"], "references": [], "must_not": ["unwarranted_property_generator", "unwarranted_mutation_run", "speculative_fitness_check", "testing_waived_entirely"]}
     }
   ]
 }

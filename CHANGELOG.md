@@ -28,6 +28,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   settings drift without launching, scraping, or automatically routing a
   model. Catalogs may name only code-allowlisted version probes; they cannot
   supply commands or arguments.
+- **Multi-task plans now settle a durable, non-executable task graph
+  (ADR-0040).** Both primary seats approve explicit nodes, dependencies, and
+  genuine evidence-guarded decisions. Task records use canonical `depends_on`
+  with a read-compatible `dependencies` alias, while `validate --docs` rejects
+  malformed IDs, conflicting fields, dangling/self/duplicate edges, and cycles
+  without becoming a scheduler. Material graph and cross-task contract changes
+  require Plan vN+1; ordinary in-node detail does not. Verification planning
+  may earn property tests, targeted mutation testing, or a project-owned
+  architecture fitness check from explicit risk and oracle evidence, without
+  imposing optional tools on consuming projects.
 - **Critical-path focus now preserves bounded quality work (ADR-0038).**
   Materiality and the dependency presently controlling the accepted outcome are
   treated as related but distinct. Models protect all quality and safety gates,

@@ -472,6 +472,7 @@ mod tests {
                     estimate: None,
                     acceptance: Vec::new(),
                     tests: Vec::new(),
+                    depends_on: Vec::new(),
                     branch: None,
                     pr_number: None,
                     created_at: now.clone(),

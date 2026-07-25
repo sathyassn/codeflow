@@ -93,8 +93,12 @@ so agents proceed autonomously and the human reviews **one** final PR. Every
 other gate (commit standards, secret scan, destructive-op rules, the test gate)
 still applies on every branch; only the merge-into-`main` step is deferred.
 
-1. **Plan.** One epic with per-task acceptance criteria; mark each task
-   dependent (serial) or independent (parallelizable).
+1. **Plan.** One epic with per-task acceptance criteria. Materialize the
+   dual-approved `TASK_GRAPH vN` from `cf-model-orchestrator` into canonical
+   `depends_on` task frontmatter. Bare edges are finish-before-start; guarded
+   edges are only pre-settled decision points. Parallel eligibility follows
+   topology, but actual fan-out still needs a critical-path benefit and safe
+   isolation.
 2. **Integration branch.** Cut `integration/<epic-id>-<slug>` off `main` and
    push it. It is **non-protected** — agents merge into it freely.
 3. **Task branches.** Each task on `feat/<epic-id>-<task-slug>`, branched *from
@@ -114,8 +118,10 @@ still applies on every branch; only the merge-into-`main` step is deferred.
    - **PR** — open a PR with base = the integration branch; CI runs (the
      `pull_request` trigger fires regardless of base) and the agent merges on
      green, because the base is non-protected.
-   Land tasks in the planned dependency order and run affected gates after each
-   merge; task-local green is not integration evidence.
+   Land tasks in a valid topological order and run affected gates after each
+   merge; task-local green is not integration evidence. A material node, edge,
+   guard, ownership, acceptance/interface, or safety mutation creates Plan
+   vN+1; another valid linearization under unchanged constraints does not.
 5. **Drift control** (long-running epics): periodically **merge** `origin/main`
    *into* the integration branch. Merge only — never rebase a shared branch;
    rebase only task branches.

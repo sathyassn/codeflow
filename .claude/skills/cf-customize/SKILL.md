@@ -102,6 +102,11 @@ Then verify and **offer** remediation — never install silently.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
+  Also inspect any project-owned property/generative, mutation, and architecture
+  fitness commands named by the settled plan or stack standards. Verify only
+  techniques whose trigger evidence satisfies the orchestrator's
+  `resources/verification-selection.md`; do not install a tool or create a gate
+  merely because another project uses one.
 
 **Remediation rule (critical).** For each missing or outdated tool, **print the
 exact fix and confirm before running it.** Never silently auto-install:

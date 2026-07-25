@@ -38,8 +38,8 @@ Core modules grouped by responsibility:
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity
-  lint), the capability registry parser, FTS5 recall, and the cross-repo
-  registry.
+  lint, including structural task dependency identity/reference/cycle checks),
+  the capability registry parser, FTS5 recall, and the cross-repo registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
   `error.rs`): the doctor check table (14 checks — hooks, claude, codex, config,
   permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
@@ -152,6 +152,12 @@ Recall walks source trees without following directory symlinks and applies
 depth/count budgets; encoded path bytes are index identity while lossy paths are
 display-only. Ledger compaction syncs the directory after installing the merged
 base and again after deleting fragments so crash ordering preserves the base.
+Task records optionally carry canonical `depends_on` metadata; the historical
+`dependencies` spelling is a read alias. Documentation validation checks the
+non-executable structural graph for well-formed IDs, filenames, references,
+duplicates, self-edges, and cycles. Guard selection, branch readiness, task
+completion, and scheduling remain Plan/ledger and native-harness concerns
+(ADR-0040).
 
 ### scaffold — `assets/`
 
@@ -176,6 +182,15 @@ mirrored `cf-editorial-review` skill rather than expanding the always-loaded
 contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
 audience/medium/task, and requested tone; both seats protect technical meaning,
 and Fable owns the final contextual editorial verdict (ADR-0032).
+Multi-task plans additionally settle one acyclic task graph whose evidence
+guards represent genuine decisions, not repeated quality gates. Durable task
+metadata preserves its structural candidate predecessors, while Plan evidence
+selects guarded branches and a material graph mutation forces Plan vN+1.
+Verification planning may earn property tests, targeted mutation testing, or a
+project-owned architecture fitness check from explicit risk and oracle
+evidence; ordinary work and single-task plans incur no such ceremony. These
+resources are progressive disclosure, and CodeFlow never becomes a task
+scheduler or installs consuming-project test tools for parity (ADR-0040).
 Review attention is consequence-led: substantiated material and systemic
 findings precede cosmetics, evidence confidence stays distinct from severity,
 remediation effort affects sequencing only, security retains its CVSS-aligned

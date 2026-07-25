@@ -33,4 +33,6 @@ created: {{DATE}}
 
 ## Tasks
 
-<!-- TSK-NNN-NNN links once broken down; small epics may have none. -->
+<!-- TSK-NNN-NNN links once broken down; small epics may have none. For a
+     multi-task body, include or link the exact dual-approved TASK_GRAPH vN.
+     Task frontmatter carries the same direct edges in `depends_on`. -->

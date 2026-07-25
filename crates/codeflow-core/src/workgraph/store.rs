@@ -399,6 +399,7 @@ mod tests {
             estimate: None,
             acceptance: vec!["it works".to_string()],
             tests: vec![],
+            depends_on: vec![],
             branch: None,
             pr_number: None,
             created_at: "2026-06-11T00:00:00Z".to_string(),

@@ -32,6 +32,11 @@ pub struct Task {
     pub acceptance: Vec<String>,
     /// Test references that verify this task.
     pub tests: Vec<String>,
+    /// Direct predecessor task format ids from the settled task graph.
+    ///
+    /// New records use `depends_on`; deserialization accepts the historical
+    /// `dependencies` spelling as an alias.
+    pub depends_on: Vec<String>,
     pub branch: Option<String>,
     pub pr_number: Option<i64>,
     pub created_at: String,
@@ -67,6 +72,8 @@ impl<'de> Deserialize<'de> for Task {
             acceptance: Vec<String>,
             #[serde(default)]
             tests: Vec<String>,
+            #[serde(default, alias = "dependencies")]
+            depends_on: Vec<String>,
             #[serde(default)]
             branch: Option<String>,
             #[serde(default)]
@@ -95,6 +102,7 @@ impl<'de> Deserialize<'de> for Task {
             estimate: w.estimate,
             acceptance: w.acceptance,
             tests: w.tests,
+            depends_on: w.depends_on,
             branch: w.branch,
             pr_number: w.pr_number,
             created_at: w.created_at,
@@ -132,6 +140,7 @@ created: 2026-07-05T00:00:00Z
         );
         assert_eq!(task.priority, "");
         assert!(task.acceptance.is_empty());
+        assert!(task.depends_on.is_empty());
     }
 
     fn make_task() -> Task {
@@ -147,6 +156,7 @@ created: 2026-07-05T00:00:00Z
             estimate: Some("M".to_string()),
             acceptance: vec!["All tests pass".to_string()],
             tests: vec!["crates/codeflow-core/src/".to_string()],
+            depends_on: vec!["TSK-001-001".to_string()],
             branch: None,
             pr_number: None,
             created_at: "2026-03-07T00:00:00Z".to_string(),
@@ -210,6 +220,40 @@ created: 2026-07-05T00:00:00Z
         assert_eq!(back.epic_id, task.epic_id);
         assert_eq!(back.status, task.status);
         assert_eq!(back.acceptance, task.acceptance);
+        assert_eq!(back.depends_on, task.depends_on);
+    }
+
+    #[test]
+    fn test_task_accepts_legacy_dependencies_alias() {
+        let yaml = r"
+id: task-01abc
+format_id: TSK-001-002
+epic_id: epic-01abc
+title: Do the thing
+status: todo
+work_type: fix
+dependencies: [TSK-001-001]
+created: 2026-07-05T00:00:00Z
+";
+        let task: Task = serde_yaml::from_str(yaml).expect("legacy task must parse");
+        assert_eq!(task.depends_on, ["TSK-001-001"]);
+    }
+
+    #[test]
+    fn test_task_rejects_both_dependency_spellings() {
+        let yaml = r"
+id: task-01abc
+format_id: TSK-001-002
+epic_id: epic-01abc
+title: Do the thing
+status: todo
+work_type: fix
+depends_on: [TSK-001-001]
+dependencies: [TSK-001-000]
+created: 2026-07-05T00:00:00Z
+";
+        let error = serde_yaml::from_str::<Task>(yaml).expect_err("aliases must not conflict");
+        assert!(error.to_string().contains("duplicate field"));
     }
 
     #[test]

@@ -17,6 +17,12 @@ planning. The markdown resources own durable quality and task assignment;
 the JSON record owns fast-changing model selectors, effort defaults, internal
 worker classes, and escalation triggers.
 Harness-specific agents are adapters, not alternate sources of truth.
+For a multi-task plan or a possible dependency/decision change, also read
+[resources/task-graph.md](resources/task-graph.md). When choosing or reviewing
+test strength, read
+[resources/verification-selection.md](resources/verification-selection.md).
+These on-demand resources keep the always-loaded path concise without making
+their contracts optional.
 
 ## Outcome modes
 
@@ -223,6 +229,12 @@ v2, v3, and so on; approval of an older version does not carry forward.
 Convergence is bounded to two reconciliation rounds. If both do not explicitly
 approve the same version, stop for the human.
 
+For multi-task work, both approvals cover the same canonical task graph. A
+material node, dependency, decision guard, ownership, acceptance, interface, or
+safety-boundary change creates Plan vN+1 under the task-graph contract. Ordinary
+steps and bounded implementation choices inside an approved node remain ledger
+evidence and do not manufacture replanning ceremony.
+
 ### 3. Detailed tasking
 
 After dual approval, the host expands the agreed plan into ordered tasks with:
@@ -235,6 +247,13 @@ After dual approval, the host expands the agreed plan into ordered tasks with:
 - unit, integration, end-to-end, UI, coverage, and security evidence required;
 - rollback or recovery considerations where relevant.
 
+Multi-task plans use the node/edge notation and mutation boundary in
+`resources/task-graph.md`; durable task records materialize the same direct
+dependencies. A single obvious task uses the resource's explicit N/A path.
+The test plan applies `resources/verification-selection.md` and names the
+trigger evidence for any property/generative, mutation, or architecture
+fitness check—or records `none selected`.
+
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
 and requires both approvals; same-seat high→xhigh on a documented trigger is
@@ -242,7 +261,7 @@ ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
-- dependencies and merge order;
+- the settled task graph and a valid integration order;
 - one file/component owner, branch, and worktree per parallel task;
 - shared or conflict-prone files reserved to one integration owner;
 - a host resource budget and maximum concurrent heavyweight builds/browsers;

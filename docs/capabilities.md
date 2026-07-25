@@ -300,9 +300,9 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test doctor::tests::test_check_delegates"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -343,6 +343,17 @@ ensemble record. Primary seats retain their plan and approval duties, the
 owning primary controls internal routing, and Fable owns Claude-side judgment.
 Each run records actual model versions, effort, routing evidence, and escalation
 rationale rather than inferring usage state.
+
+For multi-task work, both approvals cover one acyclic Plan vN graph. Ordinary
+completion uses bare edges; only genuine pre-approved decisions use observable
+guards. Task frontmatter keeps non-executable structural `depends_on` data so
+`validate --docs` can reject malformed, dangling, self-referential, duplicate,
+or cyclic topology without interpreting branch readiness. Material graph or
+cross-task contract changes force Plan vN+1; in-node implementation detail does
+not. Verification planning selects property tests, targeted mutation testing,
+or project-owned architecture fitness checks only when the risk and oracle
+evidence earn them. CodeFlow adds neither a scheduler nor mandatory
+consuming-project tools.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, serialized
