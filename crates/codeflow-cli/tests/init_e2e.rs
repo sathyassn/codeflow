@@ -140,6 +140,21 @@ fn assert_engine_placeholders_rendered(root: &Path) {
 fn assert_update_round_trips(root: &Path) {
     let agents_before = read(root, "AGENTS.md");
     let settings_before = read(root, ".claude/settings.json");
+    let selected_binding = r#"{
+  "schema_version": 1,
+  "bindings": [
+    {
+      "role": "claude-judgment-primary",
+      "binding_id": "locally-qualified-claude-binding"
+    }
+  ]
+}
+"#;
+    std::fs::write(
+        root.join(".codeflow/model-selection.json"),
+        selected_binding,
+    )
+    .expect("write user-owned model selection");
     let out = codeflow(root, &["update"]);
     let report = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
@@ -160,6 +175,11 @@ fn assert_update_round_trips(root: &Path) {
         read(root, ".claude/settings.json"),
         settings_before,
         "settings merge did not round-trip"
+    );
+    assert_eq!(
+        read(root, ".codeflow/model-selection.json"),
+        selected_binding,
+        "update changed the user-owned model selection"
     );
     let mut after = Vec::new();
     walk_files(root, &mut after);

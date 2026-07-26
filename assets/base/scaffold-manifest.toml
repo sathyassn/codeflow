@@ -140,6 +140,14 @@ dest = ".codeflow/policy.json"
 ownership = "user-owned"
 tiers = ["minimal", "standard", "full"]
 
+# --- model selection (user-owned, reference-only) ---------------------------
+
+[[entry]]
+src = "model-selection.json"
+dest = ".codeflow/model-selection.json"
+ownership = "user-owned"
+tiers = ["standard", "full"]
+
 # --- git hook shims (wired via core.hooksPath unless another manager owns it) -
 
 [[entry]]

@@ -373,7 +373,8 @@ CodeFlow separates stable method from changing bindings (ADR-0039):
 durable doctrine
   -> universal harness capability contract
     -> approved concrete binding evidence
-      -> current ensemble policy
+      -> managed current ensemble
+        -> project selection by qualified binding ID
 ```
 
 The orchestrator and quality/routing resources own duties that should survive
@@ -381,8 +382,14 @@ model releases. `harnesses.json` owns the minimum guarantees and evidence for
 each capability-supported native harness; that catalog status does not qualify
 a model. A promoted local record binds one actual model, effort, harness,
 settings digest, and approved full result.
-`current-ensemble.json` alone selects the current primaries, effort defaults,
-worker classes, and escalation triggers.
+`current-ensemble.json` selects the managed primaries, effort defaults, worker
+classes, and escalation triggers. Standard/full projects also own
+`.codeflow/model-selection.json`. Leave it absent or empty to use those
+defaults; an override maps only a stable role to a promoted local binding ID.
+Run `codeflow doctor --check model-bindings` before using an override. The
+entire selection fails closed rather than partly applying when a record is
+missing, ineligible, unsupported, drifted, or would collapse the two primary
+lineages.
 
 For a model upgrade on a capability-supported harness, evaluate the new
 concrete binding and update the ensemble record; do not rewrite the doctrine. A
@@ -398,7 +405,8 @@ The maintenance boundary is deliberate:
 
 | Change | Update | Re-prove | Do not add |
 |---|---|---|---|
-| New model/version or effort policy on a supported harness | `current-ensemble.json`, then a promoted binding record | Controlled full native evaluation with requested/observed identity | Doctrine rewrites or automatic routing |
+| New managed model/version or effort policy on a supported harness | Promoted binding evidence, then `current-ensemble.json` | Controlled full native evaluation with requested/observed identity | Doctrine rewrites or automatic routing |
+| Consuming-project model choice | `.codeflow/model-selection.json` references an approved local binding ID for an exact stable role | `codeflow doctor --check model-bindings` plus normal duo canary | Raw selectors, partial fallback, or same-lineage pseudo-duos |
 | Material harness release/configuration change | Capability evidence only if the contract changed; refresh the concrete binding | Native capability canary plus full binding qualification where behavior or settings changed | An inferred pass from `--version` alone |
 | Genuinely new harness/provider | One catalog entry and the smallest reviewed transport/probe seam actually required | Every universal capability, then each production binding | Generic plugin machinery, arbitrary catalog commands, or speculative providers |
 | Durable orchestration duty change | Doctrine/quality/routing contract and linked requirement/cases | Regression and over-trigger cases plus both primary judgments | Binding facts duplicated through many skills |
@@ -425,6 +433,24 @@ harness/settings drift without inferring live model state. Diagnostic packs
 help isolate failures but never qualify a binding. Then use the skill's
 marker+run-ID-gated cleanup for fixtures;
 never use it against the consuming project itself (ADR-0027).
+
+## Selecting deterministic code analysis
+
+CodeFlow does not impose one SAST service on every stack. During
+`/cf-customize`, `cf-stack` inventories languages, trust boundaries, hosting,
+existing tools, and CI constraints, then records the smallest maintained lane
+that provides relevant source/data-flow or taint evidence. CodeQL default setup
+is a low-maintenance choice for an eligible GitHub-hosted repository and a
+supported language; Semgrep, Sonar, or a language-native analyzer may fit other
+stacks or governance requirements. SCA and secret scanning remain separate
+evidence and do not substitute for SAST.
+
+Verify the chosen analyzer rather than merely installing it: record applicable
+rules, scanned-file/tool status, extraction errors, suppressions, owner,
+cadence, and whether it gates locally, in CI, or through branch protection. If
+no relevant lane is available, record the residual risk and disposition.
+CodeFlow's own post-public CodeQL setting is repository-specific and is not
+copied into consuming projects by `init` or `update`.
 
 ## Enforcement planes — who catches what
 

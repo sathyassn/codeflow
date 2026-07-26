@@ -43,7 +43,7 @@ it as non-trivial.
 
 | Intent | Use |
 |---|---|
-| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; Fable owns the integrated Claude judgment. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
+| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
 | Materialize an agreed plan | `/cf-plan` — supporting flow for acceptance criteria, epic/spec/ADR artifacts, used inside the duo or after a recorded solo degradation |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
@@ -187,7 +187,7 @@ landing with `codeflow integrate`; rerun the affected and aggregate gates after
 every merge. Rebase task branches, never a shared integration branch. Parallel
 output is not complete until the integration worktree is green and the combined
 diff has received the same producer verification, cross-lineage unit review, and
-integrated Fable judgment as a serial change.
+integrated Claude-judgment-primary review as a serial change.
 
 ## Session flow
 

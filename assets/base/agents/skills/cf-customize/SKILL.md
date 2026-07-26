@@ -66,9 +66,10 @@ Then verify and **offer** remediation — never install silently.
     proves the real session) — including
     the `cf-delegate` sibling Stop-hook preflight over the effective Stop-hook
     set. Never use `claude -p`, bare `tmux wait-for` signalling, or pane
-    stability as the work protocol. If Fable/auto is
-    unavailable, record it and canary the strongest reasoning model with
-    `acceptEdits`; never select bypass on an ordinary host.
+    stability as the work protocol. If the selected Claude judgment primary or
+    auto mode is unavailable, record it and canary the strongest qualified
+    reasoning fallback with `acceptEdits`; never select bypass on an ordinary
+    host or claim the fallback was the selected primary.
   - **Autonomy settings** — parse and inspect the effective files rather than
     trusting their comments:
     - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
@@ -102,6 +103,16 @@ Then verify and **offer** remediation — never install silently.
 - **Stack test toolchain.** The runner the detected stack tests with — cargo /
   npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
+  Inspect the selected deterministic security lane too: language-native
+  analysis, SAST/dataflow/taint, SCA, and secret scanning are different
+  evidence. For an eligible GitHub repository, CodeQL default setup is one
+  low-maintenance option; Semgrep, a native analyzer, Sonar, or another
+  maintained service may fit a different stack or governance model. Verify the
+  actual rule coverage, scanned-file/tool status, suppressions, owner, cadence,
+  and local/CI gate instead of choosing by brand. Never assume a private-repo
+  entitlement or auto-enable a remote service. If relevant SAST/taint evidence
+  is not selected, record the residual risk and why; model review and SCA do not
+  impersonate it.
   Also inspect any project-owned property/generative, mutation, and architecture
   fitness commands named by the settled plan or stack standards. Verify only
   techniques whose trigger evidence satisfies the orchestrator's
@@ -218,10 +229,15 @@ confirms the final content.
   is user-owned; `codeflow update` never touches it.
 - **Harness model/MCP config** — read the current primary selectors, effort
   defaults/escalations, and permitted internal routes from
-  `../cf-model-orchestrator/resources/current-ensemble.json`; do not duplicate
-  or freeze them here. Invoke each primary directly, leave internal routing to
-  that primary, require observed native routing for any worker, and keep
-  planning, approval, interpretation, and judgment with the primaries.
+  `../cf-model-orchestrator/resources/current-ensemble.json`. Then inspect
+  `.codeflow/model-selection.json`: absent/empty means the managed default;
+  every override references only a local binding ID qualified for that exact
+  stable role. Run `codeflow doctor --check model-bindings` before proposing an
+  override. A failure blocks the selection—never write a raw selector, partially
+  apply entries, or silently fall back. Invoke each effective primary directly,
+  leave internal routing to that primary, require observed native routing for
+  any worker, and keep planning, approval, interpretation, and judgment with the
+  primaries.
   Configure the research,
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;

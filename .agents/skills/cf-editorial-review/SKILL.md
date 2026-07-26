@@ -66,11 +66,12 @@ misrepresent the author or project.
 ## Duo review
 
 Within the CodeFlow duo, both primary seats check factual and technical
-correctness. The directly invoked primary Fable seat reviews the substantial
-artifact's design, voice, and final editorial quality, even when Claude drafted
-it; use a fresh context for an independent final pass when Fable authored
-material text. Helpers may collect evidence but do not own the judgment. If
-Fable is unavailable, record the fallback and reduced assurance.
+correctness. The directly invoked `claude-judgment-primary` reviews the
+substantial artifact's design, voice, and final editorial quality, even when
+Claude drafted it; use a fresh context for an independent final pass when that
+primary authored material text. Helpers may collect evidence but do not own the
+judgment. If the selected primary is unavailable, record the fallback and
+reduced assurance.
 
 ## Review output
 

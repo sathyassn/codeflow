@@ -110,7 +110,9 @@ worker classes from
 `../cf-model-orchestrator/resources/current-ensemble.json`. Invoke the primary
 directly with that selector and effort. Any worker requires observed native
 routing; the invoked primary retains the task, implementation, verification,
-and verdict.
+and verdict. If `.codeflow/model-selection.json` is nonempty, first require
+`codeflow doctor --check model-bindings` to pass and use only its effective
+qualified override for the active harness.
 
 **Output counts as Codex only with a native Codex thread behind it.** Every
 plugin exchange must yield the native thread ID, recheckable afterward
@@ -133,7 +135,7 @@ the session started cleanly, the delivered prompt was accepted as the armed
 turn, and the terminal event belongs to that turn. The sequence, compactly:
 
 ```sh
-# Read these two values from current-ensemble.json before launch.
+# Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default or triggered escalation effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"  # prints generated settings.json

@@ -105,7 +105,10 @@ limits of catalog support in consuming scaffolds.
 
    Add only roles the evidence qualifies. The record retains requested and
    observed model/effort, content digests, harness metadata, and approval—not
-   prompts, settings contents, credentials, or arbitrary trace text. Run
+   prompts, settings contents, credentials, or arbitrary trace text. Stable
+   primary roles additionally require their role-tagged behavioral cases to
+   pass. A project adopts an approved binding only by referencing its ID from
+   `.codeflow/model-selection.json`; never copy the raw selector. Run
    `codeflow doctor --check model-bindings`; harness-version or declared
    settings drift requires requalification, while live model/effort remains a
    native-session observation.

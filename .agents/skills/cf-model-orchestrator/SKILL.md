@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex duo for every non-trivial repository task from either Claude Code, Codex, or another capable host. Both models independently research, analyze, and plan; Claude leads design; the host routes each approved task to a capable producer and cross-lineage reviewer; Fable owns the integrated Claude judgment; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex duo for every non-trivial repository task from either Claude Code, Codex, or another capable host. Both models independently research, analyze, and plan; Claude leads design; the host routes each approved task to a capable producer and cross-lineage reviewer; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
@@ -16,6 +16,12 @@ the current concrete seats from
 planning. The markdown resources own durable quality and task assignment;
 the JSON record owns fast-changing model selectors, effort defaults, internal
 worker classes, and escalation triggers.
+If `.codeflow/model-selection.json` contains project overrides, run
+`codeflow doctor --check model-bindings` and use only the effective qualified
+role bindings it reports. An absent or empty file keeps the managed defaults;
+an invalid or drifted active selection blocks preflight without partial
+application or silent fallback. The project file may reference binding IDs
+only—it never owns raw selectors, worker routes, or commands.
 Harness-specific agents are adapters, not alternate sources of truth.
 For a multi-task plan or a possible dependency/decision change, also read
 [resources/task-graph.md](resources/task-graph.md). When choosing or reviewing
@@ -31,8 +37,8 @@ implementation stage for an analysis-only request.
 
 - **Research / analysis:** independent discovery → evidence comparison → joint settled findings → closeout.
 - **Plan / design:** independent discovery → Claude-led options → versioned dual-approved plan/tasks → closeout without edits.
-- **Implementation:** routed production/verification → cross-lineage unit review → Fable integrated judgment → closeout.
-- **Review / verification:** independent inspection without self-review → Fable integrated verdict; review grants no edit authority.
+- **Implementation:** routed production/verification → cross-lineage unit review → Claude-judgment-primary integrated judgment → closeout.
+- **Review / verification:** independent inspection without self-review → Claude-judgment-primary integrated verdict; review grants no edit authority.
 - **Substantive documentation:** use research/plan mode when only the proposed
   content is requested; use implementation mode when repository docs will be
   changed and verified. Apply `cf-editorial-review` before final approval.
@@ -52,10 +58,11 @@ implementation stage for an analysis-only request.
   native usage signals only. Seat/lineage reassignment invalidates approvals.
 - **Review is producer-relative.** The producer first-verifies its own unit; the
   other lineage reviews it independently. Self-review is never independent.
-- **Fable owns integrated Claude judgment.** The directly invoked primary Fable
-  seat reviews the settled design and integrated diff, reruns relevant tests,
-  and owns the final quality verdict. Codex supplies independent review for a
-  Fable-authored unit; Fable's integrated pass is not independent unit review.
+- **The Claude judgment primary owns integrated Claude judgment.** The directly
+  invoked model qualified for `claude-judgment-primary` reviews the settled
+  design and integrated diff, reruns relevant tests, and owns the final quality
+  verdict. Codex supplies independent review for a unit authored by that
+  primary; its integrated pass is not independent review of its own unit.
 - **Qualified reasoning seats.** Use the concrete selectors, default effort,
   escalation effort/triggers, and permitted internal worker classes in the
   current ensemble record. The durable rule is unchanged when those bindings
@@ -119,8 +126,8 @@ Detect capabilities, not model identity.
 
 | Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|
-| Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Per-task producer/reviewer assignment; Fable leads design and integrated judgment |
-| Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Per-task producer/reviewer assignment; Fable leads design and integrated judgment |
+| Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
 Desktop apps are not peer automation endpoints. Claude Code reaches Codex via
@@ -165,11 +172,12 @@ Never simulate a missing vendor with another host-model instance.
      `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted →
      wait-terminal with bounded cleanup — using the generated immutable hook
      settings and the
-     `cf-delegate` sibling Stop-hook preflight. If Fable or auto mode is
-     unavailable, record the exact capability gap and use the strongest
-     supported Claude reasoning model with `acceptEdits` plus the same
-     fail-closed sandbox; use the record's escalation effort when a trigger
-     applies. Never fall through to bypass mode on an ordinary host.
+     `cf-delegate` sibling Stop-hook preflight. If the selected Claude judgment
+     primary or auto mode is unavailable, record the exact capability gap and
+     use the strongest supported qualified Claude reasoning fallback with
+     `acceptEdits` plus the same fail-closed sandbox; use the record's escalation
+     effort when a trigger applies. Never fall through to bypass mode on an
+     ordinary host or claim the fallback was the selected primary.
 4. Verify the autonomy boundary through the effective settings, not prose:
    - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
      autonomy, raw-secret denies, and user-scope auto + `classifyAllShell`.
@@ -307,25 +315,26 @@ a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 
 For a Codex host, Codex-produced work stays in the current worktree and session;
-Fable- or Opus-produced units stay in their native Claude session. In either
-direction, the approved other-lineage reviewer independently inspects the unit
-and its evidence before integration. Workers return to their primary seat;
-workers never approve plans or replace the named reviewer.
+Claude-primary- or Claude-worker-produced units stay in their native Claude
+session. In either direction, the approved other-lineage reviewer independently
+inspects the unit and its evidence before integration. Workers return to their
+primary seat; workers never approve plans or replace the named reviewer.
 
-### 5. Cross-lineage review and integrated Fable judgment
+### 5. Cross-lineage review and integrated Claude judgment
 
 For implementation/review modes, each unit carries the named other-lineage
 review and any finding returns to that unit's producer. Then the directly
-invoked primary Fable seat reviews the actual integrated diff rather than task
-summaries. It reruns relevant tests, grades every acceptance criterion with
-evidence, rejects unnecessary or non-idiomatic complexity and brittle
+invoked `claude-judgment-primary` reviews the actual integrated diff rather than
+task summaries. It reruns relevant tests, grades every acceptance criterion
+with evidence, rejects unnecessary or non-idiomatic complexity and brittle
 under-design, checks design and design-system conformance plus UX/UI behavior,
 performs the independent security pass, applies `cf-editorial-review` to
 substantial changed prose and user-facing copy, and owns the final code and
 design quality verdict. In Claude Code, `cf-reviewer` and
 `cf-security-reviewer` may deepen the pass; they do not replace the required
-other-lineage review or Fable judgment. For a Fable-authored unit, record the
-Codex independent review and describe Fable's pass only as integrated judgment.
+other-lineage review or primary judgment. For a unit authored by the Claude
+judgment primary, record the Codex independent review and describe the primary's
+pass only as integrated judgment.
 For research/analysis/plan modes, Claude instead final-reviews the settled
 artifact and its source/evidence coverage.
 
@@ -339,8 +348,9 @@ implementation handoff.
 
 Any confirmed issue returns to its designated producer. Rework is bounded to two rounds and
 requires fresh evidence. A deterministic failure or unverified criterion blocks
-completion. If Fable is unavailable, record the fallback and reduced assurance;
-never report that Fable reviewed the work.
+completion. If the selected Claude judgment primary is unavailable, record the
+fallback and reduced assurance;
+never report that the selected Claude judgment primary reviewed the work.
 
 Before closeout, both primary seats inspect the consolidated deferral batch
 once. They choose `fix now`, `track once`, or `drop` for each related set,

@@ -35,8 +35,9 @@ or one obvious local check.
   non-trivial repository task, including research, analysis, planning, design,
   review, substantive docs, implementation, and verification. In this Claude
   host, use the official Codex plugin; Claude leads design, while the host
-  routes each task to an approved producer and cross-lineage reviewer. Fable
-  owns the integrated Claude judgment. A missing seat degrades legibly only
+  routes each task to an approved producer and cross-lineage reviewer. The
+  qualified Claude judgment primary owns the integrated Claude verdict. A
+  missing seat degrades legibly only
   after preflight. The unattended pipeline is
   explicitly single-vendor and never substitutes for the interactive duo.
 - Load the concrete primary selectors, effort defaults/escalations, and
@@ -48,7 +49,8 @@ or one obvious local check.
 - Match stages and process weight to the outcome: trivial → just do it;
   otherwise begin `/cf-model-orchestrator`. Research/planning-only work exits
   after joint settlement; implementation continues through routed production,
-  producer verification, cross-lineage review, and integrated Fable judgment.
+  producer verification, cross-lineage review, and integrated
+  Claude-judgment-primary review.
   `/cf-plan` and `/cf-develop` are supporting/solo flows,
   not alternate entry points. Full ladder in the `cf-method` skill.
 - Compose stages and models in config (`args.stages`, `args.models`) — never

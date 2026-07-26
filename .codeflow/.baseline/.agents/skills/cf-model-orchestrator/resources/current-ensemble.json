@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "policy_id": "claude-codex-duo",
   "bindings": [
     {
+      "role": "claude-judgment-primary",
       "seat": "claude-primary",
       "provider": "anthropic",
       "lineage": "claude",
@@ -33,6 +34,7 @@
       ]
     },
     {
+      "role": "codex-engineering-primary",
       "seat": "codex-primary",
       "provider": "openai",
       "lineage": "codex",

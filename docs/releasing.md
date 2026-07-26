@@ -99,8 +99,15 @@ git push -u origin chore/release   # then open the PR
     qualification.
     Run `codeflow doctor --check model-bindings` for retained local promotion
     records and resolve requested/observed, harness-version, or declared
-    settings drift. A diagnostic pack or parseable harness name is not
-    promotion evidence.
+    settings drift. Confirm the repository's project selection is absent/empty
+    or resolves atomically to exact stable-role binding IDs; a diagnostic pack
+    or parseable harness name is not promotion evidence.
+  - Before the repository is public, confirm no committed CodeQL workflow has
+    entered the scaffold. After it is public, enable GitHub CodeQL default setup
+    for Rust with `security-extended`, verify intended file coverage and zero
+    tool-status errors, and collect five healthy applicable PR runs before
+    considering the check required. Roll back branch-protection requirements
+    before disabling the setup.
   - `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
     locally; CI billing/availability never substitutes for this evidence.
   - `cargo dist plan --output-format=json` lists all four archives, both

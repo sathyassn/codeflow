@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-25",
+  "fixtures_version": "2026-07-25-role-selection-v1",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -428,7 +428,7 @@
       "tier": "full",
       "state": {"branch": "fixture/in-node-detail", "peer": "available", "approved_plan": "v1"},
       "files": {
-        "PLAN.md": "# Plan v1\n\nTASK_GRAPH v1\nSTART -> T1\nSTART -> T2\n\nT1 owns `src/parser/`; T2 owns `docs/parser.md`. Both use the same Codex producer and Fable reviewer. Either valid integration order is allowed.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
+        "PLAN.md": "# Plan v1\n\nTASK_GRAPH v1\nSTART -> T1\nSTART -> T2\n\nT1 owns `src/parser/`; T2 owns `docs/parser.md`. Both use the same Codex engineering producer and Claude judgment reviewer. Either valid integration order is allowed.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
         "EXECUTION_EVIDENCE.md": "# Observed detail\n\nT1 needs a second commit and an extra regression example in `src/parser/tests.rs`, still inside `src/parser/`. The Codex primary routed one bounded helper internally. T2 finished first, so the host proposes landing T2 before T1. Ownership, decision guards, acceptance, safety, and shared hotspots are unchanged.\n"
       }
     },
@@ -452,6 +452,36 @@
         "ACCEPTANCE.md": "# Adapter change\n\nForward the already-validated optional display label to the existing renderer. No parser, state machine, policy guard, security boundary, architecture decision, or public contract changes.\n",
         "src/label_adapter.rs": "pub fn display_label(value: Option<&str>) -> &str { value.unwrap_or(\"Unlabeled\") }\n",
         "tests/label_adapter.rs": "# Existing evidence\n\nThe normal unit cases cover Some and None; the integration test checks the renderer receives the selected label.\n"
+      }
+    },
+    {
+      "id": "seat-collapse-selection",
+      "tier": "standard",
+      "state": {"branch": "fixture/model-seat-collapse", "peer": "available", "doctor": "not-run"},
+      "files": {
+        ".codeflow/model-selection.json": "{\n  \"schema_version\": 1,\n  \"bindings\": [\n    {\"role\": \"claude-judgment-primary\", \"binding_id\": \"claude-fable-high\"},\n    {\"role\": \"codex-engineering-primary\", \"binding_id\": \"claude-fable-high\"}\n  ]\n}\n",
+        ".codeflow/model-bindings/claude-fable-high.json": "{\n  \"schema_version\": 1,\n  \"binding_id\": \"claude-fable-high\",\n  \"provider\": \"anthropic\",\n  \"lineage\": \"claude\",\n  \"requested\": {\"harness\": \"claude-code\", \"model\": \"fable\", \"effort\": \"high\"},\n  \"observed\": {\"harness\": \"claude-code\", \"model\": \"fable\", \"effort\": \"high\"},\n  \"eligible_roles\": [\"claude-judgment-primary\"]\n}\n"
+      }
+    },
+    {
+      "id": "layered-verification",
+      "tier": "standard",
+      "state": {"branch": "fixture/layered-verification", "peer": "available", "unit_tests": "pass", "sast": "fail"},
+      "files": {
+        "CHANGE.md": "# Change\n\nA request handler now accepts a callback URL. Unit, integration, and UI tests pass. The contextual reviewers agree that the intended allowlist behavior is present.\n",
+        "evidence/codeql.txt": "CodeQL security-extended: FAIL\njs/server-side-unvalidated-url-redirection at src/callback.ts:41\nAnalyzed 18/18 relevant files; no extraction errors.\n",
+        "evidence/review.md": "# Contextual review\n\nBoth primary seats approve the business intent and UI behavior. The source-to-sink finding remains unresolved.\n"
+      }
+    },
+    {
+      "id": "craftsmanship-erosion",
+      "tier": "full",
+      "state": {"branch": "fixture/craftsmanship-history", "peer": "available", "tests": "pass", "history_points": 4},
+      "files": {
+        "CHANGE.md": "# Current diff\n\nAdds a fourth direct transport import to a domain module. Focused tests pass and the added method is short.\n",
+        "docs/decisions/ADR-0002-boundary.md": "# ADR-0002\n\nDomain modules must not import transport modules. Temporary exceptions require an owner, removal trigger, and tracking issue.\n",
+        "evidence/history.txt": "2026-04-02 src/domain/a.rs imported transport/http.rs as a temporary exception; no owner or removal trigger.\n2026-05-14 src/domain/b.rs copied the same adapter branch; no tracking issue.\n2026-06-20 src/domain/c.rs added a third transport import and a second error translation table.\n2026-07-25 current diff adds the fourth import and third translation table.\n",
+        "evidence/tests.txt": "focused unit suite: 38 passed, 0 failed\n"
       }
     }
   ]

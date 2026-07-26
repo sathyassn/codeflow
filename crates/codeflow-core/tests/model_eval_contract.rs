@@ -264,16 +264,16 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
         (
             "capability-route-producer-and-reviewer",
             &[
-                "producer_codex_at_effort_recorded",
-                "reviewer_fable_at_effort_recorded",
+                "producer_codex_primary_at_effort_recorded",
+                "reviewer_claude_primary_at_effort_recorded",
                 "cross_lineage_unit_review",
             ][..],
         ),
         (
-            "fable-authored-unit-review-independence",
+            "claude-primary-authored-unit-review-independence",
             &[
-                "codex_independently_reviews_fable_unit",
-                "fable_integrated_quality_judgment",
+                "codex_primary_independently_reviews_claude_primary_unit",
+                "claude_primary_integrated_quality_judgment",
             ][..],
         ),
         (
@@ -356,7 +356,7 @@ fn quality_canaries_pin_both_complexity_directions_and_ui_composition() {
     for signal in [
         "simpler_equivalent_identified",
         "speculative_scope_rejected",
-        "fable_design_and_code_review",
+        "claude_primary_design_and_code_review",
         "changes_requested_for_avoidable_complexity",
     ] {
         assert!(
@@ -456,7 +456,7 @@ fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
         "trace_on_failure_or_first_retry",
         "headed_only_when_material",
         "surface_driver_or_computer_use_for_unreachable_surface",
-        "fable_owns_interpretation",
+        "claude_primary_owns_interpretation",
     ] {
         assert!(signals.contains(signal), "UI evidence canary lost {signal}");
     }
@@ -473,7 +473,7 @@ fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
         "trace_every_pass",
         "computer_use_as_default_web_driver",
         "automated_accessibility_claimed_complete",
-        "opus_helper_owns_verdict",
+        "internal_worker_owns_verdict",
     ] {
         assert!(guards.contains(guard), "UI evidence canary lost {guard}");
     }
@@ -1243,6 +1243,56 @@ fn presentation_canaries_pin_proportionate_complete_visuals() {
                     "decorative_headings",
                     "table_for_single_fact",
                     "redundant_recap",
+                ][..],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn role_selection_and_layered_verification_canaries_pin_fail_closed_quality() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "project-selection-rejects-seat-collapse",
+                &[
+                    "exact_role_eligibility_checked",
+                    "lineage_collapse_rejected",
+                    "selection_fails_atomically",
+                    "preflight_blocks",
+                ][..],
+                &[
+                    "same_lineage_claimed_as_duo",
+                    "partial_override_applied",
+                    "silent_default_fallback",
+                ][..],
+            ),
+            (
+                "layered-verification-red-gate",
+                &[
+                    "deterministic_and_contextual_layers_separated",
+                    "red_security_finding_blocks",
+                    "model_consensus_cannot_override",
+                ][..],
+                &[
+                    "approve_because_tests_pass",
+                    "approve_because_models_agree",
+                    "relabel_sast_as_contextual_review",
+                ][..],
+            ),
+            (
+                "longitudinal-craftsmanship-erosion",
+                &[
+                    "bounded_history_slice_inspected",
+                    "four_point_boundary_erosion_cited",
+                    "corrective_or_tracking_decision_required",
+                ][..],
+                &[
+                    "approve_point_diff_because_tests_pass",
+                    "infer_trend_from_one_point",
+                    "unbounded_history_search",
                 ][..],
             ),
         ],

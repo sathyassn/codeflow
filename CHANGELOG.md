@@ -14,10 +14,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Stable model roles now resolve through qualified project bindings
+  (ADR-0041), and verification is explicitly layered (ADR-0042).** Durable
+  orchestration names the Claude judgment and Codex engineering roles rather
+  than a model release. The managed ensemble still selects the current Fable
+  and Sol bindings, while standard/full projects may atomically reference
+  locally approved binding IDs from `.codeflow/model-selection.json`.
+  `codeflow doctor --check model-bindings` fails closed on invalid, drifted, or
+  pseudo-duo selections without partial fallback. Role-tagged evals, a
+  seat-collapse regression, deterministic-red verification, and bounded-history
+  craftsmanship cases protect the boundary. CodeFlow will enable GitHub CodeQL
+  default Rust analysis after public launch; consuming projects select SAST
+  from stack/hosting evidence during customization, so no CodeQL workflow is
+  imposed by the portable scaffold.
 - **Model and harness evolution now has qualified bindings (ADR-0039).**
   Durable independent planning, Claude-led design, capability-routed
   production, cross-lineage review, integrated Claude judgment, and graceful
-  degradation remain unchanged. One current ensemble record now owns concrete
+  degradation remain unchanged. One managed ensemble record now owns concrete
   model selectors, effort policy, worker classes, and escalation triggers; a
   universal native-harness capability catalog replaces the evaluator's
   hard-coded harness enum. Catalog entries mean capability support, not
@@ -53,14 +66,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   non-bypassable.
 - **Duo execution is now capability-routed per task (ADR-0035).** Independent
   Claude+Codex discovery, Claude-led design, versioned joint approval, native
-  interactive transport, evidence gates, and Fable integrated judgment remain
+  interactive transport, evidence gates, and integrated Claude judgment remain
   mandatory. The host now records each task's producer and cross-lineage
   reviewer from verified task fit, tools/context, independence, routing,
   resources, and observed native usage signals; a seat/lineage reassignment
   invalidates approval. Explicit host/peer/worker roles prevent nested duos,
-  unverified workers are unavailable rather than guessed, and Fable-authored
-  units receive independent Codex review without calling Fable's integrated
-  judgment self-independent.
+  unverified workers are unavailable rather than guessed, and units authored
+  by the Claude judgment primary receive independent Codex review without
+  calling the primary's integrated judgment self-independent.
 - **Reviews and proactive discovery now act by materiality (ADR-0034).**
   Models still search broadly, but substantiate candidates and lead with
   consequential strategic, architectural, structural, correctness, security,
@@ -120,8 +133,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Right-sized design and code are now a blocking duo gate (ADR-0030).**
   Both seats must approve design proportionality; every routed producer
   first-verifies the smallest coherent, idiomatic change, the other lineage
-  reviews it independently, and the directly invoked Fable primary owns the
-  integrated quality verdict. Speculative features, abstractions,
+  reviews it independently, and the directly invoked Claude judgment primary
+  owns the integrated quality verdict. Speculative features, abstractions,
   configuration, dependencies, compatibility paths, dead code, and other
   complexity without a current requirement or evidenced risk yield
   `changes_requested` even when tests pass. The same gate rejects brittle
@@ -187,8 +200,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code hosts through the official Codex plugin; Codex App/interactive
   CLI hosts through a task-scoped interactive Claude CLI in tmux. Both models
   independently research/analyze/plan and Claude leads design. ADR-0035 now
-  routes production and cross-lineage review per task while preserving Fable's
-  integrated judgment. A versioned
+  routes production and cross-lineage review per task while preserving the
+  selected Claude primary's integrated judgment. A versioned
   dual-approved plan, reproducible evidence ledger, scenario-first tests, an
   80% coverage floor/90% target where measurable, UI-driven validation, and
   independent security review now form one shared quality contract.

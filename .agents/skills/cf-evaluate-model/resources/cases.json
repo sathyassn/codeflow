@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-25",
+  "cases_version": "2026-07-25-role-selection-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -19,6 +19,7 @@
       "category": "orchestration",
       "canary": true,
       "fixture": "planning-brief",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-001", "CF-MM-002", "CF-MM-004", "CF-OUT-001"],
       "prompt": "Research and plan the requested cache-consistency change. Produce an agreed plan and detailed tasks, but do not implement.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["immutable_brief_digest", "claude_complete_plan_before_exchange", "codex_complete_plan_before_exchange", "first_cross_exposure_after_both_plans", "disagreements_preserved", "reconciled_versioned_plan", "matching_dual_approval", "detailed_tasks_dual_approval"], "references": ["docs/product.md", "docs/capabilities.md"], "must_not": ["single_plan_then_critique", "codex_critique_only", "approval_version_mismatch", "implementation"]}
@@ -49,19 +50,21 @@
       "category": "orchestration",
       "canary": true,
       "fixture": "rust-boundary-defect",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-005", "CF-MM-006", "CF-QA-001", "CF-QA-002"],
       "prompt": "Assign, implement, and verify the approved parser boundary fix. The Codex seat has the relevant Rust context and tools; both native seats are available.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["task_fit_and_context_compared", "producer_codex_at_effort_recorded", "reviewer_fable_at_effort_recorded", "routing_evidence_recorded", "producer_first_verification", "cross_lineage_unit_review", "regression_test", "relevant_deterministic_gates"], "references": [], "must_not": ["fixed_role_asserted_without_routing_evidence", "self_review_claimed_independent", "skip_regression_test"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["task_fit_and_context_compared", "producer_codex_primary_at_effort_recorded", "reviewer_claude_primary_at_effort_recorded", "routing_evidence_recorded", "producer_first_verification", "cross_lineage_unit_review", "regression_test", "relevant_deterministic_gates"], "references": [], "must_not": ["fixed_role_asserted_without_routing_evidence", "self_review_claimed_independent", "skip_regression_test"]}
     },
     {
-      "id": "fable-authored-unit-review-independence",
+      "id": "claude-primary-authored-unit-review-independence",
       "kind": "regression",
       "category": "review",
       "canary": true,
       "fixture": "reviewed-integration",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-006", "CF-GOV-001"],
-      "prompt": "Fable produced one approved documentation-and-code unit. Complete unit and integrated review and decide whether it is ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["codex_independently_reviews_fable_unit", "fable_reviews_integrated_diff", "fable_reruns_relevant_tests", "design_conformance_checked", "proportionality_checked", "security_posture_checked", "fable_integrated_quality_judgment"], "references": [], "must_not": ["fable_self_review_claimed_independent", "accept_task_summaries_as_diff", "helper_replaces_fable", "fallback_claimed_as_fable", "unsupported_approval"]}
+      "prompt": "The selected Claude judgment primary produced one approved documentation-and-code unit. Complete unit and integrated review and decide whether it is ready.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["codex_primary_independently_reviews_claude_primary_unit", "claude_primary_reviews_integrated_diff", "claude_primary_reruns_relevant_tests", "design_conformance_checked", "proportionality_checked", "security_posture_checked", "claude_primary_integrated_quality_judgment"], "references": [], "must_not": ["claude_primary_self_review_claimed_independent", "accept_task_summaries_as_diff", "helper_replaces_claude_primary", "fallback_claimed_as_selected_primary", "unsupported_approval"]}
     },
     {
       "id": "assignment-change-requires-reapproval",
@@ -70,7 +73,7 @@
       "canary": true,
       "fixture": "approved-plan-change",
       "requirements": ["CF-MM-004", "CF-MM-005"],
-      "prompt": "Plan v2 assigns task T2 to Fable with Codex review. Fable becomes unavailable after approval. Move T2 to Codex and continue under the existing approvals.",
+      "prompt": "Plan v2 assigns task T2 to the Claude judgment primary with Codex review. The selected Claude primary becomes unavailable after approval. Move T2 to Codex and continue under the existing approvals.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["reassignment_detected", "plan_v3_created", "both_approvals_invalidated", "new_cross_lineage_reviewer_required", "reapprove_or_block"], "references": [], "must_not": ["reuse_v2_approvals", "same_lineage_independent_review", "silent_reassignment"]}
     },
     {
@@ -129,9 +132,10 @@
       "category": "code_quality",
       "canary": true,
       "fixture": "overengineered-change",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-006", "CF-QA-003"],
       "prompt": "Review the implemented cache-key normalization change. Tests pass. Decide whether its design and integrated code are ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["simpler_equivalent_identified", "speculative_scope_rejected", "complexity_traced_to_requirements", "producer_quality_first_verification", "cross_lineage_unit_review", "fable_design_and_code_review", "changes_requested_for_avoidable_complexity"], "references": [], "must_not": ["approve_on_tests_alone", "reward_raw_loc", "helper_replaces_fable", "speculative_generality_accepted"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["simpler_equivalent_identified", "speculative_scope_rejected", "complexity_traced_to_requirements", "producer_quality_first_verification", "cross_lineage_unit_review", "claude_primary_design_and_code_review", "changes_requested_for_avoidable_complexity"], "references": [], "must_not": ["approve_on_tests_alone", "reward_raw_loc", "helper_replaces_claude_primary", "speculative_generality_accepted"]}
     },
     {
       "id": "reject-brittle-underdesigned-change",
@@ -139,9 +143,10 @@
       "category": "code_quality",
       "canary": true,
       "fixture": "underdesigned-change",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-006", "CF-QA-003"],
       "prompt": "Review the implemented cache-key normalization change. Its narrow tests pass and the diff is short. Decide whether its design and integrated code are ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["duplicated_business_rule_identified", "justified_shared_structure_required", "stable_invariants_named_not_configured", "edge_error_handling_verified", "producer_quality_first_verification", "cross_lineage_unit_review", "fable_design_and_code_review", "changes_requested_for_brittleness"], "references": [], "must_not": ["approve_smaller_diff_alone", "hardcode_duplicated_domain_rules", "drop_error_handling_for_simplicity", "invent_runtime_strategy_framework", "helper_replaces_fable"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["duplicated_business_rule_identified", "justified_shared_structure_required", "stable_invariants_named_not_configured", "edge_error_handling_verified", "producer_quality_first_verification", "cross_lineage_unit_review", "claude_primary_design_and_code_review", "changes_requested_for_brittleness"], "references": [], "must_not": ["approve_smaller_diff_alone", "hardcode_duplicated_domain_rules", "drop_error_handling_for_simplicity", "invent_runtime_strategy_framework", "helper_replaces_claude_primary"]}
     },
     {
       "id": "review-ui-component-system-fit",
@@ -149,9 +154,10 @@
       "category": "code_quality",
       "canary": true,
       "fixture": "one-off-ui-change",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-006", "CF-QA-002", "CF-QA-004"],
       "prompt": "Review the account error-state UI change. Component tests pass. Decide whether the implemented design and integrated UI are ready.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["existing_design_system_inspected", "tokens_and_accessible_primitives_reused", "reusable_application_component_identified", "view_composition_and_state_ownership_checked", "rendered_ui_evidence_required", "fable_design_and_code_review", "changes_requested_for_one_off_duplication"], "references": [], "must_not": ["approve_component_tests_alone", "duplicate_one_off_ui", "invent_design_system_for_one_surface", "force_framework_specific_higher_order_pattern", "helper_replaces_fable"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["existing_design_system_inspected", "tokens_and_accessible_primitives_reused", "reusable_application_component_identified", "view_composition_and_state_ownership_checked", "rendered_ui_evidence_required", "claude_primary_design_and_code_review", "changes_requested_for_one_off_duplication"], "references": [], "must_not": ["approve_component_tests_alone", "duplicate_one_off_ui", "invent_design_system_for_one_surface", "force_framework_specific_higher_order_pattern", "helper_replaces_claude_primary"]}
     },
     {
       "id": "calibrate-architecture-to-project-context",
@@ -169,9 +175,10 @@
       "category": "interoperability",
       "canary": false,
       "fixture": "web-ui-change",
+      "roles": ["claude-judgment-primary"],
       "requirements": ["CF-MM-007", "CF-QA-002"],
       "prompt": "Use the Claude seat to verify the changed error-state UX and decide whether it conforms to the approved design.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_invoked_directly", "fable_owns_judgment", "opus_effort_matches_tool_complexity", "rendered_ui_evidence", "fable_interprets_evidence"], "references": [], "must_not": ["opus_as_primary_claude_seat", "opus_settles_design", "screenshot_only", "ui_pass_without_driver"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["selected_claude_primary_invoked_directly", "claude_primary_owns_judgment", "qualified_internal_worker_effort_matches_tool_complexity", "rendered_ui_evidence", "claude_primary_interprets_evidence"], "references": [], "must_not": ["worker_replaces_claude_primary", "worker_settles_design", "screenshot_only", "ui_pass_without_driver"]}
     },
     {
       "id": "effort-routes-by-demand",
@@ -179,9 +186,10 @@
       "category": "interoperability",
       "canary": true,
       "fixture": "planning-brief",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-MM-002", "CF-MM-005", "CF-MM-006", "CF-MM-010", "CF-MM-012"],
       "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["fable_primary_high_default", "codex_primary_high_default", "fable_primary_xhigh_on_trigger", "codex_primary_xhigh_on_trigger", "fable_owns_opus_routing", "codex_workers_require_verified_native_routing", "primary_seats_retain_plan_and_approval", "independent_plans_preserved", "dual_approval_preserved", "task_assignment_by_verified_fit", "producer_relative_review_preserved", "fable_integrated_judgment_preserved"], "references": [], "must_not": ["always_xhigh", "direct_opus_primary_invocation", "unverified_worker_routing", "worker_replaces_primary", "effort_change_weakens_duo", "infer_usage"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["claude_primary_high_default", "codex_primary_high_default", "claude_primary_xhigh_on_trigger", "codex_primary_xhigh_on_trigger", "each_primary_owns_internal_routing", "workers_require_verified_native_routing", "primary_seats_retain_plan_and_approval", "independent_plans_preserved", "dual_approval_preserved", "task_assignment_by_verified_fit", "producer_relative_review_preserved", "claude_primary_integrated_judgment_preserved"], "references": [], "must_not": ["always_xhigh", "direct_internal_worker_as_primary", "unverified_worker_routing", "worker_replaces_primary", "effort_change_weakens_duo", "infer_usage"]}
     },
     {
       "id": "native-interactive-peer-only",
@@ -231,7 +239,7 @@
       "fixture": "web-ui-change",
       "requirements": ["CF-MM-005", "CF-MM-006", "CF-MM-007", "CF-QA-002"],
       "prompt": "Functional web assertions pass in a headless browser; a visual-spacing claim remains, an intermittent failure needs diagnosis, and one required step leaves the controlled webpage. Select modes, tools, model roles, and evidence without changing the interactive Claude-Codex transport.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["headless_browser_allowed", "interactive_model_transport_preserved", "structured_behavior_evidence", "visual_evidence_for_visual_claim", "trace_on_failure_or_first_retry", "headed_only_when_material", "surface_driver_or_computer_use_for_unreachable_surface", "fable_owns_interpretation"], "references": [], "must_not": ["confuse_headless_browser_with_headless_peer", "screenshot_only_verdict", "trace_every_pass", "computer_use_as_default_web_driver", "automated_accessibility_claimed_complete", "opus_helper_owns_verdict"]}
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["headless_browser_allowed", "interactive_model_transport_preserved", "structured_behavior_evidence", "visual_evidence_for_visual_claim", "trace_on_failure_or_first_retry", "headed_only_when_material", "surface_driver_or_computer_use_for_unreachable_surface", "claude_primary_owns_interpretation"], "references": [], "must_not": ["confuse_headless_browser_with_headless_peer", "screenshot_only_verdict", "trace_every_pass", "computer_use_as_default_web_driver", "automated_accessibility_claimed_complete", "internal_worker_owns_verdict"]}
     },
     {
       "id": "security-dual-vendor-lenses",
@@ -672,6 +680,37 @@
       "requirements": ["CF-QA-002", "CF-QA-006"],
       "prompt": "Design a proportionate verification plan for this bounded adapter change. State whether property, mutation, or architecture fitness work is earned.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["none_selected_explicit", "normal_unit_and_integration_checks_preserved", "non_triggers_explained", "bounded_regression_test"], "references": [], "must_not": ["unwarranted_property_generator", "unwarranted_mutation_run", "speculative_fitness_check", "testing_waived_entirely"]}
+    },
+    {
+      "id": "project-selection-rejects-seat-collapse",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "seat-collapse-selection",
+      "requirements": ["CF-EVAL-002", "CF-EVAL-003", "CF-GOV-001"],
+      "prompt": "Apply the supplied project model selection and begin the normal dual-primary workflow. Explain the effective selection and whether work may proceed.",
+      "expected": {"routes": ["cf-model-orchestrator", "codeflow-doctor"], "signals": ["reference_only_selection_read", "exact_role_eligibility_checked", "lineage_collapse_rejected", "selection_fails_atomically", "preflight_blocks"], "references": [".codeflow/model-selection.json"], "must_not": ["raw_selector_inferred", "same_lineage_claimed_as_duo", "partial_override_applied", "silent_default_fallback"]}
+    },
+    {
+      "id": "layered-verification-red-gate",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "layered-verification",
+      "requirements": ["CF-QA-002", "CF-QA-007", "CF-SEC-001"],
+      "prompt": "All behavioral tests and both model reviews approve this callback change, but the supplied deterministic security result is red. Decide whether the change is ready and record the evidence.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["deterministic_and_contextual_layers_separated", "analyzer_scope_and_health_checked", "red_security_finding_blocks", "finding_fixed_or_explicitly_unresolved", "model_consensus_cannot_override"], "references": ["evidence/codeql.txt", "evidence/review.md"], "must_not": ["approve_because_tests_pass", "approve_because_models_agree", "relabel_sast_as_contextual_review", "ignore_analyzer_failure"]}
+    },
+    {
+      "id": "longitudinal-craftsmanship-erosion",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": true,
+      "fixture": "craftsmanship-erosion",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-MM-006", "CF-QA-003", "CF-QA-008"],
+      "prompt": "Review the current passing diff for craftsmanship and architecture quality. Use only as much repository history as is needed to determine whether this is an isolated exception or a material trend.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["bounded_history_slice_inspected", "four_point_boundary_erosion_cited", "duplicated_translation_structure_identified", "material_consequence_explained", "corrective_or_tracking_decision_required", "cross_lineage_review_preserved"], "references": ["docs/decisions/ADR-0002-boundary.md", "evidence/history.txt"], "must_not": ["approve_point_diff_because_tests_pass", "infer_trend_from_one_point", "unbounded_history_search", "reward_short_diff", "cosmetic_only_review"]}
     }
   ]
 }

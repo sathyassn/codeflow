@@ -92,6 +92,27 @@ fn ci_downloads_verify_pinned_checksums() {
     );
 }
 
+#[test]
+fn codeql_remains_repository_owned_not_a_scaffolded_workflow() {
+    let root = repo_root();
+    let mut violations = Vec::new();
+    for directory in [root.join(".github/workflows"), root.join("assets/base/ci")] {
+        for file in walk_files(&directory) {
+            let content = std::fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+            if content.to_ascii_lowercase().contains("codeql") {
+                violations.push(rel(&root, &file));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "CodeQL is enabled as CodeFlow repository default setup after the repo \
+         becomes public; it must not become a portable scaffold/CI dependency: {}",
+        violations.join(", ")
+    );
+}
+
 /// Files under `assets/base` that deliberately ship WITHOUT a manifest entry.
 /// Exact and honest: `every_authored_asset_is_in_the_manifest` fails when an
 /// entry here goes stale (file deleted, or wired into the manifest after all).

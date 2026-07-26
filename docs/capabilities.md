@@ -302,7 +302,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -319,8 +319,8 @@ the producer and cross-lineage reviewer from verified capability, context,
 resources, and observed native usage evidence. Both seats approve those
 assignments before implementation; changing a named seat or lineage invalidates
 the approvals. Each producer first-verifies its unit, the other lineage reviews
-it independently, and Fable owns the integrated Claude quality judgment without
-claiming independent review of its own authored unit.
+it independently, and the selected `claude-judgment-primary` owns integrated
+Claude quality judgment without claiming independent review of its own unit.
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
 CLI reaches Claude through an interactive task-scoped tmux session. Another
@@ -333,14 +333,16 @@ coverage floor where measurable (90% normal target), security review, and
 bounded rework. It also blocks material avoidable complexity: both seats review
 design proportionality, every producer first-verifies the smallest coherent
 implementation, the other lineage independently reviews it, and the directly
-invoked Fable primary reviews the settled design and actual integrated diff for
-the final quality verdict. Substantial prose additionally
+invoked Claude judgment primary reviews the settled design and actual
+integrated diff for the final quality verdict. Substantial prose additionally
 loads `cf-editorial-review`: both seats protect technical meaning and evidence,
-while Fable owns the final contextual voice and editorial verdict. Cross-model
+while the Claude judgment primary owns the final contextual voice and editorial
+verdict. Cross-model
 callers invoke both primary seats directly using the selectors, default and
 escalation effort, triggers, and permitted internal routes in the current
-ensemble record. Primary seats retain their plan and approval duties, the
-owning primary controls internal routing, and Fable owns Claude-side judgment.
+ensemble record. Primary seats retain their plan and approval duties, each
+owning primary controls internal routing, and the selected Claude primary owns
+Claude-side judgment.
 Each run records actual model versions, effort, routing evidence, and escalation
 rationale rather than inferring usage state.
 
@@ -444,9 +446,9 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs"]
-epics: []
-adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md"]
+epics: [EPC-003]
+adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,
@@ -467,6 +469,11 @@ ensemble record owns concrete primary selectors, effort policy, worker classes,
 and escalation triggers. A new harness or model name is not usable merely
 because it parses; the harness needs catalog evidence and the concrete binding
 needs approved native full qualification.
+Standard/full projects may then reference an approved binding ID for an exact
+stable role in `.codeflow/model-selection.json`. The file is reference-only;
+doctor resolves it atomically and fails closed on malformed, ineligible,
+unsupported, drifted, or lineage-collapsing overrides. An absent or empty file
+keeps the managed ensemble.
 Composable diagnostic packs select existing cases without changing graders or
 promotion. Approved full results can emit non-secret local binding records;
 doctor detects record contradictions and observable harness/settings drift
@@ -482,7 +489,15 @@ The hard `CF-QA-002` contract separates browser headlessness from interactive
 peer-model transport and requires claim-matched behavior, visual, runtime,
 trace, and accessibility evidence. Its regression canary rejects
 screenshot-only verdicts, indiscriminate tracing, Computer Use as the default
-web driver, and helper-model ownership of Fable's design judgment.
+web driver, and helper-model ownership of the Claude primary's design judgment.
+
+The hard `CF-QA-007` contract requires complementary deterministic and
+contextual verification. Applicable syntax/style, SCA, source/data-flow, taint,
+secret, and architecture checks stay distinct from independent intent and
+semantic review; a deterministic red result cannot be waived by model
+consensus, and missing relevant SAST/taint evidence remains visible residual
+risk. `CF-QA-008` adds a bounded-history craftsmanship case so repeated
+dependency and duplication erosion cannot hide behind a passing point diff.
 
 The hard `CF-QA-005` contract evaluates materiality-led review, execution
 focus, and proactive routing. Cases require consequential findings to lead

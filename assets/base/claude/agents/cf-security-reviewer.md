@@ -48,11 +48,13 @@ change:
 
 - the pre-commit secret scan (`crates/codeflow-core/src/hooks/scan.rs`) and
   gitleaks (CI) for secrets and entropy;
-- the dependency / supply-chain and SAST run. Today the deterministic floor is
-  `osv-scanner` in CI — stack-agnostic SCA across every lockfile ecosystem, the
-  universal floor. Per-stack scanners (`cargo audit`, `pip-audit`, `govulncheck`,
-  and `semgrep --config auto` for cross-language taint) are an optional future
-  extension, not a shipped core module; consume whichever ran for this change.
+- the dependency / supply-chain and selected SAST/dataflow/taint run. The
+  portable shipped floor is `osv-scanner` in CI — stack-agnostic SCA across
+  lockfile ecosystems. Consume any project-selected language-native analyzer,
+  CodeQL, Semgrep, Sonar, or equivalent as a distinct evidence layer; do not
+  claim SCA or Clippy supplied source-to-sink taint analysis. If the settled
+  risk/test plan requires such analysis and none ran, record the residual risk
+  and request the missing evidence rather than manufacturing a pass.
 
 If the deterministic floor did not run, that is itself a blocker — return
 `changes_requested`. **Layer, never duplicate:** you do not re-run secret
@@ -117,7 +119,7 @@ SecurityFinding {
   confidence:  confirmed | likely | speculative
   remediation: "<the fix>"
   detector:    model-claude | model-codex | cargo-audit | osv-scanner | gitleaks
-             | secret-scan | semgrep | pip-audit | govulncheck
+             | secret-scan | codeql | semgrep | sonar | pip-audit | govulncheck
 }
 
 SecurityVerdict {
@@ -157,8 +159,9 @@ findings artifact; neither ships today.
   level is read from `.codeflow/policy.json`: it fails CI only when `git.security_review`
   or `git.dep_audit` is `block`; the shipped default is `warn` (reported, not
   failed), and both can be `off`. There is no non-overridable High+ hard block and
-  no per-stack/Semgrep floor yet — those are future work alongside the per-stack
-  scanner table.
+  no universal per-stack SAST floor. A consuming project's selected analyzer
+  remains project-owned, and CodeFlow's own CodeQL gate is a post-public
+  repository setting rather than shipped CI.
 - **Model-reasoned findings warn and force pipeline rework — CI checks no artifact.**
   Your verdict drives the local pipeline gate's bounded rework, but no CI check
   requires a committed structured-findings artifact (it was not built). Your

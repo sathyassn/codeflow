@@ -42,8 +42,9 @@ You are planning work, not building it.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
    every non-trivial repository task: both seats plan independently, Claude leads
    design, and each implementation task records its approved producer and
-   cross-lineage reviewer. Fable owns the integrated Claude judgment regardless
-   of the host. Solo `/cf-develop` appears only as the noted fallback
+   cross-lineage reviewer. The qualified Claude judgment primary owns the
+   integrated Claude verdict regardless of the host. Solo `/cf-develop` appears
+   only as the noted fallback
    when a required interactive seat is unavailable.
 8. Apply the orchestrator's `resources/verification-selection.md` when drafting
    the test strategy. Name evidence for each selected property/generative,

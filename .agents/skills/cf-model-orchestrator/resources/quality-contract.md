@@ -81,13 +81,14 @@ boundaries, without speculative generality.
 Both seats grade design proportionality before approval. Each producer
 first-verifies its implementation for necessity, clarity, idiomatic structure,
 maintainability, failure behavior, and security; the named other-lineage seat
-reviews that unit independently. The directly invoked primary Fable seat reviews
-the settled design and actual integrated diff and owns the final quality verdict;
-helpers may collect evidence but cannot replace that judgment. Fable's integrated
-judgment is not independent review of a unit Fable authored.
+reviews that unit independently. The directly invoked model qualified for the
+`claude-judgment-primary` role reviews the settled design and actual integrated
+diff and owns the final quality verdict; helpers may collect evidence but cannot
+replace that judgment. Its integrated judgment is not independent review of a
+unit it authored.
 Material avoidable complexity is `changes_requested`, even when tests pass.
-A non-Fable fallback records reduced assurance and never claims that Fable
-reviewed the work.
+A fallback records reduced assurance and never claims that the selected Claude
+judgment primary reviewed the work.
 
 ## Materiality and prioritization
 
@@ -248,6 +249,25 @@ Apply the checks relevant to the changed surface:
 - regression tests for each fixed defect;
 - repository-specific validation, packaging, or migration checks.
 
+Record deterministic and contextual evidence as complementary layers. The
+deterministic layer selects applicable syntax/style, dependency/SCA,
+data/control-flow, taint, secret, and project-owned architecture checks. The
+contextual layer independently verifies intent, business logic, deep semantics,
+material performance behavior, state/environment interactions, and emergent
+anomalies. A deterministic red result cannot be overridden by model agreement;
+an agentic verdict cannot claim an analyzer ran when it did not. If a relevant
+SAST/taint lane is unavailable, record the residual risk and disposition rather
+than turning absence into a pass. Each layer may mark a category `N/A` only with
+surface evidence.
+
+Quality review is also longitudinal when the repository has relevant history.
+Inspect the changed surface, nearby patterns, and the smallest useful history
+slice to detect repeated exceptions, dependency-direction erosion, growing
+duplication, unstable abstractions, or complexity that no single diff exposes.
+Do not infer a trend from one point or run an unbounded archaeology exercise:
+cite the concrete sequence, its material consequence, and the corrective or
+tracking decision.
+
 Use [the verification-selection contract](verification-selection.md) to decide
 whether evidence earns property/generative tests, targeted mutation testing, or
 project-owned architecture fitness checks. Record the trigger or `none
@@ -268,9 +288,9 @@ work plus a settled, evidenced result.
 
 Apply `cf-editorial-review` to substantial documentation, ADRs, proposals,
 release notes, PR narratives, operator communications, and user-facing copy.
-The primary Fable seat owns the final contextual editorial verdict; both seats
-still verify technical meaning and evidence. Do not invoke the skill for every
-short response, and do not let tone override truth, policy, or precision.
+The Claude judgment primary owns the final contextual editorial verdict; both
+seats still verify technical meaning and evidence. Do not invoke the skill for
+every short response, and do not let tone override truth, policy, or precision.
 
 Presentation is graded for proportionality in both directions: simple content
 stays simply formatted, while a structure that is materially clearer visually
@@ -342,9 +362,10 @@ changed, record `UI: N/A — no user-facing surface changed`.
 
 Each producer first-verifies its unit. The approved cross-lineage reviewer then
 reviews the actual unit, reruns relevant gates, and checks conformance with the
-chosen design. Fable separately reviews the integrated diff and owns the Claude
-quality verdict. For a Fable-authored unit, Codex is the independent reviewer;
-Fable's integrated pass is not described as independent review of that unit.
+chosen design. The Claude judgment primary separately reviews the integrated
+diff and owns the Claude quality verdict. For a unit it authored, Codex is the
+independent reviewer; the primary's integrated pass is not described as
+independent review of that unit.
 Every reviewer challenges the evidence rather than accepting a summary.
 
 Classify findings by severity, order them by the materiality contract above,
@@ -363,8 +384,8 @@ Completion requires:
 - required deterministic gates are green;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
-- every unit has approved cross-lineage review and Fable has approved the
-  integrated design/code judgment;
+- every unit has approved cross-lineage review and the selected Claude judgment
+  primary has approved the integrated design/code judgment;
 - design and implementation proportionality are approved;
 - substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.

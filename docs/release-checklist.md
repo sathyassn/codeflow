@@ -25,6 +25,13 @@ named human release decision.
 - [ ] Secret scanning, dependency audit, policy validation, and the repository
       integrity/managed-drift checks pass or have a documented, human-approved
       disposition that does not weaken a non-relaxable floor.
+- [ ] CodeFlow's repository-specific CodeQL state is honest. Before public
+      launch it remains pending and no CodeQL workflow is shipped in the
+      portable scaffold. After public launch, GitHub default setup for Rust uses
+      `security-extended`; tool status shows the intended files analyzed with
+      zero extraction/configuration errors. Treat it as advisory until five
+      consecutive applicable PR runs are healthy, then decide separately
+      whether branch protection should require it.
 - [ ] Catastrophic-action blocked/allowed canaries pass for macOS, Linux/WSL2,
       and native Windows command forms, including supported privilege and shell
       launch wrappers.
@@ -72,8 +79,9 @@ named human release decision.
       evidence records versions, effort, tool access, and graceful degradation.
 - [ ] Each task records its producer and cross-lineage reviewer with verified
       routing evidence; producers first-verify, the other lineage reviews each
-      unit independently, and Fable owns the integrated design/code judgment.
-      Every blocking finding is resolved or explicitly stops the release.
+      unit independently, and the selected Claude judgment primary owns the
+      integrated design/code judgment. Every blocking finding is resolved or
+      explicitly stops the release.
 - [ ] Host/peer/worker role canaries reject nested orchestration, usage state is
       observed rather than inferred, and reassignment forces fresh dual approval.
 
@@ -89,6 +97,8 @@ named human release decision.
       repository access.
 - [ ] Rollback is ready: the prior release remains installable, the bad release
       can be marked/withdrawn without rewriting tag history, and corrective
-      release ownership is named.
+      release ownership is named. For CodeQL, rollback removes any required
+      check before disabling default setup; findings and the last healthy tool
+      status remain linked in the release record.
 - [ ] Downstream Agent OS work begins only from this verified public CodeFlow
       release; the portal is updated only after the matching Agent OS release.

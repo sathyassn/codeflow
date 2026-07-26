@@ -48,19 +48,19 @@
     {
       "id": "CF-MM-006",
       "level": "hard",
-      "statement": "Each producer first-verifies its unit, the named other-lineage seat reviews it independently, and the directly invoked primary Fable seat owns the integrated design/code judgment without claiming independent review of a Fable-authored unit; a fallback is recorded without claiming Fable review.",
+      "statement": "Each producer first-verifies its unit, the named other-lineage seat reviews it independently, and the directly invoked Claude judgment primary owns the integrated design/code judgment without claiming independent review of its own authored unit; a fallback is recorded without claiming the selected primary reviewed.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Review is producer-relative.**", "**Fable owns integrated Claude judgment.**", "Codex supplies independent review", "never report that Fable reviewed the work"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["A model cannot independently review its own authored unit", "do not label Fable's integrated judgment"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Review is producer-relative.**", "**The Claude judgment primary owns integrated Claude judgment.**", "Codex supplies independent review", "never report that the selected Claude judgment primary reviewed the work"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["A model cannot independently review its own authored unit", "do not label the primary's integrated judgment"]}
       ]
     },
     {
       "id": "CF-MM-007",
       "level": "hard",
-      "statement": "The directly invoked primary Fable-class seat owns Claude judgment; only the owning primary may use qualified internal routes from the current ensemble, and workers never settle the judgment.",
+      "statement": "The directly invoked qualified Claude judgment primary owns Claude judgment; only the owning primary may use qualified internal routes from the current ensemble, and workers never settle the judgment.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Fable owns integrated Claude judgment", "let the owning primary control its internal routing", "never let a worker replace a primary"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["\"model_class\": \"latest-fable\"", "\"model_class\": \"latest-opus\"", "\"effort\": \"medium\"", "\"effort\": \"high\"", "without transferring judgment"]}
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["The Claude judgment primary owns integrated Claude judgment", "let the owning primary control its internal routing", "never let a worker replace a primary"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["\"role\": \"claude-judgment-primary\"", "\"model_class\": \"latest-fable\"", "\"model_class\": \"latest-opus\"", "\"effort\": \"medium\"", "\"effort\": \"high\"", "without transferring judgment"]}
       ]
     },
     {
@@ -327,6 +327,33 @@
         {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["minimum native harness capability contract", "even `release-smoke` is not a promotion suite", "After a full result passes promotion validation", "live model/effort remains a native-session observation"]},
         {"path": ".agents/skills/cf-evaluate-model/resources/protocol.md", "markers": ["Adding a harness requires evidence for every capability plus the full model suite", "Promotion additionally requires `system.observed`", "requested and observed model/effort match", "runtime routing config, or permission to auto-promote"]},
         {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["A changed concrete binding requires native-interactive qualification before promotion"]}
+      ]
+    },
+    {
+      "id": "CF-EVAL-003",
+      "level": "hard",
+      "statement": "Project model selection is a reference-only, atomic override of stable roles to locally qualified binding IDs; absent or empty selection preserves the managed default, while malformed, missing, ineligible, drifted, unsupported, or lineage-collapsing selection fails closed without partial fallback.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": [".codeflow/model-selection.json", "An absent or empty file keeps the managed defaults", "invalid or drifted active selection blocks preflight without partial application or silent fallback"]},
+        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["every override references only a local binding ID qualified for that exact stable role", "A failure blocks the selection", "never write a raw selector, partially apply entries, or silently fall back"]},
+        {"path": ".codeflow/model-selection.json", "markers": ["\"schema_version\": 1", "\"bindings\": []"]}
+      ]
+    },
+    {
+      "id": "CF-QA-007",
+      "level": "hard",
+      "statement": "Verification combines applicable deterministic structural/security checks with independent contextual judgment; model consensus cannot override a deterministic red result or claim an unavailable analyzer ran, and missing relevant SAST/taint evidence remains explicit residual risk.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Record deterministic and contextual evidence as complementary layers", "A deterministic red result cannot be overridden by model agreement", "record the residual risk and disposition"]},
+        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["deterministic security lane", "model review and SCA do not impersonate it"]}
+      ]
+    },
+    {
+      "id": "CF-QA-008",
+      "level": "hard",
+      "statement": "Quality review uses a bounded, evidenced history slice when relevant to detect structural erosion that a point-in-time passing diff can hide, without inferring trends from one point or turning review into unbounded archaeology.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Quality review is also longitudinal", "smallest useful history slice", "Do not infer a trend from one point", "unbounded archaeology exercise"]}
       ]
     },
     {

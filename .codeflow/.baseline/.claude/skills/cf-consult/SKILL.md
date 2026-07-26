@@ -42,6 +42,9 @@ independent.
      from `../cf-model-orchestrator/resources/current-ensemble.json`, using
      `claude --model <selector> --effort <effort> --permission-mode auto
      --settings <state-dir>/settings.json`;
+     when `.codeflow/model-selection.json` is nonempty, first require
+     `codeflow doctor --check model-bindings` to pass and use only its effective
+     qualified override for this harness;
      the generated settings file carries only the lifecycle hooks and is
      immutable — make `autoMode.classifyAllShell` effective at user scope.
      Keep "read and
@@ -53,9 +56,9 @@ independent.
      reviewer its native tools, MCPs, and public-network research without
      using bypass mode on an ordinary host. Preflight: `claude` and `tmux` are
      present, `claude mcp list` succeeds, and a scoped interactive canary
-     returns an authenticated response. Fable owns any internal Opus delegation
-     and the resulting judgment; the caller never invokes Opus as the Claude
-     reasoning seat. See
+     returns an authenticated response. The selected Claude judgment primary
+     owns any qualified internal worker delegation and the resulting judgment;
+     the caller never invokes a worker as the Claude reasoning seat. See
      <https://code.claude.com/docs/en/permission-modes>.
 3. The named vendor's CLI missing, the plugin surface absent, or auth failing
    → tell the user the remedy (`codex login`; install the plugin from a Claude

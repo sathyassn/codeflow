@@ -56,7 +56,14 @@ RFC3339 = re.compile(
     r"(?:\.(?P<fraction>[0-9]+))?(?P<offset>Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 QUALIFIED_ROLES = frozenset(
-    {"primary", "producer", "reviewer", "evidence-worker"}
+    {
+        "primary",
+        "producer",
+        "reviewer",
+        "evidence-worker",
+        "claude-judgment-primary",
+        "codex-engineering-primary",
+    }
 )
 GRADER_MATERIAL_DIRS = (
     ".agents/skills/cf-evaluate-model",
@@ -460,6 +467,20 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 covered_requirements.add(requirement_id)
                 if case.get("canary") is True:
                     canary_requirements.add(requirement_id)
+        try:
+            roles = string_list(
+                case.get("roles", []), f"{case_id}.roles", allow_empty=True
+            )
+            unknown_roles = set(roles) - QUALIFIED_ROLES
+            if unknown_roles:
+                errors.append(
+                    f"{case_id}: unknown roles: "
+                    + ", ".join(sorted(unknown_roles))
+                )
+            if len(roles) != len(set(roles)):
+                errors.append(f"{case_id}: duplicate role")
+        except EvalError as error:
+            errors.append(str(error))
         expected = case.get("expected")
         if not isinstance(expected, dict):
             errors.append(f"{case_id}: expected must be an object")
@@ -1636,6 +1657,27 @@ def qualified_binding_record(
             "cannot record an unqualified binding:\n- "
             + "\n- ".join(promotion_errors)
         )
+    _, cases_doc, _ = suite_documents()
+    role_cases: dict[str, set[str]] = defaultdict(set)
+    for case in cases_doc["cases"]:
+        for role in case.get("roles", []):
+            role_cases[role].add(case["id"])
+    for role in normalized_roles:
+        if role in {"claude-judgment-primary", "codex-engineering-primary"}:
+            if not role_cases[role]:
+                raise EvalError(f"no behavioral cases qualify role {role}")
+            failed = sorted(
+                {
+                    trial["case_id"]
+                    for trial in result["trials"]
+                    if trial["case_id"] in role_cases[role]
+                    and trial["status"] != "pass"
+                }
+            )
+            if failed:
+                raise EvalError(
+                    f"role {role} has non-passing cases: " + ", ".join(failed)
+                )
     system = result["system"]
     harness = harness_catalog()[system["harness"]]
     observed = system["observed"]

@@ -467,12 +467,20 @@ class ResultScoringTests(unittest.TestCase):
             record = eval_kit.qualified_binding_record(
                 result,
                 binding_id="codex-primary-high",
-                roles=["primary", "reviewer", "reviewer"],
+                roles=[
+                    "primary",
+                    "reviewer",
+                    "reviewer",
+                    "codex-engineering-primary",
+                ],
                 settings_files=[settings],
             )
         self.assertEqual("openai", record["provider"])
         self.assertEqual("codex", record["lineage"])
-        self.assertEqual(["primary", "reviewer"], record["eligible_roles"])
+        self.assertEqual(
+            ["codex-engineering-primary", "primary", "reviewer"],
+            record["eligible_roles"],
+        )
         self.assertEqual(
             result["system"]["observed"]["model"], record["observed"]["model"]
         )
@@ -486,6 +494,33 @@ class ResultScoringTests(unittest.TestCase):
                 mismatch,
                 binding_id="bad-binding",
                 roles=["primary"],
+                settings_files=[],
+            )
+
+    def test_stable_primary_role_requires_all_role_tagged_cases_to_pass(self) -> None:
+        result = promotable_result()
+        cases = {
+            case["id"]: case
+            for case in eval_kit.suite_documents()[1]["cases"]
+        }
+        role_case = next(
+            case["id"]
+            for case in cases.values()
+            if "codex-engineering-primary" in case.get("roles", [])
+        )
+        trial = next(
+            trial for trial in result["trials"] if trial["case_id"] == role_case
+        )
+        trial["status"] = "fail"
+        trial["observed"]["signals"] = []
+        result["summary"] = eval_kit.expected_summary(result["trials"], cases)
+        with self.assertRaisesRegex(
+            eval_kit.EvalError, "cannot record an unqualified binding"
+        ):
+            eval_kit.qualified_binding_record(
+                result,
+                binding_id="codex-primary-high",
+                roles=["codex-engineering-primary"],
                 settings_files=[],
             )
 

@@ -43,7 +43,7 @@ configuration, and an unknown or unverified sibling fails the preflight.
 ## Launch and drive one turn
 
 ```sh
-# Read these two values from current-ensemble.json before launch.
+# Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default or triggered escalation effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"
@@ -65,7 +65,10 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
 ```
 
 Invoke the Claude primary using the selector and default or escalation effort
-from `../../cf-model-orchestrator/resources/current-ensemble.json`. Delivery must be
+from `../../cf-model-orchestrator/resources/current-ensemble.json`; when
+`.codeflow/model-selection.json` is nonempty, first require
+`codeflow doctor --check model-bindings` to pass and use its effective
+qualified override. Delivery must be
 **exact-byte after one canonicalization boundary**: the prompt file must
 already be non-empty UTF-8 text with internal LF line endings, no terminal line
 break, and no other control characters. `arm` rejects noncanonical input before

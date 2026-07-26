@@ -108,10 +108,10 @@ route is unavailable, not an invitation to guess or invoke it headlessly.
 
 Each producer first-verifies its unit. The named other-lineage seat then reviews
 the actual unit and evidence independently. A model cannot independently review
-its own authored unit. The primary Fable seat still reviews the integrated
-design/code and owns the final Claude quality judgment; for a Fable-authored
-unit, record Codex as the independent reviewer and do not label Fable's
-integrated judgment an independent unit review.
+its own authored unit. The model qualified for `claude-judgment-primary` still
+reviews the integrated design/code and owns the final Claude quality judgment;
+for a unit authored by that primary, record Codex as the independent reviewer
+and do not label the primary's integrated judgment an independent unit review.
 
 If a planned seat, route, or required tool is unavailable before approval,
 select another qualified assignment and settle a new plan version. Mid-run loss

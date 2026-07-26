@@ -28,7 +28,7 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
         "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
     ))
     .expect("harness catalog JSON");
-    assert_eq!(ensemble["schema_version"], 1);
+    assert_eq!(ensemble["schema_version"], 2);
     let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
         .as_array()
         .expect("harnesses")
@@ -51,10 +51,13 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
     assert_eq!(bindings.len(), 2, "the current duo must have two primaries");
     let mut seats = BTreeSet::new();
     let mut lineages = BTreeSet::new();
+    let mut roles = BTreeSet::new();
     for binding in bindings {
+        let role = binding["role"].as_str().expect("role");
         let seat = binding["seat"].as_str().expect("seat");
         let provider = binding["provider"].as_str().expect("provider");
         let lineage = binding["lineage"].as_str().expect("lineage");
+        assert!(roles.insert(role), "duplicate ensemble role {role}");
         assert!(seats.insert(seat), "duplicate ensemble seat {seat}");
         assert!(
             lineages.insert(lineage),
@@ -81,6 +84,10 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
         }
     }
     assert_eq!(lineages, BTreeSet::from(["claude", "codex"]));
+    assert_eq!(
+        roles,
+        BTreeSet::from(["claude-judgment-primary", "codex-engineering-primary"])
+    );
     assert!(!ensemble["xhigh_triggers"]
         .as_array()
         .expect("xhigh triggers")
@@ -108,7 +115,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "**Claude leads design.**",
         "**Host routes execution.**",
         "**Review is producer-relative.**",
-        "**Fable owns integrated Claude judgment.**",
+        "**The Claude judgment primary owns integrated Claude judgment.**",
         "task fit",
         "observed native usage signals only",
         "Codex supplies independent review",
@@ -133,9 +140,11 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
 
     for required in [
         "\"seat\": \"claude-primary\"",
+        "\"role\": \"claude-judgment-primary\"",
         "\"model_class\": \"latest-fable\"",
         "\"model_class\": \"latest-opus\"",
         "\"seat\": \"codex-primary\"",
+        "\"role\": \"codex-engineering-primary\"",
         "\"model_class\": \"latest-strongest-sol-coding\"",
         "\"model_class\": \"qualified-terra-worker\"",
         "\"default_effort\": \"high\"",
@@ -242,8 +251,8 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     for required in [
         "unless the brief already fixes a clear direction, compares 2–3 viable options",
         "When the brief already dictates one clear design direction, record that constraint and why option exploration was waived.",
-        "independent inspection without self-review → Fable integrated verdict",
-        "they do not replace the required other-lineage review or Fable judgment.",
+        "independent inspection without self-review → Claude-judgment-primary integrated verdict",
+        "they do not replace the required other-lineage review or primary judgment.",
         "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
     ] {
         assert!(
@@ -556,7 +565,7 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
         "cluster items by shared purpose and audience",
         "There is no universal word, punctuation, formatting, or emoji blacklist",
         "Do not use an AI detector",
-        "primary Fable seat reviews",
+        "claude-judgment-primary` reviews",
     ] {
         assert!(skill.contains(required), "editorial skill lost {required}");
     }

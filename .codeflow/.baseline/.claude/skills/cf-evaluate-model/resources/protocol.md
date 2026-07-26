@@ -12,6 +12,11 @@ capability cases to learn what a model can do and where it fails. Report both
 per-trial pass rate and consistency across repeated trials; never hide variance
 behind one aggregate.
 
+Cases may name stable `roles`. Those tags identify the behavioral evidence that
+qualifies a role; they never encode the current model name. Requested and
+observed system identity proves the concrete binding separately. Recording a
+stable primary role requires its tagged cases to pass.
+
 ## Result record
 
 Store JSON with this logical shape. The validator rejects missing or extra full
@@ -214,6 +219,15 @@ including peer seats, and blocks on any case regression. It reports
 min/median/max and totals for duration, tokens, and cost; incomplete telemetry
 is `n/a` and never estimated. Efficiency improvements cannot offset a semantic
 regression.
+
+Scope every comparison claim to this suite, harness, settings, tools, budget,
+and three-trial sample. Report per-case pass rate and consistency, not a
+universal ranking or one lucky point result. A mixed result triggers more
+predeclared trials or a narrower qualified role; it is not rounded into a win.
+After human promotion, adoption uses an event-based probation over reviewed
+orchestrated tasks or pull requests. A material regression rolls back the
+project selection to the prior binding and preserves the evidence for
+requalification.
 
 ## References
 

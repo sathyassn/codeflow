@@ -6,7 +6,7 @@
 //! v2 surface only: the binary's hook subcommands, harness availability,
 //! `.codeflow/` config validity and writability, and network reachability.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -473,77 +473,137 @@ fn check_config(opts: &Options) -> CheckResult {
 fn check_model_bindings(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let Some(directory) = opts.qualification_dir.as_deref() else {
-        return CheckResult {
-            name: "model-bindings".into(),
-            status: Status::Pass,
-            message: "qualified-binding check not configured for this caller".into(),
-            duration: start.elapsed(),
-        };
+        return model_binding_result(
+            start,
+            Status::Pass,
+            "qualified-binding check not configured for this caller",
+        );
     };
-    let records = match model_qualification::load_bindings(directory) {
-        Ok(records) => records,
-        Err(error) => {
-            return CheckResult {
-                name: "model-bindings".into(),
-                status: Status::Fail,
-                message: format!("invalid qualified-binding record: {error}"),
-                duration: start.elapsed(),
-            };
-        }
+    let (records, selected) = match load_model_binding_inputs(opts, directory) {
+        Ok(inputs) => inputs,
+        Err(error) => return model_binding_result(start, Status::Fail, error),
     };
     if records.is_empty() {
-        return CheckResult {
-            name: "model-bindings".into(),
-            status: Status::Pass,
-            message: format!(
-                "no local promoted model bindings in {} (optional; nothing to drift-check)",
+        return model_binding_result(
+            start,
+            Status::Pass,
+            format!(
+                "no local promoted model bindings in {} and no project override (optional; shipped ensemble remains effective)",
                 directory.display()
             ),
-            duration: start.elapsed(),
-        };
+        );
     }
     let catalog = match model_qualification::harness_catalog() {
         Ok(catalog) => catalog,
         Err(error) => {
-            return CheckResult {
-                name: "model-bindings".into(),
-                status: Status::Fail,
-                message: format!("embedded harness catalog invalid: {error}"),
-                duration: start.elapsed(),
-            };
+            return model_binding_result(
+                start,
+                Status::Fail,
+                format!("embedded harness catalog invalid: {error}"),
+            )
         }
     };
     let (drift, unobservable) = observe_binding_drift(opts, &records, &catalog);
-    if !drift.is_empty() {
-        return CheckResult {
-            name: "model-bindings".into(),
-            status: Status::Warn,
-            message: format!(
-                "binding requalification required: {}. Requested model/effort remain native-session observations, never inferred by doctor",
-                drift.join("; ")
+    let active_ids: BTreeSet<&str> = selected
+        .iter()
+        .map(|binding| binding.binding_id.as_str())
+        .collect();
+    let active_drift: Vec<&str> = drift
+        .iter()
+        .filter(|(binding_id, _)| active_ids.contains(binding_id.as_str()))
+        .map(|(_, message)| message.as_str())
+        .collect();
+    if !active_drift.is_empty() {
+        return model_binding_result(
+            start,
+            Status::Fail,
+            format!(
+                "active project model selection requires requalification: {}. No override is applied",
+                active_drift.join("; ")
             ),
-            duration: start.elapsed(),
-        };
+        );
+    }
+    if !drift.is_empty() {
+        return model_binding_result(
+            start,
+            Status::Warn,
+            format!(
+                "binding requalification required: {}. Requested model/effort remain native-session observations, never inferred by doctor",
+                drift
+                    .iter()
+                    .map(|(_, message)| message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        );
     }
     if !unobservable.is_empty() {
-        return CheckResult {
-            name: "model-bindings".into(),
-            status: Status::Warn,
-            message: format!(
+        return model_binding_result(
+            start,
+            Status::Warn,
+            format!(
                 "{} approved binding(s) are structurally valid; {}. Re-run a native canary when freshness matters",
                 records.len(),
                 unobservable.join("; ")
             ),
-            duration: start.elapsed(),
-        };
+        );
     }
+    let message = effective_selection_message(records.len(), &selected);
+    model_binding_result(start, Status::Pass, message)
+}
+
+fn effective_selection_message(
+    record_count: usize,
+    selected: &[model_qualification::ResolvedSelection],
+) -> String {
+    if selected.is_empty() {
+        return format!(
+            "{record_count} approved binding(s) passed structural, harness-version, and declared-settings drift checks; no project override is active and live model/effort still require native observation"
+        );
+    }
+    let bindings = selected
+        .iter()
+        .map(|binding| {
+            format!(
+                "{}={} ({} {}@{})",
+                binding.role, binding.binding_id, binding.harness, binding.model, binding.effort
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{} project override(s) passed qualification and drift checks: {bindings}; live model/effort still require native observation",
+        selected.len()
+    )
+}
+
+fn load_model_binding_inputs(
+    opts: &Options,
+    directory: &Path,
+) -> Result<
+    (
+        Vec<model_qualification::QualifiedBinding>,
+        Vec<model_qualification::ResolvedSelection>,
+    ),
+    String,
+> {
+    let records = model_qualification::load_bindings(directory)
+        .map_err(|error| format!("invalid qualified-binding record: {error}"))?;
+    let project_root = if opts.project_dir.is_empty() {
+        Path::new(".")
+    } else {
+        Path::new(&opts.project_dir)
+    };
+    let selected = model_qualification::resolve_project_selection(project_root, &records)
+        .map_err(|error| format!("invalid project model selection: {error}"))?;
+    Ok((records, selected))
+}
+
+fn model_binding_result(start: Instant, status: Status, message: impl Into<String>) -> CheckResult {
     CheckResult {
         name: "model-bindings".into(),
-        status: Status::Pass,
-        message: format!(
-            "{} approved binding(s) passed structural, harness-version, and declared-settings drift checks; live model/effort still require native observation",
-            records.len()
-        ),
+        status,
+        message: message.into(),
         duration: start.elapsed(),
     }
 }
@@ -552,7 +612,7 @@ fn observe_binding_drift(
     opts: &Options,
     records: &[model_qualification::QualifiedBinding],
     catalog: &BTreeMap<String, model_qualification::HarnessMetadata>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<(String, String)>, Vec<String>) {
     let mut drift = Vec::new();
     let mut unobservable = Vec::new();
     for record in records {
@@ -566,21 +626,30 @@ fn observe_binding_drift(
                         Ok(observed)
                             if probe_version(probe_id, observed.trim())
                                 == Some(record.requested.harness_version.as_str()) => {}
-                        Ok(observed) => drift.push(format!(
-                            "{} harness version changed (qualified {:?}, observed {:?})",
-                            record.binding_id,
-                            record.requested.harness_version,
-                            observed.trim()
+                        Ok(observed) => drift.push((
+                            record.binding_id.clone(),
+                            format!(
+                                "{} harness version changed (qualified {:?}, observed {:?})",
+                                record.binding_id,
+                                record.requested.harness_version,
+                                observed.trim()
+                            ),
                         )),
-                        Err(error) => drift.push(format!(
-                            "{} harness version probe failed: {error}",
-                            record.binding_id
+                        Err(error) => drift.push((
+                            record.binding_id.clone(),
+                            format!(
+                                "{} harness version probe failed: {error}",
+                                record.binding_id
+                            ),
                         )),
                     }
                 }
-                Err(_) => drift.push(format!(
-                    "{} harness command {} is unavailable",
-                    record.binding_id, probe.command
+                Err(_) => drift.push((
+                    record.binding_id.clone(),
+                    format!(
+                        "{} harness command {} is unavailable",
+                        record.binding_id, probe.command
+                    ),
                 )),
             }
         } else {
@@ -594,17 +663,23 @@ fn observe_binding_drift(
                 Ok(bytes) => {
                     let observed = format!("sha256:{}", sha256_hex(&bytes));
                     if observed != source.digest {
-                        drift.push(format!(
-                            "{} settings changed at {}",
-                            record.binding_id,
-                            source.path.display()
+                        drift.push((
+                            record.binding_id.clone(),
+                            format!(
+                                "{} settings changed at {}",
+                                record.binding_id,
+                                source.path.display()
+                            ),
                         ));
                     }
                 }
-                Err(error) => drift.push(format!(
-                    "{} settings source {} cannot be checked: {error}",
-                    record.binding_id,
-                    source.path.display()
+                Err(error) => drift.push((
+                    record.binding_id.clone(),
+                    format!(
+                        "{} settings source {} cannot be checked: {error}",
+                        record.binding_id,
+                        source.path.display()
+                    ),
                 )),
             }
         }
@@ -1538,7 +1613,7 @@ mod tests {
             "binding_id": "claude-fable-high",
             "provider": "anthropic",
             "lineage": "claude",
-            "eligible_roles": ["primary", "reviewer"],
+            "eligible_roles": ["primary", "reviewer", "claude-judgment-primary"],
             "qualified_at": "2026-07-25T10:00:00Z",
             "requested": {
                 "model": "fable-5",
@@ -1579,7 +1654,9 @@ mod tests {
         opts.qualification_dir = Some(directory.path().join("qualified-bindings"));
         let result = check_model_bindings(&opts);
         assert_eq!(result.status, Status::Pass);
-        assert!(result.message.contains("optional; nothing to drift-check"));
+        assert!(result
+            .message
+            .contains("shipped ensemble remains effective"));
     }
 
     #[test]
@@ -1600,6 +1677,78 @@ mod tests {
         let result = check_model_bindings(&opts);
         assert_eq!(result.status, Status::Pass, "got: {}", result.message);
         assert!(result.message.contains("live model/effort"));
+    }
+
+    fn write_project_selection(root: &Path, binding_id: &str) {
+        let directory = root.join(".codeflow");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("model-selection.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "bindings": [{
+                    "role": "claude-judgment-primary",
+                    "binding_id": binding_id
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn model_bindings_reports_a_valid_active_project_selection() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("qualified-bindings");
+        write_binding(&directory, "high");
+        write_project_selection(workspace.path(), "claude-fable-high");
+        let mut opts = test_opts();
+        opts.project_dir = workspace.path().to_string_lossy().into_owned();
+        opts.qualification_dir = Some(directory);
+        opts.look_path = Some(|name| {
+            (name == "claude")
+                .then(|| "/usr/local/bin/claude".into())
+                .ok_or_else(|| "not found".into())
+        });
+        opts.exec_command = Some(|_, _| Ok("2.1.220 (Claude Code)".into()));
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Pass, "got: {}", result.message);
+        assert!(result.message.contains("claude-judgment-primary"));
+        assert!(result.message.contains("claude-fable-high"));
+    }
+
+    #[test]
+    fn model_bindings_missing_active_record_fails_closed() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("qualified-bindings");
+        std::fs::create_dir_all(&directory).unwrap();
+        write_project_selection(workspace.path(), "missing");
+        let mut opts = test_opts();
+        opts.project_dir = workspace.path().to_string_lossy().into_owned();
+        opts.qualification_dir = Some(directory);
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Fail);
+        assert!(result.message.contains("references missing binding"));
+    }
+
+    #[test]
+    fn model_bindings_active_drift_is_a_failure_not_a_warning() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("qualified-bindings");
+        write_binding(&directory, "high");
+        write_project_selection(workspace.path(), "claude-fable-high");
+        let mut opts = test_opts();
+        opts.project_dir = workspace.path().to_string_lossy().into_owned();
+        opts.qualification_dir = Some(directory);
+        opts.look_path = Some(|name| {
+            (name == "claude")
+                .then(|| "/usr/local/bin/claude".into())
+                .ok_or_else(|| "not found".into())
+        });
+        opts.exec_command = Some(|_, _| Ok("2.2.0 (Claude Code)".into()));
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Fail);
+        assert!(result.message.contains("No override is applied"));
     }
 
     #[test]

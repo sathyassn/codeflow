@@ -30,11 +30,20 @@ and decide; `codeflow` verifies the result deterministically.
    the appropriate test mode and keep expensive diagnostics explicit and
    bounded. Never install a tool, invent a threshold, or add all three for
    parity. Record `none selected` when no technique is earned.
-5. Append a `## Stack standards` section to `AGENTS.md` OUTSIDE the
+5. Select deterministic security analysis from the actual stack, trust
+   boundaries, hosting, and available rules. Reuse a working analyzer already
+   owned by the project. Otherwise compare the language's native analyzer,
+   CodeQL for an eligible GitHub repository, Semgrep or another maintained
+   SAST/taint route, and `none selected — residual risk <reason>`. A remote
+   service records its CI check and ownership; a local-capable analyzer uses a
+   reviewed target in `.codeflow/test-config.json` at the mode justified by its
+   cost. Never auto-install a scanner, assume entitlement, enable every vendor,
+   or claim SCA/Clippy is source-to-sink taint analysis.
+6. Append a `## Stack standards` section to `AGENTS.md` OUTSIDE the
    codeflow:managed markers (the managed block is replaced on update): the
-   chosen stack, test/lint commands, and any conventions agreed with the user.
-   Keep it under ~15 lines.
-6. Verify deterministically and show the evidence: `codeflow test` (targets
+   chosen stack, test/lint/security commands, and any conventions agreed with
+   the user. Keep it under ~15 lines.
+7. Verify deterministically and show the evidence: `codeflow test` (targets
    resolve and run), `codeflow doctor` (wiring healthy). Fix what fails before
    reporting done; say what was not verified. Commit the config in small units;
    when a remote is configured, push the branch for durability — backup, not a

@@ -175,13 +175,14 @@ resources; harness-specific reviewer agents only
 deepen that contract. Quality includes proportionate design and implementation:
 every material new surface maps to a current requirement or evidenced risk,
 each producer first-verifies its unit, the other lineage reviews it independently,
-and the directly invoked Fable primary owns the integrated design/code quality
-verdict without claiming independent review of its own work (ADR-0030,
-ADR-0035). Substantial prose loads the
+and the directly invoked Claude judgment primary owns the integrated
+design/code quality verdict without claiming independent review of its own
+work (ADR-0030, ADR-0035, ADR-0041). Substantial prose loads the
 mirrored `cf-editorial-review` skill rather than expanding the always-loaded
 contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
 audience/medium/task, and requested tone; both seats protect technical meaning,
-and Fable owns the final contextual editorial verdict (ADR-0032).
+and the Claude judgment primary owns the final contextual editorial verdict
+(ADR-0032).
 Multi-task plans additionally settle one acyclic task graph whose evidence
 guards represent genuine decisions, not repeated quality gates. Durable task
 metadata preserves its structural candidate predecessors, while Plan evidence
@@ -248,8 +249,15 @@ Codex or Claude sessions with their configured tools; no engine model router,
 headless peer runner, CI model call, or general-purpose cleanup command is added.
 
 Fast-changing binding facts are isolated from durable orchestration doctrine
-(ADR-0039). `current-ensemble.json` owns concrete primary selectors, effort
-policy, permitted worker classes, and escalation triggers.
+(ADR-0039, ADR-0041). Stable role duties stay in the orchestrator and quality
+resources. `current-ensemble.json` owns the managed concrete selectors, effort
+policy, permitted worker classes, and escalation triggers. A consuming project
+may atomically map a stable role to an approved local binding ID in
+`.codeflow/model-selection.json`; it cannot supply selectors, commands, or
+worker routes. An absent/empty file keeps the managed ensemble. Doctor resolves
+the effective selection and fails closed on malformed, missing, ineligible,
+unsupported, observably drifted, or lineage-collapsing overrides, without
+partially applying the remainder.
 `harnesses.json` is a qualification catalog, not executable provider
 configuration: every entry must prove the universal native-session,
 provenance/tool, scoped-work, bounded-failure, permission, recheck, and git
@@ -257,6 +265,17 @@ capabilities. `packs.json` composes existing eval cases for diagnosis only.
 Approved full results can produce compact user-owned records under
 `~/.codeflow/qualified-bindings/`; doctor checks their structure and observable
 harness/settings drift without launching models or routing work.
+
+Verification is deliberately layered (ADR-0042). Project-owned deterministic
+lanes cover the applicable syntax/style, SCA, source/data flow, taint, secrets,
+and architecture rules; the two primary lineages independently review intent,
+business logic, deep semantics, performance, state/environment behavior, and
+emergent anomalies. A deterministic red result blocks regardless of model
+agreement. CodeFlow itself will use GitHub CodeQL default setup after the
+repository is public, but does not embed a CodeQL workflow in the portable
+scaffold. Consuming projects select CodeQL, Semgrep, Sonar, a language-native
+analyzer, or an explicit residual-risk disposition from their actual stack and
+hosting evidence during customization.
 
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
