@@ -59,6 +59,7 @@ it as non-trivial.
 |---|---|
 | Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
 | Materialize an agreed plan | `/cf-plan` — supporting flow for acceptance criteria, epic/spec/ADR artifacts, used inside the duo or after a recorded solo degradation |
+| Settle product/UX/UI/visual direction | `/cf-design` inside the orchestrated flow — establish proportionate, evidence-grounded `DESIGN_INTENT`; bounded conformance and unchanged-direction work use its compact collapse paths |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
@@ -324,8 +325,12 @@ to reason from, not a rote checklist.
   complex subjects may need a larger, layered, or multi-view diagram. Add a
   brief caption or legend when it aids orientation. Never add decorative or
   forced diagrams, headings, tables, or recaps. Presentation creative,
-  elegant, modern, fit to the domain; web artifacts componentized, never
-  monolithic. Then take the audience's seat: structured, logical, progressive,
+  elegant, modern, fit to the domain. For material product, UX, UI,
+  interaction, or visual-design work, apply `cf-design` and settle an
+  evidence-grounded `DESIGN_INTENT` before implementation; explicit
+  conformance or N/A is valid when the direction is unchanged. Web artifacts
+  are componentized, never monolithic. Then take the audience's seat:
+  structured, logical, progressive,
   the sought depth findable? Craft lives in the details — sloppy work is a
   defect, not a style. For substantial prose, apply `cf-editorial-review`:
   verified truth and policy outrank CodeFlow philosophy, the consuming

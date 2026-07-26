@@ -344,6 +344,26 @@ dest = ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# Product/UX/UI/visual design direction stays on demand: the always-loaded
+# contract carries the obligation and this skill owns the adaptive method.
+[[entry]]
+src = "agents/skills/cf-design/SKILL.md"
+dest = ".claude/skills/cf-design/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-design/references/design-defaults.md"
+dest = ".claude/skills/cf-design/references/design-defaults.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-design/agents/openai.yaml"
+dest = ".claude/skills/cf-design/agents/openai.yaml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Contextual editorial review stays on demand: the always-loaded contract carries
 # only the principle and this skill owns the detailed, cross-harness workflow.
 [[entry]]
@@ -515,6 +535,24 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
 dest = ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-design/SKILL.md"
+dest = ".agents/skills/cf-design/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-design/references/design-defaults.md"
+dest = ".agents/skills/cf-design/references/design-defaults.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-design/agents/openai.yaml"
+dest = ".agents/skills/cf-design/agents/openai.yaml"
 ownership = "managed"
 tiers = ["standard", "full"]
 

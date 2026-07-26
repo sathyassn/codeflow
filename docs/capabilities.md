@@ -302,7 +302,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -321,6 +321,17 @@ assignments before implementation; changing a named seat or lineage invalidates
 the approvals. Each producer first-verifies its unit, the other lineage reviews
 it independently, and the selected `claude-judgment-primary` owns integrated
 Claude quality judgment without claiming independent review of its own unit.
+For material product, UX, interaction, or visual-direction work, the
+orchestrator loads `cf-design` and records a proportionate `DESIGN_INTENT`
+inside that same plan. Cosmetic changes may collapse as not applicable,
+bounded established-system work may conform, new surfaces settle a direction,
+and materially open novel work compares two or three viable directions first.
+The Claude judgment role leads intent, Codex challenges feasibility and
+fidelity, and both approve the exact plan. Review anchors blocking design
+findings in the accepted brief, intent, accessibility target, or observed
+behavior rather than taste. The design-direction eval pack covers this
+selection, operator precedence, generic-default recognition, accessibility,
+and rendered fidelity (ADR-0043).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
 CLI reaches Claude through an interactive task-scoped tmux session. Another

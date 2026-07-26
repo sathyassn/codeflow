@@ -319,27 +319,20 @@ fn repo_skill_mirrors_are_byte_identical() {
     );
 }
 
-/// The evaluator is stored in five source/live/baseline locations. Baseline
-/// drift is especially dangerous because it corrupts future three-way updates
-/// without changing the two active harness mirrors.
-#[test]
-fn model_eval_source_live_and_baseline_copies_are_byte_identical() {
+fn assert_skill_source_live_and_baseline_copies(skill: &str) {
     let root = repo_root();
-    let canonical = root.join("assets/base/agents/skills/cf-evaluate-model");
+    let canonical = root.join("assets/base/agents/skills").join(skill);
     let copies = [
-        root.join(".agents/skills/cf-evaluate-model"),
-        root.join(".claude/skills/cf-evaluate-model"),
-        root.join(".codeflow/.baseline/.agents/skills/cf-evaluate-model"),
-        root.join(".codeflow/.baseline/.claude/skills/cf-evaluate-model"),
+        root.join(".agents/skills").join(skill),
+        root.join(".claude/skills").join(skill),
+        root.join(".codeflow/.baseline/.agents/skills").join(skill),
+        root.join(".codeflow/.baseline/.claude/skills").join(skill),
     ];
     let canonical_files: BTreeSet<String> = walk_files(&canonical)
         .iter()
         .map(|path| rel(&canonical, path))
         .collect();
-    assert!(
-        !canonical_files.is_empty(),
-        "model evaluator source is empty"
-    );
+    assert!(!canonical_files.is_empty(), "{skill} source is empty");
 
     let mut problems = Vec::new();
     for copy in copies {
@@ -361,9 +354,17 @@ fn model_eval_source_live_and_baseline_copies_are_byte_identical() {
     problems.sort();
     assert!(
         problems.is_empty(),
-        "model evaluator source/live/baseline copies drifted:\n  {}",
+        "{skill} source/live/baseline copies drifted:\n  {}",
         problems.join("\n  ")
     );
+}
+
+/// The evaluator is stored in five source/live/baseline locations. Baseline
+/// drift is especially dangerous because it corrupts future three-way updates
+/// without changing the two active harness mirrors.
+#[test]
+fn model_eval_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-evaluate-model");
 }
 
 /// The contextual editorial skill is managed in the same five source/live/
@@ -371,44 +372,12 @@ fn model_eval_source_live_and_baseline_copies_are_byte_identical() {
 /// detect a stale three-way merge base.
 #[test]
 fn editorial_source_live_and_baseline_copies_are_byte_identical() {
-    let root = repo_root();
-    let canonical = root.join("assets/base/agents/skills/cf-editorial-review");
-    let copies = [
-        root.join(".agents/skills/cf-editorial-review"),
-        root.join(".claude/skills/cf-editorial-review"),
-        root.join(".codeflow/.baseline/.agents/skills/cf-editorial-review"),
-        root.join(".codeflow/.baseline/.claude/skills/cf-editorial-review"),
-    ];
-    let canonical_files: BTreeSet<String> = walk_files(&canonical)
-        .iter()
-        .map(|path| rel(&canonical, path))
-        .collect();
-    assert!(
-        !canonical_files.is_empty(),
-        "editorial skill source is empty"
-    );
+    assert_skill_source_live_and_baseline_copies("cf-editorial-review");
+}
 
-    let mut problems = Vec::new();
-    for copy in copies {
-        let copy_files: BTreeSet<String> = walk_files(&copy)
-            .iter()
-            .map(|path| rel(&copy, path))
-            .collect();
-        for file in canonical_files.symmetric_difference(&copy_files) {
-            problems.push(format!("{}: file-set drift at {file}", copy.display()));
-        }
-        for file in canonical_files.intersection(&copy_files) {
-            let expected = std::fs::read(canonical.join(file)).expect("read canonical file");
-            let actual = std::fs::read(copy.join(file)).expect("read mirrored file");
-            if expected != actual {
-                problems.push(format!("{}: byte drift at {file}", copy.display()));
-            }
-        }
-    }
-    problems.sort();
-    assert!(
-        problems.is_empty(),
-        "editorial source/live/baseline copies drifted:\n  {}",
-        problems.join("\n  ")
-    );
+/// Design direction is also a managed cross-harness skill. Pin its source,
+/// active mirrors, and update baselines as one contract.
+#[test]
+fn design_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-design");
 }

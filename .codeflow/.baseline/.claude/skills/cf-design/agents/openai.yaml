@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeFlow Design"
+  short_description: "Settle intentional product and UI direction"
+  default_prompt: "Use $cf-design to settle an evidence-grounded design direction before implementation."

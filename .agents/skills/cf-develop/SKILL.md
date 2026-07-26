@@ -11,7 +11,10 @@ Drive the planned work to done.
    prompt). No stated criteria → stop and run the clarity gate from `cf-plan`
    first.
 2. Consult `docs/capabilities.md` and `docs/architecture.md` before touching
-   code; note what the change touches.
+   code; note what the change touches. For a material product, UX, interaction,
+   or visual-design change, require the plan's settled `DESIGN_INTENT`; if it is
+   absent, apply `cf-design` before implementation. A valid `N/A` or `conform`
+   record does not add ceremony.
 3. Work on a correctly prefixed branch in a worktree — never on the root
    protected-branch checkout.
 4. Run the loop:

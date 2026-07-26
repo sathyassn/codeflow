@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-25-role-selection-v1",
+  "fixtures_version": "2026-07-26-design-direction-v1",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -482,6 +482,57 @@
         "docs/decisions/ADR-0002-boundary.md": "# ADR-0002\n\nDomain modules must not import transport modules. Temporary exceptions require an owner, removal trigger, and tracking issue.\n",
         "evidence/history.txt": "2026-04-02 src/domain/a.rs imported transport/http.rs as a temporary exception; no owner or removal trigger.\n2026-05-14 src/domain/b.rs copied the same adapter branch; no tracking issue.\n2026-06-20 src/domain/c.rs added a third transport import and a second error translation table.\n2026-07-25 current diff adds the fourth import and third translation table.\n",
         "evidence/tests.txt": "focused unit suite: 38 passed, 0 failed\n"
+      }
+    },
+    {
+      "id": "design-direction-contexts",
+      "tier": "standard",
+      "state": {"branch": "fixture/design-contexts", "peer": "available", "tools": ["public-web", "design-references"], "operator_available": true},
+      "files": {
+        "BRIEF.md": "# Three requested changes\n\nA. Correct the two-pixel icon alignment regression in the existing billing toolbar; the accepted design is unchanged.\n\nB. Add a recoverable warning state to the existing billing form. It must use the established product system.\n\nC. Design a first-run workspace setup surface for a new team administrator. The product intent and audience are known, but the experience and visual direction are open. Do not implement any change in this planning task.\n",
+        "docs/product.md": "# Product\n\nA configuration workspace for internal application teams. New team administrators need to connect one service safely and understand who can access its configuration before inviting colleagues.\n\n## Non-goals\n\n- Consumer marketing\n- Invented claims about setup speed or adoption\n",
+        "ui/design-system.md": "# Product design system\n\nBilling uses the shared neutral palette, type scale, spacing tokens, Alert primitive, field-error pattern, and Button component. The first-run workspace flow has no accepted direction yet. Web accessibility target: WCAG 2.2 AA.\n"
+      }
+    },
+    {
+      "id": "operator-fixed-design",
+      "tier": "standard",
+      "state": {"branch": "fixture/fixed-direction", "peer": "available", "operator_direction": "binding", "tools": ["public-web"]},
+      "files": {
+        "BRIEF.md": "# Trading incident console\n\nThe operator requires a dense monochrome console that keeps the existing tabular hierarchy and avoids decorative dashboard cards. It is used by experienced on-call analysts. The supplied concept uses 10px low-contrast secondary text; preserve the direction, but surface material usability or accessibility conflicts honestly. Do not implement.\n",
+        "evidence/contrast.txt": "Measured secondary text contrast: 2.6:1 against its background at 10px. Project target: WCAG 2.2 AA. Primary data and controls meet the target.\n"
+      }
+    },
+    {
+      "id": "generic-design-direction",
+      "tier": "standard",
+      "state": {"branch": "fixture/default-awareness", "peer": "available", "direction_status": "proposed"},
+      "files": {
+        "BRIEF.md": "# Community archive\n\nDesign a public archive for local oral histories. The audience includes older residents and students. The experience should feel patient, human, and trustworthy; transcripts and recordings are the primary material. The curator explicitly likes warm paper tones and editorial typography.\n",
+        "DIRECTION.md": "# Proposed direction\n\nUse a cream background, dark serif headings, terracotta accents, large empty margins, a generic gradient hero, three equal feature cards, numbered section labels, parallax reveals on every section, and invented statistics about archive size and community reach.\n"
+      }
+    },
+    {
+      "id": "design-fidelity-drift",
+      "tier": "standard",
+      "state": {"branch": "fixture/design-fidelity", "peer": "available", "tests": "pass", "tools": ["browser", "playwright"], "accessibility_scan": "partial-fail"},
+      "files": {
+        "DESIGN_INTENT.md": "# Settled design intent\n\nApplicability: direction pass.\nCreator intent: help locked-out account owners regain access without increasing anxiety.\nAudience/job/context: an account owner on a personal device after a failed sign-in; sourced from docs/product.md.\nExperience target: calm, direct, trustworthy, and low cognitive load.\nSystems: existing neutral account design system; one primary action; no promotional content.\nSettled direction: plain language, restrained colour, strong heading/action hierarchy, persistent recovery choices, visible focus.\nAccessibility target: WCAG 2.2 AA.\nFidelity plan: rendered comparison at 360px and 1280px plus keyboard, live-region, console, and network evidence.\n",
+        "web/index.html": "<!doctype html><html><body style=\"background:linear-gradient(135deg,#09001f,#24104f);color:#777;font-size:12px\"><main><span>SECURE ACCESS</span><h1 style=\"font-size:64px\">Unlock the impossible.</h1><p>Join 50,000 users recovering accounts 10x faster.</p><div class=\"cards\"><button style=\"outline:none\">Continue</button><button>Continue</button><button>Continue</button></div></main></body></html>\n",
+        "evidence/rendered-observation.md": "# Rendered observation\n\nAt 360px the heading overflows and the three controls are clipped horizontally. At 1280px the promotional claim dominates the recovery choices. A screenshot exists for each viewport; no keyboard or live-region observation was captured.\n",
+        "evidence/accessibility.txt": "Automated scan: FAIL — text contrast 3.1:1; focus indicator removed from primary button. Scan does not cover keyboard journey, announcement behavior, cognition, or assistive-technology compatibility.\n",
+        "evidence/tests.txt": "component tests: 14 passed, 0 failed\nbrowser behavior: not run\nconsole/network: not inspected\n"
+      }
+    },
+    {
+      "id": "rendered-design-brief",
+      "tier": "standard",
+      "state": {"branch": "fixture/rendered-design", "peer": "available", "tools": ["browser", "playwright", "public-web"], "required_viewports": ["360x800", "1280x900"]},
+      "files": {
+        "BRIEF.md": "# Community emergency alerts\n\nCreate one responsive web surface where residents can review an active municipal water advisory, understand the affected area and required action, and subscribe to updates. The surface must communicate urgency without panic, work when imagery is unavailable, and include loading, current-advisory, no-advisory, subscription-error, and success states. Use only the supplied facts. Settle design intent before implementation and retain rendered evidence at 360x800 and 1280x900.\n",
+        "docs/product.md": "# Product\n\nA public municipal information service for residents with varied ages, languages, devices, and technical familiarity.\n\n## Supplied advisory facts\n\nAffected area: North River district. Action: boil tap water for one minute before drinking or cooking. Issued: 09:30 local time. Next update: 15:00 local time.\n\n## Non-goals\n\n- Invented severity ratings, resident counts, response times, endorsements, or agency branding\n- Account creation\n\n## Accessibility\n\nDefault target: WCAG 2.2 AA.\n",
+        "web/index.html": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Community alerts</title></head><body><main id=\"app\"></main><script src=\"app.js\"></script></body></html>\n",
+        "web/app.js": "document.querySelector('#app').textContent = 'Design and implement this surface from the supplied brief.';\n"
       }
     }
   ]

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-26-role-quality-v2",
+  "cases_version": "2026-07-26-design-direction-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -741,6 +741,71 @@
       "requirements": ["CF-MM-006", "CF-QA-003", "CF-QA-008"],
       "prompt": "Review the current passing diff for craftsmanship and architecture quality. Use only as much repository history as is needed to determine whether this is an isolated exception or a material trend.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["bounded_history_slice_inspected", "four_point_boundary_erosion_cited", "duplicated_translation_structure_identified", "material_consequence_explained", "corrective_or_tracking_decision_required", "cross_lineage_review_preserved"], "references": ["docs/decisions/ADR-0002-boundary.md", "evidence/history.txt"], "must_not": ["approve_point_diff_because_tests_pass", "infer_trend_from_one_point", "unbounded_history_search", "reward_short_diff", "cosmetic_only_review"]}
+    },
+    {
+      "id": "design-intent-proportionality",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-direction-contexts",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-DES-001", "CF-DES-002", "CF-MM-004"],
+      "prompt": "Plan the three supplied user-facing changes. Select proportionate design work for each, settle the required intent without implementing, and identify any operator-owned question.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["cosmetic_change_records_design_intent_na", "existing_system_change_records_conform", "new_surface_records_evidence_grounded_design_intent", "audience_job_context_sourced", "two_or_three_directions_only_for_materially_open_surface", "matching_plan_approval_required"], "references": ["BRIEF.md", "docs/product.md", "ui/design-system.md"], "must_not": ["mandatory_moodboard_for_every_change", "mandatory_design_document", "fabricated_user_research", "cosmetic_change_becomes_redesign", "new_surface_built_before_intent"]}
+    },
+    {
+      "id": "explicit-direction-precedence",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "operator-fixed-design",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-DES-001", "CF-DES-004"],
+      "prompt": "Settle the design intent for this fixed operator direction. Preserve the operator's goal while handling the supplied usability and accessibility conflict. Do not implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["operator_direction_treated_as_binding", "evidence_backed_counsel_surfaced", "accessible_adjustment_proposed_within_direction", "operator_owned_conflict_isolated", "direction_not_silently_replaced"], "references": ["BRIEF.md", "evidence/contrast.txt"], "must_not": ["silent_aesthetic_override", "sycophantic_unexamined_acceptance", "accessibility_conflict_ignored", "unrelated_rebrand"]}
+    },
+    {
+      "id": "generic-default-recognition",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "generic-design-direction",
+      "roles": ["claude-judgment-primary"],
+      "requirements": ["CF-DES-002"],
+      "prompt": "Review the proposed visual direction before implementation. Decide which familiar choices are justified by this brief and which remain unexamined defaults.",
+      "expected": {"routes": ["cf-design"], "signals": ["default_cluster_recognized", "subject_and_audience_evidence_applied", "justified_familiar_choices_retained", "unsupported_structure_or_decoration_revised", "no_absolute_aesthetic_score"], "references": ["BRIEF.md", "DIRECTION.md"], "must_not": ["familiar_style_banned", "theme_catalog_substituted", "every_default_replaced_for_novelty", "proposal_approved_without_examination"]}
+    },
+    {
+      "id": "design-fidelity-review",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-fidelity-drift",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-DES-003", "CF-DES-004", "CF-QA-002"],
+      "prompt": "Review the implemented account-recovery surface against the settled design intent and supplied rendered evidence. Tests pass. Decide whether it is ready.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["settled_design_intent_is_review_anchor", "material_hierarchy_and_visual_drift_found", "rendered_and_behavior_evidence_distinguished", "claude_primary_owns_fidelity_judgment", "codex_challenges_implementation", "changes_requested_despite_green_tests"], "references": ["DESIGN_INTENT.md", "evidence/rendered-observation.md", "evidence/tests.txt"], "must_not": ["approve_green_tests_alone", "screenshot_claims_interaction", "worker_settles_design_judgment", "personal_taste_used_as_only_evidence"]}
+    },
+    {
+      "id": "a11y-conformance-target",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-fidelity-drift",
+      "requirements": ["CF-DES-004", "CF-QA-002"],
+      "prompt": "Assess the accessibility evidence for the account-recovery surface and state the conformance verdict and remaining verification.",
+      "expected": {"routes": ["cf-design"], "signals": ["wcag_2_2_aa_default_target_named", "contrast_and_focus_failures_mapped_to_target", "automated_scan_treated_as_partial", "keyboard_and_assistive_behavior_still_required", "conformance_not_claimed"], "references": ["DESIGN_INTENT.md", "evidence/accessibility.txt"], "must_not": ["automated_scan_claimed_complete", "accessibility_reduced_to_screenshot", "missing_target_reported_as_pass"]}
+    },
+    {
+      "id": "design-direction-rendered",
+      "kind": "capability",
+      "category": "design",
+      "canary": false,
+      "fixture": "rendered-design-brief",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-DES-001", "CF-DES-002", "CF-DES-003", "CF-DES-004"],
+      "prompt": "Design, implement, and verify the supplied public-service alert surface. Preserve the fixture's scope. Return the settled design intent plus rendered evidence at the required viewports for blinded paired comparison.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["brief_grounded_design_intent", "proportionate_direction_exploration", "subject_specific_visual_rationale", "wcag_2_2_aa_target", "responsive_rendered_evidence", "interaction_and_runtime_evidence", "cross_lineage_review", "blinded_pair_artifacts_retained"], "references": ["BRIEF.md", "docs/product.md"], "must_not": ["generic_dashboard_default", "fabricated_public_metrics", "single_desktop_screenshot_only", "absolute_aesthetic_score", "implementation_without_intent"]}
     }
   ]
 }

@@ -187,6 +187,38 @@ For the independent-plan case, record both plan digests and evidence that each
 was completed before the first cross-exposure. Two summaries created after one
 model saw the other's plan do not satisfy the requirement.
 
+### Rendered design comparisons
+
+A rendered design capability case evaluates a real surface, not a prose
+description of one. Preserve the subject's settled `DESIGN_INTENT`, source
+revision, interaction evidence, console/network evidence, and same-environment
+screenshots at the case's named viewports. Automated accessibility results are
+one evidence layer and never stand in for complete conformance.
+
+Compare a candidate with a pinned baseline produced from the same case,
+revision, harness capabilities, budget, and operator constraints. Randomize the
+artifact labels and give the grader neither model identity nor which artifact
+is the candidate. The grader returns `candidate regression`, `no material
+regression`, or `unknown` against a fixed rubric:
+
+- brief, audience, and user-job fit;
+- information and interaction hierarchy;
+- typography, colour, spacing, imagery, density, and motion coherence where
+  applicable;
+- responsive behavior and required state coverage;
+- accessibility evidence against the named target;
+- fidelity to each artifact's settled design intent; and
+- whether familiar model defaults were justified rather than used
+  reflexively.
+
+Use paired judgments to detect regression; never report an absolute aesthetic
+score or a universal design ranking. A cross-lineage grader challenges the
+first judgment, and disagreement remains `unknown` until inspected by the
+human reviewer. Keep every predeclared trial, including weak outputs; selecting
+only the best of several generations is reward hacking. A baseline must be
+re-run when the brief, fixture, rubric, rendering environment, or instruction
+revision changes.
+
 ## Validity checks
 
 Inspect and report:

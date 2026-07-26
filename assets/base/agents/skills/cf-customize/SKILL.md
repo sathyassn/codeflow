@@ -242,6 +242,15 @@ confirms the final content.
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;
   keep fast-aging version pins out of shared doctrine.
+- **Product and design direction** — for projects with user-facing surfaces,
+  locate the product brief, audience/user research, operator-approved
+  references, brand guidance, design-system source, platform conventions, and
+  accessibility target that `cf-design` should consult. Reconcile conflicting
+  authorities and add only a short pointer from the project-owned AGENTS
+  section when discovery would otherwise be unreliable. Do not fabricate
+  research, prescribe a visual style, create a design system for one surface,
+  or add a mandatory design document where the project already has a durable
+  home.
 - **README and CI reconciliation** — update human-facing setup or CI only when
   the discovered canonical commands and documented behavior disagree. README is
   the human front door, not a second agent authority.

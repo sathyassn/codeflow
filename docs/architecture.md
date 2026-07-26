@@ -183,6 +183,16 @@ contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
 audience/medium/task, and requested tone; both seats protect technical meaning,
 and the Claude judgment primary owns the final contextual editorial verdict
 (ADR-0032).
+Material product, UX, interaction, or visual-direction work similarly loads the
+mirrored `cf-design` skill. It records a proportionate `DESIGN_INTENT` inside
+Plan vN: cosmetic work may be inapplicable, established-system work may conform,
+new surfaces settle one direction, and materially open novel surfaces compare
+two or three viable directions before settlement. The qualified Claude
+judgment role leads intent, Codex challenges feasibility and fidelity, and both
+approve the same plan. Rendered review grades evidence-backed drift from the
+brief, intent, accessibility target, or observed behavior; taste alone is not a
+blocking finding. Concrete model releases stay in qualified bindings
+(ADR-0043).
 Multi-task plans additionally settle one acyclic task graph whose evidence
 guards represent genuine decisions, not repeated quality gates. Durable task
 metadata preserves its structural candidate predecessors, while Plan evidence

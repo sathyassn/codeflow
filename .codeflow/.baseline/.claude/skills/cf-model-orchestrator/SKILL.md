@@ -27,6 +27,9 @@ For a multi-task plan or a possible dependency/decision change, also read
 [resources/task-graph.md](resources/task-graph.md). When choosing or reviewing
 test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
+For a new or materially reshaped user-facing surface, load `cf-design` before
+settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
+path instead.
 These on-demand resources keep the always-loaded path concise without making
 their contracts optional.
 
@@ -49,9 +52,12 @@ implementation stage for an analysis-only request.
   brief, task ledger, bounded reconciliation, durable evidence, and escalation.
 - **Both think independently.** Claude and Codex research, analyze, identify
   risks, and draft a plan in parallel before seeing the other's conclusions.
-- **Claude leads design.** Claude proposes the primary design and, unless the
-  brief already fixes a clear direction, compares 2–3 viable options. Codex
-  challenges feasibility, operability, security, and implementation detail.
+- **Claude leads design.** The qualified Claude judgment primary proposes the
+  primary solution design and, unless the brief already fixes a clear
+  direction, compares 2–3 viable options. For material product, UX, UI,
+  interaction, or visual design, it also applies `cf-design` and settles
+  `DESIGN_INTENT`. Codex challenges feasibility, operability, security,
+  proportionality, and implementation detail.
 - **Host routes execution.** Once both approve the same versioned plan, the host
   assigns every task a producer and cross-lineage reviewer by task fit, tools/
   context, independence, verified availability/routing, resources, and observed
@@ -230,6 +236,10 @@ dictates one clear design direction, record that constraint and why option
 exploration was waived. Codex reviews the design for implementation feasibility,
 failure modes, security, testing, and maintainability. It also challenges
 whether a simpler proportionate design satisfies the same requirements.
+When a user-facing surface materially changes, apply `cf-design` and include its
+evidence-grounded `DESIGN_INTENT` in the plan. A cosmetic correction or
+conformance-only change records the skill's compact `N/A` or `conform` path
+rather than manufacturing design ceremony.
 
 The host reconciles the two drafts into **Plan v1** using the plan contract in
 the quality resource. Both seats review exactly that version. Amendments create

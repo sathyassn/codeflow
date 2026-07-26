@@ -38,7 +38,12 @@
         "verification-depth-none-selected",
         "layered-verification-red-gate",
         "longitudinal-craftsmanship-erosion",
-        "editorial-operator-response-stays-honest"
+        "editorial-operator-response-stays-honest",
+        "design-intent-proportionality",
+        "explicit-direction-precedence",
+        "generic-default-recognition",
+        "design-fidelity-review",
+        "a11y-conformance-target"
       ]
     },
     {
@@ -70,6 +75,19 @@
       "includes": [],
       "cases": [
         "longitudinal-craftsmanship-erosion"
+      ]
+    },
+    {
+      "id": "design-direction",
+      "description": "Focused product, UX, visual-direction, fidelity, accessibility, and rendered-output diagnostics.",
+      "includes": [],
+      "cases": [
+        "design-intent-proportionality",
+        "explicit-direction-precedence",
+        "generic-default-recognition",
+        "design-fidelity-review",
+        "a11y-conformance-target",
+        "design-direction-rendered"
       ]
     }
   ]

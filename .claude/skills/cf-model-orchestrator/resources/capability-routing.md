@@ -112,6 +112,10 @@ its own authored unit. The model qualified for `claude-judgment-primary` still
 reviews the integrated design/code and owns the final Claude quality judgment;
 for a unit authored by that primary, record Codex as the independent reviewer
 and do not label the primary's integrated judgment an independent unit review.
+For product, UX, UI, interaction, or visual design, that role owns intent and
+fidelity judgment under `cf-design`; a worker may collect rendered/tool
+evidence but never settles the direction or interprets it in place of the
+primary.
 
 If a planned seat, route, or required tool is unavailable before approval,
 select another qualified assignment and settle a new plan version. Mid-run loss

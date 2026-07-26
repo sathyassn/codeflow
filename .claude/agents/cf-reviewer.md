@@ -30,6 +30,8 @@ itself a blocker finding — return changes_requested.
    materially change the design. For UI changes, check reuse and
    composition of existing tokens, accessible primitives, and components before
    accepting one-off styling, state logic, or a new higher-order abstraction.
+   Require the plan's proportionate `DESIGN_INTENT` record for a material
+   product, UX, UI, interaction, or visual-design change.
 3. For each criterion, verify it in the code and record evidence: file:line plus
    one sentence on how it is satisfied. No evidence means not verified.
    For substantial documentation or user-facing copy, read and apply
@@ -56,8 +58,9 @@ itself a blocker finding — return changes_requested.
    failure/first-retry trace evidence to the claim; screenshots alone are not
    interaction or accessibility proof. Use Computer Use or a surface-specific
    driver only beyond the controlled web page. Check the approved design,
-   required user-visible states, relevant sizes, and applicable accessibility
-   behavior. Record the evidence; when no user-facing surface changed, record
+   its fidelity to the settled `DESIGN_INTENT`, required user-visible states,
+   relevant sizes, and applicable accessibility behavior against the named
+   target. Record the evidence; when no user-facing surface changed, record
    `UI: N/A — no user-facing surface changed`.
 6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when
@@ -118,6 +121,9 @@ findings:
 - Cosmetic, stylistic, and personal-preference nits are minor and non-blocking;
   if they are the only findings, return `approved` and list them after the
   verified criteria and gates.
+- A design finding anchored in the brief, settled `DESIGN_INTENT`, applicable
+  accessibility target, or observed behavior is graded by materiality like any
+  other finding; unanchored aesthetic preference remains non-blocking.
 - Material avoidable complexity or brittleness is major even when tests pass;
   raw LOC alone is never the target.
 - Never fix issues, never amend commits, never re-run the build to "make it

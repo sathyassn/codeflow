@@ -382,6 +382,42 @@
         {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["For performance-, scale-, or concurrency-sensitive paths", "N+1 access", "Require a benchmark, profiler, load/stress test, race/concurrency test, or direct operational measurement"]},
         {"path": ".claude/agents/cf-reviewer.md", "markers": ["performance-, scale-, or concurrency-sensitive", "require measured or stress/race evidence only when the claim or risk is material"]}
       ]
+    },
+    {
+      "id": "CF-DES-001",
+      "level": "hard",
+      "statement": "Material product, UX, interaction, and visual-design work settles proportionate evidence-grounded design intent before implementation; cosmetic and established-system changes collapse explicitly, operator direction is a binding constraint owed honest counsel, and audience or research evidence is never fabricated.",
+      "sources": [
+        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["Choose the lightest path that still resolves material design uncertainty", "binding constraint owed honest counsel", "Never fabricate research, users, personas"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["`DESIGN_INTENT` is proportional", "Collapse irrelevant dimensions instead of filling a template"]}
+      ]
+    },
+    {
+      "id": "CF-DES-002",
+      "level": "hard",
+      "statement": "Novel materially open surfaces use proportionate subject-grounded research and two or three meaningfully distinct directions, while common model-default patterns are recognized and justified or replaced rather than prohibited or converted into another house style.",
+      "sources": [
+        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["two or three directions that differ in meaningful structure or experience", "diagnostic prompts, never bans or a replacement house style"]},
+        {"path": ".agents/skills/cf-design/references/design-defaults.md", "markers": ["not a checklist, theme catalog, scoring system, or set of prohibited styles", "Keep it when it is the clearest fit"]}
+      ]
+    },
+    {
+      "id": "CF-DES-003",
+      "level": "hard",
+      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment, Codex challenges the direction, and bounded tool or rendered-evidence collection never transfers judgment to a worker.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["applies `cf-design` and settles", "Codex challenges feasibility"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["owns intent and fidelity judgment under `cf-design`", "never settles the direction or interprets it in place of the primary"]}
+      ]
+    },
+    {
+      "id": "CF-DES-004",
+      "level": "hard",
+      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, and never treats automated accessibility evidence as complete conformance.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["default to WCAG 2.2 AA", "Compare the rendered result with the settled intent", "reviewer's unsupported taste does not"]},
+        {"path": ".claude/agents/cf-reviewer.md", "markers": ["fidelity to the settled `DESIGN_INTENT`", "unanchored aesthetic preference remains non-blocking"]}
+      ]
     }
   ]
 }

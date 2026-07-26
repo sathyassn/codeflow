@@ -16,6 +16,7 @@ VERIFIED_CONTEXT:
 ASSUMPTIONS_OR_UNRESOLVED:
 DESIGN_OPTIONS:
 CHOSEN_DESIGN_AND_RATIONALE:
+DESIGN_INTENT: <N/A with reason | conform to named system | settled cf-design record>
 COMPLEXITY_JUSTIFICATION:
 TASK_ASSIGNMENTS:
   TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort | ROUTING_EVIDENCE | DEPENDENCIES
@@ -47,6 +48,16 @@ For research/analysis-only work, `TASK_ASSIGNMENTS`, `TEST_AND_UI_PLAN`,
 reason. For planning-only work they describe the future implementation rather
 than work performed in the current run. Never imply that proposed evidence was
 executed evidence.
+
+`DESIGN_INTENT` is proportional. A cosmetic correction records `N/A` with the
+unchanged accepted direction; a bounded change inside an established design
+system records `conform` and names that authority. A new or materially reshaped
+user-facing surface applies `cf-design` and records the creator intent,
+audience/job/context evidence, experience target, systems and operator
+direction, proportionate research/options, settled direction, accessibility
+target, and fidelity plan. Collapse irrelevant dimensions instead of filling a
+template. Do not create a separate design document unless the project needs a
+durable product or design-system decision at its normal spec/ADR altitude.
 
 ## Design and implementation quality
 
@@ -174,6 +185,12 @@ only findings. Security reviews retain their CVSS-aligned
 do not translate that vocabulary inside the security report. When a general
 review consumes a security verdict, a confirmed or likely critical/high
 security finding is a blocker.
+
+A product, UX, UI, interaction, or visual-design finding anchored in the brief,
+settled `DESIGN_INTENT`, applicable accessibility target, or observed user
+behavior is graded by this same materiality rule; it is not demoted merely
+because it concerns design. An unanchored aesthetic preference remains a minor,
+non-blocking observation.
 
 Do not silently absorb out-of-scope work. An evidenced imminent severe risk is
 escalated immediately; another material observation becomes one tracked item
@@ -349,6 +366,8 @@ native, mobile, desktop, browser-chrome, or other surfaces outside Playwright's
 controlled page/context, prefer a surface-specific driver and use Computer Use
 only when no narrower driver reaches the surface. Check at least:
 
+- the upstream `DESIGN_INTENT`, including its valid `N/A` or `conform` path,
+  before treating a design as approved;
 - the project's existing design system and component library before adding a
   new pattern;
 - recurring foundations or tokens, accessible primitives, reusable
@@ -359,11 +378,14 @@ only when no narrower driver reaches the surface. Check at least:
   evidenced; no new design system or higher-order abstraction for a one-off
   surface without such evidence;
 
-- the approved design and the primary user journeys;
+- the approved design, its fidelity to the settled intent, and the primary user
+  journeys;
 - loading, empty, error, disabled, and success states;
 - responsive/layout behavior at relevant sizes;
 - keyboard navigation, focus, labels, contrast, and other applicable
-  accessibility requirements;
+  accessibility requirements against the project's target; for web surfaces,
+  default to WCAG 2.2 AA unless a stronger target or a different
+  surface-appropriate target with recorded rationale governs;
 - validation, destructive-action safeguards, and recovery;
 - console/runtime errors and network failures.
 
@@ -375,6 +397,13 @@ exploratory flow. A screenshot alone does not prove interaction or
 accessibility, automated accessibility evidence is partial, and tracing every
 green run wastes resources. A code-only review is not UI verification. If no UI
 changed, record `UI: N/A — no user-facing surface changed`.
+
+Compare the rendered result with the settled intent using only applicable
+dimensions—hierarchy, interaction, content, type and colour roles, layout,
+spacing, imagery, density, motion, states, and platform fit. Distinguish an
+approved improvement or evidenced implementation constraint from unjustified
+drift. A changed design contract or material direction creates Plan vN+1; a
+reviewer's unsupported taste does not.
 
 ## Independent review
 
