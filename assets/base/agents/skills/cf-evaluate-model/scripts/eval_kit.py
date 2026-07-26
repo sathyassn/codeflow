@@ -1651,11 +1651,11 @@ def qualified_binding_record(
         raise EvalError(
             "unknown qualified roles: " + ", ".join(sorted(unknown_roles))
         )
-    promotion_errors = validate_result(result, require_approval=True)
-    if promotion_errors:
+    validation_errors = validate_result(result)
+    if validation_errors:
         raise EvalError(
             "cannot record an unqualified binding:\n- "
-            + "\n- ".join(promotion_errors)
+            + "\n- ".join(validation_errors)
         )
     _, cases_doc, _ = suite_documents()
     role_cases: dict[str, set[str]] = defaultdict(set)
@@ -1678,6 +1678,12 @@ def qualified_binding_record(
                 raise EvalError(
                     f"role {role} has non-passing cases: " + ", ".join(failed)
                 )
+    promotion_errors = validate_result(result, require_approval=True)
+    if promotion_errors:
+        raise EvalError(
+            "cannot record an unqualified binding:\n- "
+            + "\n- ".join(promotion_errors)
+        )
     system = result["system"]
     harness = harness_catalog()[system["harness"]]
     observed = system["observed"]

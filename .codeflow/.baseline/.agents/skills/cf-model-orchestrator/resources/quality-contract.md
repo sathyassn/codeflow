@@ -249,6 +249,15 @@ Apply the checks relevant to the changed surface:
 - regression tests for each fixed defect;
 - repository-specific validation, packaging, or migration checks.
 
+For performance-, scale-, or concurrency-sensitive paths, review the actual
+operating shape rather than only functional output: algorithmic complexity and
+N+1 access, bounded work and memory, backpressure and cancellation, blocking in
+async paths, state ownership and synchronization, lost updates, races,
+deadlocks, idempotency, retry amplification, and resource cleanup as
+applicable. Require a benchmark, profiler, load/stress test, race/concurrency
+test, or direct operational measurement when a material claim or evidenced risk
+needs it; do not add ceremonial performance tests to an unaffected path.
+
 Record deterministic and contextual evidence as complementary layers. The
 deterministic layer selects applicable syntax/style, dependency/SCA,
 data/control-flow, taint, secret, and project-owned architecture checks. The
@@ -308,6 +317,15 @@ voice and context.
 Scenario coverage comes first: happy paths, boundaries, malformed input,
 timeouts, partial failure, authorization, concurrency/idempotency, recovery,
 and regression cases as applicable.
+
+Tests must be capable of failing for a material regression in the behavior they
+claim to protect. Reject tautological assertions, expectations copied from the
+implementation under test, a second implementation of the same production
+algorithm used as its oracle, mock-only call-wiring checks with no observable
+contract, weakened assertions, test-only production branches, or unreachable
+code added merely to raise coverage. Fixtures and constants may be explicit
+when they represent an independently stated contract or boundary. Coverage
+measures exercised lines; it never proves test integrity.
 
 Where the stack supports line coverage, aggregate production-code coverage is a
 hard floor of **80%** and the normal target is **90% or higher**. New or changed

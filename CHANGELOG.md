@@ -14,6 +14,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Coverage now requires test integrity, not only a percentage.** The shared
+  quality contract and independent reviewer reject tautologies, production
+  logic copied into test oracles, mock-only wiring checks, weakened assertions,
+  and production branches added only to manufacture coverage. `CF-QA-009` and a
+  behavioral canary keep the 80/90 coverage policy from being gamed while
+  preserving explicit contract fixtures and stable named invariants.
+- **Performance, scale, and concurrency review now has an operating-shape
+  canary.** Review checks complexity/N+1 access, bounded work and memory,
+  backpressure/cancellation, async blocking, state synchronization and races,
+  idempotency/retry amplification, and resource cleanup. Measurement,
+  load/stress, or concurrency evidence is required when material risk earns it,
+  without imposing ceremonial benchmarks on unaffected paths. A targeted
+  native Fable/Sol
+  [diagnostic](docs/verification/model-role-quality-diagnostic-2026-07-26.md)
+  exercised this case together with managed-primary resolution and
+  test-integrity review; it is retained as diagnostic evidence, not binding
+  qualification.
 - **Stable model roles now resolve through qualified project bindings
   (ADR-0041), and verification is explicitly layered (ADR-0042).** Durable
   orchestration names the Claude judgment and Codex engineering roles rather

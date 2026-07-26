@@ -515,14 +515,16 @@ class ResultScoringTests(unittest.TestCase):
         trial["observed"]["signals"] = []
         result["summary"] = eval_kit.expected_summary(result["trials"], cases)
         with self.assertRaisesRegex(
-            eval_kit.EvalError, "cannot record an unqualified binding"
-        ):
+            eval_kit.EvalError,
+            r"role codex-engineering-primary has non-passing cases: ",
+        ) as raised:
             eval_kit.qualified_binding_record(
                 result,
                 binding_id="codex-primary-high",
                 roles=["codex-engineering-primary"],
                 settings_files=[],
             )
+        self.assertIn(role_case, str(raised.exception))
 
     def test_binding_record_rejects_oversized_settings_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

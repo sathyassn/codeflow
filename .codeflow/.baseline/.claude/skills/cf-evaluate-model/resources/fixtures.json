@@ -457,10 +457,10 @@
     {
       "id": "seat-collapse-selection",
       "tier": "standard",
-      "state": {"branch": "fixture/model-seat-collapse", "peer": "available", "doctor": "not-run"},
+      "state": {"branch": "fixture/model-seat-collapse", "peer": "available", "doctor": "fail-role-eligibility"},
       "files": {
         ".codeflow/model-selection.json": "{\n  \"schema_version\": 1,\n  \"bindings\": [\n    {\"role\": \"claude-judgment-primary\", \"binding_id\": \"claude-fable-high\"},\n    {\"role\": \"codex-engineering-primary\", \"binding_id\": \"claude-fable-high\"}\n  ]\n}\n",
-        ".codeflow/model-bindings/claude-fable-high.json": "{\n  \"schema_version\": 1,\n  \"binding_id\": \"claude-fable-high\",\n  \"provider\": \"anthropic\",\n  \"lineage\": \"claude\",\n  \"requested\": {\"harness\": \"claude-code\", \"model\": \"fable\", \"effort\": \"high\"},\n  \"observed\": {\"harness\": \"claude-code\", \"model\": \"fable\", \"effort\": \"high\"},\n  \"eligible_roles\": [\"claude-judgment-primary\"]\n}\n"
+        "evidence/codeflow-doctor-model-bindings.txt": "FAIL model-bindings: binding claude-fable-high is not qualified for role codex-engineering-primary; active project selection rejected atomically with no managed-default fallback\nQualification evidence owner: ~/.codeflow/qualified-bindings/ (record withheld from the neutral fixture)\n"
       }
     },
     {

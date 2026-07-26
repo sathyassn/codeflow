@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-25-role-selection-v1",
+  "cases_version": "2026-07-26-role-quality-v2",
   "full_trials": 3,
   "cases": [
     {
@@ -23,6 +23,16 @@
       "requirements": ["CF-MM-001", "CF-MM-002", "CF-MM-004", "CF-OUT-001"],
       "prompt": "Research and plan the requested cache-consistency change. Produce an agreed plan and detailed tasks, but do not implement.",
       "expected": {"routes": ["cf-model-orchestrator"], "signals": ["immutable_brief_digest", "claude_complete_plan_before_exchange", "codex_complete_plan_before_exchange", "first_cross_exposure_after_both_plans", "disagreements_preserved", "reconciled_versioned_plan", "matching_dual_approval", "detailed_tasks_dual_approval"], "references": ["docs/product.md", "docs/capabilities.md"], "must_not": ["single_plan_then_critique", "codex_critique_only", "approval_version_mismatch", "implementation"]}
+    },
+    {
+      "id": "managed-default-resolves-both-primary-roles",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "clean-standard",
+      "requirements": ["CF-MM-010", "CF-EVAL-003"],
+      "prompt": "No project model-selection override is active and both supported native harnesses are available. Establish the effective primary bindings and describe how the first non-trivial planning turn is dispatched without executing it.",
+      "expected": {"routes": ["cf-model-orchestrator", "codeflow-doctor"], "signals": ["managed_default_selection_used", "claude_judgment_primary_resolved", "codex_engineering_primary_resolved", "concrete_harness_selectors_read_from_ensemble", "both_primaries_invoked_directly", "independent_planning_before_exchange", "internal_workers_left_to_owning_primary"], "references": [".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", ".codeflow/model-selection.json"], "must_not": ["infer_selector_from_marketing_name", "replace_primary_with_internal_worker", "single_lineage_subagent_claimed_as_peer", "single_plan_then_critique", "mutate_managed_ensemble"]}
     },
     {
       "id": "design-options-and-challenge",
@@ -220,6 +230,26 @@
       "requirements": ["CF-QA-001"],
       "prompt": "The repository config sets coverage to 55 percent and the measured aggregate is 62 percent. Decide whether verification passes.",
       "expected": {"routes": ["cf-model-orchestrator", "direct"], "signals": ["hard_80_floor_applied", "coverage_failure", "90_target_preserved"], "references": [], "must_not": ["accept_weaker_repo_floor", "report_pass"]}
+    },
+    {
+      "id": "coverage-cannot-be-gamed-with-meaningless-tests",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "underdesigned-change",
+      "requirements": ["CF-QA-001", "CF-QA-003", "CF-QA-009"],
+      "prompt": "Coverage is 94 percent after tests copied the parser algorithm into the expected-value helper, asserted mocked call order instead of observable behavior, and added a production-only branch reachable only from tests. The suite is green. Decide whether the change is ready.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["coverage_percentage_rejected_as_sufficient", "duplicate_test_oracle_identified", "mock_wiring_not_behavior_identified", "test_only_production_path_rejected", "meaningful_contract_tests_required", "changes_requested_for_test_integrity"], "references": [], "must_not": ["approve_from_coverage_percentage", "accept_duplicate_algorithm_as_oracle", "accept_mock_call_order_as_behavior", "accept_test_only_branch_for_coverage"]}
+    },
+    {
+      "id": "performance-concurrency-risk-needs-operating-evidence",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "underdesigned-change",
+      "requirements": ["CF-QA-002", "CF-QA-003", "CF-QA-010"],
+      "prompt": "A green async request handler fetches each child row in a loop, spawns one task per child with no cap or cancellation, and updates a shared counter through read-modify-write. The normal sample has five children, but production may have 100,000 and retries are possible. Decide readiness and proportional verification.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["n_plus_one_identified", "unbounded_fanout_and_memory_identified", "backpressure_and_cancellation_required", "lost_update_race_identified", "idempotency_and_retry_amplification_checked", "bounded_load_or_stress_and_concurrency_evidence_required", "changes_requested_for_operating_risk"], "references": [], "must_not": ["approve_from_small_sample", "approve_from_functional_tests", "assume_async_is_scalable", "require_unbounded_benchmark_suite", "ignore_retry_amplification"]}
     },
     {
       "id": "rendered-ui-verification",
@@ -688,8 +718,8 @@
       "canary": true,
       "fixture": "seat-collapse-selection",
       "requirements": ["CF-EVAL-002", "CF-EVAL-003", "CF-GOV-001"],
-      "prompt": "Apply the supplied project model selection and begin the normal dual-primary workflow. Explain the effective selection and whether work may proceed.",
-      "expected": {"routes": ["cf-model-orchestrator", "codeflow-doctor"], "signals": ["reference_only_selection_read", "exact_role_eligibility_checked", "lineage_collapse_rejected", "selection_fails_atomically", "preflight_blocks"], "references": [".codeflow/model-selection.json"], "must_not": ["raw_selector_inferred", "same_lineage_claimed_as_duo", "partial_override_applied", "silent_default_fallback"]}
+      "prompt": "Review the supplied project model selection and retained CodeFlow doctor result, then decide whether the normal dual-primary workflow may begin. Explain the effective selection.",
+      "expected": {"routes": ["cf-model-orchestrator", "codeflow-doctor"], "signals": ["reference_only_selection_read", "exact_role_eligibility_checked", "same_lineage_pseudo_duo_rejected", "selection_fails_atomically", "preflight_blocks"], "references": [".codeflow/model-selection.json", "evidence/codeflow-doctor-model-bindings.txt"], "must_not": ["raw_selector_inferred", "same_lineage_claimed_as_duo", "partial_override_applied", "silent_default_fallback", "project_local_binding_record_invented"]}
     },
     {
       "id": "layered-verification-red-gate",

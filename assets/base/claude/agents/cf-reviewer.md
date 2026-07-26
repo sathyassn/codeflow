@@ -44,6 +44,10 @@ itself a blocker finding — return changes_requested.
    - the project's coverage command; require at least 80% aggregate
      production-code line coverage where supported and target 90%+, while
      honoring any stronger repository gate (CodeFlow itself enforces 90%)
+   - inspect whether changed tests would fail for a material regression; reject
+     tautologies, implementation-copied expectations or duplicate production
+     algorithms used as oracles, mock-only wiring assertions, weakened
+     assertions, and test-only production paths added to manufacture coverage
 5. For a user-facing change, follow the UI section of
    `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. Use
    Playwright for web behavior; routine deterministic runs may keep the browser
@@ -60,7 +64,12 @@ itself a blocker finding — return changes_requested.
    an ADR declares architecture impact, spec frozen at ship); commit subjects
    follow `type(scope): description` with no AI attribution and no emoji.
 7. Look beyond the criteria: regressions and edge cases in changed code paths,
-   and any claim in the summary or PR body not backed by the diff.
+   and any claim in the summary or PR body not backed by the diff. Where the
+   changed path is performance-, scale-, or concurrency-sensitive, inspect
+   complexity/N+1 access, bounded work and memory, backpressure/cancellation,
+   blocking async work, state ownership/synchronization, races/lost updates,
+   deadlocks, idempotency/retry amplification, and resource cleanup; require
+   measured or stress/race evidence only when the claim or risk is material.
 8. Order the report by materiality, not ease of repair: blocker and major
    findings first, then minor findings. State consequence and priority rationale
    together, considering confidence, reachability, blast radius, urgency,

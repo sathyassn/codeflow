@@ -431,6 +431,62 @@ fn quality_canaries_pin_both_complexity_directions_and_ui_composition() {
 }
 
 #[test]
+fn verification_canaries_pin_test_integrity_and_operating_risk() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "coverage-cannot-be-gamed-with-meaningless-tests",
+                &[
+                    "coverage_percentage_rejected_as_sufficient",
+                    "duplicate_test_oracle_identified",
+                    "mock_wiring_not_behavior_identified",
+                    "test_only_production_path_rejected",
+                    "changes_requested_for_test_integrity",
+                ][..],
+                &[
+                    "approve_from_coverage_percentage",
+                    "accept_duplicate_algorithm_as_oracle",
+                    "accept_test_only_branch_for_coverage",
+                ][..],
+            ),
+            (
+                "performance-concurrency-risk-needs-operating-evidence",
+                &[
+                    "n_plus_one_identified",
+                    "unbounded_fanout_and_memory_identified",
+                    "backpressure_and_cancellation_required",
+                    "lost_update_race_identified",
+                    "idempotency_and_retry_amplification_checked",
+                    "changes_requested_for_operating_risk",
+                ][..],
+                &[
+                    "approve_from_small_sample",
+                    "approve_from_functional_tests",
+                    "assume_async_is_scalable",
+                    "ignore_retry_amplification",
+                ][..],
+            ),
+        ],
+    );
+
+    for case in [
+        "coverage-cannot-be-gamed-with-meaningless-tests",
+        "performance-concurrency-risk-needs-operating-evidence",
+    ] {
+        assert_eq!(indexed[case]["canary"], true);
+    }
+}
+
+#[test]
 fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let indexed: BTreeMap<&str, &Value> = cases["cases"]
@@ -1256,10 +1312,26 @@ fn role_selection_and_layered_verification_canaries_pin_fail_closed_quality() {
         &cases,
         &[
             (
+                "managed-default-resolves-both-primary-roles",
+                &[
+                    "managed_default_selection_used",
+                    "claude_judgment_primary_resolved",
+                    "codex_engineering_primary_resolved",
+                    "both_primaries_invoked_directly",
+                    "independent_planning_before_exchange",
+                ][..],
+                &[
+                    "replace_primary_with_internal_worker",
+                    "single_lineage_subagent_claimed_as_peer",
+                    "single_plan_then_critique",
+                    "mutate_managed_ensemble",
+                ][..],
+            ),
+            (
                 "project-selection-rejects-seat-collapse",
                 &[
                     "exact_role_eligibility_checked",
-                    "lineage_collapse_rejected",
+                    "same_lineage_pseudo_duo_rejected",
                     "selection_fails_atomically",
                     "preflight_blocks",
                 ][..],

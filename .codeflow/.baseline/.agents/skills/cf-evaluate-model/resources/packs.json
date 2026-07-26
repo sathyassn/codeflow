@@ -7,6 +7,7 @@
       "includes": [],
       "cases": [
         "model-independent-plans",
+        "managed-default-resolves-both-primary-roles",
         "capability-route-producer-and-reviewer",
         "cross-harness-dispatch-declares-bounded-role",
         "unverified-worker-route-is-unavailable",
@@ -30,6 +31,8 @@
         "reject-brittle-underdesigned-change",
         "review-ui-component-system-fit",
         "coverage-floor-cannot-be-undercut",
+        "coverage-cannot-be-gamed-with-meaningless-tests",
+        "performance-concurrency-risk-needs-operating-evidence",
         "rendered-ui-verification",
         "verification-depth-routes-by-evidence",
         "verification-depth-none-selected",
