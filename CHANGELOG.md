@@ -21,7 +21,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The stable Claude judgment role leads intent, Codex challenges feasibility
   and fidelity, both approve the plan, and review distinguishes evidenced drift
   from taste. Behavioral and rendered cases exercise direction selection,
-  operator precedence, generic-default recognition, accessibility, and
+  operator precedence, evidence-grounded design-choice review, accessibility, and
   fidelity without tying the doctrine to a concrete model release.
 - **Coverage now requires test integrity, not only a percentage.** The shared
   quality contract and independent reviewer reject tautologies, production

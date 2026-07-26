@@ -146,16 +146,17 @@ For a direction pass, ask:
 - Do typography, colour, layout, imagery, density, and motion express the
   intended experience rather than decorate it?
 - Which choices came from the subject, brief, system, or research?
-- Which choices may be familiar model defaults, and why are they still right
-  here—or what should replace them?
+- Which choices lack evidence from the subject, brief, system, or research?
+  Which familiar choices are still right here, and why?
 - Does the direction remain coherent across loading, empty, error, disabled,
   success, destructive, and recovery states?
 - Is the design feasible, maintainable, responsive, accessible, and
   proportionate to the accepted lifetime and scale?
 
-Read [references/design-defaults.md](references/design-defaults.md) only for a
-new/reshaped surface or when generic pattern risk is material. Its patterns are
-diagnostic prompts, never bans or a replacement house style.
+Read [references/design-choice-audit.md](references/design-choice-audit.md)
+only after forming a candidate direction, and only for a new/reshaped surface
+or when unexamined-choice risk is material. It audits the reasoning behind
+choices; it never supplies formats, bans, or a replacement house style.
 
 ## 7. Hand off and verify
 

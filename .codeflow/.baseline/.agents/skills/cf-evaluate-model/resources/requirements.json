@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-26",
+  "requirements_version": "2026-07-26-design-direction-v2",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -395,10 +395,10 @@
     {
       "id": "CF-DES-002",
       "level": "hard",
-      "statement": "Novel materially open surfaces use proportionate subject-grounded research and two or three meaningfully distinct directions, while common model-default patterns are recognized and justified or replaced rather than prohibited or converted into another house style.",
+      "statement": "Novel materially open surfaces use proportionate subject-grounded research and two or three meaningfully distinct directions, while familiar design choices are retained or revised from product evidence rather than accepted or rejected by category or converted into a CodeFlow house style.",
       "sources": [
-        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["two or three directions that differ in meaningful structure or experience", "diagnostic prompts, never bans or a replacement house style"]},
-        {"path": ".agents/skills/cf-design/references/design-defaults.md", "markers": ["not a checklist, theme catalog, scoring system, or set of prohibited styles", "Keep it when it is the clearest fit"]}
+        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["two or three directions that differ in meaningful structure or experience", "never supplies formats, bans, or a replacement house style"]},
+        {"path": ".agents/skills/cf-design/references/design-choice-audit.md", "markers": ["not a checklist, theme catalog, scoring system, or set of prohibited styles", "Absence from this reference is not evidence"]}
       ]
     },
     {

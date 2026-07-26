@@ -353,8 +353,8 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "agents/skills/cf-design/references/design-defaults.md"
-dest = ".claude/skills/cf-design/references/design-defaults.md"
+src = "agents/skills/cf-design/references/design-choice-audit.md"
+dest = ".claude/skills/cf-design/references/design-choice-audit.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -545,8 +545,8 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "agents/skills/cf-design/references/design-defaults.md"
-dest = ".agents/skills/cf-design/references/design-defaults.md"
+src = "agents/skills/cf-design/references/design-choice-audit.md"
+dest = ".agents/skills/cf-design/references/design-choice-audit.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

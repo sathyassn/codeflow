@@ -33,7 +33,7 @@ for material fidelity review. It selects one of four process weights:
 
 ```text
 exact/cosmetic change             -> DESIGN_INTENT: N/A
-bounded established-system work  -> conform to the named system
+bounded established-system work   -> conform to the named system
 new or reshaped surface           -> settle one evidenced direction
 novel surface with open direction -> compare 2–3 viable directions, then settle
 ```
@@ -64,8 +64,9 @@ Review compares the rendered result with `DESIGN_INTENT` using evidence suited
 to the claim. Findings anchored in the brief, accepted intent, accessibility
 target, or observed behavior are graded by materiality. Unanchored taste remains
 non-blocking. Behavioral evals cover proportionality, explicit operator
-direction, generic-default recognition, fidelity, and accessibility; a rendered
-case uses same-environment artifacts and blinded paired comparison.
+direction, counterfactual evidence-grounded choice review, fidelity, and
+accessibility; a rendered case uses same-environment artifacts and blinded
+paired comparison.
 
 ## Consequences
 
@@ -73,8 +74,8 @@ case uses same-environment artifacts and blinded paired comparison.
   always-loaded doctrine into a design manual.
 - New surfaces receive discovery and direction work when uncertainty warrants
   it; bounded changes can conform or collapse without ceremony.
-- Consuming-project evidence and operator direction outrank model defaults or a
-  CodeFlow house style.
+- Consuming-project evidence and operator direction outrank unexamined model
+  completion or a CodeFlow house style.
 - Model-family changes require binding qualification, not edits to design
   semantics.
 - Visual quality remains partly judgment-based. Deterministic accessibility,
@@ -93,7 +94,8 @@ case uses same-environment artifacts and blinded paired comparison.
   framework-neutral contract integrated with its plan, evidence, and review
   model.
 - Maintain a prohibited-style list or theme catalog: familiar patterns can be
-  correct; the defect is an unexamined default, not the pattern itself.
+  correct; the defect is a material choice without sufficient evidence, not the
+  pattern itself.
 - Give Agent OS a second repository-design method: development delegated to a
   CodeFlow repository should use `cf-design`, while Agent OS keeps only its
   runtime-neutral product and artifact-design invariants.

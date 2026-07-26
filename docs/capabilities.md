@@ -300,7 +300,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "cargo test doctor::tests::test_check_delegates"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043]
 ```
@@ -330,8 +330,8 @@ The Claude judgment role leads intent, Codex challenges feasibility and
 fidelity, and both approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
 behavior rather than taste. The design-direction eval pack covers this
-selection, operator precedence, generic-default recognition, accessibility,
-and rendered fidelity (ADR-0043).
+selection, operator precedence, evidence-grounded design-choice review,
+accessibility, and rendered fidelity (ADR-0043).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
 CLI reaches Claude through an interactive task-scoped tmux session. Another

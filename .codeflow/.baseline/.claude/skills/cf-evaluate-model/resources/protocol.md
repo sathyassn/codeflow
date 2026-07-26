@@ -208,8 +208,8 @@ regression`, or `unknown` against a fixed rubric:
 - responsive behavior and required state coverage;
 - accessibility evidence against the named target;
 - fidelity to each artifact's settled design intent; and
-- whether familiar model defaults were justified rather than used
-  reflexively.
+- whether familiar design choices were retained or revised from the artifact's
+  evidence rather than accepted or rejected by category.
 
 Use paired judgments to detect regression; never report an absolute aesthetic
 score or a universal design ranking. A cross-lineage grader challenges the

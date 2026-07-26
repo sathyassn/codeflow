@@ -68,9 +68,10 @@ named human release decision.
       have retained native interactive Claude and Codex canary evidence;
       deterministic corpus validation alone is not reported as model behavior.
 - [ ] Any material design-contract change exercises proportional routing,
-      operator-direction precedence, generic-default challenge, accessibility,
-      and fidelity cases. Rendered comparisons retain same-environment artifacts
-      and blinded paired judgments; taste alone is not reported as a defect.
+      operator-direction precedence, counterfactual evidence-grounded choice
+      review, accessibility, and fidelity cases. Rendered comparisons retain
+      same-environment artifacts and blinded paired judgments; taste or category
+      familiarity alone is not reported as a defect.
 - [ ] The current ensemble selectors and effort/worker policy match the models
       actually qualified for this release; every `capability-supported`
       harness catalog entry still satisfies the universal capability contract.

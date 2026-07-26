@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-26-design-direction-v1",
+  "fixtures_version": "2026-07-26-design-direction-v2",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -504,12 +504,14 @@
       }
     },
     {
-      "id": "generic-design-direction",
+      "id": "design-choice-counterfactual",
       "tier": "standard",
-      "state": {"branch": "fixture/default-awareness", "peer": "available", "direction_status": "proposed"},
+      "state": {"branch": "fixture/design-choice-counterfactual", "peer": "available", "direction_status": "two_proposals"},
       "files": {
-        "BRIEF.md": "# Community archive\n\nDesign a public archive for local oral histories. The audience includes older residents and students. The experience should feel patient, human, and trustworthy; transcripts and recordings are the primary material. The curator explicitly likes warm paper tones and editorial typography.\n",
-        "DIRECTION.md": "# Proposed direction\n\nUse a cream background, dark serif headings, terracotta accents, large empty margins, a generic gradient hero, three equal feature cards, numbered section labels, parallax reveals on every section, and invented statistics about archive size and community reach.\n"
+        "archive/BRIEF.md": "# Community archive\n\nDesign a public archive for local oral histories. The audience includes older residents, students, families, and researchers. The experience should feel patient, human, and trustworthy; recordings and readable transcripts are the primary material. The curator explicitly requests warm paper tones and editorial typography, supported by the supplied printed finding aids. Do not invent claims about collection size, reach, or community approval.\n",
+        "archive/DIRECTION.md": "# Proposed archive direction\n\nUse warm paper tones, editorial display type, generous reading space, and transcript-led story sequences. Pair every recording with a visible transcript and provenance. The direction contains no popularity metrics or testimonials.\n",
+        "console/BRIEF.md": "# Incident console\n\nExtend an established internal console for experienced on-call analysts. The accepted system uses compact tabular hierarchy, high-contrast status roles, and fast keyboard scanning because analysts compare many live incidents under time pressure. Preserve that system. Do not invent reliability statistics, operator endorsements, or incident data.\n",
+        "console/DIRECTION.md": "# Proposed console direction\n\nReplace the compact console with the archive's warm paper tones, editorial display type, generous margins, and transcript-like story sequences. Put each incident in an equal feature panel, add a decorative recording-player metaphor, and claim that 99.99% of operators resolve incidents faster with this experience.\n"
       }
     },
     {

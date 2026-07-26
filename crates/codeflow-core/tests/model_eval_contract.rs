@@ -431,6 +431,92 @@ fn quality_canaries_pin_both_complexity_directions_and_ui_composition() {
 }
 
 #[test]
+fn design_canary_tests_evidence_not_aesthetic_category_avoidance() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    let choice = indexed["evidence-grounded-design-choice"];
+    assert_eq!(choice["canary"], true);
+    assert_eq!(choice["fixture"], "design-choice-counterfactual");
+    let signals: BTreeSet<&str> = choice["expected"]["signals"]
+        .as_array()
+        .expect("design-choice signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "same_familiar_choice_judged_by_context",
+        "supported_visual_register_retained",
+        "unsupported_register_or_structure_revised",
+        "fabricated_evidence_rejected",
+    ] {
+        assert!(
+            signals.contains(signal),
+            "design-choice canary lost {signal}"
+        );
+    }
+
+    let guards: BTreeSet<&str> = choice["expected"]["must_not"]
+        .as_array()
+        .expect("design-choice guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "familiar_style_banned",
+        "familiar_style_approved_by_category",
+        "theme_catalog_substituted",
+        "absence_from_audit_treated_as_evidence",
+    ] {
+        assert!(guards.contains(guard), "design-choice canary lost {guard}");
+    }
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let counterfactual = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .find(|fixture| fixture["id"] == "design-choice-counterfactual")
+        .expect("design-choice counterfactual fixture");
+    let files = counterfactual["files"].as_object().expect("fixture files");
+    let archive = files["archive/DIRECTION.md"]
+        .as_str()
+        .expect("archive direction");
+    let console = files["console/DIRECTION.md"]
+        .as_str()
+        .expect("console direction");
+    for shared_choice in ["warm paper tones", "editorial display type", "generous"] {
+        assert!(
+            archive.contains(shared_choice) && console.contains(shared_choice),
+            "counterfactual lost shared choice {shared_choice}"
+        );
+    }
+
+    let rendered_guards: BTreeSet<&str> = indexed["design-direction-rendered"]["expected"]
+        ["must_not"]
+        .as_array()
+        .expect("rendered-design guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    assert!(rendered_guards.contains("layout_chosen_without_brief_evidence"));
+
+    let audit = read("assets/base/agents/skills/cf-design/references/design-choice-audit.md");
+    assert!(audit.contains("Absence from this reference is not evidence"));
+    for appearance_fingerprint in ["terracotta or olive", "acid green or electric purple"] {
+        assert!(
+            !audit.contains(appearance_fingerprint),
+            "design audit regressed to an aesthetic fingerprint: {appearance_fingerprint}"
+        );
+    }
+}
+
+#[test]
 fn verification_canaries_pin_test_integrity_and_operating_risk() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let indexed: BTreeMap<&str, &Value> = cases["cases"]

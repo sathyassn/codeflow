@@ -41,7 +41,7 @@
         "editorial-operator-response-stays-honest",
         "design-intent-proportionality",
         "explicit-direction-precedence",
-        "generic-default-recognition",
+        "evidence-grounded-design-choice",
         "design-fidelity-review",
         "a11y-conformance-target"
       ]
@@ -84,7 +84,7 @@
       "cases": [
         "design-intent-proportionality",
         "explicit-direction-precedence",
-        "generic-default-recognition",
+        "evidence-grounded-design-choice",
         "design-fidelity-review",
         "a11y-conformance-target",
         "design-direction-rendered"

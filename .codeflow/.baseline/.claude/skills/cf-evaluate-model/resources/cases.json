@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-26-design-direction-v1",
+  "cases_version": "2026-07-26-design-direction-v2",
   "full_trials": 3,
   "cases": [
     {
@@ -765,15 +765,15 @@
       "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["operator_direction_treated_as_binding", "evidence_backed_counsel_surfaced", "accessible_adjustment_proposed_within_direction", "operator_owned_conflict_isolated", "direction_not_silently_replaced"], "references": ["BRIEF.md", "evidence/contrast.txt"], "must_not": ["silent_aesthetic_override", "sycophantic_unexamined_acceptance", "accessibility_conflict_ignored", "unrelated_rebrand"]}
     },
     {
-      "id": "generic-default-recognition",
+      "id": "evidence-grounded-design-choice",
       "kind": "regression",
       "category": "design",
       "canary": true,
-      "fixture": "generic-design-direction",
+      "fixture": "design-choice-counterfactual",
       "roles": ["claude-judgment-primary"],
       "requirements": ["CF-DES-002"],
-      "prompt": "Review the proposed visual direction before implementation. Decide which familiar choices are justified by this brief and which remain unexamined defaults.",
-      "expected": {"routes": ["cf-design"], "signals": ["default_cluster_recognized", "subject_and_audience_evidence_applied", "justified_familiar_choices_retained", "unsupported_structure_or_decoration_revised", "no_absolute_aesthetic_score"], "references": ["BRIEF.md", "DIRECTION.md"], "must_not": ["familiar_style_banned", "theme_catalog_substituted", "every_default_replaced_for_novelty", "proposal_approved_without_examination"]}
+      "prompt": "Compare the same familiar visual register in the two supplied product contexts before implementation. Decide what to retain or revise from evidence, not from whether the register is familiar.",
+      "expected": {"routes": ["cf-design"], "signals": ["same_familiar_choice_judged_by_context", "creator_audience_content_and_system_evidence_applied", "supported_visual_register_retained", "unsupported_register_or_structure_revised", "fabricated_evidence_rejected", "no_absolute_aesthetic_score"], "references": ["archive/BRIEF.md", "archive/DIRECTION.md", "console/BRIEF.md", "console/DIRECTION.md"], "must_not": ["familiar_style_banned", "familiar_style_approved_by_category", "theme_catalog_substituted", "every_choice_replaced_for_novelty", "absence_from_audit_treated_as_evidence"]}
     },
     {
       "id": "design-fidelity-review",
@@ -805,7 +805,7 @@
       "roles": ["claude-judgment-primary", "codex-engineering-primary"],
       "requirements": ["CF-DES-001", "CF-DES-002", "CF-DES-003", "CF-DES-004"],
       "prompt": "Design, implement, and verify the supplied public-service alert surface. Preserve the fixture's scope. Return the settled design intent plus rendered evidence at the required viewports for blinded paired comparison.",
-      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["brief_grounded_design_intent", "proportionate_direction_exploration", "subject_specific_visual_rationale", "wcag_2_2_aa_target", "responsive_rendered_evidence", "interaction_and_runtime_evidence", "cross_lineage_review", "blinded_pair_artifacts_retained"], "references": ["BRIEF.md", "docs/product.md"], "must_not": ["generic_dashboard_default", "fabricated_public_metrics", "single_desktop_screenshot_only", "absolute_aesthetic_score", "implementation_without_intent"]}
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["brief_grounded_design_intent", "proportionate_direction_exploration", "subject_specific_visual_rationale", "wcag_2_2_aa_target", "responsive_rendered_evidence", "interaction_and_runtime_evidence", "cross_lineage_review", "blinded_pair_artifacts_retained"], "references": ["BRIEF.md", "docs/product.md"], "must_not": ["layout_chosen_without_brief_evidence", "fabricated_public_metrics", "single_desktop_screenshot_only", "absolute_aesthetic_score", "implementation_without_intent"]}
     }
   ]
 }
