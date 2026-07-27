@@ -72,6 +72,21 @@ named human release decision.
       review, accessibility, and fidelity cases. Rendered comparisons retain
       same-environment artifacts and blinded paired judgments; taste or category
       familiarity alone is not reported as a defect.
+- [ ] Whole-flow and concurrent-browser canaries exercise an affected journey
+      through every applicable changed boundary, disclose controlled external
+      seams, allocate isolated browser/endpoints/data/artifacts per task, and
+      prove teardown. A listening MCP port is required only for a listening
+      transport; headed evidence uses a test-owned browser/session and never
+      the operator's existing browser or desktop.
+- [ ] The mixed closeout canary inventories active, proven-landed, dirty, and
+      unproven worktrees; removes only the clean proven-landed entry; and
+      retains every other entry with ownership/recheck evidence. Age and
+      `git worktree prune` metadata never stand in for merge proof.
+- [ ] `codeflow status` classifies linked worktrees and unattached local
+      branches as removable, preserve-dirty, or retain-unproven from locally
+      known ancestry/patch evidence; tests cover squash-equivalent, dirty, and
+      unlanded states. The report performs no mutation and does not replace the
+      active-owner check.
 - [ ] The current ensemble selectors and effort/worker policy match the models
       actually qualified for this release; every `capability-supported`
       harness catalog entry still satisfies the universal capability contract.

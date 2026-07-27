@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-26-design-direction-v2",
+  "requirements_version": "2026-07-26-e2e-isolation-v1",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -417,6 +417,33 @@
       "sources": [
         {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["default to WCAG 2.2 AA", "Compare the rendered result with the settled intent", "reviewer's unsupported taste does not"]},
         {"path": ".claude/agents/cf-reviewer.md", "markers": ["fidelity to the settled `DESIGN_INTENT`", "unanchored aesthetic preference remains non-blocking"]}
+      ]
+    },
+    {
+      "id": "CF-QA-011",
+      "level": "hard",
+      "statement": "Every material changed journey maps its affected topology and has faithful end-to-end evidence through each applicable changed in-project and runtime boundary; unit/integration tests remain complementary, controlled external doubles are disclosed and contract-checked where feasible, and an unexercised seam is never reported as whole-flow proof.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["For each material changed journey, map the exercised path", "At least one test at the highest faithful surface", "does not prove that whole journey", "record it as controlled and unexercised", "never claim that dependency was live or exercised"]},
+        {"path": ".claude/agents/cf-reviewer.md", "markers": ["compare the declared topology with the executed E2E evidence", "not counted as whole-flow proof"]}
+      ]
+    },
+    {
+      "id": "CF-QA-012",
+      "level": "hard",
+      "statement": "Concurrent UI verification allocates task-owned isolated browser state, non-overlapping listening and application endpoints where applicable, namespaced test data, and run-scoped artifacts, then verifies bounded teardown; headed or Computer Use work never attaches to or takes over the operator's browser, profile, tabs, or active desktop.",
+      "sources": [
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["before any concurrent browser work", "never attach to the operator's existing browser", "verify ports and task-owned resources were released", "CodeFlow supplies this resource contract, not universal port numbers"]},
+        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["settle and canary its browser-resource contract", "must not attach to or manipulate the operator's existing tabs"]}
+      ]
+    },
+    {
+      "id": "CF-GIT-003",
+      "level": "hard",
+      "statement": "Orientation and post-landing closeout use the read-only CodeFlow status inventory for linked worktrees and unattached branches, promptly remove only clean entries proven landed after owner clearance, preserve active, dirty, or unproven work with an owner and recheck event, and never treat age, names, or worktree-prune metadata as merge proof.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["At orientation and after a landing, use `codeflow status`", "not ownership authorization", "never use age, name resemblance, or `git worktree prune` as merge proof"]},
+        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["use `codeflow status` as the local worktree/branch inventory", "Confirm the task owner is inactive", "only removes stale administrative records"]}
       ]
     }
   ]

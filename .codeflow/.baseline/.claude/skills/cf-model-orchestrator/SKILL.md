@@ -262,7 +262,12 @@ After dual approval, the host expands the agreed plan into ordered tasks with:
   focus, and the evidence event that causes reassessment;
 - files/interfaces expected to change;
 - happy-path and edge/error acceptance criteria;
-- unit, integration, end-to-end, UI, coverage, and security evidence required;
+- unit, integration, end-to-end, UI, coverage, and security evidence required,
+  including the affected journey topology and each real boundary the
+  end-to-end run must traverse or explicitly disclose as controlled/unverified;
+- for concurrent UI work, the owner and run-scoped browser profile/context,
+  service/application endpoints, test-data namespace, artifact directory,
+  retention, and teardown verification required by the quality contract;
 - rollback or recovery considerations where relevant.
 
 Multi-task plans use the node/edge notation and mutation boundary in
@@ -282,7 +287,8 @@ If implementation has independent tasks, add an explicit execution graph:
 - the settled task graph and a valid integration order;
 - one file/component owner, branch, and worktree per parallel task;
 - shared or conflict-prone files reserved to one integration owner;
-- a host resource budget and maximum concurrent heavyweight builds/browsers;
+- a host resource budget and maximum concurrent heavyweight builds/browsers,
+  with non-overlapping browser resources for every parallel UI task;
 - the `integration/<epic>` branch and serialized `codeflow integrate` order;
 - focused checks per task and combined checks after each landing.
 

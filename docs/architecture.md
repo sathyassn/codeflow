@@ -287,6 +287,22 @@ scaffold. Consuming projects select CodeQL, Semgrep, Sonar, a language-native
 analyzer, or an explicit residual-risk disposition from their actual stack and
 hosting evidence during customization.
 
+End-to-end and UI evidence also owns explicit runtime boundaries (ADR-0044).
+Each material changed journey records its affected topology and one faithful
+vertical run across the applicable changed frontend, service, state,
+infrastructure, and runtime boundaries; controlled external seams remain
+visible. Concurrent UI tasks receive task-owned isolated browser state,
+non-overlapping listening/application endpoints where applicable, namespaced
+test data, run-scoped artifacts, and verified teardown. The consuming project
+defines allocators, ranges, namespace formats, retention, and commands during
+customization—CodeFlow adds no universal browser daemon or port broker.
+`codeflow status` emits the post-landing inventory for linked worktrees and
+unattached local branches. It proves landing from the locally known target by
+normal ancestry or `git cherry` patch equivalence, marks dirty and unproven
+resources for retention, and never deletes. The owner check remains explicit:
+even a clean landed resource is removable only after confirming no active task
+owns it.
+
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
 engine manages it by three ownership classes (charter §4.3): **fully-managed**

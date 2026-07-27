@@ -14,6 +14,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **End-to-end and concurrent UI verification now own their real boundaries
+  (ADR-0044).** Material changed journeys map the affected frontend, service,
+  state, external-seam, infrastructure, runtime, outcome, and recovery path,
+  then prove one faithful vertical run instead of promoting disconnected unit
+  and mocked layer tests to E2E. Concurrent Playwright work receives
+  task-owned isolated browser state, non-overlapping endpoints where
+  applicable, namespaced test data, run-scoped artifacts, and verified
+  teardown; headed or Computer Use work cannot commandeer the operator's
+  browser or active desktop. Consuming projects choose their allocator/ranges
+  and cleanup commands during customization. Worktree closeout now inventories
+  and promptly removes proven-landed entries while preserving active, dirty,
+  and unproven work with ownership evidence; `codeflow status` classifies
+  linked worktrees and unattached local branches from ancestry, squash-safe
+  patch equivalence, and dirtiness without deleting them. Three behavioral
+  canaries and deterministic contract tests pin the contract without adding a
+  browser, port broker, or deletion command.
 - **Product and interface design direction is now an explicit proportionate
   contract (ADR-0043).** Standard/full scaffolds gain a mirrored `cf-design`
   skill. Material new surfaces settle evidence-grounded `DESIGN_INTENT` inside

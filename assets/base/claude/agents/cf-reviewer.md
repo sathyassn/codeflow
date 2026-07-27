@@ -50,6 +50,11 @@ itself a blocker finding — return changes_requested.
      tautologies, implementation-copied expectations or duplicate production
      algorithms used as oracles, mock-only wiring assertions, weakened
      assertions, and test-only production paths added to manufacture coverage
+   - for each material changed journey, compare the declared topology with the
+     executed E2E evidence. Require one faithful vertical run through every
+     applicable affected in-project and runtime boundary; a mocked changed
+     boundary or uncontrolled external seam is disclosed, not counted as
+     whole-flow proof
 5. For a user-facing change, follow the UI section of
    `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. Use
    Playwright for web behavior; routine deterministic runs may keep the browser
@@ -57,10 +62,14 @@ itself a blocker finding — return changes_requested.
    debugging reason. Match structured behavior, visual, console/network, and
    failure/first-retry trace evidence to the claim; screenshots alone are not
    interaction or accessibility proof. Use Computer Use or a surface-specific
-   driver only beyond the controlled web page. Check the approved design,
-   its fidelity to the settled `DESIGN_INTENT`, required user-visible states,
-   relevant sizes, and applicable accessibility behavior against the named
-   target. Record the evidence; when no user-facing surface changed, record
+   driver only beyond the controlled web page. For concurrent work, verify the
+   task-owned isolated profile/context, non-overlapping endpoints, namespaced
+   test data, artifact directory, and teardown evidence. Reject attachment to
+   the operator's existing browser/profile/tabs or active desktop. Check the
+   approved design, its fidelity to the settled `DESIGN_INTENT`, required
+   user-visible states, relevant sizes, and applicable accessibility behavior
+   against the named target. Record the evidence; when no user-facing surface
+   changed, record
    `UI: N/A — no user-facing surface changed`.
 6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when

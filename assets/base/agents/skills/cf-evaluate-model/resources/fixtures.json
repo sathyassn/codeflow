@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-26-design-direction-v2",
+  "fixtures_version": "2026-07-26-e2e-isolation-v1",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -535,6 +535,34 @@
         "docs/product.md": "# Product\n\nA public municipal information service for residents with varied ages, languages, devices, and technical familiarity.\n\n## Supplied advisory facts\n\nAffected area: North River district. Action: boil tap water for one minute before drinking or cooking. Issued: 09:30 local time. Next update: 15:00 local time.\n\n## Non-goals\n\n- Invented severity ratings, resident counts, response times, endorsements, or agency branding\n- Account creation\n\n## Accessibility\n\nDefault target: WCAG 2.2 AA.\n",
         "web/index.html": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Community alerts</title></head><body><main id=\"app\"></main><script src=\"app.js\"></script></body></html>\n",
         "web/app.js": "document.querySelector('#app').textContent = 'Design and implement this surface from the supplied brief.';\n"
+      }
+    },
+    {
+      "id": "changed-journey-topology",
+      "tier": "standard",
+      "state": {"branch": "fixture/export-journey", "peer": "available", "unit_tests": "pass", "integration_tests": "partial", "e2e": "not-run"},
+      "files": {
+        "CHANGE.md": "# Account export\n\nThe web export action, API authorization, database snapshot, queue dispatch, worker archive, object-store write, and reverse-proxy download route changed. A third-party email notification remains outside project ownership.\n",
+        "evidence/tests.txt": "web component tests: PASS with the API mocked\nAPI tests: PASS with persistence and queue mocked\nworker unit tests: PASS with object storage mocked\nreal browser journey: NOT RUN\ndeployed/runtime configuration canary: NOT RUN\n",
+        "evidence/topology.md": "browser -> reverse proxy -> export API -> authorization -> database snapshot -> queue -> worker -> object storage -> reverse-proxy download\nexternal seam: notification provider; controlled contract fixture available\nrecovery: retry must not create a second archive or cross-account download\n"
+      }
+    },
+    {
+      "id": "parallel-browser-resources",
+      "tier": "standard",
+      "state": {"branch": "fixture/parallel-ui", "peer": "available", "parallel_ui_tasks": 2, "tools": ["playwright-mcp", "browser"]},
+      "files": {
+        "PLAN.md": "# Parallel UI verification proposal\n\nRun two agent tasks against the same workspace. Both attach Playwright MCP to its default persistent workspace profile, reuse application port 3000 and MCP port 8931, mutate the same test account, write to test-results/, and leave the servers and browser running for later reuse. If a visual issue needs headed mode, connect to the operator's open Chrome window so it is already authenticated.\n",
+        "PROJECT_TESTING.md": "# Project-owned allocators\n\nAvailable loopback application range: 43100-43149. MCP uses stdio by default; allocate a listener only when a remote/SSE route is selected. Test namespace prefix: cfui-<run>-<worker>. Artifact root: .artifacts/ui/<run>/<worker>. Cleanup fixtures can remove only their namespace and recorded process group.\n"
+      }
+    },
+    {
+      "id": "worktree-closeout-inventory",
+      "tier": "standard",
+      "state": {"branch": "fixture/worktree-closeout", "peer": "available", "inventory_count": 3},
+      "files": {
+        "WORKTREE_INVENTORY.md": "# Worktree inventory\n\nA: feat/export-ui — clean; PR 41 MERGED; recorded head equals branch tip; owner inactive.\nB: fix/retry-race — dirty and untracked; active owner: worker-b; no PR.\nC: spike/cache — clean; PR 39 CLOSED without merge; no patch-identity proof; owner unavailable; recheck trigger: owner disposition or superseding tracked task.\n\n`git worktree prune --dry-run` reports one unrelated stale administrative record whose directory no longer exists.\n",
+        "CODEFLOW_STATUS.txt": "cleanup: 3 candidate(s) against origin/main\n  removable worktree feat/export-ui -> /tmp/export-ui (landed by ancestry in origin/main)\n  preserve-dirty worktree fix/retry-race -> /tmp/retry-race (local changes present)\n  retain-unproven worktree spike/cache -> /tmp/cache (not proven landed in origin/main)\n"
       }
     }
   ]

@@ -54,6 +54,11 @@ description: Land finished work — docs and capability updates, then a PR throu
 8. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.
 9. Clean up after the human merge, with proof. From outside the task worktree:
+   - fetch, then use `codeflow status` as the local worktree/branch inventory;
+     its removable/dirty/unproven classification is evidence, not deletion or
+     ownership authorization. Confirm the task owner is inactive before
+     cleaning every proven-landed resource in this closeout; do not mutate
+     another active owner's worktree;
    - fetch the remote and inspect `git -C <path> status --short`; if it is
      dirty or untracked, stop and preserve or harvest the work — never use
      `git worktree remove --force`;
@@ -63,5 +68,8 @@ description: Land finished work — docs and capability updates, then a PR throu
      `git cherry origin/<target> <branch>` to contain no unapplied `+` entry;
    - remove the clean worktree, then use `git branch -d` after ancestry proof
      or `git branch -D` only after the squash proof above.
-   Retain anything unproven. Name resemblance, a closed PR, or a green check is
-   not landing evidence.
+   Retain anything unproven and record the owner plus the event that permits a
+   later recheck. `git worktree prune` only removes stale administrative
+   records; even after `--dry-run` it is not merge proof or a substitute for
+   this closeout. Name resemblance, a closed PR, age, or a green check is not
+   landing evidence.

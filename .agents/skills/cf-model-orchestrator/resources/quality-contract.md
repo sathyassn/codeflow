@@ -261,10 +261,30 @@ Apply the checks relevant to the changed surface:
 - formatting, lint/static analysis, type checking, and documentation checks;
 - focused unit tests for changed logic, including boundaries and failures;
 - integration tests across changed interfaces and persistence/network edges;
-- end-to-end tests for critical user journeys and irreversible operations;
+- end-to-end tests for critical changed journeys and irreversible operations;
 - dependency and vulnerability scanning plus a source-to-sink security review;
 - regression tests for each fixed defect;
 - repository-specific validation, packaging, or migration checks.
+
+For each material changed journey, map the exercised path before selecting the
+end-to-end evidence: user or system entry point; every affected in-project
+frontend, service, job, queue, persistence, and authorization boundary; relevant
+deployment/runtime configuration; and the observable outcome and recovery path.
+At least one test at the highest faithful surface drives the real changed path
+through every applicable affected boundary. A UI test backed by a mocked changed
+service, or a service test that bypasses changed persistence or runtime wiring,
+does not prove that whole journey. Keep unit and integration tests as faster
+diagnostics; they complement rather than replace this vertical proof.
+
+Use a controlled double only beyond the system's ownership boundary when the
+real dependency is unsafe, unavailable, non-deterministic, or prohibitively
+costly. Pin that seam with a contract/integration check where feasible and
+record it as controlled and unexercised; never claim that dependency was live
+or exercised. Infrastructure, packaging, installer, migration, and
+configuration changes require an ephemeral/deployed-runtime canary or
+equivalent native evidence for the affected path. A category may still be
+`N/A` for a change with no material journey, but the plan names the topology
+evidence that makes it so.
 
 For performance-, scale-, or concurrency-sensitive paths, review the actual
 operating shape rather than only functional output: algorithmic complexity and
@@ -365,6 +385,28 @@ interaction debugging, or environment-specific rendering is material. For
 native, mobile, desktop, browser-chrome, or other surfaces outside Playwright's
 controlled page/context, prefer a surface-specific driver and use Computer Use
 only when no narrower driver reaches the surface. Check at least:
+
+- before any concurrent browser work, allocate a task/run owner and isolate
+  every mutable resource it uses: a fresh browser context/profile (prefer
+  Playwright MCP `--isolated`, or a task-specific user-data directory only when
+  persistence is required); a unique MCP/service endpoint when the transport
+  listens on a port; non-overlapping loopback application/service endpoints;
+  a per-run and, when parallel, per-worker test-data namespace/account/schema;
+  and an absolute task-scoped output/report/screenshot/trace directory;
+- define allocation, readiness, retention, and teardown before launch. Use
+  fixture/finalizer cleanup for data and services, stop only owned process
+  groups/containers/endpoints, close contexts and browsers, then verify ports
+  and task-owned resources were released. Preserve failure evidence under the
+  project's retention policy; delete secrets and successful disposable state;
+- never attach to the operator's existing browser, default user profile, tabs,
+  or active desktop. A materially necessary headed run launches a test-owned
+  browser/profile and must not take over the user's current view. Computer Use
+  runs only in a dedicated test desktop/session or with explicit operator
+  control; if that isolated surface is unavailable, record the limitation
+  rather than hijacking the user's session;
+- the consuming project owns its safe port allocator/range, namespace format,
+  artifact root, retention, and teardown commands. CodeFlow supplies this
+  resource contract, not universal port numbers or stack-specific scripts;
 
 - the upstream `DESIGN_INTENT`, including its valid `N/A` or `conform` path,
   before treating a design as approved;

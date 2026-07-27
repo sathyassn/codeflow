@@ -145,6 +145,13 @@ Develop in a worktree per session (native worktree support). Protected branches
 stay checked out only at the repo root, so git itself refuses a second checkout —
 structural protection for free.
 
+At orientation and after a landing, use `codeflow status` to inventory linked
+worktrees and unattached local branches. Treat its removable/dirty/unproven
+classification as local Git evidence, not ownership authorization: confirm the
+owner is inactive before promptly closing a proven-landed resource. Retain
+active, dirty, and unproven work with an owner, reason, and recheck event; never
+use age, name resemblance, or `git worktree prune` as merge proof.
+
 Before a task's first branch, worktree, commit, merge, rebase, push, or delete
 mutation, make three ordered work-start assertions:
 
@@ -326,8 +333,14 @@ to reason from, not a rote checklist.
 - **Prove it at every surface.** Verify the work where it runs — unit,
   integration, end-to-end, and user-facing behavior (drive a real UI with a
   browser/computer-use tool when that is the surface) — and check what it affects
-  upstream and downstream, not just the lines you changed. Tests ship in the same
-  change. Select property/generative tests, targeted mutation testing, or
+  upstream and downstream, not just the lines you changed. For a material
+  changed journey, the end-to-end evidence drives the real affected path across
+  its applicable frontend, service, persistence, external-seam, infrastructure,
+  and runtime boundaries; a mocked changed boundary is disclosed, never called
+  whole-flow proof. Concurrent UI runs isolate browser state, endpoints, test
+  data, and artifacts and verify teardown without taking over the operator's
+  browser or active desktop. Tests ship in the same change. Select
+  property/generative tests, targeted mutation testing, or
   project-owned architecture fitness checks only from the orchestrator's
   evidence triggers; `none selected` is valid, and normal scenario coverage
   remains mandatory. Run `codeflow test` before calling it done — the local

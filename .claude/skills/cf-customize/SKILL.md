@@ -154,6 +154,24 @@ or outward action. The fixes:
   Do not add `--headless` globally: select browser mode per task. Headless is
   the efficient routine E2E/CI path; headed/UI mode is for materially visual,
   browser-chrome, environment-rendering, or interactive-debugging claims.
+  For a project that can run concurrent UI work, also settle and canary its
+  browser-resource contract rather than relying on MCP defaults:
+  - a task/run ID owns a fresh isolated context/profile; use `--isolated` by
+    default, or a task-specific `--user-data-dir` only when persistent state is
+    required—never the operator's default browser profile;
+  - the project allocates non-overlapping loopback application/service ports
+    and, only for a listening MCP transport, a distinct MCP port. Record the
+    allocator or safe range; CodeFlow does not impose universal port numbers;
+  - mutable test data uses a run namespace/account/schema and a worker suffix
+    when tests parallelize. Artifact/report/trace output uses an absolute
+    run-scoped directory with a declared retention policy;
+  - fixtures/finalizers stop only task-owned processes or containers, release
+    ports, close browser state, remove disposable namespaced data, and retain
+    bounded failure evidence. Canary teardown as well as launch/readiness.
+  A headed run still launches a test-owned browser/profile and must not attach
+  to or manipulate the operator's existing tabs, browser, profile, or active
+  desktop. Computer Use requires a dedicated test desktop/session or explicit
+  operator control.
 
 - Claude auto mode unavailable → show the failed capability check; use
   `acceptEdits` with the fail-closed project sandbox for this run. Do not write

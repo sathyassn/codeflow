@@ -104,7 +104,12 @@ softening the commit rules quietly breaks it.
   of merge. Ancestry never proves a squash merge — require PR state `MERGED`
   and a matching recorded head SHA, or no unapplied `+` entry from `git cherry`
   against the updated target, before branch force-delete. Never force-remove a
-  dirty worktree; preserve or harvest dirty or untracked work first.
+  dirty worktree; preserve or harvest dirty or untracked work first. At
+  orientation and after a landing, use `codeflow status` to inventory linked
+  worktrees and unattached local branches. Treat its removable/dirty/unproven
+  result as local Git evidence, not ownership authorization; retain active,
+  dirty, and unproven entries with an owner, reason, and recheck event. Age,
+  name resemblance, and `git worktree prune` are not merge proof.
 
 ## Workflow discipline
 
@@ -194,8 +199,13 @@ to reason from, not a rote checklist.
   invent personality, experience, feelings, familiarity, or slang.
 - **Prove it where it runs.** Verify the work at the surface it affects — unit,
   integration, end-to-end, user-facing — and check what it touches upstream and
-  downstream, not just the lines you changed. `codeflow test` is green before you
-  call it done.
+  downstream, not just the lines you changed. For a material changed journey,
+  exercise the real affected path across its applicable UI, service,
+  persistence, external-seam, infrastructure, and runtime boundaries; disclose
+  a mocked changed boundary instead of calling it whole-flow proof. Concurrent
+  UI runs isolate browser state, endpoints, test data, and artifacts, verify
+  teardown, and never take over the operator's browser or active desktop.
+  `codeflow test` is green before you call it done.
 - **Unverifiable or fabricated claims are defects (zero tolerance).** Every claim
   needs evidence — file:line, command output, or a reproducible check; never
   invent a fact, number, result, or citation. Say explicitly what was *not*

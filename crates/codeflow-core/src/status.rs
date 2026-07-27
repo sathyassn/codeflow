@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::process::Command;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
@@ -18,6 +19,38 @@ use crate::workgraph::{MarkdownStore, RecordStore};
 pub struct WorktreeInfo {
     pub name: String,
     pub path: String,
+}
+
+/// Read-only closeout advice for a linked worktree or an unattached local
+/// branch. `CodeFlow` reports evidence; it never removes either resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupInfo {
+    pub kind: String,
+    pub name: String,
+    pub path: Option<String>,
+    pub disposition: CleanupDisposition,
+    pub proof: String,
+}
+
+/// The three outcomes used by the closeout inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupDisposition {
+    /// Clean and proven landed by ancestry or patch equivalence.
+    Removable,
+    /// Contains local changes and must be preserved.
+    PreserveDirty,
+    /// Clean, but landing could not be proven from local Git evidence.
+    RetainUnproven,
+}
+
+impl CleanupDisposition {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Removable => "removable",
+            Self::PreserveDirty => "preserve-dirty",
+            Self::RetainUnproven => "retain-unproven",
+        }
+    }
 }
 
 /// In-flight work, summarized from the workgraph store.
@@ -74,6 +107,10 @@ pub struct StatusView {
     /// Current branch; `None` outside a git repo or on unborn HEAD.
     pub branch: Option<String>,
     pub worktrees: Vec<WorktreeInfo>,
+    /// Local target ref used for cleanup proof, when available.
+    pub cleanup_target: Option<String>,
+    /// Linked worktrees and unattached local branches that need closeout.
+    pub cleanup: Vec<CleanupInfo>,
     /// `None` when the project-management tier is absent.
     pub work: Option<WorkSummary>,
     /// `None` when `docs/capabilities.md` is absent.
@@ -91,16 +128,25 @@ pub struct StatusView {
 pub fn collect_status(repo_root: &Path) -> StatusView {
     let mut notes = Vec::new();
 
-    let (branch, worktrees) = if let Ok(repo) = git2::Repository::open(repo_root) {
-        let branch = repo
-            .head()
-            .ok()
-            .and_then(|h| h.shorthand().ok().map(ToString::to_string));
-        (branch, list_worktrees(&repo))
-    } else {
-        notes.push("not a git repository — branch/worktree state unavailable".to_string());
-        (None, Vec::new())
-    };
+    let (branch, worktrees, cleanup_target, cleanup) =
+        if let Ok(repo) = git2::Repository::open(repo_root) {
+            let branch = repo
+                .head()
+                .ok()
+                .and_then(|h| h.shorthand().ok().map(ToString::to_string));
+            let worktrees = list_worktrees(&repo);
+            let target = cleanup_target(&repo);
+            let cleanup = collect_cleanup(repo_root, &repo, target.as_ref());
+            (
+                branch,
+                worktrees,
+                target.as_ref().map(|item| item.name.clone()),
+                cleanup,
+            )
+        } else {
+            notes.push("not a git repository — branch/worktree state unavailable".to_string());
+            (None, Vec::new(), None, Vec::new())
+        };
 
     let work = collect_work(repo_root, &mut notes);
     let capabilities = collect_capabilities(repo_root, &mut notes);
@@ -109,11 +155,230 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
     StatusView {
         branch,
         worktrees,
+        cleanup_target,
+        cleanup,
         work,
         capabilities,
         delivery,
         notes,
     }
+}
+
+#[derive(Debug)]
+struct CleanupTarget {
+    name: String,
+    oid: git2::Oid,
+}
+
+fn cleanup_target(repo: &git2::Repository) -> Option<CleanupTarget> {
+    let mut names = Vec::new();
+    if let Ok(head) = repo.find_reference("refs/remotes/origin/HEAD") {
+        if let Ok(Some(symbolic)) = head.symbolic_target() {
+            names.push(symbolic.to_string());
+        }
+    }
+    names.extend(
+        [
+            "refs/remotes/origin/main",
+            "refs/remotes/origin/master",
+            "refs/heads/main",
+            "refs/heads/master",
+        ]
+        .into_iter()
+        .map(ToString::to_string),
+    );
+
+    names.into_iter().find_map(|name| {
+        let reference = repo.find_reference(&name).ok()?;
+        let oid = reference.peel_to_commit().ok()?.id();
+        Some(CleanupTarget {
+            name: display_ref(&name),
+            oid,
+        })
+    })
+}
+
+fn display_ref(name: &str) -> String {
+    name.strip_prefix("refs/remotes/")
+        .or_else(|| name.strip_prefix("refs/heads/"))
+        .unwrap_or(name)
+        .to_string()
+}
+
+fn collect_cleanup(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    target: Option<&CleanupTarget>,
+) -> Vec<CleanupInfo> {
+    let mut out = Vec::new();
+    let mut checked_out = std::collections::BTreeSet::new();
+    if let Ok(head) = repo.head() {
+        if let Ok(name) = head.shorthand() {
+            checked_out.insert(name.to_string());
+        }
+    }
+
+    if let Ok(names) = repo.worktrees() {
+        for name in names.iter().filter_map(|name| name.ok().flatten()) {
+            let Ok(worktree) = repo.find_worktree(name) else {
+                continue;
+            };
+            let path = worktree.path();
+            let Ok(worktree_repo) = git2::Repository::open(path) else {
+                out.push(CleanupInfo {
+                    kind: "worktree".to_string(),
+                    name: name.to_string(),
+                    path: Some(path.display().to_string()),
+                    disposition: CleanupDisposition::RetainUnproven,
+                    proof: "worktree state unavailable".to_string(),
+                });
+                continue;
+            };
+            let head = worktree_repo.head().ok();
+            let branch = head
+                .as_ref()
+                .and_then(|item| item.shorthand().ok())
+                .map(ToString::to_string);
+            if let Some(branch) = &branch {
+                checked_out.insert(branch.clone());
+            }
+            let oid = head.as_ref().and_then(git2::Reference::target);
+            let (disposition, proof) = classify_cleanup(
+                repo_root,
+                repo,
+                oid,
+                branch.as_deref(),
+                target,
+                repository_dirty(path),
+            );
+            out.push(CleanupInfo {
+                kind: "worktree".to_string(),
+                name: branch.unwrap_or_else(|| format!("{name} (detached)")),
+                path: Some(path.display().to_string()),
+                disposition,
+                proof,
+            });
+        }
+    }
+
+    if let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) {
+        for item in branches.flatten() {
+            let (branch, _) = item;
+            let Some(name) = branch.name().ok().flatten() else {
+                continue;
+            };
+            if checked_out.contains(name) || target_matches_branch(target, name) {
+                continue;
+            }
+            let oid = branch.get().peel_to_commit().ok().map(|commit| commit.id());
+            let (disposition, proof) =
+                classify_cleanup(repo_root, repo, oid, Some(name), target, Some(false));
+            out.push(CleanupInfo {
+                kind: "branch".to_string(),
+                name: name.to_string(),
+                path: None,
+                disposition,
+                proof,
+            });
+        }
+    }
+
+    out.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    out
+}
+
+fn target_matches_branch(target: Option<&CleanupTarget>, branch: &str) -> bool {
+    target.is_some_and(|item| {
+        item.name == branch
+            || item
+                .name
+                .strip_prefix("origin/")
+                .is_some_and(|name| name == branch)
+    })
+}
+
+fn classify_cleanup(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    oid: Option<git2::Oid>,
+    branch: Option<&str>,
+    target: Option<&CleanupTarget>,
+    dirty: Option<bool>,
+) -> (CleanupDisposition, String) {
+    match dirty {
+        Some(true) => {
+            return (
+                CleanupDisposition::PreserveDirty,
+                "local changes present".to_string(),
+            );
+        }
+        None => {
+            return (
+                CleanupDisposition::RetainUnproven,
+                "working state unavailable".to_string(),
+            );
+        }
+        Some(false) => {}
+    }
+
+    let (Some(oid), Some(target)) = (oid, target) else {
+        return (
+            CleanupDisposition::RetainUnproven,
+            "landing target or revision unavailable".to_string(),
+        );
+    };
+    if oid == target.oid || repo.graph_descendant_of(target.oid, oid).unwrap_or(false) {
+        return (
+            CleanupDisposition::Removable,
+            format!("landed by ancestry in {}", target.name),
+        );
+    }
+    if branch.is_some_and(|name| patch_equivalent(repo_root, &target.name, name)) {
+        return (
+            CleanupDisposition::Removable,
+            format!("patch-equivalent in {}", target.name),
+        );
+    }
+    (
+        CleanupDisposition::RetainUnproven,
+        format!("not proven landed in {}", target.name),
+    )
+}
+
+fn repository_dirty(path: &Path) -> Option<bool> {
+    let repo = git2::Repository::open(path).ok()?;
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    repo.statuses(Some(&mut options))
+        .ok()
+        .map(|statuses| !statuses.is_empty())
+}
+
+fn patch_equivalent(repo_root: &Path, target: &str, branch: &str) -> bool {
+    if target.starts_with('-') || branch.starts_with('-') {
+        return false;
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["cherry", target, branch])
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    output.status.success() && first.starts_with('-') && lines.all(|line| line.starts_with('-'))
 }
 
 fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
@@ -300,6 +565,8 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
         }
     }
 
+    render_cleanup(&mut out, view);
+
     match &view.work {
         Some(work) => {
             let _ = writeln!(
@@ -360,6 +627,57 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     }
 
     out
+}
+
+fn render_cleanup(out: &mut String, view: &StatusView) {
+    match &view.cleanup_target {
+        Some(target) if view.cleanup.is_empty() => {
+            let _ = writeln!(out, "cleanup: none (target {target})");
+        }
+        Some(target) => {
+            let _ = writeln!(
+                out,
+                "cleanup: {} candidate(s) against {target}",
+                view.cleanup.len()
+            );
+            for item in &view.cleanup {
+                let path = item
+                    .path
+                    .as_deref()
+                    .map(|path| format!(" -> {path}"))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "  {} {} {}{} ({})",
+                    item.disposition.label(),
+                    item.kind,
+                    item.name,
+                    path,
+                    item.proof
+                );
+            }
+        }
+        None if !view.cleanup.is_empty() => {
+            let _ = writeln!(
+                out,
+                "cleanup: {} candidate(s); landing target unavailable",
+                view.cleanup.len()
+            );
+            for item in &view.cleanup {
+                let _ = writeln!(
+                    out,
+                    "  {} {} {} ({})",
+                    item.disposition.label(),
+                    item.kind,
+                    item.name,
+                    item.proof
+                );
+            }
+        }
+        None => {
+            let _ = writeln!(out, "cleanup: unavailable");
+        }
+    }
 }
 
 /// Render the capability-delivery rollup: for each capability, its status and
@@ -754,6 +1072,146 @@ mod tests {
         let rendered = render_status(&view, false);
         assert!(rendered.contains("worktrees: 1"));
         assert!(rendered.contains("wt-feature"));
+    }
+
+    #[test]
+    fn cleanup_preserves_dirty_and_unproven_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let dirty_path = dir.path().join("wt-dirty");
+        git(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                dirty_path.to_str().unwrap(),
+                "-b",
+                "feat/dirty",
+            ],
+        );
+        std::fs::write(dirty_path.join("draft.txt"), "uncommitted\n").unwrap();
+
+        let pending_path = dir.path().join("wt-pending");
+        git(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                pending_path.to_str().unwrap(),
+                "-b",
+                "feat/pending",
+            ],
+        );
+        std::fs::write(pending_path.join("pending.txt"), "not landed\n").unwrap();
+        git(&pending_path, &["add", "pending.txt"]);
+        git(&pending_path, &["commit", "-m", "feat: add pending work"]);
+
+        let view = collect_status(dir.path());
+        let dirty = view
+            .cleanup
+            .iter()
+            .find(|item| item.name == "feat/dirty")
+            .unwrap();
+        assert_eq!(
+            dirty.disposition,
+            CleanupDisposition::PreserveDirty,
+            "{:?}",
+            view.cleanup
+        );
+        let pending = view
+            .cleanup
+            .iter()
+            .find(|item| item.name == "feat/pending")
+            .unwrap();
+        assert_eq!(
+            pending.disposition,
+            CleanupDisposition::RetainUnproven,
+            "{:?}",
+            view.cleanup
+        );
+    }
+
+    #[test]
+    fn cleanup_recognizes_squash_landing_by_patch_equivalence() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let wt_path = dir.path().join("wt-squashed");
+        git(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                wt_path.to_str().unwrap(),
+                "-b",
+                "feat/squashed",
+            ],
+        );
+        std::fs::write(wt_path.join("squashed.txt"), "landed once\n").unwrap();
+        git(&wt_path, &["add", "squashed.txt"]);
+        git(&wt_path, &["commit", "-m", "feat: add squashed change"]);
+
+        git(dir.path(), &["merge", "--squash", "feat/squashed"]);
+        git(dir.path(), &["commit", "-m", "feat: land squashed change"]);
+
+        let view = collect_status(dir.path());
+        let squashed = view
+            .cleanup
+            .iter()
+            .find(|item| item.name == "feat/squashed")
+            .unwrap();
+        assert_eq!(
+            squashed.disposition,
+            CleanupDisposition::Removable,
+            "{:?}",
+            view.cleanup
+        );
+        assert!(squashed.proof.contains("patch-equivalent"));
+        let rendered = render_status(&view, false);
+        let canonical_worktree = std::fs::canonicalize(&wt_path).unwrap();
+        assert!(
+            rendered.contains(&format!(
+                "removable worktree feat/squashed -> {} (patch-equivalent in main)",
+                canonical_worktree.display()
+            )),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn cleanup_rejects_option_shaped_refs_before_git_cherry() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!patch_equivalent(dir.path(), "main", "--unsafe"));
+        assert!(!patch_equivalent(dir.path(), "--unsafe", "feat/safe"));
+    }
+
+    #[test]
+    fn cleanup_does_not_apply_root_dirtiness_to_unattached_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        git(dir.path(), &["branch", "feat/already-landed"]);
+        std::fs::write(dir.path().join("local-draft.txt"), "root-only\n").unwrap();
+
+        let view = collect_status(dir.path());
+        let branch = view
+            .cleanup
+            .iter()
+            .find(|item| item.name == "feat/already-landed")
+            .unwrap();
+        assert_eq!(
+            branch.disposition,
+            CleanupDisposition::Removable,
+            "{:?}",
+            view.cleanup
+        );
+        assert!(branch.proof.contains("ancestry"));
+        let rendered = render_status(&view, false);
+        assert!(
+            rendered.contains(
+                "cleanup: 1 candidate(s) against main\n  removable branch \
+                 feat/already-landed (landed by ancestry in main)"
+            ),
+            "{rendered}"
+        );
     }
 
     #[test]

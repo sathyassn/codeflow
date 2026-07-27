@@ -209,9 +209,9 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs"]
-epics: [EPC-001]
-adrs: [ADR-0013]
+verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-001, EPC-004]
+adrs: [ADR-0013, ADR-0044]
 ```
 
 `codeflow orient` generates the session-start digest live (≤30 lines,
@@ -226,6 +226,12 @@ both harnesses — plain-text stdout each injects as session context — so ther
 no per-harness duplication. Headless `codex exec` does not fire project hooks
 (ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
 JSON wiring, while live firing rests on Codex's documented hooks contract.
+
+`codeflow status` also emits a read-only cleanup inventory for linked
+worktrees and unattached local branches. Against the locally known target it
+distinguishes clean ancestry/patch-equivalent resources, dirty work, and
+unproven work; the report performs no mutation and never substitutes for an
+active-owner check (ADR-0044).
 
 ## CAP-008 — remote-protect-doctor
 
@@ -300,9 +306,9 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
-epics: [EPC-002]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
+epics: [EPC-002, EPC-004]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -356,6 +362,17 @@ owning primary controls internal routing, and the selected Claude primary owns
 Claude-side judgment.
 Each run records actual model versions, effort, routing evidence, and escalation
 rationale rather than inferring usage state.
+
+For a material changed journey, the end-to-end plan maps the affected entry,
+in-project components, persistence/queue, external seam, infrastructure/runtime
+wiring, observable result, and recovery path. One faithful vertical run crosses
+every applicable changed boundary; disconnected unit/integration passes and a
+mocked changed service are not whole-flow proof. Parallel UI tasks allocate
+task-owned isolated browser state, applicable listening/application endpoints,
+namespaced test data, run-scoped artifacts, and teardown evidence without
+attaching to the operator's browser or active desktop. The project supplies its
+own allocator/ranges, namespace, artifact, retention, and cleanup commands
+during customization (ADR-0044).
 
 For multi-task work, both approvals cover one acyclic Plan vN graph. Ordinary
 completion uses bare edges; only genuine pre-approved decisions use observable
@@ -419,9 +436,9 @@ id: CAP-012
 name: scaffold-customize
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs"]
-epics: []
-adrs: [ADR-0025]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-004]
+adrs: [ADR-0025, ADR-0044]
 ```
 
 `/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
@@ -442,6 +459,11 @@ network, live-search, and approval posture rather than trusting comments. It
 also canaries the task's
 research, GitHub, stack, coverage/security, browser/UI, design, and
 project-specific MCP tools with brokered authentication and no raw secrets.
+For concurrent browser work it additionally settles the project's resource
+contract: isolated profile/context, ports only where a listener or local
+service needs them, namespaced test data, run-scoped artifacts, and owned
+teardown/release verification. CodeFlow never supplies universal port numbers
+or reuses the operator's browser profile.
 
 Analysis-then-propose: one prioritized report first, then fixes applied
 interactively on a working branch through a PR; it never auto-installs a tool or
@@ -457,9 +479,9 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md"]
-epics: [EPC-003]
-adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-003, EPC-004]
+adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,

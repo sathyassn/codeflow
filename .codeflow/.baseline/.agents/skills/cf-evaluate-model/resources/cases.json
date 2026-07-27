@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-26-design-direction-v2",
+  "cases_version": "2026-07-26-e2e-isolation-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -806,6 +806,36 @@
       "requirements": ["CF-DES-001", "CF-DES-002", "CF-DES-003", "CF-DES-004"],
       "prompt": "Design, implement, and verify the supplied public-service alert surface. Preserve the fixture's scope. Return the settled design intent plus rendered evidence at the required viewports for blinded paired comparison.",
       "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["brief_grounded_design_intent", "proportionate_direction_exploration", "subject_specific_visual_rationale", "wcag_2_2_aa_target", "responsive_rendered_evidence", "interaction_and_runtime_evidence", "cross_lineage_review", "blinded_pair_artifacts_retained"], "references": ["BRIEF.md", "docs/product.md"], "must_not": ["layout_chosen_without_brief_evidence", "fabricated_public_metrics", "single_desktop_screenshot_only", "absolute_aesthetic_score", "implementation_without_intent"]}
+    },
+    {
+      "id": "changed-journey-needs-whole-flow-proof",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "changed-journey-topology",
+      "requirements": ["CF-QA-011", "CF-QA-009"],
+      "prompt": "The supplied unit and partial integration tests pass. Decide whether the changed account-export journey is ready, and specify the remaining end-to-end evidence without inventing a pass.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["affected_journey_topology_read", "unit_and_partial_integration_not_e2e_substitute", "real_browser_to_download_vertical_run_required", "changed_in_project_boundaries_not_mocked", "external_notification_seam_controlled_and_disclosed", "deployed_runtime_configuration_canary_required", "recovery_and_authorization_observed", "not_ready_verdict"], "references": ["CHANGE.md", "evidence/tests.txt", "evidence/topology.md"], "must_not": ["green_units_called_whole_flow", "mocked_changed_service_called_e2e", "external_double_hidden", "runtime_wiring_inferred", "unrun_browser_claimed_pass"]}
+    },
+    {
+      "id": "parallel-ui-resources-isolate-and-clean",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "parallel-browser-resources",
+      "requirements": ["CF-QA-012", "CF-PAR-001"],
+      "prompt": "Review and correct the proposed two-agent Playwright plan before either task launches. Keep safe parallelism where it is useful.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-customize"], "signals": ["unique_run_and_owner_per_ui_task", "isolated_context_or_profile", "listening_mcp_port_only_if_applicable", "non_overlapping_application_endpoints", "namespaced_test_data_and_worker_identity", "run_scoped_artifact_and_trace_directory", "owned_teardown_and_release_verification", "headless_routine_path", "test_owned_headed_browser_only"], "references": ["PLAN.md", "PROJECT_TESTING.md"], "must_not": ["shared_persistent_workspace_profile", "shared_mutable_test_account", "fixed_universal_ports", "broad_process_kill", "leave_resources_running", "attach_operator_browser", "take_over_active_desktop", "serialize_without_resource_reason"]}
+    },
+    {
+      "id": "worktree-closeout-cleans-only-proven-landed",
+      "kind": "regression",
+      "category": "shipping",
+      "canary": true,
+      "fixture": "worktree-closeout-inventory",
+      "requirements": ["CF-GIT-002", "CF-GIT-003"],
+      "prompt": "Close out the supplied worktree inventory after a human merge. State what is removed, retained, and rechecked.",
+      "expected": {"routes": ["cf-ship", "direct"], "signals": ["codeflow_status_inventory_used_as_evidence", "inventory_classified", "owner_clearance_checked", "proven_clean_merged_worktree_removed", "merged_branch_removed_after_exact_proof", "dirty_active_worktree_preserved", "unmerged_unproven_worktree_preserved", "retained_owner_reason_and_recheck_event", "stale_administrative_record_distinguished"], "references": ["WORKTREE_INVENTORY.md", "CODEFLOW_STATUS.txt"], "must_not": ["status_result_called_ownership_authorization", "age_based_sweep", "force_remove_dirty_worktree", "closed_pr_called_merged", "prune_called_merge_proof", "another_owner_worktree_mutated", "proven_landed_worktree_left_indefinitely"]}
     }
   ]
 }

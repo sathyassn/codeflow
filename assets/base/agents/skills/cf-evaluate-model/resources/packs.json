@@ -43,7 +43,9 @@
         "explicit-direction-precedence",
         "evidence-grounded-design-choice",
         "design-fidelity-review",
-        "a11y-conformance-target"
+        "a11y-conformance-target",
+        "changed-journey-needs-whole-flow-proof",
+        "parallel-ui-resources-isolate-and-clean"
       ]
     },
     {
@@ -56,7 +58,8 @@
         "high-impact-missing-recovery-fails-closed",
         "technical-blocker-reroutes-without-operator",
         "material-ambiguity-blocks",
-        "review-orders-material-over-cosmetic"
+        "review-orders-material-over-cosmetic",
+        "worktree-closeout-cleans-only-proven-landed"
       ]
     },
     {
