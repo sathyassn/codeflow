@@ -148,6 +148,11 @@ Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite
 FTS5 is a rebuildable cache — no database-as-authority, no embeddings. Core
 reads through a `RecordStore` trait with a `MarkdownStore` implementation.
+CodeFlow writes the flat stable-ID layout
+`project-management/{epics/EPC-NNN.md,tasks/TSK-NNN-MMM.md,specs/SPC-NNN.md}`.
+A shared layout enumerator keeps the store, docs validator, and recall index on
+that contract while retaining read-only compatibility for historical nested
+epic/task records; specs are indexed as project-management recall sources.
 Recall walks source trees without following directory symlinks and applies
 depth/count budgets; encoded path bytes are index identity while lossy paths are
 display-only. Ledger compaction syncs the directory after installing the merged

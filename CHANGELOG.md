@@ -22,6 +22,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Durable work now has one explicit, adaptable authority.** Full-tier
+  scaffolds document the canonical flat `EPC-NNN` / `TSK-NNN-MMM` / `SPC-NNN`
+  layout, monorepo area decomposition, serialized ID allocation across
+  worktrees, and loose-link coexistence with external trackers or planning
+  methods. Epic/task templates add opaque external references, affected
+  surfaces, a proportionate execution contract, and honest closeout: bounded
+  discoveries carry evidence, while material deviations require dual-approved
+  Plan vN+1 before work continues. Store, validation, and recall now share one
+  symlink-safe record enumerator; legacy nested records remain readable and
+  frozen specs become recall-findable. Provider-neutral behavioral canaries
+  guard external-method ownership and reject host-local databases as shared
+  team truth without rejecting SQLite as a rebuildable cache.
 - **End-to-end and concurrent UI verification now own their real boundaries
   (ADR-0044).** Material changed journeys map the affected frontend, service,
   state, external-seam, infrastructure, runtime, outcome, and recovery path,

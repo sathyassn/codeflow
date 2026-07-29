@@ -13,7 +13,7 @@
 //! | `ledger`     | `<state>/ledger/{work-graph,config}/*.jsonl` (per line) |
 //! | `session`    | `<state>/ledger/{sessions,memory-events}/*.jsonl` (per line) |
 //! | `adr`        | `docs/decisions/*.md` |
-//! | `pm`         | `project-management/{epics,tasks}/*.md` |
+//! | `pm`         | `project-management/{epics,tasks,specs}/*.md` |
 //! | `capability` | `docs/capabilities.md` |
 //! | `product`    | `docs/product.md` |
 //! | `plan`       | `docs/plan/**/*.md` (recursive) |
@@ -342,13 +342,13 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
         sources.push(source_file(root, abs, "adr"));
     }
 
-    for sub in ["epics", "tasks"] {
-        // Recursive: the canonical layout nests
-        // (`epics/EPC-001/EPC-001.md`, `epics/EPC-001/tasks/TSK-*.md`), so a
-        // flat read misses dogfooded epics/tasks entirely.
-        for abs in md_files_under(&root.join("project-management").join(sub)) {
-            sources.push(source_file(root, abs, "pm"));
-        }
+    let pm_root = root.join("project-management");
+    for abs in crate::workgraph::layout::epic_record_files(&pm_root)
+        .into_iter()
+        .chain(crate::workgraph::layout::task_record_files(&pm_root))
+        .chain(crate::workgraph::layout::spec_record_files(&pm_root))
+    {
+        sources.push(source_file(root, abs, "pm"));
     }
 
     let caps = root.join("docs/capabilities.md");
@@ -911,6 +911,33 @@ mod tests {
             "nested epic/task files must be indexed as pm: {:?}",
             report.results
         );
+    }
+
+    #[test]
+    fn test_recall_indexes_frozen_specs() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        make_repo(repo.path());
+        let specs = repo.path().join("project-management/specs");
+        fs::create_dir_all(&specs).unwrap();
+        fs::write(
+            specs.join("SPC-009.md"),
+            "---\ntitle: Quokka wire protocol\nstatus: implemented\n---\n\n\
+             # Quokka wire protocol\n\nPins the quokka frame checksum.\n",
+        )
+        .unwrap();
+
+        let report = recall(
+            &home.path().join("recall.db"),
+            &[target("r1", repo.path())],
+            "quokka checksum",
+            &RecallOptions::default(),
+        )
+        .unwrap();
+
+        assert!(report.results.iter().any(|result| {
+            result.path == "project-management/specs/SPC-009.md" && result.kind == "pm"
+        }));
     }
 
     #[test]

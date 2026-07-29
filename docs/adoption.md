@@ -55,6 +55,24 @@ tier is a clean superset of the one below.
 | `--standard` (default) | + the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine, the full contract, the test gate, recall capture, and harness integration | Code projects |
 | `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Programs whose work outlives sessions |
 
+### Organize durable work without duplicating it
+
+The full tier writes `epics/EPC-NNN.md`, `tasks/TSK-NNN-MMM.md`, and optional
+hand-authored `specs/SPC-NNN.md`; filenames are stable IDs, while titles can
+evolve. A single-surface repo and a shared-release monorepo use the same
+repo-level namespace. In a monorepo, tasks normally align to areas such as a
+shared contract, backend, web, mobile, or infrastructure, while the epic owns
+their cross-area outcome and integration evidence.
+
+CodeFlow is the natural authority for finite repo-local gated work. Keep the
+team's external tracker authoritative when work is multi-team, cross-repo,
+assignment/roadmap/SLA driven, or already owned by an established planning
+method. Link opaque IDs or URLs through `external_refs`; do not mirror status,
+specs, or task trees. A host-local database may cache/index records but is not a
+shared team authority. `/cf-customize` records this project-specific choice, and
+the agent-facing decision model lives in
+`cf-method/references/project-organization.md`.
+
 ## Greenfield — an empty directory
 
 ```sh

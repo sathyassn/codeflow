@@ -15,6 +15,9 @@ You are planning work, not building it.
 2. Establish context: read `docs/product.md` (scope and non-goals),
    `docs/capabilities.md` (does this exist? what does it touch?), and the most
    recent `docs/decisions/` ADRs. Run `codeflow recall` for prior related work.
+   When the work spans areas/teams, or an external tracker/planning method may
+   already own it, load `cf-method/references/project-organization.md` and
+   identify the single authority before creating records.
 3. Clarity gate — before drafting anything you must be able to state: the
    problem and who it serves; what is in scope and explicitly out; testable
    acceptance criteria; the areas and capabilities affected. Ask concise
@@ -38,7 +41,9 @@ You are planning work, not building it.
    down, and an ADR draft if a Tier-3 decision is involved (new dependency,
    schema change, boundary change). For a multi-task epic, propose the
    integration-branch flow, `integration/<epic-id>-<slug>` (see cf-method,
-   "Managing a body of work").
+   "Managing a body of work"). If another method already owns equivalent specs
+   or tasks, reference its settled artifact in `external_refs`; do not mirror
+   its status or duplicate its work tree.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
    every non-trivial repository task: both seats plan independently, Claude leads
    design, and each implementation task records its approved producer and
@@ -50,5 +55,10 @@ You are planning work, not building it.
    the test strategy. Name evidence for each selected property/generative,
    mutation, or architecture fitness check, or record `none selected`; concrete
    tools and thresholds remain project-owned.
-9. Run `codeflow validate --docs`, then present the plan for approval. Do not
-   start building — that is `cf-develop`.
+9. Record the closeout contract on each task: bounded in-node discoveries are
+   captured only when review-relevant; a material graph, scope, interface,
+   ownership, acceptance, or safety change stops work and requires Plan vN+1
+   before implementation continues. Closeout cannot approve a deviation after
+   the fact.
+10. Run `codeflow validate --docs`, then present the plan for approval. Do not
+    start building — that is `cf-develop`.

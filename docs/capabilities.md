@@ -190,12 +190,12 @@ area: engine
 status: shipped
 verified_by: ["cargo test recall::", "cargo test registry::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001]
-adrs: []
+adrs: [ADR-0045]
 ```
 
 `codeflow recall [--all] "<query>"` searches project memory — ledger events,
-session summaries, ADRs, epics, capabilities — via bundled SQLite FTS5, with
-coverage gaps disclosed. The cross-repo view comes from
+session summaries, ADRs, epics, tasks, frozen specs, and capabilities — via
+bundled SQLite FTS5, with coverage gaps disclosed. The cross-repo view comes from
 `~/.codeflow/registry.json`, a flock'd registry upserted on every command run;
 a lazy view at query time, not a daemon.
 Recursive source discovery skips directory symlinks and obeys depth/count
@@ -308,7 +308,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002, EPC-004]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -380,10 +380,13 @@ guards. Task frontmatter keeps non-executable structural `depends_on` data so
 `validate --docs` can reject malformed, dangling, self-referential, duplicate,
 or cyclic topology without interpreting branch readiness. Material graph or
 cross-task contract changes force Plan vN+1; in-node implementation detail does
-not. Verification planning selects property tests, targeted mutation testing,
-or project-owned architecture fitness checks only when the risk and oracle
-evidence earn them. CodeFlow adds neither a scheduler nor mandatory
-consuming-project tools.
+not. Review-relevant bounded discoveries persist at task closeout; closeout
+cannot retroactively approve a material change. Project organization keeps one
+authoritative work-item home and links, rather than mirrors, external planning
+methods or trackers. Verification planning selects property tests, targeted
+mutation testing, or project-owned architecture fitness checks only when the
+risk and oracle evidence earn them. CodeFlow adds neither a scheduler nor
+mandatory consuming-project tools.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, serialized

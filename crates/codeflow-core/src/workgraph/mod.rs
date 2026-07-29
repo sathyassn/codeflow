@@ -9,6 +9,7 @@
 
 pub mod allocate;
 mod format_id;
+pub(crate) mod layout;
 pub mod store;
 
 pub use allocate::{create_epic, create_task, next_epic_id, next_task_id, NewRecord};

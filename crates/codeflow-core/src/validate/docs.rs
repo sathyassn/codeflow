@@ -131,7 +131,7 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     let epics_dir = repo_root.join("project-management/epics");
     let epics = if epics_dir.is_dir() {
         Some(
-            epic_files(&epics_dir)
+            crate::workgraph::layout::epic_record_files(&repo_root.join("project-management"))
                 .iter()
                 .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
                 .map(ToString::to_string)
@@ -291,7 +291,7 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
         return; // absence already noted
     }
 
-    for path in epic_files(&epics_dir) {
+    for path in crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")) {
         let rel = path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf();
         let Ok(content) = std::fs::read(&path) else {
             continue;
@@ -341,7 +341,7 @@ struct TaskGraphRecord {
 }
 
 fn lint_tasks(repo_root: &Path, report: &mut DocsLintReport) {
-    let files = task_files(repo_root);
+    let files = crate::workgraph::layout::task_record_files(&repo_root.join("project-management"));
     if files.is_empty() {
         if !repo_root.join("project-management/tasks").is_dir() {
             report
@@ -593,67 +593,6 @@ fn adr_files(dir: &Path) -> Vec<PathBuf> {
                 .is_some_and(|n| n.starts_with("ADR-"))
         })
         .collect()
-}
-
-/// Epic markdown files under `dir`, accepting BOTH layouts:
-/// * flat — `epics/EPC-001.md`
-/// * nested — `epics/EPC-001/EPC-001.md`, where the epic gets its own
-///   directory so `tasks/` and specs can live alongside it.
-///
-/// In the nested layout only the epic file itself (named for its directory) is
-/// returned; sibling task/spec files are ignored. Sorted for stable output.
-fn epic_files(dir: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return paths;
-    };
-    for entry in rd.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "md") {
-            paths.push(path);
-        } else if path.is_dir() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                let nested = path.join(format!("{name}.md"));
-                if nested.is_file() {
-                    paths.push(nested);
-                }
-            }
-        }
-    }
-    paths.sort();
-    paths
-}
-
-/// Task records from the canonical flat directory and optional nested epic
-/// task directories. Directory symlinks are not followed.
-fn task_files(repo_root: &Path) -> Vec<PathBuf> {
-    let mut paths = task_md_files(&repo_root.join("project-management/tasks"));
-    let epics = repo_root.join("project-management/epics");
-    let Ok(entries) = std::fs::read_dir(epics) else {
-        return paths;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        // DirEntry::file_type does not follow symlinks, so symlinked
-        // directories are not classified as directories here.
-        if file_type.is_dir() {
-            paths.extend(task_md_files(&entry.path().join("tasks")));
-        }
-    }
-    paths.sort();
-    paths
-}
-
-fn task_md_files(dir: &Path) -> Vec<PathBuf> {
-    let Ok(metadata) = std::fs::symlink_metadata(dir) else {
-        return Vec::new();
-    };
-    if !metadata.is_dir() {
-        return Vec::new();
-    }
-    md_files(dir)
 }
 
 /// All `.md` files directly in a directory, sorted.

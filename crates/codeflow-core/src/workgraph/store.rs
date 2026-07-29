@@ -209,79 +209,49 @@ impl MarkdownStore {
         Ok((record, body.to_string()))
     }
 
-    fn scan<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<(PathBuf, T)>, StoreError> {
+    fn scan<T: serde::de::DeserializeOwned>(paths: Vec<PathBuf>) -> Vec<(PathBuf, T)> {
         let mut records = Vec::new();
-        if !dir.is_dir() {
-            return Ok(records);
-        }
-        for path in record_files(dir)? {
+        for path in paths {
             match Self::read_record::<T>(&path) {
                 Ok((record, _body)) => records.push((path, record)),
                 Err(e) => eprintln!("warn: store: skipping {}: {e}", path.display()),
             }
         }
-        Ok(records)
+        records
     }
 
-    fn find_epic(&self, id: &str) -> Result<Option<(PathBuf, Epic, String)>, StoreError> {
-        find_by(&self.epics_dir(), |e: &Epic| e.id == id)
+    fn find_epic(&self, id: &str) -> Option<(PathBuf, Epic, String)> {
+        find_by(
+            crate::workgraph::layout::epic_record_files(&self.root),
+            |e: &Epic| e.id == id,
+        )
     }
 
-    fn find_task(&self, id: &str) -> Result<Option<(PathBuf, Task, String)>, StoreError> {
-        find_by(&self.tasks_dir(), |t: &Task| t.id == id)
+    fn find_task(&self, id: &str) -> Option<(PathBuf, Task, String)> {
+        find_by(
+            crate::workgraph::layout::task_record_files(&self.root),
+            |t: &Task| t.id == id,
+        )
     }
 }
 
-/// Scan `dir` for the first record matching `pred`, returning its path,
-/// record, and preserved body.
+/// Scan record `paths` for the first match, returning its path, record, and
+/// preserved body.
 fn find_by<T: serde::de::DeserializeOwned>(
-    dir: &Path,
+    paths: Vec<PathBuf>,
     pred: impl Fn(&T) -> bool,
-) -> Result<Option<(PathBuf, T, String)>, StoreError> {
-    if !dir.is_dir() {
-        return Ok(None);
-    }
-    for path in record_files(dir)? {
+) -> Option<(PathBuf, T, String)> {
+    for path in paths {
         match MarkdownStore::read_record::<T>(&path) {
             Ok((record, body)) => {
                 if pred(&record) {
-                    return Ok(Some((path, record, body)));
+                    return Some((path, record, body));
                 }
             }
             Err(e) => eprintln!("warn: store: skipping {}: {e}", path.display()),
         }
     }
-    Ok(None)
-}
-
-/// All record markdown files under `dir`, accepting BOTH layouts:
-/// * flat — `<dir>/EPC-001.md`
-/// * nested — `<dir>/EPC-001/EPC-001.md`, where a record gets its own
-///   directory so related files (tasks, specs) can live alongside it.
-///
-/// In the nested case only the record file named for its directory is
-/// returned; sibling files are ignored. Sorted for stable ordering.
-///
-/// # Errors
-///
-/// Returns `StoreError::Io` if `dir` cannot be read.
-fn record_files(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    for entry in fs::read_dir(dir)?.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "md") {
-            paths.push(path);
-        } else if path.is_dir() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                let nested = path.join(format!("{name}.md"));
-                if nested.is_file() {
-                    paths.push(nested);
-                }
-            }
-        }
-    }
-    paths.sort();
-    Ok(paths)
+    None
 }
 
 /// Split markdown content into (frontmatter yaml, body).
@@ -313,19 +283,20 @@ impl RecordStore for MarkdownStore {
     }
 
     fn get_epic(&self, id: &str) -> Result<Option<Epic>, StoreError> {
-        Ok(self.find_epic(id)?.map(|(_, epic, _)| epic))
+        Ok(self.find_epic(id).map(|(_, epic, _)| epic))
     }
 
     fn get_epic_by_format_id(&self, format_id: &str) -> Result<Option<Epic>, StoreError> {
-        Ok(
-            find_by(&self.epics_dir(), |e: &Epic| e.format_id == format_id)?
-                .map(|(_, epic, _)| epic),
+        Ok(find_by(
+            crate::workgraph::layout::epic_record_files(&self.root),
+            |e: &Epic| e.format_id == format_id,
         )
+        .map(|(_, epic, _)| epic))
     }
 
     fn update_epic(&self, id: &str, update: EpicUpdate) -> Result<(), StoreError> {
         let (path, _epic, body) = self
-            .find_epic(id)?
+            .find_epic(id)
             .ok_or_else(|| StoreError::NotFound(format!("epic:{id}")))?;
         let mut fields = Vec::new();
         if let Some(status) = update.status {
@@ -345,7 +316,7 @@ impl RecordStore for MarkdownStore {
     }
 
     fn list_epics(&self, filter: EpicFilter) -> Result<Vec<Epic>, StoreError> {
-        let records = Self::scan::<Epic>(&self.epics_dir())?;
+        let records = Self::scan::<Epic>(crate::workgraph::layout::epic_record_files(&self.root));
         Ok(records
             .into_iter()
             .map(|(_, epic)| epic)
@@ -359,19 +330,20 @@ impl RecordStore for MarkdownStore {
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, StoreError> {
-        Ok(self.find_task(id)?.map(|(_, task, _)| task))
+        Ok(self.find_task(id).map(|(_, task, _)| task))
     }
 
     fn get_task_by_format_id(&self, format_id: &str) -> Result<Option<Task>, StoreError> {
-        Ok(
-            find_by(&self.tasks_dir(), |t: &Task| t.format_id == format_id)?
-                .map(|(_, task, _)| task),
+        Ok(find_by(
+            crate::workgraph::layout::task_record_files(&self.root),
+            |t: &Task| t.format_id == format_id,
         )
+        .map(|(_, task, _)| task))
     }
 
     fn update_task(&self, id: &str, update: TaskUpdate) -> Result<(), StoreError> {
         let (path, _task, body) = self
-            .find_task(id)?
+            .find_task(id)
             .ok_or_else(|| StoreError::NotFound(format!("task:{id}")))?;
         let mut fields = Vec::new();
         if let Some(status) = update.status {
@@ -394,7 +366,7 @@ impl RecordStore for MarkdownStore {
     }
 
     fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, StoreError> {
-        let records = Self::scan::<Task>(&self.tasks_dir())?;
+        let records = Self::scan::<Task>(crate::workgraph::layout::task_record_files(&self.root));
         Ok(records
             .into_iter()
             .map(|(_, task)| task)
@@ -814,6 +786,36 @@ created: 2026-06-11
         assert_eq!(epics.len(), 2, "both layouts must coexist");
         assert_eq!(epics[0].format_id, "EPC-001");
         assert_eq!(epics[1].format_id, "EPC-002");
+    }
+
+    #[test]
+    fn test_scan_finds_and_updates_legacy_nested_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+        let nested = store.root().join("epics/EPC-001/tasks/TSK-001-001.md");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        MarkdownStore::write_record(
+            &nested,
+            &make_task("task-01a", "TSK-001-001", "epic-01a"),
+            "## keep\n",
+        )
+        .unwrap();
+
+        assert_eq!(store.list_tasks(TaskFilter::default()).unwrap().len(), 1);
+        store
+            .update_task(
+                "task-01a",
+                TaskUpdate {
+                    status: Some(TaskStatus::Complete),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let after = fs::read_to_string(&nested).unwrap();
+        assert!(after.contains("status: complete"));
+        assert!(after.contains("## keep"));
+        assert!(!store.root().join("tasks/TSK-001-001.md").exists());
     }
 
     #[test]

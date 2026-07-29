@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-26-e2e-isolation-v1",
+  "requirements_version": "2026-07-28-project-organization-v1",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -444,6 +444,24 @@
       "sources": [
         {"path": "AGENTS.md", "markers": ["At orientation and after a landing, use `codeflow status`", "not ownership authorization", "never use age, name resemblance, or `git worktree prune` as merge proof"]},
         {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["use `codeflow status` as the local worktree/branch inventory", "Confirm the task owner is inactive", "only removes stale administrative records"]}
+      ]
+    },
+    {
+      "id": "CF-PM-001",
+      "level": "hard",
+      "statement": "Durable work has one authoritative home: CodeFlow uses flat stable-ID Git records for repo-local gated work, links rather than mirrors external trackers or planning methods, and never promotes a host-local database from rebuildable cache or single-host runtime state into shared team truth.",
+      "sources": [
+        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["The system that owns an item's status, acceptance, and lifecycle is its authority", "`external_refs` is a list of opaque links or IDs, not a status mirror", "Do not make an untracked SQLite file or another host-local database the shared team authority"]},
+        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["Project shape and work authority", "never status mirroring or a host-local database as shared team truth"]}
+      ]
+    },
+    {
+      "id": "CF-PM-002",
+      "level": "hard",
+      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives dual-approved Plan vN+1 before work continues, never retrospective approval in closeout.",
+      "sources": [
+        {"path": "project-management/templates/task.md", "markers": ["Bounded discoveries/deviations", "never legalized here after implementation", "settle Plan vN+1 with both primary seats, then continue"]},
+        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["bounded in-node discoveries are captured only when review-relevant", "Closeout cannot approve a deviation after the fact"]}
       ]
     }
   ]

@@ -531,6 +531,45 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
 }
 
 #[test]
+fn project_organization_has_one_authority_and_honest_closeout() {
+    let reference = normalize_whitespace(&read(
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+    ));
+    let task = normalize_whitespace(&read("assets/base/pm/task.md.tmpl"));
+    let epic = normalize_whitespace(&read("assets/base/pm/epic.md.tmpl"));
+
+    for required in [
+        "epics/EPC-NNN.md",
+        "tasks/TSK-NNN-MMM.md",
+        "specs/SPC-NNN.md",
+        "The system that owns an item's status, acceptance, and lifecycle is its authority",
+        "not a status mirror",
+        "host-local database the shared team authority",
+        "do not import or paraphrase an equivalent spec/task tree",
+        "stop; settle and dual-approve Plan vN+1 before continuing",
+    ] {
+        assert!(
+            reference.contains(required),
+            "project organization lost required marker: {required}"
+        );
+    }
+
+    for required in [
+        "external_refs: []",
+        "Bounded discoveries/deviations",
+        "never legalized here after implementation",
+        "Shared engineering/security/testing doctrine stays in AGENTS.md",
+    ] {
+        assert!(
+            task.contains(required),
+            "task template lost required marker: {required}"
+        );
+    }
+    assert!(epic.contains("external_refs: []"));
+    assert!(epic.contains("Affected surfaces and interfaces"));
+}
+
+#[test]
 fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
     let full_agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
     let minimal_agents = normalize_whitespace(&read("assets/base/AGENTS.minimal.md.tmpl"));

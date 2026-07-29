@@ -227,6 +227,16 @@ confirms the final content.
   outside its managed region. Do not repeat the project brief or common commands
   already owned by `docs/product.md`, `docs/architecture.md`, or `AGENTS.md`.
   **Never edit inside either managed block**—`codeflow update` owns it.
+- **Project shape and work authority** — identify whether this is a
+  single-surface repo, a shared-release monorepo, or independently governed
+  products in one tree; name the durable area boundaries and nearest local
+  instructions. For each class of work, settle one authority: CodeFlow Git
+  records, an external team tracker, an existing planning method, or a
+  high-volume issue queue. Load
+  `cf-method/references/project-organization.md`; configure only opaque loose
+  links between authorities, never status mirroring or a host-local database as
+  shared team truth. Existing project practice wins when it is coherent and
+  durable—propose migration only for an evidenced failure.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer

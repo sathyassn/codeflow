@@ -68,7 +68,8 @@
       "includes": [
         "orchestration-core",
         "quality-core",
-        "safety-governance"
+        "safety-governance",
+        "project-organization"
       ],
       "cases": []
     },
@@ -91,6 +92,17 @@
         "design-fidelity-review",
         "a11y-conformance-target",
         "design-direction-rendered"
+      ]
+    },
+    {
+      "id": "project-organization",
+      "description": "Focused diagnostics for durable work authority, external planning-method coexistence, and local-cache boundaries.",
+      "includes": [],
+      "cases": [
+        "external-method-keeps-work-authority",
+        "local-database-is-not-team-work-authority",
+        "graph-mutation-creates-new-version",
+        "in-node-detail-does-not-replan"
       ]
     }
   ]

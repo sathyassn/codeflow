@@ -7,6 +7,7 @@ work_type: feat          # feat | fix | docs | refactor | test | chore | ci | ho
 capabilities: []         # CAP-### ids this epic creates or changes
 adrs: []                 # ADR ids consumed or produced
 specs: []                # SPC-### inputs, if any
+external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
 ---
 
@@ -30,6 +31,13 @@ created: {{DATE}}
 ## Out of scope
 
 <!-- What this epic deliberately does not do. Check docs/product.md non-goals. -->
+
+## Affected surfaces and interfaces
+
+<!-- Name the capabilities, areas/teams, user journeys, shared contracts, and
+     integration boundaries affected. In a monorepo, tasks normally align to
+     these surfaces while this epic owns the cross-area outcome. Omit details
+     already owned by architecture or a linked authoritative specification. -->
 
 ## Tasks
 

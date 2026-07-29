@@ -259,6 +259,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "claude/skills/cf-method/references/project-organization.md"
+dest = ".claude/skills/cf-method/references/project-organization.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "claude/skills/cf-delegate/SKILL.md"
 dest = ".claude/skills/cf-delegate/SKILL.md"
 ownership = "managed"
@@ -457,6 +463,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-method/SKILL.md"
 dest = ".agents/skills/cf-method/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-method/references/project-organization.md"
+dest = ".agents/skills/cf-method/references/project-organization.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

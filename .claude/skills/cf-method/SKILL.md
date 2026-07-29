@@ -84,8 +84,26 @@ ID, `codeflow validate --docs` shall exit non-zero in CI."
 Bad criterion: "validation works correctly" (not testable, no check named), or a
 14-item list restating the implementation plan (that is design, not acceptance).
 
-Right-size the epic: it should ship in days, not weeks. If the criteria list
-will not fit on one screen, split the epic.
+Right-size the epic for one coherent delivery cycle—normally a small number of
+agent sessions or PRs after its load-bearing questions are settled. Estimate
+from dependencies, remaining discovery, implementation complexity, integration,
+and verification rather than translating a human staffing calendar. If the
+criteria list will not fit on one screen, split the epic.
+
+## Project organization and work authority
+
+The full tier writes flat, stable-ID records:
+`epics/EPC-NNN.md`, `tasks/TSK-NNN-MMM.md`, and `specs/SPC-NNN.md`.
+Historical nested epic/task records remain read-compatible but are not written.
+One system owns each work item's status and acceptance; external trackers or
+planning methods are linked, never mirrored, and host-local databases remain
+rebuildable caches rather than team truth.
+
+Load `references/project-organization.md` when choosing an item home, planning a
+monorepo or cross-area body, coexisting with another planning method/tracker, or
+recording implementation discoveries at closeout. It contains the flexible
+decision model and template contract; do not load it for an obvious bounded
+task.
 
 ## Managing a body of work
 

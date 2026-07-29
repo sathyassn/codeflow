@@ -1,16 +1,19 @@
-//! Collision-free id allocation and file scaffolding for new epics and tasks.
+//! Deterministic id allocation and file scaffolding for new epics and tasks.
 //!
 //! Epic/task format ids (`EPC-NNN`, `TSK-NNN-MMM`) are hand-picked today, so
-//! two agents in parallel worktrees can grab the same number. This module
-//! allocates the next free id by scanning the `project-management/` tree for
-//! the ids already present on disk (max existing + 1, restarting per epic for
-//! tasks) and renders the pm template into place — offline and deterministic.
+//! two agents in independent worktrees can still propose the same number.
+//! Within one checkout, this module allocates the next free id by scanning the
+//! `project-management/` tree (max existing + 1, restarting per epic for
+//! tasks) and creates the file exclusively. Parallel plans therefore serialize
+//! work-item allocation or resolve the visible same-path merge conflict; the
+//! allocator is not a distributed id service.
 //!
 //! Allocation scans *files*, not parsed records: an id present on disk is
 //! reserved even when its frontmatter is malformed or template-shaped, so the
 //! allocator never reissues a number the store's parser would silently skip.
-//! Both the flat (`epics/EPC-001.md`) and nested (`epics/EPC-001/EPC-001.md`,
-//! `epics/EPC-001/tasks/TSK-001-001.md`) layouts are recognized.
+//! `CodeFlow` writes the canonical flat layout. The historical nested layout
+//! (`epics/EPC-001/EPC-001.md`,
+//! `epics/EPC-001/tasks/TSK-001-001.md`) remains read-compatible.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,8 +85,7 @@ fn collect_task_seqs(dir: &Path, out: &mut Vec<(u32, u32)>) {
 }
 
 /// Existing `(epic_seq, task_seq)` pairs, from the canonical flat `tasks/` dir
-/// and any nested `epics/EPC-NNN/tasks/` dirs (both are respected so a human's
-/// nested tasks are never collided with).
+/// and legacy nested `epics/EPC-NNN/tasks/` dirs (both reserve their ids).
 fn scan_task_seqs(pm_root: &Path) -> Vec<(u32, u32)> {
     let mut out = Vec::new();
     collect_task_seqs(&pm_root.join("tasks"), &mut out);

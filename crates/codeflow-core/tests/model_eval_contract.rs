@@ -1256,11 +1256,14 @@ fn task_graph_and_verification_strength_canaries_pin_both_directions() {
                     "material_graph_mutation_identified",
                     "plan_v2_created",
                     "both_primary_seats_reapprove_or_block",
+                    "closeout_cannot_retroactively_approve_change",
+                    "task_closeout_names_reapproved_plan",
                 ][..],
                 &[
                     "silent_node_or_edge_addition",
                     "reuse_v1_approvals",
                     "treat_shared_owner_change_as_in_node_detail",
+                    "closeout_used_as_retroactive_approval",
                 ][..],
             ),
             (
@@ -1269,11 +1272,13 @@ fn task_graph_and_verification_strength_canaries_pin_both_directions() {
                     "in_node_detail_identified",
                     "plan_v1_remains_current",
                     "valid_topological_reorder_allowed",
+                    "review_relevant_discovery_recorded_at_closeout",
                 ][..],
                 &[
                     "unnecessary_plan_v2",
                     "ordinary_file_prediction_treated_as_scope_change",
                     "worker_choice_treated_as_new_node",
+                    "implementation_diary_added",
                 ][..],
             ),
             (
@@ -1302,6 +1307,48 @@ fn task_graph_and_verification_strength_canaries_pin_both_directions() {
                     "unwarranted_mutation_run",
                     "speculative_fitness_check",
                     "testing_waived_entirely",
+                ][..],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn project_organization_canaries_pin_authority_without_vendor_coupling() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "external-method-keeps-work-authority",
+                &[
+                    "existing_work_authority_identified",
+                    "external_spec_and_tasks_not_duplicated",
+                    "opaque_cross_reference_only",
+                    "codeflow_execution_controls_applied",
+                    "cross_artifact_consistency_checked",
+                ][..],
+                &[
+                    "external_status_mirrored",
+                    "spec_tree_copied",
+                    "task_tree_copied",
+                    "brand_specific_adapter_required",
+                    "local_database_promoted_to_team_truth",
+                ][..],
+            ),
+            (
+                "local-database-is-not-team-work-authority",
+                &[
+                    "team_concurrency_and_authority_needs_identified",
+                    "untracked_local_database_rejected_as_shared_truth",
+                    "sqlite_retained_as_rebuildable_local_index",
+                    "git_or_networked_authority_required",
+                ][..],
+                &[
+                    "sqlite_banned_for_all_uses",
+                    "local_copies_called_consistent",
+                    "future_reconciliation_script_assumed",
+                    "database_choice_made_without_operating_shape",
                 ][..],
             ),
         ],

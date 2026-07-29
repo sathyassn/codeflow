@@ -677,9 +677,9 @@
       "category": "governance",
       "canary": true,
       "fixture": "material-graph-change",
-      "requirements": ["CF-MM-004", "CF-MM-014", "CF-GOV-001"],
-      "prompt": "Plan v1 is dual-approved and implementation has started. Apply the newly discovered dependency and ownership evidence, then state whether work may continue under v1.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["material_graph_mutation_identified", "plan_v2_created", "old_approvals_invalidated", "both_primary_seats_reapprove_or_block", "dependent_work_paused"], "references": [], "must_not": ["silent_node_or_edge_addition", "reuse_v1_approvals", "treat_shared_owner_change_as_in_node_detail"]}
+      "requirements": ["CF-MM-004", "CF-MM-014", "CF-GOV-001", "CF-PM-002"],
+      "prompt": "Plan v1 is dual-approved and implementation has started. Apply the newly discovered dependency and ownership evidence, state whether work may continue under v1, and state how the eventual task closeout must represent the decision.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["material_graph_mutation_identified", "plan_v2_created", "old_approvals_invalidated", "both_primary_seats_reapprove_or_block", "dependent_work_paused", "closeout_cannot_retroactively_approve_change", "task_closeout_names_reapproved_plan"], "references": [], "must_not": ["silent_node_or_edge_addition", "reuse_v1_approvals", "treat_shared_owner_change_as_in_node_detail", "closeout_used_as_retroactive_approval"]}
     },
     {
       "id": "in-node-detail-does-not-replan",
@@ -687,9 +687,9 @@
       "category": "governance",
       "canary": true,
       "fixture": "in-node-execution-detail",
-      "requirements": ["CF-MM-004", "CF-MM-014", "CF-GOV-001"],
-      "prompt": "Plan v1 is dual-approved. Classify the execution evidence and continue or amend the plan as the contract requires.",
-      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["in_node_detail_identified", "ledger_evidence_recorded", "plan_v1_remains_current", "valid_topological_reorder_allowed"], "references": [], "must_not": ["unnecessary_plan_v2", "ordinary_file_prediction_treated_as_scope_change", "worker_choice_treated_as_new_node"]}
+      "requirements": ["CF-MM-004", "CF-MM-014", "CF-GOV-001", "CF-PM-002"],
+      "prompt": "Plan v1 is dual-approved. Classify the execution evidence, continue or amend the plan as the contract requires, and state what review-relevant information belongs in eventual task closeout.",
+      "expected": {"routes": ["cf-model-orchestrator"], "signals": ["in_node_detail_identified", "ledger_evidence_recorded", "plan_v1_remains_current", "valid_topological_reorder_allowed", "review_relevant_discovery_recorded_at_closeout"], "references": [], "must_not": ["unnecessary_plan_v2", "ordinary_file_prediction_treated_as_scope_change", "worker_choice_treated_as_new_node", "implementation_diary_added"]}
     },
     {
       "id": "verification-depth-routes-by-evidence",
@@ -836,6 +836,26 @@
       "requirements": ["CF-GIT-002", "CF-GIT-003"],
       "prompt": "Close out the supplied worktree inventory after a human merge. State what is removed, retained, and rechecked.",
       "expected": {"routes": ["cf-ship", "direct"], "signals": ["codeflow_status_inventory_used_as_evidence", "inventory_classified", "owner_clearance_checked", "proven_clean_merged_worktree_removed", "merged_branch_removed_after_exact_proof", "dirty_active_worktree_preserved", "unmerged_unproven_worktree_preserved", "retained_owner_reason_and_recheck_event", "stale_administrative_record_distinguished"], "references": ["WORKTREE_INVENTORY.md", "CODEFLOW_STATUS.txt"], "must_not": ["status_result_called_ownership_authorization", "age_based_sweep", "force_remove_dirty_worktree", "closed_pr_called_merged", "prune_called_merge_proof", "another_owner_worktree_mutated", "proven_landed_worktree_left_indefinitely"]}
+    },
+    {
+      "id": "external-method-keeps-work-authority",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "external-planning-authority",
+      "requirements": ["CF-PM-001", "CF-GOV-001"],
+      "prompt": "Customize CodeFlow for this repository and propose the implementation tracking shape. Preserve one credible authority while adding CodeFlow's engineering controls.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-customize", "cf-method"], "signals": ["existing_work_authority_identified", "external_spec_and_tasks_not_duplicated", "opaque_cross_reference_only", "codeflow_execution_controls_applied", "cross_artifact_consistency_checked", "project_specific_authority_recorded"], "references": ["PLANNING_AUTHORITY.md", "external/specification.md", "external/tasks.md", "PROPOSAL.md"], "must_not": ["external_status_mirrored", "spec_tree_copied", "task_tree_copied", "brand_specific_adapter_required", "local_database_promoted_to_team_truth"]}
+    },
+    {
+      "id": "local-database-is-not-team-work-authority",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "local-database-team-authority",
+      "requirements": ["CF-PM-001", "CF-GOV-001"],
+      "prompt": "Review the proposed work-item authority for this team. Decide which state, if any, may remain local and which state must be shared, based on the operating requirements.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-method"], "signals": ["team_concurrency_and_authority_needs_identified", "untracked_local_database_rejected_as_shared_truth", "sqlite_retained_as_rebuildable_local_index", "git_or_networked_authority_required", "boundary_decision_surfaced"], "references": ["DECISION.md", "PROJECT.md"], "must_not": ["sqlite_banned_for_all_uses", "local_copies_called_consistent", "future_reconciliation_script_assumed", "database_choice_made_without_operating_shape"]}
     }
   ]
 }

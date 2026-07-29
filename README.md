@@ -92,7 +92,7 @@ ordinary task execution and adds no model-running CLI command.
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
 | `doctor` | Health checks (14): hooks, claude, codex, config, permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
 | `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
-| `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
+| `recall` | Search project memory: ledger, session summaries, ADRs, epics/tasks/specs, capabilities |
 | `remote` | Remote provider operations (branch protection) |
 | `epic new` | Allocate the next `EPC-NNN` and scaffold the epic from the template |
 | `task new` | Allocate the next `TSK-NNN-MMM` under an epic and scaffold it |

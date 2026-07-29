@@ -64,6 +64,11 @@ it as non-trivial.
 - In-session work uses the harness's native task tools. Durable work (full tier)
   lives in `project-management/` as markdown + frontmatter, updated in the same PR
   as the code it tracks.
+- CodeFlow writes flat stable-ID records (`epics/EPC-NNN.md`,
+  `tasks/TSK-NNN-MMM.md`, `specs/SPC-NNN.md`). One system owns each work item's
+  status and acceptance; trackers and external planning methods are loose links,
+  never mirrors. Load `cf-method/references/project-organization.md` for
+  monorepos, authority choices, or implementation-deviation closeout.
 - Specs are inputs, frozen (`status: implemented`) when their epic ships. Truth
   then lives in architecture, capabilities, and tests.
 - Status views are generated (`codeflow status`) — never hand-maintain a dashboard.

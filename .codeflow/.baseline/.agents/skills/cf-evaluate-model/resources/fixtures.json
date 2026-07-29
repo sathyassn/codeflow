@@ -564,6 +564,26 @@
         "WORKTREE_INVENTORY.md": "# Worktree inventory\n\nA: feat/export-ui — clean; PR 41 MERGED; recorded head equals branch tip; owner inactive.\nB: fix/retry-race — dirty and untracked; active owner: worker-b; no PR.\nC: spike/cache — clean; PR 39 CLOSED without merge; no patch-identity proof; owner unavailable; recheck trigger: owner disposition or superseding tracked task.\n\n`git worktree prune --dry-run` reports one unrelated stale administrative record whose directory no longer exists.\n",
         "CODEFLOW_STATUS.txt": "cleanup: 3 candidate(s) against origin/main\n  removable worktree feat/export-ui -> /tmp/export-ui (landed by ancestry in origin/main)\n  preserve-dirty worktree fix/retry-race -> /tmp/retry-race (local changes present)\n  retain-unproven worktree spike/cache -> /tmp/cache (not proven landed in origin/main)\n"
       }
+    },
+    {
+      "id": "external-planning-authority",
+      "tier": "full",
+      "state": {"branch": "fixture/external-authority", "peer": "available", "existing_authority": "external-planning-method"},
+      "files": {
+        "PLANNING_AUTHORITY.md": "# Work authority\n\nThe team's established planning method owns the approved product specification, work-item status, assignments, and acceptance. Its item `EXT-184` covers the repository implementation. CodeFlow has just been initialized for engineering execution and verification.\n",
+        "external/specification.md": "# Approved export retention change\n\nAuthority: EXT-184\nStatus: approved\nScope: API, worker, and storage lifecycle.\n",
+        "external/tasks.md": "# Authoritative tasks\n\n- EXT-184-A: API contract\n- EXT-184-B: worker retention\n- EXT-184-C: whole-flow verification\n",
+        "PROPOSAL.md": "# Proposed onboarding\n\nCopy the external specification into `project-management/specs/SPC-001.md`, recreate all three tasks as TSK records, synchronize status after every change, and put the shared task state in `.codeflow/work.db` so every worktree can query it.\n"
+      }
+    },
+    {
+      "id": "local-database-team-authority",
+      "tier": "full",
+      "state": {"branch": "fixture/local-db-authority", "peer": "available", "team_members": 6, "hosts": 3},
+      "files": {
+        "DECISION.md": "# Proposed task authority\n\nReplace Git-visible work records and the team's networked tracker with an untracked SQLite file at `.codeflow/team-work.db`. Each developer and CI runner will maintain a local copy. A script may reconcile them later. The proposal claims this avoids merge conflicts.\n",
+        "PROJECT.md": "# Operating shape\n\nSix contributors work from three hosts and parallel worktrees. The team needs shared assignment, permissions, backup, audit, concurrent updates, and fast local search when disconnected.\n"
+      }
     }
   ]
 }
