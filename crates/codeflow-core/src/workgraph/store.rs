@@ -159,6 +159,43 @@ impl MarkdownStore {
         Ok(())
     }
 
+    /// Update only the named frontmatter fields, preserving every other key.
+    ///
+    /// Planning records deliberately carry fields owned by documentation and
+    /// orchestration rather than the typed workgraph model. Re-serializing the
+    /// model would silently discard those fields, so partial record updates
+    /// operate on the generic YAML mapping instead.
+    fn update_record_fields(
+        path: &Path,
+        body: &str,
+        fields: impl IntoIterator<Item = (&'static str, serde_yaml::Value)>,
+    ) -> Result<(), StoreError> {
+        let content = fs::read_to_string(path)?;
+        let (yaml, _) = split_frontmatter(&content).ok_or_else(|| StoreError::Yaml {
+            path: path.display().to_string(),
+            message: "missing frontmatter delimiters".to_string(),
+        })?;
+        let mut frontmatter =
+            serde_yaml::from_str::<serde_yaml::Mapping>(yaml).map_err(|e| StoreError::Yaml {
+                path: path.display().to_string(),
+                message: e.to_string(),
+            })?;
+        for (field, value) in fields {
+            frontmatter.insert(serde_yaml::Value::String(field.to_string()), value);
+        }
+        Self::write_record(path, &frontmatter, body)
+    }
+
+    fn yaml_value<T: serde::Serialize>(
+        path: &Path,
+        value: T,
+    ) -> Result<serde_yaml::Value, StoreError> {
+        serde_yaml::to_value(value).map_err(|e| StoreError::Yaml {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })
+    }
+
     fn read_record<T: serde::de::DeserializeOwned>(path: &Path) -> Result<(T, String), StoreError> {
         let content = fs::read_to_string(path)?;
         let (yaml, body) = split_frontmatter(&content).ok_or_else(|| StoreError::Yaml {
@@ -287,23 +324,24 @@ impl RecordStore for MarkdownStore {
     }
 
     fn update_epic(&self, id: &str, update: EpicUpdate) -> Result<(), StoreError> {
-        let (path, mut epic, body) = self
+        let (path, _epic, body) = self
             .find_epic(id)?
             .ok_or_else(|| StoreError::NotFound(format!("epic:{id}")))?;
+        let mut fields = Vec::new();
         if let Some(status) = update.status {
-            epic.status = status;
+            fields.push(("status", Self::yaml_value(&path, status)?));
         }
         if let Some(title) = update.title {
-            epic.title = title;
+            fields.push(("title", Self::yaml_value(&path, title)?));
         }
         if let Some(summary) = update.summary {
-            epic.summary = Some(summary);
+            fields.push(("summary", Self::yaml_value(&path, summary)?));
         }
         if let Some(pr_number) = update.pr_number {
-            epic.pr_number = Some(pr_number);
+            fields.push(("pr_number", Self::yaml_value(&path, pr_number)?));
         }
-        epic.updated_at = super::now_rfc3339();
-        Self::write_record(&path, &epic, &body)
+        fields.push(("updated_at", Self::yaml_value(&path, super::now_rfc3339())?));
+        Self::update_record_fields(&path, &body, fields)
     }
 
     fn list_epics(&self, filter: EpicFilter) -> Result<Vec<Epic>, StoreError> {
@@ -332,26 +370,27 @@ impl RecordStore for MarkdownStore {
     }
 
     fn update_task(&self, id: &str, update: TaskUpdate) -> Result<(), StoreError> {
-        let (path, mut task, body) = self
+        let (path, _task, body) = self
             .find_task(id)?
             .ok_or_else(|| StoreError::NotFound(format!("task:{id}")))?;
+        let mut fields = Vec::new();
         if let Some(status) = update.status {
-            task.status = status;
+            fields.push(("status", Self::yaml_value(&path, status)?));
         }
         if let Some(branch) = update.branch {
-            task.branch = Some(branch);
+            fields.push(("branch", Self::yaml_value(&path, branch)?));
         }
         if let Some(pr_number) = update.pr_number {
-            task.pr_number = Some(pr_number);
+            fields.push(("pr_number", Self::yaml_value(&path, pr_number)?));
         }
         if let Some(started_at) = update.started_at {
-            task.started_at = Some(started_at);
+            fields.push(("started_at", Self::yaml_value(&path, started_at)?));
         }
         if let Some(completed_at) = update.completed_at {
-            task.completed_at = Some(completed_at);
+            fields.push(("completed_at", Self::yaml_value(&path, completed_at)?));
         }
-        task.updated_at = super::now_rfc3339();
-        Self::write_record(&path, &task, &body)
+        fields.push(("updated_at", Self::yaml_value(&path, super::now_rfc3339())?));
+        Self::update_record_fields(&path, &body, fields)
     }
 
     fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, StoreError> {
@@ -526,6 +565,104 @@ mod tests {
         assert!(after.contains("## Summary"));
         assert!(after.contains("Hand-written notes."));
         assert!(after.contains("status: in_progress"));
+    }
+
+    #[test]
+    fn test_update_epic_preserves_unmodeled_planning_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+        let path = dir.path().join("epics/EPC-001.md");
+        fs::write(
+            &path,
+            r"---
+id: epic-01a
+format_id: EPC-001
+title: Test Epic
+status: draft
+work_type: feat
+capabilities: [CAP-001]
+adrs: [ADR-0001]
+specs: [SPC-001]
+custom_review_contract:
+  primary: claude
+created: 2026-06-11
+---
+## Summary
+Keep this body.
+",
+        )
+        .unwrap();
+
+        store
+            .update_epic(
+                "epic-01a",
+                EpicUpdate {
+                    status: Some(EpicStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        let (yaml, body) = split_frontmatter(&after).unwrap();
+        let frontmatter: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(frontmatter["status"], "in_progress");
+        assert_eq!(frontmatter["capabilities"][0], "CAP-001");
+        assert_eq!(frontmatter["adrs"][0], "ADR-0001");
+        assert_eq!(frontmatter["specs"][0], "SPC-001");
+        assert_eq!(frontmatter["custom_review_contract"]["primary"], "claude");
+        assert_eq!(frontmatter["created"], "2026-06-11");
+        assert!(
+            frontmatter.get("created_at").is_none(),
+            "a partial update must not rewrite the template's field shape"
+        );
+        assert!(body.contains("Keep this body."));
+    }
+
+    #[test]
+    fn test_update_task_preserves_graph_and_unmodeled_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+        let path = dir.path().join("tasks/TSK-001-001.md");
+        fs::write(
+            &path,
+            r"---
+id: task-01a
+format_id: TSK-001-001
+epic_id: epic-01a
+title: Test Task
+status: todo
+work_type: feat
+depends_on: [TSK-001-000]
+external_context: EXT-42
+created: 2026-06-11
+---
+## Acceptance Criteria
+- [ ] Preserve the graph.
+",
+        )
+        .unwrap();
+
+        store
+            .update_task(
+                "task-01a",
+                TaskUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    branch: Some("feat/test".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        let (yaml, body) = split_frontmatter(&after).unwrap();
+        let frontmatter: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(frontmatter["status"], "in_progress");
+        assert_eq!(frontmatter["branch"], "feat/test");
+        assert_eq!(frontmatter["depends_on"][0], "TSK-001-000");
+        assert_eq!(frontmatter["external_context"], "EXT-42");
+        assert_eq!(frontmatter["created"], "2026-06-11");
+        assert!(body.contains("Preserve the graph."));
     }
 
     #[test]

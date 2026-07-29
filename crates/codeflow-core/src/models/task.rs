@@ -50,8 +50,9 @@ pub struct Task {
 /// an alias of `created_at`, a missing `updated_at` falls back to the creation
 /// timestamp, and template-trimmed fields default — otherwise a task scaffolded
 /// from the template (or `codeflow task new`) fails to parse and the store
-/// silently skips it, undercounting `codeflow status`. Serialization stays
-/// canonical so store rewrites normalize the record.
+/// silently skips it, undercounting `codeflow status`. Partial store updates
+/// operate on the generic YAML mapping so fields outside this typed view
+/// remain intact.
 impl<'de> Deserialize<'de> for Task {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]

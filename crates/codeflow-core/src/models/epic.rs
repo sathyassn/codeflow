@@ -28,9 +28,9 @@ pub struct Epic {
 /// Deserialization tolerates the canonical hand-authored planning
 /// frontmatter (the pm-template/validator shape): `created` is accepted as
 /// an alias of `created_at`, and a missing `updated_at` falls back to the
-/// creation timestamp. Serialization stays canonical (`created_at` +
-/// `updated_at`), so store rewrites normalize the record. Fields the
-/// docs-lint owns (capabilities/adrs/specs) are ignored here by design.
+/// creation timestamp. Fields the docs-lint owns (capabilities/adrs/specs)
+/// are ignored by this typed view. Partial store updates operate on the
+/// generic YAML mapping so those fields remain intact.
 impl<'de> Deserialize<'de> for Epic {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]

@@ -12,6 +12,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > a major bump from `v2.1.0`; the feature additions below do not reduce it to a
 > minor release.
 
+### Fixed
+
+- **Partial epic and task updates preserve the complete planning record.**
+  Status and delivery-field updates now patch the generic YAML frontmatter
+  instead of re-serializing the narrower typed workgraph view. Capability,
+  ADR, spec, graph, and future project-owned fields therefore remain intact,
+  along with the markdown body and the template's `created` field shape.
+
 ### Changed
 
 - **End-to-end and concurrent UI verification now own their real boundaries
