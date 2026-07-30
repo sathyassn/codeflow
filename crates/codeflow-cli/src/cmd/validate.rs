@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::validate::docs::lint_docs;
-use codeflow_core::validate::{validate_epic, validate_task, ValidateOptions};
+use codeflow_core::validate::{
+    validate_epic, validate_spec, validate_task, validate_workgraph, ValidateOptions,
+};
 
 #[derive(Args)]
 pub struct ValidateArgs {
@@ -23,13 +25,40 @@ pub fn run(args: &ValidateArgs) -> i32 {
     let mut failed = false;
 
     failed |= !validate_policy(&root);
-    failed |= !validate_records(&root, args.path.as_deref());
-
-    if args.docs {
-        failed |= !run_docs_lint(&root);
+    if args.docs && args.path.is_none() {
+        failed |= !run_workgraph_validation(&root);
+    } else {
+        failed |= !validate_records(&root, args.path.as_deref());
+        if args.docs {
+            failed |= !run_docs_lint(&root);
+        }
     }
 
     i32::from(failed)
+}
+
+fn run_workgraph_validation(root: &Path) -> bool {
+    let report = validate_workgraph(root);
+    for note in &report.notes {
+        println!("validate --docs: note: {note}");
+    }
+    for warning in &report.warnings {
+        eprintln!("validate --docs: warning: {warning}");
+    }
+    for issue in &report.issues {
+        eprintln!("validate --docs: error: {issue}");
+    }
+    if report.is_clean() {
+        println!("validate: {} record(s) clean", report.checked_records);
+        println!("validate --docs: doc graph clean");
+        true
+    } else {
+        eprintln!(
+            "validate --docs: {} workgraph integrity error(s)",
+            report.issues.len()
+        );
+        false
+    }
 }
 
 /// Strictly validate `.codeflow/policy.json` — an invalid value would
@@ -75,9 +104,9 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        if !name.starts_with("TSK-") && !name.starts_with("EPC-") {
+        if !name.starts_with("TSK-") && !name.starts_with("EPC-") && !name.starts_with("SPC-") {
             eprintln!(
-                "validate: {} is not an epic/task record (expected an EPC-*/TSK-* filename) — nothing validated",
+                "validate: {} is not a work record (expected an EPC-*/SPC-*/TSK-* filename) — nothing validated",
                 base.display()
             );
             return false;
@@ -88,7 +117,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     };
 
     if files.is_empty() {
-        println!("validate: no epic/task records under {}", base.display());
+        println!("validate: no work records under {}", base.display());
         return true;
     }
 
@@ -105,6 +134,8 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
             validate_task(&file, &opts)
         } else if name.starts_with("EPC-") {
             validate_epic(&file, &opts)
+        } else if name.starts_with("SPC-") {
+            validate_spec(&file, &opts)
         } else {
             continue;
         };
@@ -135,7 +166,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     clean
 }
 
-/// Recursively collect `EPC-*`/`TSK-*` markdown files.
+/// Recursively collect `EPC-*`/`SPC-*`/`TSK-*` markdown files.
 fn collect_record_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -151,7 +182,7 @@ fn collect_record_files(dir: &Path) -> Vec<PathBuf> {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
-            if name.starts_with("TSK-") || name.starts_with("EPC-") {
+            if name.starts_with("TSK-") || name.starts_with("EPC-") || name.starts_with("SPC-") {
                 out.push(path);
             }
         }

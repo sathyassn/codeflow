@@ -24,17 +24,17 @@ repo. The block between the codeflow markers below is maintained by
 | RULES — how we work | this file + the agent skills (`.claude/skills/`, `.agents/skills/`) | rarely |
 | WHAT — what the system does | `docs/capabilities.md` (CAP-### registry) | every ship |
 | HOW — structure and decisions | `docs/architecture.md` + `docs/decisions/` (ADRs) | per decision |
-| WORK — planned and active work | `project-management/` (epics, tasks — allocated via `epic new`/`task new`; specs — hand-authored) | daily |
+| WORK — planned and active work | `project-management/` (epics, specs, tasks — allocated by the CLI) | daily |
 | TRACE — what happened and why | ledger + `codeflow recall` | automatic |
 
-The traceability spine runs downward: capability → epics → ADRs → specs → PRs →
-ledger. Only the capability ↔ epic ↔ ADR links are enforced by ID (`validate
---docs`); the spec, PR, and ledger links are by convention, found via `codeflow
-recall`. Specs carry no CLI tooling of their own (no allocator, no model, no
-validation) — they are hand-authored input docs, frozen (`status:
-implemented`) when their epic ships, findable via `codeflow recall`. Answer
-"why is X this way" by following frontmatter links or `codeflow recall "X"` —
-never by reading all the code.
+The traceability spine runs downward: capability → epic/task → ADR/spec → PR →
+ledger. `validate --docs` checks the Git-tracked workgraph and its stable IDs;
+the local ledger supplies operational evidence and `codeflow recall` search,
+not a second planning authority. Specs are allocated and linked with `spec new`,
+approved only after open questions are resolved, and frozen (`status:
+implemented`) when their consuming work ships. Answer "why is X this way" by
+following frontmatter links or `codeflow recall "X"` — never by reading all the
+code.
 
 Before building anything: check `docs/capabilities.md` (does it already exist?
 what does it touch?) and skim the most recent ADRs in `docs/decisions/`.
@@ -58,7 +58,7 @@ it as non-trivial.
 | Intent | Use |
 |---|---|
 | Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
-| Materialize an agreed plan | `/cf-plan` — supporting flow for acceptance criteria, epic/spec/ADR artifacts, used inside the duo or after a recorded solo degradation |
+| Clarify and materialize an agreed plan | `/cf-plan` — gathers project evidence, asks only consequential operator-owned questions, and creates the warranted epic/spec/task/ADR records inside the duo or after a recorded solo degradation |
 | Settle product/UX/UI/visual direction | `/cf-design` inside the orchestrated flow — establish proportionate, evidence-grounded `DESIGN_INTENT`; bounded conformance and unchanged-direction work use its compact collapse paths |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
@@ -66,7 +66,7 @@ it as non-trivial.
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
-| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `task new` |
+| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>` |
 
 ## Planning and tracking
 
@@ -75,16 +75,29 @@ it as non-trivial.
   irreversible tradeoff is an operator decision: ask, never assume. Resolve a
   local reversible implementation detail from repository evidence and disclose
   the choice.
-- In-session work uses the harness's native task tools. Durable work (full tier)
-  lives in `project-management/` as markdown + frontmatter, updated in the same PR
-  as the code it tracks.
+- In-session execution detail uses the harness's native task tools. Durable work
+  (full tier) lives in `project-management/` as Markdown + frontmatter and is
+  planned on a planning branch. Its validated planning PR must reach the task's
+  `integration_target` before implementation starts; do not invent a task
+  record on the implementation branch. A task branch is never a valid
+  integration target and cannot authorize its own planning record. The target
+  must resolve to a real local or remote-tracking branch, never `HEAD`, a tag,
+  an object ID, or another revision expression.
 - CodeFlow writes flat stable-ID records (`epics/EPC-NNN.md`,
-  `tasks/TSK-NNN-MMM.md`, `specs/SPC-NNN.md`). One system owns each work item's
-  status and acceptance; trackers and external planning methods are loose links,
-  never mirrors. Load `cf-method/references/project-organization.md` for
-  monorepos, authority choices, or implementation-deviation closeout.
-- Specs are inputs, frozen (`status: implemented`) when their epic ships. Truth
-  then lives in architecture, capabilities, and tests.
+  `specs/SPC-NNN.md`, `tasks/TSK-NNN.md`) with independent sequences and
+  relationships in frontmatter. A task belongs to one epic or carries a
+  justified `standalone_reason`; standalone is never an orphan shortcut. One
+  system owns each work item's status and acceptance; trackers and external
+  planning methods are links, never mirrors. Load
+  `cf-method/references/project-organization.md` for the complete artifact
+  choice, lifecycle, monorepo, authority, and failure-path contract.
+- Specs are planning inputs, frozen (`status: implemented`) when their consuming
+  work ships. Truth then lives in architecture, capabilities, and tests.
+- Before product edits on `task/TSK-NNN-<slug>`, run
+  `codeflow work start TSK-NNN`. It proves from the merge-base that the task,
+  matching non-task target declaration, parent or standalone rationale,
+  approved specs, and completed dependencies are anchored. The CLI, pre-commit,
+  and CI share this read-only rule.
 - Status views are generated (`codeflow status`) — never hand-maintain a dashboard.
 
 ## Git rules
@@ -102,7 +115,8 @@ server-enforced perimeter — the real boundary (why the split matters:
 cf-method, "Why the git boundary is remote"). The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
-  test/ chore/ ci/ hotfix/ plan/ spike/ experiment/ integration/`. Pick by work intent.
+  test/ chore/ ci/ hotfix/ plan/ task/ spike/ experiment/ integration/`. Durable
+  implementation uses `task/TSK-NNN-<slug>`; pick the others by work intent.
 - **Commits:** conventional format `type(scope): description` (scope optional) —
   imperative mood, lower-case type from the policy whitelist, no trailing period;
   the description ≤ 50 chars and the whole subject line ≤ 72. A body, when

@@ -11,10 +11,21 @@ pub mod allocate;
 mod format_id;
 pub(crate) mod layout;
 pub mod store;
+pub mod work_start;
 
-pub use allocate::{create_epic, create_task, next_epic_id, next_task_id, NewRecord};
-pub use format_id::{is_valid_epic_format_id, is_valid_task_format_id};
+pub use allocate::{
+    create_epic, create_spec, create_task, next_epic_id, next_spec_id, next_task_id, NewRecord,
+};
+pub use format_id::{
+    is_canonical_task_format_id, is_legacy_task_format_id, is_valid_epic_format_id,
+    is_valid_spec_format_id, is_valid_task_format_id,
+};
 pub use store::{MarkdownStore, RecordStore, StoreError};
+pub use work_start::{
+    check_work_start, check_work_start_for_branch, declared_work_target, default_work_target,
+    durable_work_tracking_enabled, is_stable_work_target, resolve_work_target, task_id_from_branch,
+    work_target_resolves, WorkStartError, WorkStartReport,
+};
 
 /// Generate an RFC 3339 UTC timestamp string.
 pub(crate) fn now_rfc3339() -> String {

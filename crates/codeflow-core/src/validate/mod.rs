@@ -1,4 +1,4 @@
-//! YAML frontmatter validation for task and epic markdown files.
+//! YAML frontmatter validation for task, epic, and spec markdown files.
 //!
 //! Validates the machine-readable record half of v2's markdown truth
 //! (charter D17): required fields, enum values, format-id shape (shared
@@ -17,7 +17,10 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::workgraph::{is_valid_epic_format_id, is_valid_task_format_id};
+use crate::workgraph::{
+    is_canonical_task_format_id, is_stable_work_target, is_valid_epic_format_id,
+    is_valid_spec_format_id, is_valid_task_format_id,
+};
 
 /// Errors from validation I/O and parsing.
 #[derive(Debug, Error)]
@@ -74,6 +77,117 @@ impl std::fmt::Display for ValidationWarning {
 pub struct ValidateOptions {
     pub task_required_sections: Vec<String>,
     pub epic_required_sections: Vec<String>,
+    pub spec_required_sections: Vec<String>,
+}
+
+/// Blocking structural and referential findings for the complete durable
+/// workgraph. This is the shared gate used by `validate --docs`, `work start`,
+/// task-branch pre-commit, and task-branch CI.
+#[derive(Debug, Default)]
+pub struct WorkgraphValidationReport {
+    pub checked_records: usize,
+    pub issues: Vec<String>,
+    pub warnings: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+impl WorkgraphValidationReport {
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.issues.is_empty()
+    }
+}
+
+/// Validate every durable record and every relationship in one pass.
+#[must_use]
+pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
+    let pm_root = repo_root.join("project-management");
+    let opts = ValidateOptions::default();
+    let mut report = WorkgraphValidationReport::default();
+    let mut identities = HashMap::<String, String>::new();
+
+    let record_sets = [
+        (
+            crate::workgraph::layout::epic_record_files(&pm_root),
+            validate_epic
+                as fn(
+                    &Path,
+                    &ValidateOptions,
+                )
+                    -> Result<(Vec<ValidationError>, Vec<ValidationWarning>), ValidateError>,
+            is_valid_epic_format_id as fn(&str) -> bool,
+        ),
+        (
+            crate::workgraph::layout::spec_record_files(&pm_root),
+            validate_spec,
+            is_valid_spec_format_id,
+        ),
+        (
+            crate::workgraph::layout::task_record_files(&pm_root),
+            validate_task,
+            is_valid_task_format_id,
+        ),
+    ];
+    for (files, validator, valid_identity) in record_sets {
+        for path in files {
+            report.checked_records += 1;
+            let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+            if let Ok(content) = std::fs::read(&path) {
+                if let Ok((data, _)) = parse_frontmatter(&content) {
+                    if let Some(identity) = supported_identity(&data, valid_identity) {
+                        let display = relative.display().to_string();
+                        if let Some(first) = identities.get(&identity) {
+                            report.issues.push(format!(
+                                "duplicate work id {identity}: {first} and {display}"
+                            ));
+                        } else {
+                            identities.insert(identity, display);
+                        }
+                    }
+                }
+            }
+            match validator(&path, &opts) {
+                Ok((errors, warnings)) => {
+                    report.issues.extend(
+                        errors
+                            .into_iter()
+                            .map(|error| format!("{}: {error}", relative.display())),
+                    );
+                    report.warnings.extend(
+                        warnings
+                            .into_iter()
+                            .map(|warning| format!("{}: {warning}", relative.display())),
+                    );
+                }
+                Err(error) => report
+                    .issues
+                    .push(format!("{}: {error}", relative.display())),
+            }
+        }
+    }
+
+    let docs = docs::lint_docs(repo_root);
+    report
+        .issues
+        .extend(docs.issues.into_iter().map(|issue| issue.to_string()));
+    report.notes = docs.notes;
+    report.issues.sort();
+    report.issues.dedup();
+    report.warnings.sort();
+    report.warnings.dedup();
+    report
+}
+
+fn supported_identity(
+    data: &HashMap<String, serde_yaml::Value>,
+    valid: fn(&str) -> bool,
+) -> Option<String> {
+    let id = get_string_field(data, "id");
+    if valid(&id) {
+        return Some(id);
+    }
+    let alias = get_string_field(data, "format_id");
+    valid(&alias).then_some(alias)
 }
 
 impl Default for ValidateOptions {
@@ -81,6 +195,11 @@ impl Default for ValidateOptions {
         Self {
             task_required_sections: vec!["## Description".into(), "## Acceptance Criteria".into()],
             epic_required_sections: vec!["## Summary".into(), "## Acceptance Criteria".into()],
+            spec_required_sections: vec![
+                "## Summary".into(),
+                "## Behavior".into(),
+                "## Open questions".into(),
+            ],
         }
     }
 }
@@ -321,42 +440,66 @@ fn validate_sections(body: &[u8], required: &[String]) -> Vec<ValidationError> {
     errs
 }
 
-fn check_filename_match(
+fn canonical_identity(
     path: &Path,
     data: &HashMap<String, serde_yaml::Value>,
-) -> Vec<ValidationWarning> {
-    let fid = get_string_field(data, "format_id");
-    if fid.is_empty() {
-        return Vec::new();
-    }
+    valid: impl Fn(&str) -> bool,
+    expected: &str,
+) -> (String, Vec<ValidationError>, Vec<ValidationWarning>) {
+    let id = get_string_field(data, "id");
+    let alias = get_string_field(data, "format_id");
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let canonical = if valid(&id) {
+        if !alias.is_empty() && alias != id {
+            errors.push(ValidationError {
+                field: "format_id".into(),
+                message: format!("conflicts with canonical id {id}"),
+            });
+        }
+        id
+    } else if valid(&alias) {
+        warnings.push(ValidationWarning {
+            field: "format_id".into(),
+            message: "historical dual-identity record; new records use one stable id".into(),
+        });
+        alias
+    } else {
+        if !id.is_empty() {
+            errors.push(ValidationError {
+                field: "id".into(),
+                message: format!("does not match {expected}"),
+            });
+        }
+        String::new()
+    };
     let base = path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    if base != fid {
-        return vec![ValidationWarning {
-            field: "format_id".into(),
+    if !canonical.is_empty() && base != canonical {
+        errors.push(ValidationError {
+            field: "id".into(),
             message: format!(
-                "filename \"{}\" does not match format_id \"{fid}\"",
+                "filename \"{}\" does not match stable id \"{canonical}\"",
                 path.file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default()
             ),
-        }];
+        });
     }
-    Vec::new()
+    (canonical, errors, warnings)
 }
 
 // ---------------------------------------------------------------------------
 // Task validation
 // ---------------------------------------------------------------------------
 
-const TASK_REQUIRED_FIELDS: &[&str] =
-    &["id", "format_id", "epic_id", "title", "status", "work_type"];
+const TASK_REQUIRED_FIELDS: &[&str] = &["id", "title", "status", "work_type"];
 
 const TASK_STATUS_VALUES: &[&str] = &["todo", "blocked", "in_progress", "complete", "cancelled"];
 
-const TASK_ARRAY_FIELDS: &[&str] = &["acceptance", "tests"];
+const TASK_ARRAY_FIELDS: &[&str] = &["acceptance", "tests", "specs", "depends_on"];
 
 const TASK_TEMPLATE_SENTINEL_FIELDS: &[&str] = &["id", "title", "epic_id"];
 
@@ -386,12 +529,42 @@ pub fn validate_task(
         TASK_TEMPLATE_SENTINEL_FIELDS,
     ));
 
-    // Format id shape (shared with workgraph::format_id).
-    let fid = get_string_field(&data, "format_id");
-    if !fid.is_empty() && !is_valid_task_format_id(&fid) {
+    let (id, identity_errors, identity_warnings) =
+        canonical_identity(path, &data, is_valid_task_format_id, "TSK-NNN");
+    errs.extend(identity_errors);
+    warns.extend(identity_warnings);
+    let integration_target = get_string_field(&data, "integration_target");
+    if is_canonical_task_format_id(&id) && integration_target.trim().is_empty() {
         errs.push(ValidationError {
-            field: "format_id".into(),
-            message: "does not match pattern TSK-NNN-NNN".into(),
+            field: "integration_target".into(),
+            message: "required for canonical TSK-NNN records".into(),
+        });
+    } else if !integration_target.trim().is_empty() && !is_stable_work_target(&integration_target) {
+        errs.push(ValidationError {
+            field: "integration_target".into(),
+            message:
+                "must name a stable non-task branch, not a tag, object ID, or revision expression"
+                    .into(),
+        });
+    }
+
+    let epic_id = get_string_field(&data, "epic_id");
+    let standalone_reason = get_string_field(&data, "standalone_reason");
+    match (epic_id.is_empty(), standalone_reason.trim().is_empty()) {
+        (true, true) => errs.push(ValidationError {
+            field: "standalone_reason".into(),
+            message: "required when epic_id is null".into(),
+        }),
+        (false, false) => errs.push(ValidationError {
+            field: "standalone_reason".into(),
+            message: "must be null when epic_id is present".into(),
+        }),
+        _ => {}
+    }
+    if !epic_id.is_empty() && !is_valid_epic_format_id(&epic_id) {
+        errs.push(ValidationError {
+            field: "epic_id".into(),
+            message: "does not match EPC-NNN".into(),
         });
     }
 
@@ -407,8 +580,14 @@ pub fn validate_task(
     // Section checks.
     errs.extend(validate_sections(&body, &opts.task_required_sections));
 
-    // Warnings: filename vs format_id.
-    warns.extend(check_filename_match(path, &data));
+    if get_string_field(&data, "status") == "complete"
+        && String::from_utf8_lossy(&body).contains("- [ ]")
+    {
+        errs.push(ValidationError {
+            field: "body".into(),
+            message: "complete task still has unchecked acceptance criteria".into(),
+        });
+    }
 
     Ok((errs, warns))
 }
@@ -417,7 +596,7 @@ pub fn validate_task(
 // Epic validation
 // ---------------------------------------------------------------------------
 
-const EPIC_REQUIRED_FIELDS: &[&str] = &["id", "format_id", "title", "status", "work_type"];
+const EPIC_REQUIRED_FIELDS: &[&str] = &["id", "title", "status", "work_type"];
 
 const EPIC_STATUS_VALUES: &[&str] = &[
     "draft",
@@ -456,14 +635,10 @@ pub fn validate_epic(
         EPIC_TEMPLATE_SENTINEL_FIELDS,
     ));
 
-    // Format id shape (shared with workgraph::format_id).
-    let fid = get_string_field(&data, "format_id");
-    if !fid.is_empty() && !is_valid_epic_format_id(&fid) {
-        errs.push(ValidationError {
-            field: "format_id".into(),
-            message: "does not match pattern EPC-NNN".into(),
-        });
-    }
+    let (_id, identity_errors, identity_warnings) =
+        canonical_identity(path, &data, is_valid_epic_format_id, "EPC-NNN");
+    errs.extend(identity_errors);
+    warns.extend(identity_warnings);
 
     // Enum validations.
     errs.extend(validate_enum(&data, "status", EPIC_STATUS_VALUES));
@@ -473,10 +648,128 @@ pub fn validate_epic(
     // Section checks.
     errs.extend(validate_sections(&body, &opts.epic_required_sections));
 
-    // Warnings: filename vs format_id.
-    warns.extend(check_filename_match(path, &data));
+    errs.extend(validate_array_fields(
+        &data,
+        &["capabilities", "adrs", "specs"],
+    ));
 
     Ok((errs, warns))
+}
+
+// ---------------------------------------------------------------------------
+// Spec validation
+// ---------------------------------------------------------------------------
+
+const SPEC_REQUIRED_FIELDS: &[&str] = &["id", "title", "status"];
+const SPEC_STATUS_VALUES: &[&str] = &["draft", "approved", "implemented"];
+
+/// Validate a specification record.
+///
+/// # Errors
+///
+/// Returns `ValidateError` on I/O or frontmatter parsing failures.
+pub fn validate_spec(
+    path: &Path,
+    opts: &ValidateOptions,
+) -> Result<(Vec<ValidationError>, Vec<ValidationWarning>), ValidateError> {
+    let content = std::fs::read(path)?;
+    let (data, body) = parse_frontmatter(&content)?;
+    let mut errors = validate_required_fields(&data, SPEC_REQUIRED_FIELDS);
+    let mut warnings = Vec::new();
+    errors.extend(check_template_sentinels(&data, &["id", "title"]));
+    let (_id, identity_errors, identity_warnings) =
+        canonical_identity(path, &data, is_valid_spec_format_id, "SPC-NNN");
+    errors.extend(identity_errors);
+    warnings.extend(identity_warnings);
+    errors.extend(validate_enum(&data, "status", SPEC_STATUS_VALUES));
+    errors.extend(validate_sections(&body, &opts.spec_required_sections));
+
+    if matches!(
+        get_string_field(&data, "status").as_str(),
+        "approved" | "implemented"
+    ) && section_has_unresolved_questions(&body)
+    {
+        errors.push(ValidationError {
+            field: "body".into(),
+            message: "approved or implemented spec must leave open questions \
+                      blank or use an explicit resolved marker"
+                .into(),
+        });
+    }
+    Ok((errors, warnings))
+}
+
+#[cfg(test)]
+fn section_has_content(body: &[u8], heading: &str) -> bool {
+    !visible_section_text(body, heading).trim().is_empty()
+}
+
+fn section_has_unresolved_questions(body: &[u8]) -> bool {
+    let text = visible_section_text(body, "## Open questions");
+    let marker = text.trim().trim_end_matches(['.', ';']);
+    if marker.is_empty() {
+        return false;
+    }
+    let lower = marker.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "none" | "n/a" | "not applicable" | "all resolved"
+    ) {
+        return false;
+    }
+    let contradicts_resolution = marker.contains('?')
+        || [
+            "unresolved",
+            "except",
+            "pending",
+            "remaining",
+            "not resolved",
+        ]
+        .iter()
+        .any(|phrase| lower.contains(phrase));
+    if contradicts_resolution {
+        return true;
+    }
+    let none_with_resolution = lower.strip_prefix("none").is_some_and(|suffix| {
+        let suffix = suffix.trim_start();
+        suffix
+            .chars()
+            .next()
+            .is_some_and(|character| "-—:;".contains(character))
+            && suffix
+                .split(|character: char| !character.is_alphabetic())
+                .any(|word| word == "resolved")
+    });
+    let natural_resolution = ["all resolved", "no open questions", "resolved"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix));
+    !(none_with_resolution || natural_resolution)
+}
+
+fn visible_section_text(body: &[u8], heading: &str) -> String {
+    let text = String::from_utf8_lossy(body);
+    let Some(start) = text.find(heading) else {
+        return String::new();
+    };
+    let after = &text[start + heading.len()..];
+    let end = after
+        .find("\n## ")
+        .or_else(|| after.find("\r\n## "))
+        .unwrap_or(after.len());
+    let section = &after[..end];
+    let mut visible = String::new();
+    let mut remainder = section;
+    while let Some(comment_start) = remainder.find("<!--") {
+        visible.push_str(&remainder[..comment_start]);
+        let after_open = &remainder[comment_start + "<!--".len()..];
+        let Some(comment_end) = after_open.find("-->") else {
+            remainder = "";
+            break;
+        };
+        remainder = &after_open[comment_end + "-->".len()..];
+    }
+    visible.push_str(remainder);
+    visible
 }
 
 #[cfg(test)]
@@ -489,9 +782,10 @@ mod tests {
 
     fn valid_task_content() -> String {
         r#"---
-id: "task-01abc"
-format_id: "TSK-022-014"
-epic_id: "epic-01xyz"
+id: "TSK-022"
+epic_id: "EPC-022"
+standalone_reason: null
+integration_target: main
 title: "Test task"
 status: "in_progress"
 work_type: "feat"
@@ -501,6 +795,8 @@ acceptance:
   - "All tests pass"
 tests:
   - "crates/codeflow-core/src/"
+specs: []
+depends_on: []
 ---
 ## Description
 Some description
@@ -513,8 +809,7 @@ Some criteria
 
     fn valid_epic_content() -> String {
         r#"---
-id: "epic-01xyz"
-format_id: "EPC-022"
+id: "EPC-022"
 title: "Test epic"
 status: "in_progress"
 work_type: "feat"
@@ -570,7 +865,7 @@ Criteria
     #[test]
     fn test_validate_task_valid() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         std::fs::write(&path, valid_task_content()).unwrap();
 
         let opts = ValidateOptions::default();
@@ -587,22 +882,22 @@ Criteria
 
         let opts = ValidateOptions::default();
         let (errs, _) = validate_task(&path, &opts).unwrap();
-        // Should flag missing: id, format_id, epic_id, status, work_type.
+        // Required-field errors are separate from relationship/body errors.
         let missing: Vec<_> = errs
             .iter()
             .filter(|e| e.message.contains("required field"))
             .collect();
         assert_eq!(
             missing.len(),
-            5,
-            "Expected 5 missing-field errors: {errs:?}"
+            3,
+            "Expected 3 missing-field errors: {errs:?}"
         );
     }
 
     #[test]
     fn test_validate_task_invalid_status() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         let content =
             valid_task_content().replace("status: \"in_progress\"", "status: \"INVALID\"");
         std::fs::write(&path, content).unwrap();
@@ -613,10 +908,44 @@ Criteria
     }
 
     #[test]
+    fn test_validate_task_rejects_task_branch_as_integration_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("TSK-022.md");
+        let content = valid_task_content().replace(
+            "integration_target: main",
+            "integration_target: task/TSK-022-self",
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let opts = ValidateOptions::default();
+        let (errs, _) = validate_task(&path, &opts).unwrap();
+        assert!(errs.iter().any(|error| {
+            error.field == "integration_target" && error.message.contains("stable non-task branch")
+        }));
+    }
+
+    #[test]
+    fn test_validate_task_rejects_full_object_id_as_integration_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("TSK-022.md");
+        let content = valid_task_content().replace(
+            "integration_target: main",
+            "integration_target: 0123456789abcdef0123456789abcdef01234567",
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let opts = ValidateOptions::default();
+        let (errs, _) = validate_task(&path, &opts).unwrap();
+        assert!(errs.iter().any(|error| {
+            error.field == "integration_target" && error.message.contains("stable non-task branch")
+        }));
+    }
+
+    #[test]
     fn test_validate_task_v1_work_type_rejected() {
         // v1 used uppercase work types (FEAT); v2 uses the branch-prefix set.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         let content = valid_task_content().replace("work_type: \"feat\"", "work_type: \"FEAT\"");
         std::fs::write(&path, content).unwrap();
 
@@ -626,25 +955,21 @@ Criteria
     }
 
     #[test]
-    fn test_validate_task_v1_format_id_rejected() {
-        // v1 area-prefixed ids (INF-TSK-022-014) are not valid v2 ids.
+    fn test_validate_task_area_prefixed_id_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("INF-TSK-022-014.md");
-        let content = valid_task_content().replace(
-            "format_id: \"TSK-022-014\"",
-            "format_id: \"INF-TSK-022-014\"",
-        );
+        let path = dir.path().join("INF-TSK-022.md");
+        let content = valid_task_content().replace("id: \"TSK-022\"", "id: \"INF-TSK-022\"");
         std::fs::write(&path, content).unwrap();
 
         let opts = ValidateOptions::default();
         let (errs, _) = validate_task(&path, &opts).unwrap();
-        assert!(errs.iter().any(|e| e.field == "format_id"));
+        assert!(errs.iter().any(|e| e.field == "id"));
     }
 
     #[test]
     fn test_validate_task_invalid_estimate() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         let content = valid_task_content().replace("estimate: \"M\"", "estimate: \"HUGE\"");
         std::fs::write(&path, content).unwrap();
 
@@ -656,7 +981,7 @@ Criteria
     #[test]
     fn test_validate_task_acceptance_must_be_array() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         let content =
             valid_task_content().replace("acceptance:\n  - \"All tests pass\"", "acceptance: 42");
         std::fs::write(&path, content).unwrap();
@@ -684,7 +1009,7 @@ Criteria
     #[test]
     fn test_validate_task_missing_sections() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         let content = valid_task_content().replace("## Acceptance Criteria", "## Something Else");
         std::fs::write(&path, content).unwrap();
 
@@ -702,7 +1027,7 @@ Criteria
     #[test]
     fn test_validate_task_custom_sections() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("TSK-022-014.md");
+        let path = dir.path().join("TSK-022.md");
         std::fs::write(&path, valid_task_content()).unwrap();
 
         let opts = ValidateOptions {
@@ -714,14 +1039,14 @@ Criteria
     }
 
     #[test]
-    fn test_validate_task_filename_mismatch_warns() {
+    fn test_validate_task_filename_mismatch_fails() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wrong-name.md");
         std::fs::write(&path, valid_task_content()).unwrap();
 
         let opts = ValidateOptions::default();
-        let (_, warns) = validate_task(&path, &opts).unwrap();
-        assert!(warns.iter().any(|w| w.field == "format_id"));
+        let (errors, _) = validate_task(&path, &opts).unwrap();
+        assert!(errors.iter().any(|error| error.field == "id"));
     }
 
     // -- epic validation --
@@ -746,42 +1071,40 @@ Criteria
 
         let opts = ValidateOptions::default();
         let (errs, _) = validate_epic(&path, &opts).unwrap();
-        // Should flag missing: id, format_id, status, work_type.
+        // Required-field errors are separate from body errors.
         let missing: Vec<_> = errs
             .iter()
             .filter(|e| e.message.contains("required field"))
             .collect();
         assert_eq!(
             missing.len(),
-            4,
-            "Expected 4 missing-field errors: {errs:?}"
+            3,
+            "Expected 3 missing-field errors: {errs:?}"
         );
     }
 
     #[test]
-    fn test_validate_epic_invalid_format_id() {
+    fn test_validate_epic_invalid_id() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.md");
-        let content =
-            valid_epic_content().replace("format_id: \"EPC-022\"", "format_id: \"invalid\"");
+        let content = valid_epic_content().replace("id: \"EPC-022\"", "id: \"invalid\"");
         std::fs::write(&path, content).unwrap();
 
         let opts = ValidateOptions::default();
         let (errs, _) = validate_epic(&path, &opts).unwrap();
-        assert!(errs.iter().any(|e| e.field == "format_id"));
+        assert!(errs.iter().any(|e| e.field == "id"));
     }
 
     #[test]
-    fn test_validate_epic_v1_format_id_rejected() {
+    fn test_validate_epic_area_prefixed_id_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("INF-EPC-022.md");
-        let content =
-            valid_epic_content().replace("format_id: \"EPC-022\"", "format_id: \"INF-EPC-022\"");
+        let content = valid_epic_content().replace("id: \"EPC-022\"", "id: \"INF-EPC-022\"");
         std::fs::write(&path, content).unwrap();
 
         let opts = ValidateOptions::default();
         let (errs, _) = validate_epic(&path, &opts).unwrap();
-        assert!(errs.iter().any(|e| e.field == "format_id"));
+        assert!(errs.iter().any(|e| e.field == "id"));
     }
 
     #[test]
@@ -808,6 +1131,25 @@ Criteria
         assert!(errs.iter().any(|e| e.message.contains("Summary")));
     }
 
+    #[test]
+    fn complete_workgraph_rejects_duplicate_identity_across_layouts() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path().join("project-management");
+        std::fs::create_dir_all(pm.join("epics/EPC-022")).unwrap();
+        std::fs::create_dir_all(pm.join("specs")).unwrap();
+        std::fs::create_dir_all(pm.join("tasks")).unwrap();
+        std::fs::write(pm.join("epics/EPC-022.md"), valid_epic_content()).unwrap();
+        std::fs::write(pm.join("epics/EPC-022/EPC-022.md"), valid_epic_content()).unwrap();
+
+        let report = validate_workgraph(dir.path());
+        assert!(!report.is_clean());
+        assert!(report.issues.iter().any(|issue| {
+            issue.contains("duplicate work id EPC-022")
+                && issue.contains("project-management/epics/EPC-022.md")
+                && issue.contains("project-management/epics/EPC-022/EPC-022.md")
+        }));
+    }
+
     // -- helpers --
 
     #[test]
@@ -817,8 +1159,13 @@ Criteria
             "format_id".to_string(),
             serde_yaml::Value::String("TSK-001-001".into()),
         );
-        let warns = check_filename_match(Path::new("wrong-name.md"), &data);
-        assert!(!warns.is_empty());
+        let (_, errors, _) = canonical_identity(
+            Path::new("wrong-name.md"),
+            &data,
+            is_valid_task_format_id,
+            "TSK-NNN",
+        );
+        assert!(!errors.is_empty());
     }
 
     #[test]
@@ -845,6 +1192,61 @@ Criteria
         assert!(is_field_empty(&data, "empty_seq"));
         assert!(is_field_empty(&data, "absent"));
         assert!(!is_field_empty(&data, "filled"));
+    }
+
+    #[test]
+    fn section_content_ignores_complete_and_unclosed_html_comments() {
+        assert!(!section_has_content(
+            b"## Open questions\n<!--\nplaceholder\nspans lines\n-->\n## Decisions\nDone\n",
+            "## Open questions"
+        ));
+        assert!(!section_has_content(
+            b"## Open questions\n<!-- unfinished placeholder\nstill a comment\n",
+            "## Open questions"
+        ));
+    }
+
+    #[test]
+    fn section_content_detects_text_around_multiple_html_comments() {
+        assert!(section_has_content(
+            b"## Open questions\n<!-- first -->\nMaterial question\n<!-- second -->\n## Decisions\n",
+            "## Open questions"
+        ));
+        assert!(section_has_content(
+            b"## Open questions\n<!-- placeholder --> actual question\n## Decisions\n",
+            "## Open questions"
+        ));
+    }
+
+    #[test]
+    fn resolved_open_question_markers_are_not_unresolved_questions() {
+        for marker in [
+            "",
+            "None",
+            "N/A",
+            "Not applicable.",
+            "All resolved",
+            "All resolved during planning.",
+            "No open questions remain.",
+            "Resolved — see SPC-008.",
+            "None — all resolved during planning.",
+        ] {
+            let body =
+                format!("## Open questions\n{marker}\n<!-- placeholder -->\n## Decisions\nDone\n");
+            assert!(
+                !section_has_unresolved_questions(body.as_bytes()),
+                "{marker:?} must describe a resolved section"
+            );
+        }
+        assert!(section_has_unresolved_questions(
+            b"## Open questions\nWhich recovery channel is authoritative?\n## Decisions\n"
+        ));
+        assert!(section_has_unresolved_questions(
+            b"## Open questions\nNone are resolved yet.\n## Decisions\n"
+        ));
+        assert!(section_has_unresolved_questions(
+            b"## Open questions\nAll resolved except the recovery channel.\n## Decisions\n"
+        ));
     }
 
     // -- enum consts stay in lockstep with the model enums --

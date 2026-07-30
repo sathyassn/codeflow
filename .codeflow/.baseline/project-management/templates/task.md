@@ -1,16 +1,18 @@
 ---
-id: TSK-{{NNN}}-{{MMM}}
-format_id: TSK-{{NNN}}-{{MMM}}   # TSK-NNN-NNN: epic number, task number — must match the filename
-epic_id: EPC-{{NNN}}
-title: {{TITLE}}
+id: TSK-{{NNN}}
+epic_id: {{EPIC_ID}}              # EPC-NNN, or null for a justified standalone task
+standalone_reason: {{STANDALONE_REASON}} # required exactly when epic_id is null
+title: {{TITLE_YAML}}
 status: todo             # todo | blocked | in_progress | complete | cancelled
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
+specs: []                # task-specific SPC-### inputs; epic specs are inherited
 depends_on: []           # structural predecessors; Plan guards own branch readiness
+integration_target: {{TARGET_BRANCH}} # main/master or integration/EPC-NNN-<slug>
 external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
 ---
 
-# TSK-{{NNN}}-{{MMM}} — {{TITLE}}
+# TSK-{{NNN}} — {{TITLE}}
 
 ## Description
 
@@ -27,9 +29,10 @@ created: {{DATE}}
 <!-- The single home for this task's acceptance — testable statements,
      preferably in EARS ("When <trigger>, the system shall <response>") or
      Given/When/Then form; a subset scoped from the epic's when there is one.
-     Each criterion names a concrete, machine-verifiable check — a command, a
-     test path, or an observable with a threshold; the reviewer checks them with
-     evidence, and unverifiable claims are defects. -->
+     Each criterion names concrete, claim-matched evidence: automate where
+     meaningful, otherwise name a bounded observable or review. Do not invent
+     a hard-coded or meaningless test merely to satisfy the record. The
+     reviewer checks the named evidence, and unsupported claims are defects. -->
 
 - [ ]
 

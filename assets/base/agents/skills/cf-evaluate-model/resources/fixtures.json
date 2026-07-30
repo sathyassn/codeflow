@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-26-e2e-isolation-v1",
+  "fixtures_version": "2026-07-29-durable-work-lifecycle-v3",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -583,6 +583,32 @@
       "files": {
         "DECISION.md": "# Proposed task authority\n\nReplace Git-visible work records and the team's networked tracker with an untracked SQLite file at `.codeflow/team-work.db`. Each developer and CI runner will maintain a local copy. A script may reconcile them later. The proposal claims this avoids merge conflicts.\n",
         "PROJECT.md": "# Operating shape\n\nSix contributors work from three hosts and parallel worktrees. The team needs shared assignment, permissions, backup, audit, concurrent updates, and fast local search when disconnected.\n"
+      }
+    },
+    {
+      "id": "durable-work-lifecycle",
+      "tier": "full",
+      "state": {"branch": "fixture/durable-work-lifecycle", "peer": "available", "target": "integration/EPC-014-account-recovery", "target_precedes_fixture": true},
+      "files": {
+        "BRIEF.md": "# Account recovery\n\nAdd account recovery across the existing web, API, worker, and notification surfaces. Preserve the existing privacy boundary. The operator has not decided whether recovery links may remain valid after a password change.\n",
+        "docs/product.md": "# Product\n\nAccount owners must recover access without disclosing whether an unknown email has an account.\n\n## Non-goals\n\n- Changing sign-in authentication\n- Marketing communication\n",
+        "docs/capabilities.md": "# Capabilities\n\nCAP-014: account authentication — shipped\nCAP-021: transactional notifications — shipped\n",
+        "project-management/epics/EPC-014.md": "---\nid: EPC-014\ntitle: Account recovery\nstatus: planning\nwork_type: feat\nspecs: [SPC-009]\ncreated: 2026-07-29\n---\n",
+        "project-management/specs/SPC-009.md": "---\nid: SPC-009\ntitle: Recovery contract\nstatus: draft\ncreated: 2026-07-29\n---\n\n## Open questions\n\n- Does a password change revoke outstanding recovery links?\n",
+        "project-management/tasks/TSK-061.md": "---\nid: TSK-061\nepic_id: EPC-014\nstandalone_reason: null\ntitle: Recovery API\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: integration/EPC-014-account-recovery\ncreated: 2026-07-29\n---\n",
+        "project-management/tasks/TSK-062.md": "---\nid: TSK-062\nepic_id: null\nstandalone_reason: null\ntitle: Recovery web experience\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [TSK-061]\nintegration_target: integration/EPC-014-account-recovery\ncreated: 2026-07-29\n---\n"
+      }
+    },
+    {
+      "id": "valid-unmerged-planning",
+      "tier": "full",
+      "state": {"branch": "fixture/valid-unmerged-planning", "peer": "available", "target": "integration/EPC-014-account-recovery", "target_precedes_fixture": true},
+      "files": {
+        "BRIEF.md": "# Account recovery\n\nThe planning graph is complete and valid on this branch, but its planning PR has not reached the declared integration target. Determine whether implementation may begin and what the work-start preflight may change.\n",
+        "docs/product.md": "# Product\n\nAccount owners must recover access without disclosing whether an unknown email has an account.\n\n## Non-goals\n\n- Changing sign-in authentication\n",
+        "project-management/epics/EPC-014.md": "---\nid: EPC-014\ntitle: Account recovery\nstatus: planning\nwork_type: feat\ncapabilities: []\nadrs: []\nspecs: [SPC-009]\ncreated: 2026-07-29\n---\n\n## Summary\n\nDeliver the settled account-recovery outcome.\n\n## Acceptance Criteria\n\n- [ ] The approved recovery contract is implemented and verified.\n",
+        "project-management/specs/SPC-009.md": "---\nid: SPC-009\ntitle: Recovery contract\nstatus: approved\ncreated: 2026-07-29\n---\n\n## Summary\n\nPin the recovery-link behavior consumed by EPC-014.\n\n## Behavior\n\nRecovery links are single-use and expire according to the settled policy.\n\n## Open questions\n\n",
+        "project-management/tasks/TSK-061.md": "---\nid: TSK-061\nepic_id: EPC-014\nstandalone_reason: null\ntitle: Recovery API\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: integration/EPC-014-account-recovery\ncreated: 2026-07-29\n---\n\n## Description\n\nImplement the bounded recovery API contract.\n\n## Acceptance Criteria\n\n- [ ] The API satisfies SPC-009 with automated evidence.\n"
       }
     }
   ]

@@ -15,6 +15,7 @@ pub mod remote;
 pub mod status;
 pub mod test;
 pub mod validate;
+pub mod work;
 
 use std::path::PathBuf;
 

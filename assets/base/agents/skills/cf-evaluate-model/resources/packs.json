@@ -96,11 +96,15 @@
     },
     {
       "id": "project-organization",
-      "description": "Focused diagnostics for durable work authority, external planning-method coexistence, and local-cache boundaries.",
+      "description": "Focused diagnostics for durable work authority, planning clarity, graph integrity, stable anchors, external-method coexistence, and local-cache boundaries.",
       "includes": [],
       "cases": [
         "external-method-keeps-work-authority",
         "local-database-is-not-team-work-authority",
+        "planning-clarifies-only-operator-owned-choice",
+        "planning-lifecycle-routes-happy-and-exception-paths",
+        "workgraph-rejects-orphan-and-draft-spec",
+        "stable-planning-anchor-is-read-only",
         "graph-mutation-creates-new-version",
         "in-node-detail-does-not-replan"
       ]

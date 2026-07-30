@@ -12,12 +12,20 @@ use super::status::TaskStatus;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Task {
-    /// ULID-based internal id (e.g., `task-01abc...`).
+    /// Stable record id. Canonical records use `TSK-NNN`.
     pub id: String,
-    /// Human-readable format id (e.g., `TSK-001-002`).
+    /// Compatibility alias for historical `id` + `format_id` records.
+    ///
+    /// New records set this to the same value as `id` and never persist the
+    /// duplicate field.
     pub format_id: String,
-    /// Parent epic's ULID-based id.
-    pub epic_id: String,
+    /// Parent epic id, or `None` for an explicitly justified standalone task.
+    pub epic_id: Option<String>,
+    /// Required when `epic_id` is absent.
+    pub standalone_reason: Option<String>,
+    /// Specifications consumed directly by this task. Epic-linked tasks also
+    /// inherit specifications referenced by their epic.
+    pub specs: Vec<String>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
@@ -37,6 +45,10 @@ pub struct Task {
     /// New records use `depends_on`; deserialization accepts the historical
     /// `dependencies` spelling as an alias.
     pub depends_on: Vec<String>,
+    /// Stable branch into which this task's planning record must be merged
+    /// before implementation starts. Required for canonical `TSK-NNN`
+    /// records; optional only while reading historical task records.
+    pub integration_target: Option<String>,
     pub branch: Option<String>,
     pub pr_number: Option<i64>,
     pub created_at: String,
@@ -58,8 +70,14 @@ impl<'de> Deserialize<'de> for Task {
         #[derive(Deserialize)]
         struct Wire {
             id: String,
-            format_id: String,
-            epic_id: String,
+            #[serde(default)]
+            format_id: Option<String>,
+            #[serde(default)]
+            epic_id: Option<String>,
+            #[serde(default)]
+            standalone_reason: Option<String>,
+            #[serde(default)]
+            specs: Vec<String>,
             title: String,
             #[serde(default)]
             description: Option<String>,
@@ -76,6 +94,8 @@ impl<'de> Deserialize<'de> for Task {
             #[serde(default, alias = "dependencies")]
             depends_on: Vec<String>,
             #[serde(default)]
+            integration_target: Option<String>,
+            #[serde(default)]
             branch: Option<String>,
             #[serde(default)]
             pr_number: Option<i64>,
@@ -91,10 +111,13 @@ impl<'de> Deserialize<'de> for Task {
 
         let w = Wire::deserialize(deserializer)?;
         let updated_at = w.updated_at.unwrap_or_else(|| w.created_at.clone());
+        let format_id = w.format_id.unwrap_or_else(|| w.id.clone());
         Ok(Task {
             id: w.id,
-            format_id: w.format_id,
+            format_id,
             epic_id: w.epic_id,
+            standalone_reason: w.standalone_reason,
+            specs: w.specs,
             title: w.title,
             description: w.description,
             status: w.status,
@@ -104,6 +127,7 @@ impl<'de> Deserialize<'de> for Task {
             acceptance: w.acceptance,
             tests: w.tests,
             depends_on: w.depends_on,
+            integration_target: w.integration_target,
             branch: w.branch,
             pr_number: w.pr_number,
             created_at: w.created_at,
@@ -148,7 +172,9 @@ created: 2026-07-05T00:00:00Z
         Task {
             id: "task-01abc123".to_string(),
             format_id: "TSK-001-002".to_string(),
-            epic_id: "epic-01xyz".to_string(),
+            epic_id: Some("epic-01xyz".to_string()),
+            standalone_reason: None,
+            specs: Vec::new(),
             title: "Test Task".to_string(),
             description: Some("A test task".to_string()),
             status: TaskStatus::Todo,
@@ -158,6 +184,7 @@ created: 2026-07-05T00:00:00Z
             acceptance: vec!["All tests pass".to_string()],
             tests: vec!["crates/codeflow-core/src/".to_string()],
             depends_on: vec!["TSK-001-001".to_string()],
+            integration_target: Some("main".to_string()),
             branch: None,
             pr_number: None,
             created_at: "2026-03-07T00:00:00Z".to_string(),

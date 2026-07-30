@@ -446,7 +446,7 @@ mod tests {
         let store = MarkdownStore::new(dir.path().join("project-management")).unwrap();
         let now = "2026-06-12T00:00:00Z".to_string();
         let epic = Epic {
-            id: "epic-01a".into(),
+            id: "EPC-001".into(),
             format_id: "EPC-001".into(),
             title: "Hook plane".into(),
             summary: None,
@@ -461,9 +461,11 @@ mod tests {
         for (i, status) in [TaskStatus::Todo, TaskStatus::Complete].iter().enumerate() {
             store
                 .create_task(&Task {
-                    id: format!("task-0{i}"),
+                    id: format!("TSK-001-00{i}"),
                     format_id: format!("TSK-001-00{i}"),
-                    epic_id: "epic-01a".into(),
+                    epic_id: Some("EPC-001".into()),
+                    standalone_reason: None,
+                    specs: Vec::new(),
                     title: format!("t{i}"),
                     description: None,
                     status: *status,
@@ -473,6 +475,7 @@ mod tests {
                     acceptance: Vec::new(),
                     tests: Vec::new(),
                     depends_on: Vec::new(),
+                    integration_target: None,
                     branch: None,
                     pr_number: None,
                     created_at: now.clone(),

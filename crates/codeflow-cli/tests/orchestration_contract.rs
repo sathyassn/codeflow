@@ -540,13 +540,16 @@ fn project_organization_has_one_authority_and_honest_closeout() {
 
     for required in [
         "epics/EPC-NNN.md",
-        "tasks/TSK-NNN-MMM.md",
+        "tasks/TSK-NNN.md",
         "specs/SPC-NNN.md",
-        "The system that owns an item's status, acceptance, and lifecycle is its authority",
-        "not a status mirror",
-        "host-local database the shared team authority",
-        "do not import or paraphrase an equivalent spec/task tree",
-        "stop; settle and dual-approve Plan vN+1 before continuing",
+        "independent, repo-wide sequences",
+        "The authority owns status, acceptance, and lifecycle",
+        "never mirrored status",
+        "must remain rebuildable from Git Markdown",
+        "Do not import or paraphrase an equivalent authoritative tree",
+        "reconcile and dual-approve Plan vN+1",
+        "codeflow work start TSK-NNN",
+        "planning PR",
     ] {
         assert!(
             reference.contains(required),

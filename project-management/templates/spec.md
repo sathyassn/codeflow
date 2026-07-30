@@ -1,25 +1,22 @@
 ---
 id: SPC-{{NNN}}
-format_id: SPC-{{NNN}}   # SPC-NNN — must match the filename
-epic_id: EPC-{{NNN}}
-title: {{TITLE}}
-status: draft            # draft | implemented — set implemented (frozen) when the epic ships
+title: {{TITLE_YAML}}
+status: draft            # draft | approved | implemented
 created: {{DATE}}
 ---
 
 # SPC-{{NNN}} — {{TITLE}}
 
-<!-- Specs are hand-authored input docs, not living documents and not managed
-     by any CLI tooling — no allocator (pick SPC-{{NNN}} by hand to match this
-     file's epic), no model, no `validate` support. Write one only when
-     interfaces, formats, or behavior need pinning down before building —
-     many epics need no spec. Frozen at ship: after that, truth lives in
-     architecture + capabilities + tests, findable via `codeflow recall`.
-     Never update a frozen spec to match later reality. -->
+<!-- Specs are inputs, not living documents. `codeflow spec new --for
+     EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
+     item. Write one only when interfaces, formats, or behavior need pinning
+     down before building; many work items need no spec. `approved` requires
+     no unresolved open question. Set `implemented` and freeze the record when
+     the consuming work ships; later change gets a new spec. -->
 
 ## Summary
 
-<!-- What is being pinned down, and for which epic. -->
+<!-- What is being pinned down and why the consuming work needs it. -->
 
 ## Delta against current capability
 
@@ -49,4 +46,4 @@ created: {{DATE}}
 
 ## Open questions
 
-<!-- Must be empty before building starts. -->
+<!-- Before building starts, leave empty or state explicitly that all are resolved. -->

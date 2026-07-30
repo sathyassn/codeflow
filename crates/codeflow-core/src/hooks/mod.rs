@@ -61,8 +61,9 @@ pub const HUMAN_OVERRIDE_ENV: &str = "CODEFLOW_HUMAN_OVERRIDE";
 /// A single policy violation found by a hook plane.
 #[derive(Debug, Clone)]
 pub struct Violation {
-    /// The violated policy rule, dotted-path into `policy.json`
-    /// (e.g. `git.push_to_protected`).
+    /// Stable rule identifier. Policy-backed rules are dotted paths into
+    /// `policy.json` (for example `git.push_to_protected`); lifecycle
+    /// invariants use their own namespace.
     pub rule: String,
     /// Enforcement level the policy assigns this rule (block or warn).
     pub level: PolicyLevel,
@@ -95,6 +96,24 @@ impl Violation {
         };
         format!(
             "codeflow {plane}: {verdict} — policy rule {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  policy file: .codeflow/policy.json",
+            rule = self.rule,
+            level = self.level,
+            msg = self.message,
+            remedy = self.remedy,
+        )
+    }
+
+    /// Render a non-configurable lifecycle invariant without falsely
+    /// attributing it to `policy.json`.
+    #[must_use]
+    pub fn render_invariant(&self, plane: &str, authority: &str) -> String {
+        let verdict = match self.level {
+            PolicyLevel::Block => "BLOCKED",
+            PolicyLevel::Warn => "warning",
+            PolicyLevel::Allow | PolicyLevel::Off => "note",
+        };
+        format!(
+            "codeflow {plane}: {verdict} — lifecycle invariant {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  authority: {authority}",
             rule = self.rule,
             level = self.level,
             msg = self.message,

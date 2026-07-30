@@ -49,7 +49,9 @@ KNOWN_VALIDITY_FLAGS = {
     "unresolved_grader_disagreement",
 }
 EVALUATION_ROUTE_PREFIX = "| Qualify a model or harness change |"
-SAFE_BRANCH = re.compile(r"^(?:main|master|fixture/[a-z0-9][a-z0-9-]*)$")
+SAFE_BRANCH = re.compile(
+    r"^(?:main|master|fixture/[a-z0-9][a-z0-9-]*|integration/[A-Za-z0-9][A-Za-z0-9-]*)$"
+)
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 RFC3339 = re.compile(
     r"^(?P<date_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
@@ -512,6 +514,17 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 errors.append(f"{fixture_id}: unsafe branch {branch!r}")
             local_origin_main = state.get("local_origin_main") is True
             squash_cleanup = state.get("squash_cleanup_worktree") is True
+            target_precedes_fixture = state.get("target_precedes_fixture") is True
+            if target_precedes_fixture:
+                target = state.get("target")
+                if not isinstance(target, str) or not SAFE_BRANCH.fullmatch(target):
+                    errors.append(
+                        f"{fixture_id}: target_precedes_fixture requires a safe state.target"
+                    )
+                elif target == branch:
+                    errors.append(
+                        f"{fixture_id}: target_precedes_fixture target must differ from state.branch"
+                    )
             if local_origin_main and branch != "main":
                 errors.append(
                     f"{fixture_id}: local_origin_main requires state.branch to be main"
@@ -520,6 +533,11 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 errors.append(
                     f"{fixture_id}: local_origin_main and "
                     "squash_cleanup_worktree are mutually exclusive"
+                )
+            if target_precedes_fixture and (local_origin_main or squash_cleanup):
+                errors.append(
+                    f"{fixture_id}: target_precedes_fixture is mutually exclusive "
+                    "with local_origin_main and squash_cleanup_worktree"
                 )
             if "untracked_files" in state:
                 try:
@@ -794,6 +812,13 @@ def reset_fixture_history(
         configure_fixture_hooks(root)
 
 
+def configure_target_before_fixture(root: Path, target: str, branch: str) -> None:
+    """Create a plan branch from a real target before subject files are added."""
+
+    reset_fixture_history(root, target, install_hooks=False)
+    run_command(["git", "switch", "-c", branch], root)
+
+
 def configure_local_origin_main(root: Path, origin: Path) -> None:
     """Add a fixture-local bare origin whose main tip matches the subject HEAD."""
 
@@ -887,11 +912,15 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     tier_flag = "--full" if fixture["tier"] == "full" else "--standard"
     run_command([str(codeflow_path), "init", "--yes", tier_flag], output)
     remove_grader_material(output)
+    state = fixture["state"]
+    branch = state.get("branch", "fixture/base")
+    target_precedes_fixture = state.get("target_precedes_fixture") is True
+    if target_precedes_fixture:
+        configure_target_before_fixture(output, state["target"], branch)
     for relative, content in fixture["files"].items():
         write_fixture_file(output, relative, content)
     write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
     assert_no_grader_material(output)
-    state = fixture["state"]
     post_history_files: dict[str, str] = {}
     for relative in state.get("untracked_files", []):
         safe = safe_relative_path(relative)
@@ -900,8 +929,11 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
             raise EvalError(f"untracked fixture file is missing: {relative}")
         post_history_files[relative] = target.read_text(encoding="utf-8")
         target.unlink()
-    branch = state.get("branch", "fixture/base")
-    reset_fixture_history(output, branch, install_hooks=False)
+    if target_precedes_fixture:
+        run_command(["git", "add", "-A"], output)
+        run_command(["git", "commit", "-m", "chore: add evaluation subject"], output)
+    else:
+        reset_fixture_history(output, branch, install_hooks=False)
     if state.get("squash_cleanup_worktree") is True:
         configure_squash_cleanup_worktree(output, state)
     elif state.get("local_origin_main") is True:

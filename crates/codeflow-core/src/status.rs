@@ -488,10 +488,9 @@ fn collect_delivery(
         epics.iter().map(|e| (e.format_id.as_str(), e)).collect();
     let mut tasks_by_epic: BTreeMap<&str, Vec<&Task>> = BTreeMap::new();
     for task in &tasks {
-        tasks_by_epic
-            .entry(task.epic_id.as_str())
-            .or_default()
-            .push(task);
+        if let Some(epic_id) = task.epic_id.as_deref() {
+            tasks_by_epic.entry(epic_id).or_default().push(task);
+        }
     }
 
     let rollup = capabilities
@@ -770,16 +769,18 @@ mod tests {
     }
 
     fn task_fixture(
-        id: &str,
+        _legacy_id: &str,
         format_id: &str,
         epic_id: &str,
         title: &str,
         status: TaskStatus,
     ) -> Task {
         Task {
-            id: id.into(),
+            id: format_id.into(),
             format_id: format_id.into(),
-            epic_id: epic_id.into(),
+            epic_id: Some(epic_id.into()),
+            standalone_reason: None,
+            specs: vec![],
             title: title.into(),
             description: None,
             status,
@@ -789,6 +790,7 @@ mod tests {
             acceptance: vec![],
             tests: vec![],
             depends_on: vec![],
+            integration_target: None,
             branch: None,
             pr_number: None,
             created_at: "2026-07-05T00:00:00Z".into(),
@@ -849,7 +851,7 @@ mod tests {
         let store = MarkdownStore::new(dir.path().join("project-management")).unwrap();
         store
             .create_epic(&Epic {
-                id: "epic-01a".into(),
+                id: "EPC-001".into(),
                 format_id: "EPC-001".into(),
                 title: "Build the flow".into(),
                 summary: None,
@@ -863,9 +865,11 @@ mod tests {
             .unwrap();
         store
             .create_task(&Task {
-                id: "task-01a".into(),
+                id: "TSK-001-001".into(),
                 format_id: "TSK-001-001".into(),
-                epic_id: "epic-01a".into(),
+                epic_id: Some("EPC-001".into()),
+                standalone_reason: None,
+                specs: vec![],
                 title: "Wire the CLI".into(),
                 description: None,
                 status: TaskStatus::Todo,
@@ -875,6 +879,7 @@ mod tests {
                 acceptance: vec![],
                 tests: vec![],
                 depends_on: vec![],
+                integration_target: None,
                 branch: None,
                 pr_number: None,
                 created_at: "2026-06-11T00:00:00Z".into(),
@@ -954,8 +959,8 @@ mod tests {
         init_repo(dir.path());
 
         let store = MarkdownStore::new(dir.path().join("project-management")).unwrap();
-        let mk_epic = |id: &str, fid: &str, title: &str| Epic {
-            id: id.into(),
+        let mk_epic = |_legacy_id: &str, fid: &str, title: &str| Epic {
+            id: fid.into(),
             format_id: fid.into(),
             title: title.into(),
             summary: None,
@@ -980,7 +985,7 @@ mod tests {
             .create_task(&task_fixture(
                 "task-01a",
                 "TSK-001-001",
-                "epic-01a",
+                "EPC-001",
                 "Wire CLI",
                 TaskStatus::Todo,
             ))
@@ -989,7 +994,7 @@ mod tests {
             .create_task(&task_fixture(
                 "task-01b",
                 "TSK-001-002",
-                "epic-01a",
+                "EPC-001",
                 "Ship it",
                 TaskStatus::Complete,
             ))
@@ -998,7 +1003,7 @@ mod tests {
             .create_task(&task_fixture(
                 "task-02a",
                 "TSK-002-001",
-                "epic-02b",
+                "EPC-002",
                 "Elsewhere",
                 TaskStatus::Todo,
             ))

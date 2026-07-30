@@ -398,7 +398,8 @@ fn epic_new_allocates_and_scaffolds_from_template() {
     let epic_path = dir.path().join("project-management/epics/EPC-001.md");
     assert!(epic_path.exists(), "scaffolds the epic file");
     let body = std::fs::read_to_string(&epic_path).unwrap();
-    assert!(body.contains("format_id: EPC-001"), "rendered id: {body}");
+    assert!(body.contains("id: EPC-001"), "rendered id: {body}");
+    assert!(!body.contains("format_id:"), "one stable id: {body}");
     assert!(body.contains("Ship the thing"), "rendered title: {body}");
     assert!(!body.contains("{{"), "no placeholder survives: {body}");
 
@@ -413,7 +414,7 @@ fn epic_new_allocates_and_scaffolds_from_template() {
 }
 
 #[test]
-fn task_new_scopes_numbering_to_its_epic() {
+fn task_new_allocates_independent_ids_across_epics() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     codeflow(dir.path(), &["epic", "new", "Epic one"]); // EPC-001
@@ -421,15 +422,15 @@ fn task_new_scopes_numbering_to_its_epic() {
 
     let t1 = codeflow(dir.path(), &["task", "new", "--epic", "EPC-001", "First"]);
     assert_eq!(t1.status.code(), Some(0), "stderr: {}", stderr(&t1));
-    assert!(stdout(&t1).contains("TSK-001-001"), "{}", stdout(&t1));
+    assert!(stdout(&t1).contains("TSK-001"), "{}", stdout(&t1));
     let t2 = codeflow(dir.path(), &["task", "new", "--epic", "EPC-001", "Second"]);
-    assert!(stdout(&t2).contains("TSK-001-002"), "{}", stdout(&t2));
+    assert!(stdout(&t2).contains("TSK-002"), "{}", stdout(&t2));
 
-    // A different epic restarts task numbering at 001.
+    // Task ids remain globally independent of their parent epic.
     let other = codeflow(dir.path(), &["task", "new", "--epic", "EPC-002", "Other"]);
-    assert!(stdout(&other).contains("TSK-002-001"), "{}", stdout(&other));
+    assert!(stdout(&other).contains("TSK-003"), "{}", stdout(&other));
 
-    let task_path = dir.path().join("project-management/tasks/TSK-001-001.md");
+    let task_path = dir.path().join("project-management/tasks/TSK-001.md");
     let body = std::fs::read_to_string(&task_path).unwrap();
     assert!(
         body.contains("epic_id: EPC-001"),
@@ -446,6 +447,188 @@ fn task_new_rejects_unknown_epic() {
     let output = codeflow(dir.path(), &["task", "new", "--epic", "EPC-404", "x"]);
     assert_eq!(output.status.code(), Some(1), "unknown epic must fail");
     assert!(stderr(&output).contains("not found"), "{}", stderr(&output));
+}
+
+#[test]
+fn task_new_rejects_self_authorizing_task_target() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Anchored work"]);
+
+    let output = codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            "task/TSK-001-work",
+            "Work",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("stable non-task branch name"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!dir
+        .path()
+        .join("project-management/tasks/TSK-001.md")
+        .exists());
+}
+
+#[test]
+fn task_new_rejects_a_missing_integration_target() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Anchored work"]);
+
+    let output = codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            "integration/EPC-001-missing",
+            "Work",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("does not resolve"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!dir
+        .path()
+        .join("project-management/tasks/TSK-001.md")
+        .exists());
+}
+
+#[test]
+fn spec_new_allocates_and_links_from_its_consumer() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Contracted work"]);
+
+    let output = codeflow(
+        dir.path(),
+        &["spec", "new", "--for", "EPC-001", "Public contract"],
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("SPC-001"), "{}", stdout(&output));
+    let spec =
+        std::fs::read_to_string(dir.path().join("project-management/specs/SPC-001.md")).unwrap();
+    assert!(spec.contains("id: SPC-001"), "{spec}");
+    assert!(!spec.contains("format_id:"), "{spec}");
+    let epic =
+        std::fs::read_to_string(dir.path().join("project-management/epics/EPC-001.md")).unwrap();
+    assert!(epic.contains("specs: [SPC-001]"), "{epic}");
+}
+
+#[test]
+fn work_start_proves_a_merged_planning_anchor_without_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Anchored work"]);
+    codeflow(
+        dir.path(),
+        &["task", "new", "--epic", "EPC-001", "Implement"],
+    );
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: anchor durable task"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
+
+    let before = codeflow(dir.path(), &["status"]);
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("TSK-001 anchored"),
+        "{}",
+        stdout(&output)
+    );
+    let after = codeflow(dir.path(), &["status"]);
+    assert_eq!(stdout(&before), stdout(&after), "work start is read-only");
+    let porcelain = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(porcelain.stdout.is_empty());
+}
+
+#[test]
+fn work_start_rejects_an_invalid_visible_workgraph() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "bounded repair",
+            "Repair",
+        ],
+    );
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: anchor repair task"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
+
+    write(
+        dir.path(),
+        "project-management/epics/EPC-999.md",
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+    );
+
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("current workgraph is invalid"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("EPC-999.md"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn task_new_requires_a_parent_or_explicit_standalone_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let missing = codeflow(dir.path(), &["task", "new", "Orphan"]);
+    assert_eq!(missing.status.code(), Some(2));
+
+    let standalone = codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "one bounded durable correction",
+            "Bounded correction",
+        ],
+    );
+    assert_eq!(
+        standalone.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&standalone)
+    );
+    let body =
+        std::fs::read_to_string(dir.path().join("project-management/tasks/TSK-001.md")).unwrap();
+    assert!(body.contains("epic_id: null"), "{body}");
+    assert!(
+        body.contains("standalone_reason: \"one bounded durable correction\""),
+        "{body}"
+    );
 }
 
 #[test]

@@ -95,7 +95,9 @@ ordinary task execution and adds no model-running CLI command.
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics/tasks/specs, capabilities |
 | `remote` | Remote provider operations (branch protection) |
 | `epic new` | Allocate the next `EPC-NNN` and scaffold the epic from the template |
-| `task new` | Allocate the next `TSK-NNN-MMM` under an epic and scaffold it |
+| `spec new --for <id>` | Allocate the next `SPC-NNN`, scaffold it, and link it from an epic or task |
+| `task new` | Allocate the next independent `TSK-NNN` under an epic or with an explicit standalone rationale |
+| `work start <task-id>` | Read-only proof that durable planning is anchored and its parent/spec/dependency graph is ready |
 | `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal — the host launches the harness and delivers the prompt (ADR-0036) |
 
 `codeflow test setup` with no options detects only stack markers at the project

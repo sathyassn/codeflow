@@ -80,8 +80,12 @@ enum Command {
     Remote(cmd::remote::RemoteArgs),
     /// Create an epic: allocate the next EPC-NNN and scaffold it from the template.
     Epic(cmd::new::EpicArgs),
-    /// Create a task under an epic: allocate the next TSK-NNN-MMM and scaffold it.
+    /// Create a spec: allocate the next SPC-NNN and link its consuming work item.
+    Spec(cmd::new::SpecArgs),
+    /// Create an epic-linked or reasoned standalone task.
     Task(cmd::new::TaskArgs),
+    /// Durable-work lifecycle checks.
+    Work(cmd::work::WorkArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -157,7 +161,9 @@ fn main() -> anyhow::Result<()> {
         Command::Recall(args) => cmd::recall::run(&args)?,
         Command::Remote(args) => cmd::remote::run(&args)?,
         Command::Epic(args) => std::process::exit(cmd::new::run_epic(&args)),
+        Command::Spec(args) => std::process::exit(cmd::new::run_spec(&args)),
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
+        Command::Work(args) => std::process::exit(cmd::work::run(&args)),
     }
     Ok(())
 }

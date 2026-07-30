@@ -250,6 +250,7 @@ impl Default for GitPolicy {
                 "ci/",
                 "hotfix/",
                 "plan/",
+                "task/",
                 "spike/",
                 "experiment/",
                 "integration/",
@@ -602,7 +603,7 @@ mod tests {
         assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
-        assert_eq!(g.branch_prefixes.len(), 12);
+        assert_eq!(g.branch_prefixes.len(), 13);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
         assert_eq!(g.test_gate_on_push, PolicyLevel::Warn);
         // Security / red-team gates bootstrap at `warn` (ADR-0016); they
@@ -833,6 +834,13 @@ mod tests {
         let g = GitPolicy::default();
         assert!(g.branch_prefixes.iter().any(|p| p == "integration/"));
         assert!(g.branch_name_ok("integration/ep-12-new-flow"));
+    }
+
+    #[test]
+    fn test_default_prefixes_include_durable_tasks() {
+        let g = GitPolicy::default();
+        assert!(g.branch_prefixes.iter().any(|p| p == "task/"));
+        assert!(g.branch_name_ok("task/TSK-014-account-recovery"));
     }
 
     #[test]

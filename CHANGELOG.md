@@ -9,31 +9,71 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > **Next release: `v3.0.0` (MAJOR).** Test configurations that use the
 > unsupported `changed_files` coverage scope must migrate to `per_file`,
 > `per_package`, `per_module`, or `global`. That explicit contract break requires
-> a major bump from `v2.1.0`; the feature additions below do not reduce it to a
+> a major bump from `v2.1.0`. Full-tier consumers must also repair canonical
+> work records before updating: `validate --docs` now blocks filename/ID
+> mismatches, malformed or dangling work relationships, completed tasks with
+> unchecked acceptance criteria, and approved/implemented specs with unresolved
+> open questions. Run the current `codeflow validate --docs`, fix every reported
+> record on a planning branch, and merge that repair before installing v3. The
+> feature additions below do not reduce these managed-contract changes to a
 > minor release.
 
 ### Fixed
 
+- **New durable records cannot start malformed.** Epic, spec, and task titles
+  are encoded safely in YAML and must be non-empty single-line labels. Task
+  allocation also proves that its declared integration target already resolves
+  to a real local or remote-tracking branch instead of deferring a missing
+  target to implementation time.
+- **Work-start targets cannot be arbitrary Git revisions.** The stable-anchor
+  preflight resolves only real local or remote-tracking non-task branches and
+  record validator rejects `HEAD`, full object IDs, tags, and revision
+  expressions before the ref lookup, preventing an implementation branch from
+  authorizing itself through a revspec alias.
+- **The stable-planning-anchor canary now tests its stated premise.** It uses a
+  real declared target at the fixture's parent commit and a locally valid,
+  approved workgraph added only on the planning branch, rather than sharing the
+  intentionally orphaned/draft-spec fixture used by graph-rejection cases.
 - **Partial epic and task updates preserve the complete planning record.**
   Status and delivery-field updates now patch the generic YAML frontmatter
   instead of re-serializing the narrower typed workgraph view. Capability,
   ADR, spec, graph, and future project-owned fields therefore remain intact,
   along with the markdown body and the template's `created` field shape.
+- **Planning and implementation gates now enforce one workgraph contract.**
+  Canonical task writers retain and require the stable integration target,
+  blocked/closed tasks cannot start, spec linking preserves consumer comments
+  and key order, and multiline template comments or explicit resolved markers
+  no longer masquerade as unresolved spec questions. Duplicate identities
+  across canonical and legacy layouts now fail normal validation, and anchored
+  parse failures retain their specific graph error. `work start`, full-tier
+  task-branch pre-commit, and full-tier task-branch CI all reject an invalid
+  visible graph before checking the same anchored task snapshot; planning
+  records created on a task branch cannot authorize their own implementation.
+  Minimal and standard tiers retain `task/` as an ordinary documented branch
+  prefix without requiring absent full-tier records. A focused lifecycle
+  canary now exercises the complete brief-to-cleanup route plus material
+  replanning, blocker strategy changes, cancellation honesty, and missing-seat
+  degradation.
 
 ### Changed
 
-- **Durable work now has one explicit, adaptable authority.** Full-tier
-  scaffolds document the canonical flat `EPC-NNN` / `TSK-NNN-MMM` / `SPC-NNN`
-  layout, monorepo area decomposition, serialized ID allocation across
-  worktrees, and loose-link coexistence with external trackers or planning
-  methods. Epic/task templates add opaque external references, affected
-  surfaces, a proportionate execution contract, and honest closeout: bounded
-  discoveries carry evidence, while material deviations require dual-approved
-  Plan vN+1 before work continues. Store, validation, and recall now share one
-  symlink-safe record enumerator; legacy nested records remain readable and
-  frozen specs become recall-findable. Provider-neutral behavioral canaries
-  guard external-method ownership and reject host-local databases as shared
-  team truth without rejecting SQLite as a rebuildable cache.
+- **Durable work now has one explicit, adaptable authority and a stable start
+  boundary (ADR-0046).** Full-tier scaffolds write independent `EPC-NNN`,
+  `SPC-NNN`, and `TSK-NNN` records in one flat Git Markdown workgraph. Tasks
+  declare an epic or standalone rationale, direct dependencies, consumed specs,
+  and a non-task integration target; specs are allocated and linked by the CLI.
+  Historical dual-identity, nested, and `TSK-NNN-NNN` records remain readable.
+  `codeflow work start` rejects task-branch targets and proves from the
+  merge-base that planning reached the declared target, the anchored record
+  declares that same target, and parents, specs, and predecessors are ready; the
+  full-tier pre-commit hook and detached CI reuse the same read-only core check,
+  and a full-tier task branch with no visible durable record fails locally
+  instead of falling through to ordinary commit checks. The
+  planning method now makes the discussion → independent duo settlement →
+  planning PR → anchored task → implementation/review/ship path and its
+  failure routes explicit. Monorepo decomposition, serialized allocation,
+  loose-link external trackers, bounded-deviation closeout, spec recall, and
+  rebuildable local caches remain part of the authority contract.
 - **End-to-end and concurrent UI verification now own their real boundaries
   (ADR-0044).** Material changed journeys map the affected frontend, service,
   state, external-seam, infrastructure, runtime, outcome, and recovery path,

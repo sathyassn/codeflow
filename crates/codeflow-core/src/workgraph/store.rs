@@ -1,7 +1,8 @@
 //! Record persistence for the workgraph.
 //!
-//! v2 replaces the v1 `SurrealDB` `DataStore` (charter D17: markdown + JSONL
-//! are the source of truth; databases are at most rebuildable caches).
+//! v2 replaces the v1 `SurrealDB` `DataStore`. Git-tracked markdown is the
+//! shared authority; JSONL is local operational evidence and databases are at
+//! most rebuildable caches.
 //! `RecordStore` is the minimal epic/task persistence surface the workgraph
 //! needs; `MarkdownStore` is the production implementation, persisting each
 //! record as a markdown file with YAML frontmatter.
@@ -24,6 +25,9 @@ pub enum StoreError {
 
     #[error("record not found: {0}")]
     NotFound(String),
+
+    #[error("invalid work record: {0}")]
+    Invalid(String),
 }
 
 /// Minimal persistence surface for workgraph records.
@@ -37,7 +41,7 @@ pub trait RecordStore {
     /// Returns `StoreError::Io` on write failure.
     fn create_epic(&self, epic: &Epic) -> Result<(), StoreError>;
 
-    /// Fetch an epic by its ULID-based id.
+    /// Fetch an epic by its stable id.
     ///
     /// # Errors
     ///
@@ -51,7 +55,7 @@ pub trait RecordStore {
     /// Returns `StoreError::Io` on read failure.
     fn get_epic_by_format_id(&self, format_id: &str) -> Result<Option<Epic>, StoreError>;
 
-    /// Apply a partial update to an epic identified by ULID-based id.
+    /// Apply a partial update to an epic identified by stable id.
     ///
     /// # Errors
     ///
@@ -72,7 +76,7 @@ pub trait RecordStore {
     /// Returns `StoreError::Io` on write failure.
     fn create_task(&self, task: &Task) -> Result<(), StoreError>;
 
-    /// Fetch a task by its ULID-based id.
+    /// Fetch a task by its stable id.
     ///
     /// # Errors
     ///
@@ -86,7 +90,7 @@ pub trait RecordStore {
     /// Returns `StoreError::Io` on read failure.
     fn get_task_by_format_id(&self, format_id: &str) -> Result<Option<Task>, StoreError>;
 
-    /// Apply a partial update to a task identified by ULID-based id.
+    /// Apply a partial update to a task identified by stable id.
     ///
     /// # Errors
     ///
@@ -108,7 +112,8 @@ pub trait RecordStore {
 /// ```text
 /// <root>/
 /// ├── epics/EPC-001.md      ← YAML frontmatter = the Epic record
-/// └── tasks/TSK-001-001.md  ← YAML frontmatter = the Task record
+/// ├── specs/SPC-001.md      ← YAML frontmatter = the Spec record
+/// └── tasks/TSK-001.md      ← YAML frontmatter = the Task record
 /// ```
 ///
 /// The frontmatter is the machine-readable record; the markdown body below
@@ -118,7 +123,7 @@ pub struct MarkdownStore {
 }
 
 impl MarkdownStore {
-    /// Create a store rooted at `root`, creating `epics/` and `tasks/`
+    /// Create a store rooted at `root`, creating `epics/`, `specs/`, and `tasks/`
     /// subdirectories if missing.
     ///
     /// # Errors
@@ -127,6 +132,7 @@ impl MarkdownStore {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let root = root.into();
         fs::create_dir_all(root.join("epics"))?;
+        fs::create_dir_all(root.join("specs"))?;
         fs::create_dir_all(root.join("tasks"))?;
         Ok(Self { root })
     }
@@ -157,6 +163,30 @@ impl MarkdownStore {
         let content = format!("---\n{yaml}---\n{body}");
         fs::write(path, content)?;
         Ok(())
+    }
+
+    /// Persist a canonical record with one on-disk identity. The typed models
+    /// retain `format_id` only to read historical dual-identity records.
+    fn write_canonical_record<T: serde::Serialize>(
+        path: &Path,
+        record: &T,
+        canonical_id: &str,
+        body: &str,
+    ) -> Result<(), StoreError> {
+        let mut value = serde_yaml::to_value(record).map_err(|e| StoreError::Yaml {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })?;
+        let mapping = value.as_mapping_mut().ok_or_else(|| StoreError::Yaml {
+            path: path.display().to_string(),
+            message: "record did not serialize to a YAML mapping".to_string(),
+        })?;
+        mapping.remove(serde_yaml::Value::String("format_id".to_string()));
+        mapping.insert(
+            serde_yaml::Value::String("id".to_string()),
+            serde_yaml::Value::String(canonical_id.to_string()),
+        );
+        Self::write_record(path, &value, body)
     }
 
     /// Update only the named frontmatter fields, preserving every other key.
@@ -279,7 +309,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
 impl RecordStore for MarkdownStore {
     fn create_epic(&self, epic: &Epic) -> Result<(), StoreError> {
         let path = self.epics_dir().join(format!("{}.md", epic.format_id));
-        Self::write_record(&path, epic, "")
+        Self::write_canonical_record(&path, epic, &epic.format_id, "")
     }
 
     fn get_epic(&self, id: &str) -> Result<Option<Epic>, StoreError> {
@@ -325,8 +355,26 @@ impl RecordStore for MarkdownStore {
     }
 
     fn create_task(&self, task: &Task) -> Result<(), StoreError> {
+        if crate::workgraph::is_canonical_task_format_id(&task.format_id) {
+            let target = task
+                .integration_target
+                .as_deref()
+                .filter(|target| !target.trim().is_empty())
+                .ok_or_else(|| {
+                    StoreError::Invalid(format!(
+                        "{}: canonical task requires integration_target",
+                        task.format_id
+                    ))
+                })?;
+            if !crate::workgraph::is_stable_work_target(target) {
+                return Err(StoreError::Invalid(format!(
+                    "{}: integration_target '{target}' is not a stable non-task branch name",
+                    task.format_id
+                )));
+            }
+        }
         let path = self.tasks_dir().join(format!("{}.md", task.format_id));
-        Self::write_record(&path, task, "")
+        Self::write_canonical_record(&path, task, &task.format_id, "")
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, StoreError> {
@@ -371,7 +419,12 @@ impl RecordStore for MarkdownStore {
             .into_iter()
             .map(|(_, task)| task)
             .filter(|t| filter.status.is_none_or(|s| t.status == s))
-            .filter(|t| filter.epic_id.as_deref().is_none_or(|eid| t.epic_id == eid))
+            .filter(|t| {
+                filter
+                    .epic_id
+                    .as_deref()
+                    .is_none_or(|eid| t.epic_id.as_deref() == Some(eid))
+            })
             .collect())
     }
 }
@@ -382,9 +435,9 @@ mod tests {
 
     use super::*;
 
-    fn make_epic(id: &str, format_id: &str) -> Epic {
+    fn make_epic(_legacy_id: &str, format_id: &str) -> Epic {
         Epic {
-            id: id.to_string(),
+            id: format_id.to_string(),
             format_id: format_id.to_string(),
             title: "Test Epic".to_string(),
             summary: Some("A test epic".to_string()),
@@ -397,11 +450,13 @@ mod tests {
         }
     }
 
-    fn make_task(id: &str, format_id: &str, epic_id: &str) -> Task {
+    fn make_task(_legacy_id: &str, format_id: &str, epic_id: &str) -> Task {
         Task {
-            id: id.to_string(),
+            id: format_id.to_string(),
             format_id: format_id.to_string(),
-            epic_id: epic_id.to_string(),
+            epic_id: Some(epic_id.to_string()),
+            standalone_reason: None,
+            specs: vec![],
             title: "Test Task".to_string(),
             description: Some("A test task".to_string()),
             status: TaskStatus::Todo,
@@ -411,6 +466,7 @@ mod tests {
             acceptance: vec!["it works".to_string()],
             tests: vec![],
             depends_on: vec![],
+            integration_target: Some("main".to_string()),
             branch: None,
             pr_number: None,
             created_at: "2026-06-11T00:00:00Z".to_string(),
@@ -443,7 +499,7 @@ mod tests {
         // File lives at epics/EPC-001.md.
         assert!(dir.path().join("epics/EPC-001.md").exists());
 
-        let fetched = store.get_epic("epic-01a").unwrap().unwrap();
+        let fetched = store.get_epic("EPC-001").unwrap().unwrap();
         assert_eq!(fetched.format_id, "EPC-001");
         assert_eq!(fetched.title, "Test Epic");
         assert_eq!(fetched.status, EpicStatus::Draft);
@@ -458,7 +514,7 @@ mod tests {
             .unwrap();
 
         let fetched = store.get_epic_by_format_id("EPC-001").unwrap().unwrap();
-        assert_eq!(fetched.id, "epic-01a");
+        assert_eq!(fetched.id, "EPC-001");
         assert!(store.get_epic_by_format_id("EPC-999").unwrap().is_none());
     }
 
@@ -479,7 +535,7 @@ mod tests {
 
         store
             .update_epic(
-                "epic-01a",
+                "EPC-001",
                 EpicUpdate {
                     status: Some(EpicStatus::InProgress),
                     title: Some("New Title".to_string()),
@@ -489,7 +545,7 @@ mod tests {
             )
             .unwrap();
 
-        let epic = store.get_epic("epic-01a").unwrap().unwrap();
+        let epic = store.get_epic("EPC-001").unwrap().unwrap();
         assert_eq!(epic.status, EpicStatus::InProgress);
         assert_eq!(epic.title, "New Title");
         assert_eq!(epic.pr_number, Some(7));
@@ -525,7 +581,7 @@ mod tests {
 
         store
             .update_epic(
-                "epic-01a",
+                "EPC-001",
                 EpicUpdate {
                     status: Some(EpicStatus::InProgress),
                     ..Default::default()
@@ -660,24 +716,49 @@ created: 2026-06-11
             })
             .unwrap();
         assert_eq!(drafts.len(), 1);
-        assert_eq!(drafts[0].id, "epic-01a");
+        assert_eq!(drafts[0].id, "EPC-001");
     }
 
     #[test]
     fn test_create_and_get_task() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
-        let task = make_task("task-01a", "TSK-001-001", "epic-01a");
+        let task = make_task("task-01a", "TSK-001-001", "EPC-001");
         store.create_task(&task).unwrap();
 
         assert!(dir.path().join("tasks/TSK-001-001.md").exists());
 
-        let fetched = store.get_task("task-01a").unwrap().unwrap();
+        let fetched = store.get_task("TSK-001-001").unwrap().unwrap();
         assert_eq!(fetched.format_id, "TSK-001-001");
         assert_eq!(fetched.acceptance, vec!["it works".to_string()]);
 
         let by_fid = store.get_task_by_format_id("TSK-001-001").unwrap().unwrap();
-        assert_eq!(by_fid.id, "task-01a");
+        assert_eq!(by_fid.id, "TSK-001-001");
+    }
+
+    #[test]
+    fn canonical_task_writer_requires_a_stable_integration_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(dir.path()).unwrap();
+
+        let mut missing = make_task("task-01a", "TSK-001", "EPC-001");
+        missing.integration_target = None;
+        assert!(matches!(
+            store.create_task(&missing),
+            Err(StoreError::Invalid(message)) if message.contains("requires integration_target")
+        ));
+
+        let mut unstable = make_task("task-01a", "TSK-001", "EPC-001");
+        unstable.integration_target = Some("task/TSK-001-self".to_string());
+        assert!(matches!(
+            store.create_task(&unstable),
+            Err(StoreError::Invalid(message)) if message.contains("not a stable")
+        ));
+
+        let valid = make_task("task-01a", "TSK-001", "EPC-001");
+        store.create_task(&valid).unwrap();
+        let content = fs::read_to_string(dir.path().join("tasks/TSK-001.md")).unwrap();
+        assert!(content.contains("integration_target: main"));
     }
 
     #[test]
@@ -685,12 +766,12 @@ created: 2026-06-11
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
         store
-            .create_task(&make_task("task-01a", "TSK-001-001", "epic-01a"))
+            .create_task(&make_task("task-01a", "TSK-001-001", "EPC-001"))
             .unwrap();
 
         store
             .update_task(
-                "task-01a",
+                "TSK-001-001",
                 TaskUpdate {
                     status: Some(TaskStatus::InProgress),
                     branch: Some("feat/test-branch".to_string()),
@@ -700,7 +781,7 @@ created: 2026-06-11
             )
             .unwrap();
 
-        let task = store.get_task("task-01a").unwrap().unwrap();
+        let task = store.get_task("TSK-001-001").unwrap().unwrap();
         assert_eq!(task.status, TaskStatus::InProgress);
         assert_eq!(task.branch.as_deref(), Some("feat/test-branch"));
         assert_eq!(task.started_at.as_deref(), Some("2026-06-11T01:00:00Z"));
@@ -711,9 +792,9 @@ created: 2026-06-11
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
         store
-            .create_task(&make_task("task-01a", "TSK-001-001", "epic-01a"))
+            .create_task(&make_task("task-01a", "TSK-001-001", "EPC-001"))
             .unwrap();
-        let mut other = make_task("task-01b", "TSK-002-001", "epic-01b");
+        let mut other = make_task("task-01b", "TSK-002-001", "EPC-002");
         other.status = TaskStatus::InProgress;
         store.create_task(&other).unwrap();
 
@@ -722,12 +803,12 @@ created: 2026-06-11
 
         let by_epic = store
             .list_tasks(TaskFilter {
-                epic_id: Some("epic-01a".to_string()),
+                epic_id: Some("EPC-001".to_string()),
                 ..Default::default()
             })
             .unwrap();
         assert_eq!(by_epic.len(), 1);
-        assert_eq!(by_epic[0].id, "task-01a");
+        assert_eq!(by_epic[0].id, "TSK-001-001");
 
         let in_progress = store
             .list_tasks(TaskFilter {
@@ -736,7 +817,7 @@ created: 2026-06-11
             })
             .unwrap();
         assert_eq!(in_progress.len(), 1);
-        assert_eq!(in_progress[0].id, "task-01b");
+        assert_eq!(in_progress[0].id, "TSK-002-001");
     }
 
     #[test]
@@ -763,7 +844,7 @@ created: 2026-06-11
 
         // find_by paths (get/update) must resolve the nested record too.
         let by_fid = store.get_epic_by_format_id("EPC-001").unwrap().unwrap();
-        assert_eq!(by_fid.id, "epic-01a");
+        assert_eq!(by_fid.id, "EPC-001");
     }
 
     #[test]
@@ -796,7 +877,7 @@ created: 2026-06-11
         fs::create_dir_all(nested.parent().unwrap()).unwrap();
         MarkdownStore::write_record(
             &nested,
-            &make_task("task-01a", "TSK-001-001", "epic-01a"),
+            &make_task("task-01a", "TSK-001-001", "EPC-001"),
             "## keep\n",
         )
         .unwrap();
@@ -804,7 +885,7 @@ created: 2026-06-11
         assert_eq!(store.list_tasks(TaskFilter::default()).unwrap().len(), 1);
         store
             .update_task(
-                "task-01a",
+                "TSK-001-001",
                 TaskUpdate {
                     status: Some(TaskStatus::Complete),
                     ..Default::default()
@@ -831,7 +912,7 @@ created: 2026-06-11
 
         store
             .update_epic(
-                "epic-01a",
+                "EPC-001",
                 EpicUpdate {
                     status: Some(EpicStatus::Complete),
                     ..Default::default()

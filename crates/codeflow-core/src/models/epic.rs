@@ -1,8 +1,8 @@
 //! Epic record model.
 //!
-//! v2 trim: dual-purpose v1 fields tied to dead subsystems (area types,
-//! pathflow domains, file-scope claims, external task-tracker mirroring)
-//! are removed. Markdown + JSONL are the source of truth (charter D17).
+//! Git-tracked markdown frontmatter is the shared authority. `format_id` is
+//! retained only as an in-memory compatibility alias for historical records;
+//! canonical records write one stable `EPC-NNN` value in `id`.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -10,9 +10,12 @@ use super::status::EpicStatus;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Epic {
-    /// ULID-based internal id (e.g., `epic-01abc...`).
+    /// Stable record id. Canonical records use `EPC-NNN`.
     pub id: String,
-    /// Human-readable format id (e.g., `EPC-001`).
+    /// Compatibility alias for historical `id` + `format_id` records.
+    ///
+    /// New records set this to the same value as `id` and never persist the
+    /// duplicate field.
     pub format_id: String,
     pub title: String,
     pub summary: Option<String>,
@@ -36,7 +39,8 @@ impl<'de> Deserialize<'de> for Epic {
         #[derive(Deserialize)]
         struct Wire {
             id: String,
-            format_id: String,
+            #[serde(default)]
+            format_id: Option<String>,
             title: String,
             #[serde(default)]
             summary: Option<String>,
@@ -56,9 +60,10 @@ impl<'de> Deserialize<'de> for Epic {
 
         let w = Wire::deserialize(deserializer)?;
         let updated_at = w.updated_at.unwrap_or_else(|| w.created_at.clone());
+        let format_id = w.format_id.unwrap_or_else(|| w.id.clone());
         Ok(Epic {
             id: w.id,
-            format_id: w.format_id,
+            format_id,
             title: w.title,
             summary: w.summary,
             status: w.status,

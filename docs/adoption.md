@@ -57,12 +57,19 @@ tier is a clean superset of the one below.
 
 ### Organize durable work without duplicating it
 
-The full tier writes `epics/EPC-NNN.md`, `tasks/TSK-NNN-MMM.md`, and optional
-hand-authored `specs/SPC-NNN.md`; filenames are stable IDs, while titles can
-evolve. A single-surface repo and a shared-release monorepo use the same
+The full tier writes independently allocated `epics/EPC-NNN.md`,
+`specs/SPC-NNN.md`, and `tasks/TSK-NNN.md`; filenames are stable IDs, while
+titles can evolve. Use `codeflow epic new`, `spec new --for <epic-or-task>`,
+and `task new`. A single-surface repo and a shared-release monorepo use the same
 repo-level namespace. In a monorepo, tasks normally align to areas such as a
 shared contract, backend, web, mobile, or infrastructure, while the epic owns
 their cross-area outcome and integration evidence.
+
+For durable work, plan and validate records on a `plan/` branch, merge the
+planning PR into each task's declared `integration_target`, then implement from
+`task/TSK-NNN-<slug>`. `codeflow work start TSK-NNN` verifies that stable
+anchor, parent or standalone rationale, approved specs, and completed
+predecessors without mutating repository state.
 
 CodeFlow is the natural authority for finite repo-local gated work. Keep the
 team's external tracker authoritative when work is multi-team, cross-repo,

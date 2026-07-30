@@ -11,6 +11,8 @@
 //! * ADR `status` legal (`proposed|accepted|superseded`); superseded ADRs
 //!   carry `superseded_by`
 //! * epic frontmatter `capabilities[]` / `adrs[]` resolve back
+//! * epic/task `specs[]` resolve to specification records
+//! * task `epic_id` resolves, or an explicit standalone reason exists
 //! * task `depends_on[]` references resolve and form an acyclic graph
 //!
 //! Tier-graceful: an absent layer (no registry, no decisions dir, no
@@ -22,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use crate::capability::{parse_capabilities, CAPABILITY_STATUS_VALUES};
 use crate::validate::{get_string_field, parse_frontmatter};
-use crate::workgraph::is_valid_task_format_id;
+use crate::workgraph::{is_valid_epic_format_id, is_valid_spec_format_id, is_valid_task_format_id};
 
 /// Legal ADR status values (charter §5; ADR template).
 pub const ADR_STATUS_VALUES: &[&str] = &["proposed", "accepted", "superseded"];
@@ -68,6 +70,14 @@ struct DocGraph {
     adrs: Option<BTreeSet<String>>,
     /// Epic format ids resolvable in `project-management/epics/`.
     epics: Option<BTreeSet<String>>,
+    /// Spec ids resolvable in `project-management/specs/`.
+    specs: Option<BTreeSet<String>>,
+}
+
+struct TaskGraphIndex {
+    graph: BTreeMap<String, Vec<String>>,
+    files_by_id: BTreeMap<String, PathBuf>,
+    dependency_lines_by_id: BTreeMap<String, usize>,
 }
 
 /// Run the docs-integrity lint over a repository root.
@@ -80,7 +90,7 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_capabilities(repo_root, &graph, &mut report);
     lint_adrs(repo_root, &mut report);
     lint_epics(repo_root, &graph, &mut report);
-    lint_tasks(repo_root, &mut report);
+    lint_tasks(repo_root, &graph, &mut report);
 
     report
 }
@@ -144,10 +154,27 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
         None
     };
 
+    let specs_dir = repo_root.join("project-management/specs");
+    let specs = if specs_dir.is_dir() {
+        Some(
+            crate::workgraph::layout::spec_record_files(&repo_root.join("project-management"))
+                .iter()
+                .filter_map(|path| path.file_stem().and_then(|stem| stem.to_str()))
+                .map(str::to_owned)
+                .collect(),
+        )
+    } else {
+        report
+            .notes
+            .push("project-management/specs/ absent — spec reference checks skipped".to_string());
+        None
+    };
+
     DocGraph {
         capabilities,
         adrs,
         epics,
+        specs,
     }
 }
 
@@ -329,18 +356,35 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
                 }
             }
         }
+
+        if let Some(spec_ids) = &graph.specs {
+            for spec_ref in string_list(&data, "specs") {
+                if !spec_ids.contains(&spec_ref) {
+                    report.issues.push(DocsLintIssue {
+                        file: rel.clone(),
+                        line: find_line(&content, &spec_ref).unwrap_or(1),
+                        message: format!(
+                            "epic references {spec_ref} but no matching specification exists"
+                        ),
+                    });
+                }
+            }
+        }
     }
 }
 
 #[derive(Debug)]
 struct TaskGraphRecord {
     file: PathBuf,
-    format_id: String,
+    id: String,
+    epic_id: Option<String>,
+    standalone_reason: Option<String>,
+    specs: Vec<String>,
     depends_on: Vec<String>,
     dependency_line: usize,
 }
 
-fn lint_tasks(repo_root: &Path, report: &mut DocsLintReport) {
+fn lint_tasks(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     let files = crate::workgraph::layout::task_record_files(&repo_root.join("project-management"));
     if files.is_empty() {
         if !repo_root.join("project-management/tasks").is_dir() {
@@ -355,7 +399,7 @@ fn lint_tasks(repo_root: &Path, report: &mut DocsLintReport) {
         .iter()
         .filter_map(|path| parse_task_graph_record(repo_root, path, report))
         .collect();
-    lint_task_graph_records(&records, report);
+    lint_task_graph_records(&records, graph, report);
 }
 
 fn parse_task_graph_record(
@@ -367,33 +411,24 @@ fn parse_task_graph_record(
     let content = std::fs::read(path).ok()?;
     let (data, _) = parse_frontmatter(&content).ok()?; // general validation owns malformed YAML
 
-    let format_id = get_string_field(&data, "format_id");
-    if format_id.is_empty() {
+    let id = stable_record_id(&data, is_valid_task_format_id);
+    if id.is_empty() {
         report.issues.push(DocsLintIssue {
             file: rel,
             line: 1,
-            message: "task frontmatter is missing format_id".to_string(),
+            message: "task has no supported TSK-NNN or legacy TSK-NNN-NNN identity".to_string(),
         });
         return None;
     }
 
-    let format_id_line = find_line(&content, "format_id:").unwrap_or(1);
-    if !is_valid_task_format_id(&format_id) {
-        report.issues.push(DocsLintIssue {
-            file: rel,
-            line: format_id_line,
-            message: format!("task format_id {format_id} is malformed; expected TSK-NNN-NNN"),
-        });
-        return None;
-    }
-
+    let id_line = find_line(&content, "id:").unwrap_or(1);
     let file_stem = path.file_stem().and_then(|stem| stem.to_str());
-    if file_stem != Some(format_id.as_str()) {
+    if file_stem != Some(id.as_str()) {
         report.issues.push(DocsLintIssue {
             file: rel.clone(),
-            line: format_id_line,
+            line: id_line,
             message: format!(
-                "task format_id {format_id} does not match filename {}.md",
+                "task id {id} does not match filename {}.md",
                 file_stem.unwrap_or("<non-utf8>")
             ),
         });
@@ -429,9 +464,7 @@ fn parse_task_graph_record(
                 report.issues.push(DocsLintIssue {
                     file: rel.clone(),
                     line: dependency_line,
-                    message: format!(
-                        "task {format_id} {field_name} must contain only task-id strings"
-                    ),
+                    message: format!("task {id} {field_name} must contain only task-id strings"),
                 });
                 None
             })?,
@@ -439,7 +472,7 @@ fn parse_task_graph_record(
             report.issues.push(DocsLintIssue {
                 file: rel.clone(),
                 line: dependency_line,
-                message: format!("task {format_id} {field_name} must be a YAML list"),
+                message: format!("task {id} {field_name} must be a YAML list"),
             });
             return None;
         }
@@ -447,66 +480,167 @@ fn parse_task_graph_record(
 
     Some(TaskGraphRecord {
         file: rel,
-        format_id,
+        id,
+        epic_id: optional_string(&data, "epic_id"),
+        standalone_reason: optional_string(&data, "standalone_reason"),
+        specs: string_list(&data, "specs"),
         depends_on,
         dependency_line,
     })
 }
 
-fn lint_task_graph_records(records: &[TaskGraphRecord], report: &mut DocsLintReport) {
+fn lint_task_graph_records(
+    records: &[TaskGraphRecord],
+    doc_graph: &DocGraph,
+    report: &mut DocsLintReport,
+) {
+    let index = index_task_records(records, report);
+    for record in records {
+        if index.files_by_id.get(&record.id) != Some(&record.file) {
+            continue;
+        }
+        lint_task_parent(record, doc_graph, report);
+        lint_task_specs(record, doc_graph, report);
+        lint_task_dependencies(record, &index.graph, report);
+    }
+    report_task_cycle(
+        &index.graph,
+        &index.files_by_id,
+        &index.dependency_lines_by_id,
+        report,
+    );
+}
+
+fn index_task_records(records: &[TaskGraphRecord], report: &mut DocsLintReport) -> TaskGraphIndex {
     let mut graph = BTreeMap::new();
     let mut files_by_id: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut dependency_lines_by_id = BTreeMap::new();
     for record in records {
-        if let Some(first) = files_by_id.get(&record.format_id) {
+        if let Some(first) = files_by_id.get(&record.id) {
             report.issues.push(DocsLintIssue {
                 file: record.file.clone(),
                 line: 1,
                 message: format!(
-                    "duplicate task format_id {} also appears in {}",
-                    record.format_id,
+                    "duplicate task id {} also appears in {}",
+                    record.id,
                     first.display()
                 ),
             });
             continue;
         }
-        files_by_id.insert(record.format_id.clone(), record.file.clone());
-        dependency_lines_by_id.insert(record.format_id.clone(), record.dependency_line);
-        graph.insert(record.format_id.clone(), record.depends_on.clone());
+        files_by_id.insert(record.id.clone(), record.file.clone());
+        dependency_lines_by_id.insert(record.id.clone(), record.dependency_line);
+        graph.insert(record.id.clone(), record.depends_on.clone());
     }
+    TaskGraphIndex {
+        graph,
+        files_by_id,
+        dependency_lines_by_id,
+    }
+}
 
-    for record in records {
-        if files_by_id.get(&record.format_id) != Some(&record.file) {
-            continue; // duplicate already reported; keep one graph node
-        }
-        let mut seen = BTreeSet::new();
-        for dependency in &record.depends_on {
-            if !seen.insert(dependency) {
+fn lint_task_parent(record: &TaskGraphRecord, doc_graph: &DocGraph, report: &mut DocsLintReport) {
+    match record.epic_id.as_deref() {
+        Some(epic_id) => {
+            if !is_valid_epic_format_id(epic_id)
+                || doc_graph
+                    .epics
+                    .as_ref()
+                    .is_some_and(|ids| !ids.contains(epic_id))
+            {
                 report.issues.push(DocsLintIssue {
                     file: record.file.clone(),
-                    line: record.dependency_line,
-                    message: format!("task {} repeats dependency {dependency}", record.format_id),
-                });
-            } else if dependency == &record.format_id {
-                report.issues.push(DocsLintIssue {
-                    file: record.file.clone(),
-                    line: record.dependency_line,
-                    message: format!("task {} depends on itself", record.format_id),
-                });
-            } else if !graph.contains_key(dependency) {
-                report.issues.push(DocsLintIssue {
-                    file: record.file.clone(),
-                    line: record.dependency_line,
+                    line: 1,
                     message: format!(
-                        "task {} depends on {dependency}, but no task with that format_id exists",
-                        record.format_id
+                        "task {} references epic {epic_id}, but no matching epic exists",
+                        record.id
+                    ),
+                });
+            }
+            if record
+                .standalone_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.trim().is_empty())
+            {
+                report.issues.push(DocsLintIssue {
+                    file: record.file.clone(),
+                    line: 1,
+                    message: format!("task {} has both epic_id and standalone_reason", record.id),
+                });
+            }
+        }
+        None => {
+            if record
+                .standalone_reason
+                .as_deref()
+                .is_none_or(|reason| reason.trim().is_empty())
+            {
+                report.issues.push(DocsLintIssue {
+                    file: record.file.clone(),
+                    line: 1,
+                    message: format!("standalone task {} requires standalone_reason", record.id),
+                });
+            }
+        }
+    }
+}
+
+fn lint_task_specs(record: &TaskGraphRecord, doc_graph: &DocGraph, report: &mut DocsLintReport) {
+    if let Some(spec_ids) = &doc_graph.specs {
+        for spec_id in &record.specs {
+            if !is_valid_spec_format_id(spec_id) || !spec_ids.contains(spec_id) {
+                report.issues.push(DocsLintIssue {
+                    file: record.file.clone(),
+                    line: 1,
+                    message: format!(
+                        "task {} references missing specification {spec_id}",
+                        record.id
                     ),
                 });
             }
         }
     }
+}
 
-    if let Some(cycle) = find_task_cycle(&graph) {
+fn lint_task_dependencies(
+    record: &TaskGraphRecord,
+    graph: &BTreeMap<String, Vec<String>>,
+    report: &mut DocsLintReport,
+) {
+    let mut seen = BTreeSet::new();
+    for dependency in &record.depends_on {
+        let message = if !seen.insert(dependency) {
+            Some(format!(
+                "task {} repeats dependency {dependency}",
+                record.id
+            ))
+        } else if dependency == &record.id {
+            Some(format!("task {} depends on itself", record.id))
+        } else if !graph.contains_key(dependency) {
+            Some(format!(
+                "task {} depends on {dependency}, but no task with that id exists",
+                record.id
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = message {
+            report.issues.push(DocsLintIssue {
+                file: record.file.clone(),
+                line: record.dependency_line,
+                message,
+            });
+        }
+    }
+}
+
+fn report_task_cycle(
+    graph: &BTreeMap<String, Vec<String>>,
+    files_by_id: &BTreeMap<String, PathBuf>,
+    dependency_lines_by_id: &BTreeMap<String, usize>,
+    report: &mut DocsLintReport,
+) {
+    if let Some(cycle) = find_task_cycle(graph) {
         let first = cycle.first().expect("cycle is nonempty");
         report.issues.push(DocsLintIssue {
             file: files_by_id
@@ -625,6 +759,30 @@ fn string_list(
             .filter_map(|v| v.as_str().map(ToString::to_string))
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn optional_string(
+    data: &std::collections::HashMap<String, serde_yaml::Value>,
+    key: &str,
+) -> Option<String> {
+    let value = get_string_field(data, key);
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn stable_record_id(
+    data: &std::collections::HashMap<String, serde_yaml::Value>,
+    valid: impl Fn(&str) -> bool,
+) -> String {
+    let id = get_string_field(data, "id");
+    if valid(&id) {
+        return id;
+    }
+    let alias = get_string_field(data, "format_id");
+    if valid(&alias) {
+        alias
+    } else {
+        String::new()
     }
 }
 
@@ -995,7 +1153,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let report = lint_docs(dir.path());
         assert!(report.is_clean());
-        assert_eq!(report.notes.len(), 4, "notes: {:?}", report.notes);
+        assert_eq!(report.notes.len(), 5, "notes: {:?}", report.notes);
         assert!(report.notes.iter().any(|n| n.contains("capabilities.md")));
         assert!(report.notes.iter().any(|n| n.contains("decisions")));
         assert!(report
@@ -1209,13 +1367,13 @@ mod tests {
         let issue = report
             .issues
             .iter()
-            .find(|issue| issue.message.contains("expected TSK-NNN-NNN"))
+            .find(|issue| issue.message.contains("supported TSK-NNN"))
             .expect("malformed task format id reported");
         assert_eq!(
             issue.file,
             PathBuf::from("project-management/tasks/not-a-task-id.md")
         );
-        assert_eq!(issue.line, 3);
+        assert_eq!(issue.line, 1);
     }
 
     #[test]
@@ -1237,9 +1395,9 @@ mod tests {
         let report = lint_docs(dir.path());
         for marker in [
             "depends on itself",
-            "no task with that format_id exists",
+            "no task with that id exists",
             "does not match filename",
-            "duplicate task format_id",
+            "duplicate task id",
         ] {
             assert!(
                 report

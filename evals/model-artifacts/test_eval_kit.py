@@ -231,6 +231,53 @@ class SuiteContractTests(unittest.TestCase):
             with self.assertRaises(eval_kit.EvalError):
                 eval_kit.reset_fixture_history(root, "../escape")
 
+    def test_target_before_fixture_creates_a_real_unmerged_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "README.md").write_text("baseline\n", encoding="utf-8")
+            target = "integration/EPC-014-account-recovery"
+            branch = "fixture/valid-unmerged-planning"
+            eval_kit.configure_target_before_fixture(root, target, branch)
+
+            plan = root / "project-management" / "tasks" / "TSK-061.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text("planned only here\n", encoding="utf-8")
+            eval_kit.run_command(["git", "add", "-A"], root)
+            eval_kit.run_command(["git", "commit", "-m", "chore: add plan"], root)
+
+            current = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            merge_base = subprocess.run(
+                ["git", "merge-base", "HEAD", target],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            target_tip = subprocess.run(
+                ["git", "rev-parse", target],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            target_plan = subprocess.run(
+                ["git", "show", f"{target}:project-management/tasks/TSK-061.md"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(branch, current)
+            self.assertEqual(target_tip, merge_base)
+            self.assertNotEqual(0, target_plan.returncode)
+
     def test_local_fixture_origin_exposes_current_head_as_origin_main(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp)
@@ -367,6 +414,21 @@ class SuiteContractTests(unittest.TestCase):
                     "squash_cleanup_worktree": True,
                 },
                 "mutually exclusive",
+            ),
+            (
+                {
+                    "target_precedes_fixture": True,
+                    "target": "../outside",
+                },
+                "requires a safe state.target",
+            ),
+            (
+                {
+                    "branch": "fixture/same",
+                    "target_precedes_fixture": True,
+                    "target": "fixture/same",
+                },
+                "target must differ from state.branch",
             ),
         )
         for state_update, expected in invalid_states:

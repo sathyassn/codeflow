@@ -1,374 +1,765 @@
-//! Deterministic id allocation and file scaffolding for new epics and tasks.
+//! Deterministic id allocation and scaffolding for durable work records.
 //!
-//! Epic/task format ids (`EPC-NNN`, `TSK-NNN-MMM`) are hand-picked today, so
-//! two agents in independent worktrees can still propose the same number.
-//! Within one checkout, this module allocates the next free id by scanning the
-//! `project-management/` tree (max existing + 1, restarting per epic for
-//! tasks) and creates the file exclusively. Parallel plans therefore serialize
-//! work-item allocation or resolve the visible same-path merge conflict; the
-//! allocator is not a distributed id service.
+//! New records use independent `EPC-NNN`, `SPC-NNN`, and `TSK-NNN` ids and
+//! write the canonical flat layout. Historical nested epics/tasks and
+//! `TSK-NNN-NNN` task ids remain visible to allocation so a new id never
+//! collides with an existing legacy namespace.
 //!
-//! Allocation scans *files*, not parsed records: an id present on disk is
-//! reserved even when its frontmatter is malformed or template-shaped, so the
-//! allocator never reissues a number the store's parser would silently skip.
-//! `CodeFlow` writes the canonical flat layout. The historical nested layout
-//! (`epics/EPC-001/EPC-001.md`,
-//! `epics/EPC-001/tasks/TSK-001-001.md`) remains read-compatible.
+//! Allocation is deliberately Git-native rather than a distributed id
+//! service. A process scans the visible checkout, selects max + 1, and creates
+//! the record exclusively. Same-checkout races fail instead of overwriting;
+//! independent worktree races become visible merge conflicts and are
+//! reallocated during planning.
 
+use std::fmt::Write as _;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::scaffold::template::TemplateContext;
 use crate::workgraph::store::StoreError;
 
-/// A newly scaffolded record: its allocated format id and the file written.
+/// A newly scaffolded record and the file written.
 #[derive(Debug, Clone)]
 pub struct NewRecord {
-    /// The allocated human-readable id (`EPC-NNN` or `TSK-NNN-MMM`).
-    pub format_id: String,
-    /// The file that was created.
+    /// Stable record id.
+    pub id: String,
+    /// Canonical record path.
     pub path: PathBuf,
 }
 
-/// Parse the sequence number from an `EPC-NNN` id (`None` if malformed).
-fn epic_seq(id: &str) -> Option<u32> {
-    id.strip_prefix("EPC-").and_then(|n| n.parse().ok())
+fn sequence(id: &str, prefix: &str) -> Option<u32> {
+    id.strip_prefix(prefix)?.parse().ok()
 }
 
-/// Parse `(epic_seq, task_seq)` from a `TSK-NNN-MMM` id (`None` if malformed).
-fn task_seqs(id: &str) -> Option<(u32, u32)> {
+/// Reserve the first sequence of either `TSK-NNN` or historical
+/// `TSK-NNN-NNN`. Reserving the legacy epic segment prevents a canonical
+/// `TSK-051` from becoming visually ambiguous beside `TSK-051-008`.
+fn task_reservation_sequence(id: &str) -> Option<u32> {
     let rest = id.strip_prefix("TSK-")?;
-    let (epic, task) = rest.split_once('-')?;
-    Some((epic.parse().ok()?, task.parse().ok()?))
+    rest.split('-').next()?.parse().ok()
 }
 
-/// The file stem of a record entry: the directory name for a nested record
-/// (`epics/EPC-001/`), or the file name without `.md` for a flat one. The
-/// store names both after their format id, so the stem is the candidate id.
 fn record_stem(path: &Path) -> Option<String> {
-    if path.is_dir() {
-        path.file_name()
-    } else if path.extension().is_some_and(|e| e == "md") {
-        path.file_stem()
-    } else {
-        None
-    }
-    .and_then(|n| n.to_str())
-    .map(str::to_string)
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::to_owned)
 }
 
-/// Existing epic sequence numbers under `epics/` (flat files and nested dirs).
-fn scan_epic_seqs(epics_dir: &Path) -> Vec<u32> {
-    let Ok(entries) = fs::read_dir(epics_dir) else {
+fn direct_record_stems(dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     entries
         .filter_map(Result::ok)
-        .filter_map(|e| record_stem(&e.path()))
-        .filter_map(|s| epic_seq(&s))
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().is_some_and(|extension| extension == "md") {
+                record_stem(&path)
+            } else if path.is_dir() {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_owned)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
-/// Collect `(epic_seq, task_seq)` pairs from every `TSK-*.md` file in `dir`.
-fn collect_task_seqs(dir: &Path, out: &mut Vec<(u32, u32)>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "md") {
-            if let Some(pair) = record_stem(&path).as_deref().and_then(task_seqs) {
-                out.push(pair);
-            }
-        }
-    }
+fn task_record_stems(pm_root: &Path) -> Vec<String> {
+    crate::workgraph::layout::task_record_files(pm_root)
+        .iter()
+        .filter_map(|path| record_stem(path))
+        .collect()
 }
 
-/// Existing `(epic_seq, task_seq)` pairs, from the canonical flat `tasks/` dir
-/// and legacy nested `epics/EPC-NNN/tasks/` dirs (both reserve their ids).
-fn scan_task_seqs(pm_root: &Path) -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
-    collect_task_seqs(&pm_root.join("tasks"), &mut out);
-    if let Ok(entries) = fs::read_dir(pm_root.join("epics")) {
-        for entry in entries.filter_map(Result::ok) {
-            let dir = entry.path();
-            if dir.is_dir() {
-                collect_task_seqs(&dir.join("tasks"), &mut out);
-            }
-        }
-    }
-    out
-}
-
-/// The next free epic id under `pm_root` (`EPC-NNN` = highest existing + 1,
-/// `EPC-001` when none exist).
+/// Next free epic id (`EPC-NNN`, max visible sequence + 1).
 #[must_use]
 pub fn next_epic_id(pm_root: &Path) -> String {
-    let next = scan_epic_seqs(&pm_root.join("epics"))
-        .into_iter()
+    let next = direct_record_stems(&pm_root.join("epics"))
+        .iter()
+        .filter_map(|id| sequence(id, "EPC-"))
         .max()
         .unwrap_or(0)
         + 1;
     format!("EPC-{next:03}")
 }
 
-/// The next free task id within `epic_id` (`TSK-NNN-MMM`, numbering scoped to
-/// the epic). `None` when `epic_id` is not a well-formed `EPC-NNN`.
+/// Next free spec id (`SPC-NNN`, max visible sequence + 1).
 #[must_use]
-pub fn next_task_id(pm_root: &Path, epic_id: &str) -> Option<String> {
-    if !crate::workgraph::format_id::is_valid_epic_format_id(epic_id) {
-        return None;
-    }
-    let en = epic_seq(epic_id)?;
-    let next = scan_task_seqs(pm_root)
-        .into_iter()
-        .filter(|(e, _)| *e == en)
-        .map(|(_, t)| t)
+pub fn next_spec_id(pm_root: &Path) -> String {
+    let next = direct_record_stems(&pm_root.join("specs"))
+        .iter()
+        .filter_map(|id| sequence(id, "SPC-"))
         .max()
         .unwrap_or(0)
         + 1;
-    Some(format!("TSK-{en:03}-{next:03}"))
+    format!("SPC-{next:03}")
 }
 
-/// Whether an epic with `epic_id` exists under `pm_root`.
+/// Next free independent task id (`TSK-NNN`, max canonical or legacy
+/// reservation sequence + 1).
 #[must_use]
-pub fn epic_exists(pm_root: &Path, epic_id: &str) -> bool {
-    epic_seq(epic_id).is_some_and(|en| scan_epic_seqs(&pm_root.join("epics")).contains(&en))
+pub fn next_task_id(pm_root: &Path) -> String {
+    let next = task_record_stems(pm_root)
+        .iter()
+        .filter_map(|id| task_reservation_sequence(id))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    format!("TSK-{next:03}")
 }
 
-/// Date portion (`YYYY-MM-DD`) of the current UTC timestamp.
+/// Whether a stable work-item id exists in the visible checkout.
+#[must_use]
+pub fn work_item_exists(pm_root: &Path, id: &str) -> bool {
+    let paths = if crate::workgraph::is_valid_epic_format_id(id) {
+        crate::workgraph::layout::epic_record_files(pm_root)
+    } else if crate::workgraph::is_valid_task_format_id(id) {
+        crate::workgraph::layout::task_record_files(pm_root)
+    } else {
+        return false;
+    };
+    paths
+        .iter()
+        .any(|path| record_stem(path).as_deref() == Some(id))
+}
+
+/// Whether an epic exists in the visible checkout.
+#[must_use]
+pub fn epic_exists(pm_root: &Path, id: &str) -> bool {
+    crate::workgraph::is_valid_epic_format_id(id) && work_item_exists(pm_root, id)
+}
+
 fn today() -> String {
     super::now_rfc3339()[..10].to_string()
 }
 
-/// Render `template`, replacing the given `{{KEY}}` placeholders.
 fn render(template: &str, values: &[(&str, &str)]) -> String {
-    let mut ctx = TemplateContext::new();
+    let mut context = TemplateContext::new();
     for (key, value) in values {
-        ctx.set(*key, *value);
+        context.set(*key, *value);
     }
-    ctx.substitute(template)
+    context.substitute(template)
 }
 
-/// Create `path` exclusively (never clobbers an existing file) and write it.
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn record_title(title: &str) -> Result<&str, StoreError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(StoreError::Invalid(
+            "record title cannot be empty".to_string(),
+        ));
+    }
+    if title.contains(['\r', '\n']) {
+        return Err(StoreError::Invalid(
+            "record title must be one line".to_string(),
+        ));
+    }
+    Ok(title)
+}
+
 fn write_new(path: &Path, content: &str) -> Result<(), StoreError> {
-    use std::io::Write;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
-    file.write_all(content.as_bytes())?;
+    if let Err(error) = file.write_all(content.as_bytes()) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(StoreError::Io(error));
+    }
     Ok(())
 }
 
-/// Allocate the next epic id under `pm_root` and scaffold it from `template`
-/// (a `pm/epic.md.tmpl` body), filling `NNN`/`TITLE`/`DATE`.
+/// Allocate and scaffold a canonical epic.
 ///
 /// # Errors
 ///
-/// Returns [`StoreError::Io`] if the `epics/` directory or the record file
-/// cannot be written.
+/// Returns an I/O error when the destination cannot be created or written.
 pub fn create_epic(pm_root: &Path, template: &str, title: &str) -> Result<NewRecord, StoreError> {
-    let format_id = next_epic_id(pm_root);
-    let nnn = format_id.strip_prefix("EPC-").unwrap_or(format_id.as_str());
+    let title = record_title(title)?;
+    let id = next_epic_id(pm_root);
+    let nnn = id.strip_prefix("EPC-").unwrap_or(id.as_str());
     let date = today();
-    let content = render(
-        template,
-        &[("NNN", nnn), ("TITLE", title), ("DATE", date.as_str())],
-    );
-    let dir = pm_root.join("epics");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{format_id}.md"));
-    write_new(&path, &content)?;
-    Ok(NewRecord { format_id, path })
-}
-
-/// Allocate the next task id within `epic_id` and scaffold it from `template`
-/// (a `pm/task.md.tmpl` body), filling `NNN`/`MMM`/`TITLE`/`DATE`.
-///
-/// # Errors
-///
-/// Returns [`StoreError::NotFound`] if `epic_id` is not a well-formed
-/// `EPC-NNN`, or [`StoreError::Io`] if the record file cannot be written.
-pub fn create_task(
-    pm_root: &Path,
-    template: &str,
-    epic_id: &str,
-    title: &str,
-) -> Result<NewRecord, StoreError> {
-    let format_id = next_task_id(pm_root, epic_id)
-        .ok_or_else(|| StoreError::NotFound(format!("epic:{epic_id}")))?;
-    // format_id is `TSK-NNN-MMM`; split back out for the template placeholders.
-    let (nnn, mmm) = format_id
-        .strip_prefix("TSK-")
-        .and_then(|r| r.split_once('-'))
-        .unwrap_or(("", ""));
-    let date = today();
+    let title_yaml = yaml_string(title);
     let content = render(
         template,
         &[
             ("NNN", nnn),
-            ("MMM", mmm),
             ("TITLE", title),
+            ("TITLE_YAML", title_yaml.as_str()),
             ("DATE", date.as_str()),
+        ],
+    );
+    let dir = pm_root.join("epics");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{id}.md"));
+    write_new(&path, &content)?;
+    Ok(NewRecord { id, path })
+}
+
+/// Allocate and scaffold a canonical task.
+///
+/// Exactly one task relationship is required: an existing `epic_id`, or a
+/// non-empty `standalone_reason`.
+///
+/// # Errors
+///
+/// Returns an invalid-record error for ambiguous or missing parentage or an
+/// empty integration target, a not-found error for a missing epic, or an I/O
+/// error when the record cannot be created.
+pub fn create_task(
+    pm_root: &Path,
+    template: &str,
+    epic_id: Option<&str>,
+    standalone_reason: Option<&str>,
+    integration_target: Option<&str>,
+    title: &str,
+) -> Result<NewRecord, StoreError> {
+    let title = record_title(title)?;
+    match (epic_id, standalone_reason.map(str::trim)) {
+        (Some(epic), None | Some("")) if epic_exists(pm_root, epic) => {}
+        (Some(epic), None | Some("")) => {
+            return Err(StoreError::NotFound(format!("epic:{epic}")));
+        }
+        (None, Some(reason)) if !reason.is_empty() => {}
+        (Some(_), Some(reason)) if !reason.is_empty() => {
+            return Err(StoreError::Invalid(
+                "task cannot have both epic_id and standalone_reason".to_string(),
+            ));
+        }
+        _ => {
+            return Err(StoreError::Invalid(
+                "task requires an existing epic or a non-empty standalone reason".to_string(),
+            ));
+        }
+    }
+
+    let id = next_task_id(pm_root);
+    let nnn = id.strip_prefix("TSK-").unwrap_or(id.as_str());
+    let date = today();
+    let epic_value = epic_id.unwrap_or("null");
+    let repository_root = if pm_root
+        .file_name()
+        .is_some_and(|name| name == "project-management")
+    {
+        pm_root.parent().unwrap_or(pm_root)
+    } else {
+        pm_root
+    };
+    if integration_target.is_some_and(|target| target.trim().is_empty()) {
+        return Err(StoreError::Invalid(
+            "integration target cannot be empty".to_string(),
+        ));
+    }
+    if integration_target.is_some_and(|target| !super::is_stable_work_target(target)) {
+        return Err(StoreError::Invalid(
+            "integration target must be a stable non-task branch name".to_string(),
+        ));
+    }
+    let resolved_target = integration_target
+        .map(str::trim)
+        .map(str::to_owned)
+        .or_else(|| crate::workgraph::default_work_target(repository_root))
+        .ok_or_else(|| {
+            StoreError::Invalid(
+                "integration target must resolve to a local or remote-tracking branch".to_string(),
+            )
+        })?;
+    if !super::work_target_resolves(repository_root, &resolved_target) {
+        return Err(StoreError::Invalid(format!(
+            "integration target '{resolved_target}' does not resolve to a local or remote-tracking branch"
+        )));
+    }
+    let target = resolved_target
+        .strip_prefix("origin/")
+        .unwrap_or(&resolved_target)
+        .to_string();
+    let target_value = yaml_string(&target);
+    let title_yaml = yaml_string(title);
+    let reason_value = standalone_reason
+        .filter(|reason| !reason.trim().is_empty())
+        .map_or_else(|| "null".to_string(), yaml_string);
+    let content = render(
+        template,
+        &[
+            ("NNN", nnn),
+            ("EPIC_ID", epic_value),
+            ("STANDALONE_REASON", reason_value.as_str()),
+            ("TITLE", title),
+            ("TITLE_YAML", title_yaml.as_str()),
+            ("DATE", date.as_str()),
+            ("TARGET_BRANCH", target_value.as_str()),
         ],
     );
     let dir = pm_root.join("tasks");
     fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{format_id}.md"));
+    let path = dir.join(format!("{id}.md"));
     write_new(&path, &content)?;
-    Ok(NewRecord { format_id, path })
+    Ok(NewRecord { id, path })
+}
+
+/// Allocate a spec and link it from an existing epic or task.
+///
+/// The consuming work item owns the relationship through its `specs` list;
+/// the spec does not duplicate a parent field.
+///
+/// # Errors
+///
+/// Returns a not-found error when the consuming epic or task does not exist,
+/// or an I/O/record error when creation or reference linking fails.
+pub fn create_spec(
+    pm_root: &Path,
+    template: &str,
+    work_item_id: &str,
+    title: &str,
+) -> Result<NewRecord, StoreError> {
+    let title = record_title(title)?;
+    let target = find_work_item_path(pm_root, work_item_id)
+        .ok_or_else(|| StoreError::NotFound(format!("work-item:{work_item_id}")))?;
+    let id = next_spec_id(pm_root);
+    let nnn = id.strip_prefix("SPC-").unwrap_or(id.as_str());
+    let date = today();
+    let title_yaml = yaml_string(title);
+    let content = render(
+        template,
+        &[
+            ("NNN", nnn),
+            ("TITLE", title),
+            ("TITLE_YAML", title_yaml.as_str()),
+            ("DATE", date.as_str()),
+        ],
+    );
+    let dir = pm_root.join("specs");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{id}.md"));
+    write_new(&path, &content)?;
+    if let Err(error) = append_spec_reference(&target, &id) {
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(NewRecord { id, path })
+}
+
+fn find_work_item_path(pm_root: &Path, id: &str) -> Option<PathBuf> {
+    let paths = if crate::workgraph::is_valid_epic_format_id(id) {
+        crate::workgraph::layout::epic_record_files(pm_root)
+    } else if crate::workgraph::is_valid_task_format_id(id) {
+        crate::workgraph::layout::task_record_files(pm_root)
+    } else {
+        return None;
+    };
+    paths
+        .into_iter()
+        .find(|path| record_stem(path).as_deref() == Some(id))
+}
+
+fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
+    let rest = content
+        .strip_prefix("---\r\n")
+        .or_else(|| content.strip_prefix("---\n"))?;
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Some((&rest[..offset], &rest[offset + line.len()..]));
+        }
+        offset += line.len();
+    }
+    None
+}
+
+fn append_spec_reference(path: &Path, spec_id: &str) -> Result<(), StoreError> {
+    let content = fs::read_to_string(path)?;
+    let (yaml, body) = split_frontmatter(&content).ok_or_else(|| StoreError::Yaml {
+        path: path.display().to_string(),
+        message: "missing frontmatter delimiters".to_string(),
+    })?;
+    let data =
+        serde_yaml::from_str::<serde_yaml::Mapping>(yaml).map_err(|error| StoreError::Yaml {
+            path: path.display().to_string(),
+            message: error.to_string(),
+        })?;
+    let key = serde_yaml::Value::String("specs".to_string());
+    match data.get(&key) {
+        Some(serde_yaml::Value::Sequence(values))
+            if values.contains(&serde_yaml::Value::String(spec_id.to_string())) =>
+        {
+            return Ok(());
+        }
+        Some(serde_yaml::Value::Sequence(_)) | None => {}
+        Some(_) => {
+            return Err(StoreError::Invalid(format!(
+                "{}: specs must be a YAML list",
+                path.display()
+            )));
+        }
+    }
+
+    // Preserve the consumer-owned frontmatter byte-for-byte apart from the
+    // `specs` value. Round-tripping a hand-authored mapping through serde_yaml
+    // discards comments and ordering, including the scaffold's guidance.
+    let updated_yaml = insert_yaml_sequence_value(yaml, "specs", spec_id)?;
+    crate::file_lock::atomic_write(path, format!("---\n{updated_yaml}---\n{body}").as_bytes())?;
+    Ok(())
+}
+
+fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<String, StoreError> {
+    let mut offset = 0;
+    for line_with_ending in yaml.split_inclusive('\n') {
+        let line = line_with_ending.trim_end_matches(['\r', '\n']);
+        let Some(after_key) = line
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix(':'))
+        else {
+            offset += line_with_ending.len();
+            continue;
+        };
+
+        let line_start = offset;
+        let line_end = line_start + line.len();
+        let value_start = line_start + key.len() + 1;
+        if let Some(open) = after_key.find('[') {
+            let Some(close) = after_key[open + 1..].find(']') else {
+                return Err(StoreError::Invalid(format!(
+                    "{key}: unsupported multiline flow sequence"
+                )));
+            };
+            let open = value_start + open;
+            let close = value_start + open.saturating_sub(value_start) + 1 + close;
+            let existing = &yaml[open + 1..close];
+            let replacement = if existing.trim().is_empty() {
+                value.to_string()
+            } else {
+                format!("{existing}, {value}")
+            };
+            let mut updated = yaml.to_string();
+            updated.replace_range(open + 1..close, &replacement);
+            return Ok(updated);
+        }
+
+        if after_key.trim().is_empty() || after_key.trim_start().starts_with('#') {
+            let newline = if line_with_ending.ends_with("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+            let mut updated = yaml.to_string();
+            let insertion = if line_with_ending.ends_with('\n') {
+                line_start + line_with_ending.len()
+            } else {
+                line_end
+            };
+            let prefix = if line_with_ending.ends_with('\n') {
+                ""
+            } else {
+                newline
+            };
+            updated.insert_str(insertion, &format!("{prefix}  - {value}{newline}"));
+            return Ok(updated);
+        }
+
+        return Err(StoreError::Invalid(format!(
+            "{key}: unsupported YAML sequence style"
+        )));
+    }
+
+    let mut updated = yaml.to_string();
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    write!(updated, "{key}:\n  - {value}\n").expect("writing to String cannot fail");
+    Ok(updated)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
-    const EPIC_TMPL: &str = "---\nid: EPC-{{NNN}}\nformat_id: EPC-{{NNN}}\ntitle: {{TITLE}}\nstatus: draft\nwork_type: feat\ncreated: {{DATE}}\n---\n\n# EPC-{{NNN}} — {{TITLE}}\n";
-    const TASK_TMPL: &str = "---\nid: TSK-{{NNN}}-{{MMM}}\nformat_id: TSK-{{NNN}}-{{MMM}}\nepic_id: EPC-{{NNN}}\ntitle: {{TITLE}}\nstatus: todo\nwork_type: feat\ncreated: {{DATE}}\n---\n\n# TSK-{{NNN}}-{{MMM}} — {{TITLE}}\n";
+    const EPIC_TEMPLATE: &str = "---\nid: EPC-{{NNN}}\ntitle: {{TITLE_YAML}}\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: {{DATE}}\n---\n\n# EPC-{{NNN}} — {{TITLE}}\n";
+    const TASK_TEMPLATE: &str = "---\nid: TSK-{{NNN}}\nepic_id: {{EPIC_ID}}\nstandalone_reason: {{STANDALONE_REASON}}\ntitle: {{TITLE_YAML}}\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: {{TARGET_BRANCH}}\ncreated: {{DATE}}\n---\n\n# TSK-{{NNN}} — {{TITLE}}\n";
+    const SPEC_TEMPLATE: &str = "---\nid: SPC-{{NNN}}\ntitle: {{TITLE_YAML}}\nstatus: draft\ncreated: {{DATE}}\n---\n\n# SPC-{{NNN}} — {{TITLE}}\n";
 
-    fn pm() -> tempfile::TempDir {
+    fn project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("epics")).unwrap();
-        fs::create_dir_all(dir.path().join("tasks")).unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "user.name", "Test"]);
+        fs::write(dir.path().join(".keep"), "").unwrap();
+        git(dir.path(), &["add", ".keep"]);
+        git(dir.path(), &["commit", "-m", "fixture"]);
+        for child in ["epics", "specs", "tasks"] {
+            fs::create_dir_all(dir.path().join(child)).unwrap();
+        }
         dir
     }
 
-    /// Write a flat epic record file so it is discoverable by the scan.
-    fn seed_epic(root: &Path, id: &str) {
+    fn git(root: &Path, args: &[&str]) {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success(),
+            "git {args:?}"
+        );
+    }
+
+    fn seed(root: &Path, dir: &str, id: &str) {
         fs::write(
-            root.join("epics").join(format!("{id}.md")),
-            "---\nid: x\n---\n",
+            root.join(dir).join(format!("{id}.md")),
+            format!("---\nid: {id}\n---\n"),
         )
         .unwrap();
     }
 
-    /// Write a flat task record file so it is discoverable by the scan.
-    fn seed_task(root: &Path, id: &str) {
-        fs::write(
-            root.join("tasks").join(format!("{id}.md")),
-            "---\nid: x\n---\n",
+    #[test]
+    fn independent_allocators_start_at_one() {
+        let dir = project();
+        assert_eq!(next_epic_id(dir.path()), "EPC-001");
+        assert_eq!(next_spec_id(dir.path()), "SPC-001");
+        assert_eq!(next_task_id(dir.path()), "TSK-001");
+    }
+
+    #[test]
+    fn task_allocator_reserves_legacy_namespace() {
+        let dir = project();
+        seed(dir.path(), "tasks", "TSK-041-008");
+        seed(dir.path(), "tasks", "TSK-009");
+        assert_eq!(next_task_id(dir.path()), "TSK-042");
+    }
+
+    #[test]
+    fn creates_linked_and_standalone_tasks_without_format_id() {
+        let dir = project();
+        create_epic(dir.path(), EPIC_TEMPLATE, "Outcome").unwrap();
+        git(
+            dir.path(),
+            &["branch", "integration/EPC-001-outcome", "main"],
+        );
+
+        let linked = create_task(
+            dir.path(),
+            TASK_TEMPLATE,
+            Some("EPC-001"),
+            None,
+            Some("integration/EPC-001-outcome"),
+            "Linked",
         )
         .unwrap();
-    }
+        let linked_body = fs::read_to_string(linked.path).unwrap();
+        assert_eq!(linked.id, "TSK-001");
+        assert!(linked_body.contains("epic_id: EPC-001"));
+        assert!(linked_body.contains("integration_target: \"integration/EPC-001-outcome\""));
+        assert!(linked_body.contains("standalone_reason: null"));
+        assert!(!linked_body.contains("format_id"));
 
-    #[test]
-    fn empty_project_starts_at_epic_001() {
-        assert_eq!(next_epic_id(pm().path()), "EPC-001");
-    }
-
-    #[test]
-    fn epic_allocation_picks_max_plus_one_not_count() {
-        let dir = pm();
-        // Non-contiguous ids prove it is max+1, not a count of files.
-        seed_epic(dir.path(), "EPC-001");
-        seed_epic(dir.path(), "EPC-005");
-        assert_eq!(next_epic_id(dir.path()), "EPC-006");
-    }
-
-    #[test]
-    fn epic_allocation_sees_nested_layout() {
-        let dir = pm();
-        // Dogfood layout: epics/EPC-003/EPC-003.md (dir named after its id).
-        fs::create_dir_all(dir.path().join("epics/EPC-003")).unwrap();
-        fs::write(
-            dir.path().join("epics/EPC-003/EPC-003.md"),
-            "---\nid: x\n---\n",
+        let standalone = create_task(
+            dir.path(),
+            TASK_TEMPLATE,
+            None,
+            Some("bounded correction"),
+            None,
+            "Standalone",
         )
         .unwrap();
-        assert_eq!(next_epic_id(dir.path()), "EPC-004");
+        let standalone_body = fs::read_to_string(standalone.path).unwrap();
+        assert_eq!(standalone.id, "TSK-002");
+        assert!(standalone_body.contains("epic_id: null"));
+        assert!(standalone_body.contains("bounded correction"));
     }
 
     #[test]
-    fn create_epic_allocates_renders_and_writes() {
-        let dir = pm();
-        seed_epic(dir.path(), "EPC-001");
-        let rec = create_epic(dir.path(), EPIC_TMPL, "Ship it").unwrap();
-
-        assert_eq!(rec.format_id, "EPC-002");
-        assert_eq!(rec.path, dir.path().join("epics/EPC-002.md"));
-        let body = fs::read_to_string(&rec.path).unwrap();
-        assert!(body.contains("format_id: EPC-002"));
-        assert!(body.contains("title: Ship it"));
-        assert!(body.contains("# EPC-002 — Ship it"));
-        // No placeholder survives.
-        assert!(!body.contains("{{"));
-        // A second allocation now sees the file just written.
-        assert_eq!(next_epic_id(dir.path()), "EPC-003");
+    fn rejects_ambiguous_or_unjustified_task_parentage() {
+        let dir = project();
+        create_epic(dir.path(), EPIC_TEMPLATE, "Outcome").unwrap();
+        assert!(matches!(
+            create_task(
+                dir.path(),
+                TASK_TEMPLATE,
+                Some("EPC-001"),
+                Some("also standalone"),
+                None,
+                "bad"
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            create_task(
+                dir.path(),
+                TASK_TEMPLATE,
+                Some("EPC-001"),
+                None,
+                Some("refs/heads/task/TSK-001-self"),
+                "self-authorizing"
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            create_task(dir.path(), TASK_TEMPLATE, None, None, None, "bad"),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            create_task(
+                dir.path(),
+                TASK_TEMPLATE,
+                Some("EPC-999"),
+                None,
+                None,
+                "missing"
+            ),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            create_task(
+                dir.path(),
+                TASK_TEMPLATE,
+                Some("EPC-001"),
+                None,
+                Some("  "),
+                "empty target"
+            ),
+            Err(StoreError::Invalid(_))
+        ));
     }
 
     #[test]
-    fn empty_epic_starts_tasks_at_001() {
-        let dir = pm();
-        seed_epic(dir.path(), "EPC-007");
-        assert_eq!(next_task_id(dir.path(), "EPC-007").unwrap(), "TSK-007-001");
-    }
+    fn spec_creation_links_the_consuming_work_item() {
+        let dir = project();
+        let epic = create_epic(dir.path(), EPIC_TEMPLATE, "Outcome").unwrap();
+        let spec = create_spec(dir.path(), SPEC_TEMPLATE, "EPC-001", "Interface contract").unwrap();
+        assert_eq!(spec.id, "SPC-001");
+        let epic_body = fs::read_to_string(epic.path).unwrap();
+        assert!(epic_body.contains("specs: [SPC-001]"), "{epic_body}");
+        assert!(!fs::read_to_string(spec.path).unwrap().contains("epic_id:"));
 
-    #[test]
-    fn task_numbering_is_scoped_to_its_epic() {
-        let dir = pm();
-        seed_task(dir.path(), "TSK-007-001");
-        seed_task(dir.path(), "TSK-007-002");
-        // A different epic's tasks must not raise EPC-007's next number.
-        seed_task(dir.path(), "TSK-008-001");
-        seed_task(dir.path(), "TSK-008-002");
-        seed_task(dir.path(), "TSK-008-003");
-
-        assert_eq!(next_task_id(dir.path(), "EPC-007").unwrap(), "TSK-007-003");
-        assert_eq!(next_task_id(dir.path(), "EPC-008").unwrap(), "TSK-008-004");
-        // An epic with no tasks yet starts at 001.
-        assert_eq!(next_task_id(dir.path(), "EPC-009").unwrap(), "TSK-009-001");
-    }
-
-    #[test]
-    fn task_allocation_sees_nested_epic_tasks() {
-        let dir = pm();
-        // Tasks nested under their epic dir must still reserve their numbers.
-        fs::create_dir_all(dir.path().join("epics/EPC-004/tasks")).unwrap();
-        fs::write(
-            dir.path().join("epics/EPC-004/tasks/TSK-004-001.md"),
-            "---\nid: x\n---\n",
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/EPC-001-outcome",
+                "HEAD",
+            ],
+        );
+        let task = create_task(
+            dir.path(),
+            TASK_TEMPLATE,
+            Some("EPC-001"),
+            None,
+            Some("origin/integration/EPC-001-outcome"),
+            "Work",
         )
         .unwrap();
-        assert_eq!(next_task_id(dir.path(), "EPC-004").unwrap(), "TSK-004-002");
+        let task_body = fs::read_to_string(&task.path).unwrap();
+        assert!(task_body.contains("integration_target: \"integration/EPC-001-outcome\""));
+        create_spec(dir.path(), SPEC_TEMPLATE, "TSK-001", "Task contract").unwrap();
+        assert!(fs::read_to_string(task.path)
+            .unwrap()
+            .contains("specs: [SPC-002]"));
+        assert!(matches!(
+            create_spec(dir.path(), SPEC_TEMPLATE, "TSK-999", "Missing"),
+            Err(StoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            create_spec(dir.path(), SPEC_TEMPLATE, "not-an-id", "Malformed"),
+            Err(StoreError::NotFound(_))
+        ));
     }
 
     #[test]
-    fn create_task_allocates_renders_and_writes() {
-        let dir = pm();
-        seed_epic(dir.path(), "EPC-007");
-        seed_task(dir.path(), "TSK-007-001");
-        let rec = create_task(dir.path(), TASK_TMPL, "EPC-007", "Do the thing").unwrap();
+    fn spec_linking_preserves_frontmatter_comments_and_order() {
+        let dir = project();
+        let commented_epic = EPIC_TEMPLATE.replace(
+            "specs: []",
+            "specs: [] # consumer-owned references; keep this guidance",
+        );
+        let epic = create_epic(dir.path(), &commented_epic, "Outcome").unwrap();
+        create_spec(dir.path(), SPEC_TEMPLATE, "EPC-001", "Contract").unwrap();
 
-        assert_eq!(rec.format_id, "TSK-007-002");
-        assert_eq!(rec.path, dir.path().join("tasks/TSK-007-002.md"));
-        let body = fs::read_to_string(&rec.path).unwrap();
-        assert!(body.contains("format_id: TSK-007-002"));
-        assert!(body.contains("epic_id: EPC-007"));
-        assert!(body.contains("title: Do the thing"));
-        assert!(!body.contains("{{"));
-        // The just-written task is now seen by the next allocation.
-        assert_eq!(next_task_id(dir.path(), "EPC-007").unwrap(), "TSK-007-003");
+        let after = fs::read_to_string(epic.path).unwrap();
+        assert!(
+            after.contains("specs: [SPC-001] # consumer-owned references; keep this guidance"),
+            "{after}"
+        );
+        assert!(
+            after.find("status:").unwrap() < after.find("specs:").unwrap(),
+            "unrelated frontmatter ordering changed: {after}"
+        );
     }
 
     #[test]
-    fn next_task_id_rejects_malformed_epic() {
-        assert!(next_task_id(pm().path(), "EPC-1").is_none());
-        assert!(next_task_id(pm().path(), "nonsense").is_none());
+    fn yaml_sequence_insertion_preserves_block_and_missing_key_shapes() {
+        let block = "id: EPC-001\nspecs: # linked contracts\n  - SPC-001\ncreated: now\n";
+        let block = insert_yaml_sequence_value(block, "specs", "SPC-002").unwrap();
+        assert_eq!(
+            block,
+            "id: EPC-001\nspecs: # linked contracts\n  - SPC-002\n  - SPC-001\ncreated: now\n"
+        );
+
+        let missing = insert_yaml_sequence_value("id: EPC-001\n", "specs", "SPC-001").unwrap();
+        assert_eq!(missing, "id: EPC-001\nspecs:\n  - SPC-001\n");
     }
 
     #[test]
-    fn create_task_errors_on_malformed_epic() {
-        let err = create_task(pm().path(), TASK_TMPL, "bogus", "t").unwrap_err();
-        assert!(matches!(err, StoreError::NotFound(_)));
+    fn invalid_work_item_ids_do_not_scan_records() {
+        let dir = project();
+        seed(dir.path(), "epics", "EPC-001");
+        seed(dir.path(), "tasks", "TSK-001");
+        assert!(work_item_exists(dir.path(), "EPC-001"));
+        assert!(work_item_exists(dir.path(), "TSK-001"));
+        assert!(!work_item_exists(dir.path(), "SPC-001"));
+        assert!(!work_item_exists(dir.path(), "not-an-id"));
     }
 
     #[test]
-    fn epic_exists_reflects_disk() {
-        let dir = pm();
-        seed_epic(dir.path(), "EPC-002");
-        assert!(epic_exists(dir.path(), "EPC-002"));
-        assert!(!epic_exists(dir.path(), "EPC-001"));
-        assert!(!epic_exists(dir.path(), "malformed"));
+    fn exclusive_creation_never_overwrites() {
+        let dir = project();
+        let path = dir.path().join("tasks/TSK-001.md");
+        write_new(&path, "first").unwrap();
+        assert!(write_new(&path, "second").is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "first");
+    }
+
+    #[test]
+    fn record_titles_are_one_line_and_yaml_safe() {
+        let dir = project();
+        let epic = create_epic(dir.path(), EPIC_TEMPLATE, "Account: recovery #1").unwrap();
+        let body = fs::read_to_string(epic.path).unwrap();
+        assert!(body.contains("title: \"Account: recovery #1\""));
+        assert!(body.contains("# EPC-001 — Account: recovery #1"));
+
+        assert!(matches!(
+            create_epic(dir.path(), EPIC_TEMPLATE, " \n "),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            create_epic(dir.path(), EPIC_TEMPLATE, "line one\nline two"),
+            Err(StoreError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn task_creation_requires_an_existing_integration_branch() {
+        let dir = project();
+        create_epic(dir.path(), EPIC_TEMPLATE, "Outcome").unwrap();
+        assert!(matches!(
+            create_task(
+                dir.path(),
+                TASK_TEMPLATE,
+                Some("EPC-001"),
+                None,
+                Some("integration/EPC-001-missing"),
+                "Work"
+            ),
+            Err(StoreError::Invalid(message))
+                if message.contains("does not resolve")
+        ));
     }
 }

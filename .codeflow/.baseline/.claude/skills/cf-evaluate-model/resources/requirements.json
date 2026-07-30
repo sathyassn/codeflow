@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-28-project-organization-v1",
+  "requirements_version": "2026-07-29-durable-work-lifecycle-v3",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -451,7 +451,7 @@
       "level": "hard",
       "statement": "Durable work has one authoritative home: CodeFlow uses flat stable-ID Git records for repo-local gated work, links rather than mirrors external trackers or planning methods, and never promotes a host-local database from rebuildable cache or single-host runtime state into shared team truth.",
       "sources": [
-        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["The system that owns an item's status, acceptance, and lifecycle is its authority", "`external_refs` is a list of opaque links or IDs, not a status mirror", "Do not make an untracked SQLite file or another host-local database the shared team authority"]},
+        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["The authority owns status, acceptance, and lifecycle", "`external_refs` contains opaque links or IDs, never mirrored status", "must remain rebuildable from Git Markdown"]},
         {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["Project shape and work authority", "never status mirroring or a host-local database as shared team truth"]}
       ]
     },
@@ -462,6 +462,43 @@
       "sources": [
         {"path": "project-management/templates/task.md", "markers": ["Bounded discoveries/deviations", "never legalized here after implementation", "settle Plan vN+1 with both primary seats, then continue"]},
         {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["bounded in-node discoveries are captured only when review-relevant", "Closeout cannot approve a deviation after the fact"]}
+      ]
+    },
+    {
+      "id": "CF-PM-003",
+      "level": "hard",
+      "statement": "New durable records use independent EPC-NNN, SPC-NNN, and TSK-NNN IDs with explicit relationships; a task has an epic or justified standalone rationale, and historical nested, dual-identity, and TSK-NNN-NNN records remain readable without becoming the new write shape.",
+      "sources": [
+        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["independent, repo-wide sequences", "`standalone_reason`", "reads historical dual-identity and `TSK-NNN-NNN` records"]},
+        {"path": "AGENTS.md", "markers": ["independent sequences and", "justified `standalone_reason`"]}
+      ]
+    },
+    {
+      "id": "CF-PM-004",
+      "level": "hard",
+      "statement": "Durable implementation starts only after a validated planning PR reaches a declared real local or remote-tracking non-task branch; codeflow work start, pre-commit, and CI reject revision-expression aliases and share a read-only merge-base check for the task, matching target declaration, parent or standalone rationale, ready specs, and completed predecessors.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["validated planning PR must reach", "`codeflow work start TSK-NNN`", "CLI, pre-commit, and CI share this read-only rule"]},
+        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["Merge the planning PR into every task's", "A task branch is never an integration target", "real local or remote-tracking branch", "preflight is read-only"]}
+      ]
+    },
+    {
+      "id": "CF-PM-005",
+      "level": "hard",
+      "statement": "Planning resolves discoverable facts autonomously and asks only the smallest consequential operator-owned question when the answer changes outcome, public behavior, authority, material security, or irreversible action; cf-model-orchestrator owns independent duo settlement and cf-plan owns clarification discipline and durable materialization.",
+      "sources": [
+        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["Resolve discoverable facts", "Ask the operator only", "do not ask them to perform repository discovery"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["orchestrator owns independent discovery and settlement", "`cf-plan` owns clarification discipline"]}
+      ]
+    },
+    {
+      "id": "CF-PM-006",
+      "level": "hard",
+      "statement": "The repository workflow has one legible path from brief and evidence-led clarification through dual-approved Plan vN, planning-branch materialization and stable anchoring, work-start proof, implementation, cross-lineage review, integrated judgment, shipping, and proven cleanup; material amendments return to Plan vN+1, blocked work changes strategy before escalation, cancellation records closeout, and unavailable model seats degrade explicitly rather than fabricating approval.",
+      "sources": [
+        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["From discussion to delivered work", "implement -> verify -> cross-lineage review -> integrated judgment -> ship", "Material discovery"]},
+        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["A substantive amendment creates", "Failure paths are explicit", "record a proved unavailable seat as reduced assurance"]},
+        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Bounded, evidence-moving loops", "A deterministic failure or unverified criterion blocks"]}
       ]
     }
   ]

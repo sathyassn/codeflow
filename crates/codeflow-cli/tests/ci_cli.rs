@@ -89,6 +89,123 @@ fn ci_with_body(dir: &Path, body: &str) -> Output {
     )
 }
 
+#[test]
+fn ci_blocks_task_whose_planning_record_is_not_on_target() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-b", "main"]);
+    git(dir.path(), &["config", "user.email", "t@example.com"]);
+    git(dir.path(), &["config", "user.name", "t"]);
+    std::fs::write(dir.path().join("base.txt"), "base\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: init"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-unanchored"]);
+    let tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    std::fs::write(
+        tasks.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "feat: add unanchored work"]);
+
+    let output = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-unanchored",
+            "--pr-body",
+            "## Summary\nUnanchored work.\n\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("work.stable_planning_anchor"), "{err}");
+}
+
+#[test]
+fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-b", "main"]);
+    git(dir.path(), &["config", "user.email", "t@example.com"]);
+    git(dir.path(), &["config", "user.name", "t"]);
+    let tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    std::fs::write(
+        tasks.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- [ ] repair verified\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "plan: anchor repair task"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
+
+    let epics = dir.path().join("project-management/epics");
+    std::fs::create_dir_all(&epics).unwrap();
+    std::fs::write(
+        epics.join("EPC-999.md"),
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "fix: repair work"]);
+
+    let output = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-repair",
+            "--pr-body",
+            "## Summary\nRepair.\n\n## Changes\n- repair work\n\n## Testing\n- focused test",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("work.valid_graph"), "{err}");
+    assert!(err.contains("EPC-999.md"), "{err}");
+}
+
+#[test]
+fn ci_keeps_task_prefix_available_without_durable_work_tracking() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let output = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/tidy-the-logger",
+            "--pr-body",
+            "## Summary\nBounded task.\n\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("work-start"), "{stdout}");
+}
+
 /// A body satisfying every default-required section with real content.
 const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Changes\n\n- one change\n\n\
                          ## Testing\n\n- cargo test: 12 passed\n";

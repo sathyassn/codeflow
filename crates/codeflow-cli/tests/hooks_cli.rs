@@ -1074,3 +1074,139 @@ fn bootstrap_grace_applies_before_first_commit() {
     assert_eq!(out.status.code(), Some(1), "secrets are never graced");
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.secret_scan"));
 }
+
+#[test]
+fn pre_commit_blocks_implementation_when_task_exists_only_on_task_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["switch", "-c", "task/TSK-001-unanchored"]);
+    let task_dir = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&task_dir).unwrap();
+    std::fs::write(
+        task_dir.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only planning must not authorize itself.\n\n## Acceptance Criteria\n- [ ] planning is anchored\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: add branch-only task"]);
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("task implementation is not ready"), "{err}");
+    assert!(err.contains("not present at the merge-base"), "{err}");
+}
+
+#[test]
+fn pre_commit_blocks_planning_records_created_on_a_task_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["switch", "-c", "task/TSK-001-self-plan"]);
+    let task_dir = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&task_dir).unwrap();
+    std::fs::write(
+        task_dir.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: self planning\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nPlanning belongs on plan branches.\n\n## Acceptance Criteria\n- [ ] planning is anchored\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "project-management"]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not present at the merge-base"), "{err}");
+}
+
+#[test]
+fn pre_commit_blocks_an_invalid_visible_workgraph_before_task_work() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let task_dir = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&task_dir).unwrap();
+    std::fs::write(
+        task_dir.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- [ ] repair verified\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: anchor repair task"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
+
+    let epic_dir = dir.path().join("project-management/epics");
+    std::fs::create_dir_all(&epic_dir).unwrap();
+    std::fs::write(
+        epic_dir.join("EPC-999.md"),
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "project-management"]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("workgraph error"), "{err}");
+    assert!(err.contains("EPC-999.md"), "{err}");
+}
+
+#[test]
+fn pre_commit_blocks_task_branch_without_a_visible_task_record() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    git(dir.path(), &["switch", "-c", "task/TSK-001-missing-record"]);
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("does not identify a visible durable task record"),
+        "{err}"
+    );
+    assert!(err.contains("before implementation"), "{err}");
+}
+
+#[test]
+fn pre_commit_keeps_task_prefix_available_without_durable_work_tracking() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["switch", "-c", "task/tidy-the-logger"]);
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "minimal and standard tiers must not require full-tier task records: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

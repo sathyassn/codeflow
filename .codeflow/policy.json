@@ -57,6 +57,7 @@
       "ci/",
       "hotfix/",
       "plan/",
+      "task/",
       "spike/",
       "experiment/",
       "integration/"

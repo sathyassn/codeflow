@@ -148,21 +148,27 @@ Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite
 FTS5 is a rebuildable cache — no database-as-authority, no embeddings. Core
 reads through a `RecordStore` trait with a `MarkdownStore` implementation.
-CodeFlow writes the flat stable-ID layout
-`project-management/{epics/EPC-NNN.md,tasks/TSK-NNN-MMM.md,specs/SPC-NNN.md}`.
+CodeFlow writes the flat, independently allocated stable-ID layout
+`project-management/{epics/EPC-NNN.md,specs/SPC-NNN.md,tasks/TSK-NNN.md}`.
 A shared layout enumerator keeps the store, docs validator, and recall index on
 that contract while retaining read-only compatibility for historical nested
-epic/task records; specs are indexed as project-management recall sources.
+epic/task and `TSK-NNN-NNN` records; specs are indexed as project-management
+recall sources. Frontmatter owns relationships: tasks point to an epic or carry
+a standalone rationale, tasks name direct predecessors, and consuming epics or
+tasks link specs.
 Recall walks source trees without following directory symlinks and applies
 depth/count budgets; encoded path bytes are index identity while lossy paths are
 display-only. Ledger compaction syncs the directory after installing the merged
 base and again after deleting fragments so crash ordering preserves the base.
-Task records optionally carry canonical `depends_on` metadata; the historical
-`dependencies` spelling is a read alias. Documentation validation checks the
+Task records carry an `integration_target` and canonical `depends_on`
+metadata; the historical `dependencies` spelling is a read alias.
+Documentation validation checks the
 non-executable structural graph for well-formed IDs, filenames, references,
-duplicates, self-edges, and cycles. Guard selection, branch readiness, task
-completion, and scheduling remain Plan/ledger and native-harness concerns
-(ADR-0040).
+duplicates, parent/standalone exclusivity, spec readiness, self-edges, and
+cycles. The read-only `work start` preflight proves the task and its applicable
+graph at the merge-base with the declared target; the CLI, pre-commit hook, and
+detached CI share that core check. Scheduling and status mutation remain
+Plan/native-harness concerns (ADR-0040, ADR-0046).
 
 ### scaffold — `assets/`
 

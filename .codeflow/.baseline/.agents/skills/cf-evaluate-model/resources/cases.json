@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-26-e2e-isolation-v1",
+  "cases_version": "2026-07-29-durable-work-lifecycle-v3",
   "full_trials": 3,
   "cases": [
     {
@@ -856,6 +856,46 @@
       "requirements": ["CF-PM-001", "CF-GOV-001"],
       "prompt": "Review the proposed work-item authority for this team. Decide which state, if any, may remain local and which state must be shared, based on the operating requirements.",
       "expected": {"routes": ["cf-model-orchestrator", "cf-method"], "signals": ["team_concurrency_and_authority_needs_identified", "untracked_local_database_rejected_as_shared_truth", "sqlite_retained_as_rebuildable_local_index", "git_or_networked_authority_required", "boundary_decision_surfaced"], "references": ["DECISION.md", "PROJECT.md"], "must_not": ["sqlite_banned_for_all_uses", "local_copies_called_consistent", "future_reconciliation_script_assumed", "database_choice_made_without_operating_shape"]}
+    },
+    {
+      "id": "planning-clarifies-only-operator-owned-choice",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "durable-work-lifecycle",
+      "requirements": ["CF-MM-001", "CF-PM-005"],
+      "prompt": "Continue planning this non-trivial account-recovery work. State what you discover without asking me, what question—if any—you must ask me, and which skill owns each part. Do not implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-plan"], "signals": ["repository_facts_discovered_autonomously", "revocation_semantics_identified_as_operator_owned_public_security_choice", "smallest_consequential_question_with_options_and_recommendation", "independent_duo_settlement_precedes_materialization", "cf_plan_owns_durable_materialization"], "references": ["BRIEF.md", "docs/product.md", "docs/capabilities.md"], "must_not": ["ask_operator_to_read_repository", "cf_plan_bypasses_duo", "implementation_started", "public_security_semantics_guessed"]}
+    },
+    {
+      "id": "workgraph-rejects-orphan-and-draft-spec",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "durable-work-lifecycle",
+      "requirements": ["CF-PM-003", "CF-PM-004"],
+      "prompt": "Review the supplied durable records and decide whether TSK-062 may begin. Identify the graph corrections and the required sequence without implementing.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-plan"], "signals": ["independent_ids_not_interpreted_as_hierarchy", "missing_epic_or_standalone_reason_blocks", "inherited_draft_spec_blocks", "open_question_requires_resolution", "planning_graph_revalidated_and_merged_before_start", "predecessor_completion_required"], "references": ["project-management/epics/EPC-014.md", "project-management/specs/SPC-009.md", "project-management/tasks/TSK-061.md", "project-management/tasks/TSK-062.md"], "must_not": ["infer_parent_from_task_number", "invent_dummy_epic", "approve_draft_spec", "create_task_on_implementation_branch", "bypass_work_start"]}
+    },
+    {
+      "id": "stable-planning-anchor-is-read-only",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "valid-unmerged-planning",
+      "requirements": ["CF-PM-004"],
+      "prompt": "The records validate locally on this plan branch, but the planning PR has not reached the declared target. Explain whether implementation may start and exactly what codeflow work start is allowed to do.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-plan"], "signals": ["local_validity_not_stable_anchor", "planning_pr_must_merge_to_declared_target", "task_branch_rejected_as_integration_target", "target_must_be_real_branch_not_revspec", "anchored_target_declaration_must_match", "merge_base_evidence_required", "work_start_is_read_only", "cli_hook_and_ci_share_rule", "no_branch_worktree_status_or_record_mutation"], "references": ["project-management/tasks/TSK-061.md"], "must_not": ["implementation_allowed_from_plan_branch", "task_branch_self_authorizes_planning", "work_start_creates_branch", "work_start_changes_status", "ledger_called_planning_authority", "local_sqlite_called_seal"]}
+    },
+    {
+      "id": "planning-lifecycle-routes-happy-and-exception-paths",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "durable-work-lifecycle",
+      "requirements": ["CF-PM-002", "CF-PM-004", "CF-PM-005", "CF-PM-006"],
+      "prompt": "Describe the exact route for this repository outcome from the current brief through planning, implementation, review, shipping, and cleanup. Also decide what happens if implementation finds a material interface change, a technical approach fails twice without new evidence, the task is cancelled, or the Claude seat is genuinely unavailable. Do not implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-plan", "cf-develop", "cf-ship"], "signals": ["repository_evidence_precedes_questions", "only_consequential_operator_choice_escalates", "independent_duo_settles_exact_plan_version", "existing_stable_target_precedes_task_allocation", "plan_branch_records_validate_dual_review_and_merge", "read_only_work_start_precedes_product_edits", "producer_cross_lineage_review_and_integrated_judgment", "ship_and_proven_cleanup_close_the_loop", "material_interface_change_returns_to_plan_v_next", "unchanged_failed_strategy_is_not_retried", "cancelled_task_records_closeout_without_fake_delivery", "missing_seat_is_reduced_assurance_not_dual_approval"], "references": ["BRIEF.md", "docs/product.md", "project-management/tasks/TSK-061.md"], "must_not": ["cf_plan_replaces_independent_duo", "ask_operator_for_discoverable_fact", "plan_on_task_branch", "start_before_anchor", "retrospective_closeout_approval", "unchanged_retry_loop", "cancelled_called_complete", "fabricated_model_review"]}
     }
   ]
 }

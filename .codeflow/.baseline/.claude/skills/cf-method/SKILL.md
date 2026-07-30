@@ -76,8 +76,12 @@ Input clarity checklist — do not draft until you can state all four:
 4. **Touched surface.** Which areas and which existing capabilities
    (`docs/capabilities.md`) this creates or changes.
 
-If the user's request leaves any of these open, ask. Questions before drafting
-are cheap; assumptions discovered at review are expensive.
+If a missing answer changes the outcome, public behavior, authority, material
+security boundary, irreversible action, or another operator-owned choice, ask
+the smallest consequential question with evidence, options, consequences, and
+a recommendation. Discover repository facts yourself and make reversible,
+outcome-preserving implementation choices from evidence; do not offload
+research to the operator.
 
 Good criterion (EARS): "When a capability entry references a nonexistent epic
 ID, `codeflow validate --docs` shall exit non-zero in CI."
@@ -93,7 +97,10 @@ criteria list will not fit on one screen, split the epic.
 ## Project organization and work authority
 
 The full tier writes flat, stable-ID records:
-`epics/EPC-NNN.md`, `tasks/TSK-NNN-MMM.md`, and `specs/SPC-NNN.md`.
+`epics/EPC-NNN.md`, `specs/SPC-NNN.md`, and `tasks/TSK-NNN.md`.
+Each sequence is independent and relationships live in frontmatter. A task
+points to an epic or carries a justified standalone reason; specs are linked
+from the epic/task that consumes them.
 Historical nested epic/task records remain read-compatible but are not written.
 One system owns each work item's status and acceptance; external trackers or
 planning methods are linked, never mirrored, and host-local databases remain
@@ -113,18 +120,22 @@ so agents proceed autonomously and the human reviews **one** final PR. Every
 other gate (commit standards, secret scan, destructive-op rules, the test gate)
 still applies on every branch; only the merge-into-`main` step is deferred.
 
-1. **Plan.** One epic with per-task acceptance criteria. Materialize the
+1. **Integration branch.** Cut `integration/<epic-id>-<slug>` off the current
+   target and push it. It is **non-protected** — agents merge into it freely.
+   Establish this stable target before task allocation; an implementation task
+   cannot target a missing branch.
+2. **Plan and anchor.** One epic with per-task acceptance criteria. Materialize the
    dual-approved `TASK_GRAPH vN` from `cf-model-orchestrator` into canonical
    `depends_on` task frontmatter. Bare edges are finish-before-start; guarded
    edges are only pre-settled decision points. Parallel eligibility follows
    topology, but actual fan-out still needs a critical-path benefit and safe
-   isolation.
-2. **Integration branch.** Cut `integration/<epic-id>-<slug>` off `main` and
-   push it. It is **non-protected** — agents merge into it freely.
-3. **Task branches.** Each task on `feat/<epic-id>-<task-slug>`, branched *from
+   isolation. Set each task's `integration_target` to the integration branch,
+   validate the graph, and merge the planning PR there before implementation.
+3. **Task branches.** Each task on `task/<task-id>-<slug>`, branched *from
    the integration branch*: serial tasks branch from the updated integration
    after their predecessor lands; parallel tasks branch concurrently, one
-   agent + worktree each.
+   agent + worktree each. Run `codeflow work start <task-id>` before product
+   edits; it proves the task, specs, and predecessors from the target merge-base.
    Before fan-out, assign one writer per file/component and a single owner for
    shared schemas, migrations, lockfiles, generated registries, and other merge
    hotspots. Set a concurrency cap from observed host memory, CPU, disk, and
@@ -228,7 +239,10 @@ Rules:
 Specs are **inputs to work, not living documents.**
 
 - Drafted during `/cf-plan`, only when interfaces, formats, or behavior need
-  pinning down before building. Many epics need no spec at all.
+  pinning down before building. Allocate and link with `codeflow spec new --for
+  EPC-NNN|TSK-NNN`. Many work items need no spec at all.
+- `status: approved` only after open questions are empty; draft specs block
+  `codeflow work start`.
 - Consumed during `/cf-develop`.
 - **Frozen at ship:** `status: implemented` when the epic completes. After
   that, truth lives in architecture, capabilities, and tests — the spec is
@@ -266,8 +280,8 @@ Downgrade is never destructive: stop managing, do not delete.
   rot. Docs mutate only inside the ship flow, in the same PR as the code.
 - **Speculative artifacts.** New agents, skills, commands, or templates are
   added when usage proves the need — never because they might help.
-- **Assumption-driven building.** Filling an input gap with a guess instead of
-  a question. The expensive failures all start here.
+- **Assumption-driven building.** Guessing an operator-owned outcome or safety
+  decision, or asking the operator to rediscover a fact the agent could verify.
 - **Agent-merging a protected branch.** An agent never merges into protected —
   a human merges the PR, or `codeflow integrate` lands it. Override envs
   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only; setting them

@@ -9,7 +9,10 @@ Drive the planned work to done.
 
 1. Locate the work and its acceptance criteria (epic, task, spec, or the user's
    prompt). No stated criteria → stop and run the clarity gate from `cf-plan`
-   first.
+   first. For a durable task, use `task/TSK-NNN-<slug>` and run
+   `codeflow work start TSK-NNN` before product edits; a missing stable planning
+   anchor, parent/standalone rationale, approved spec, or completed predecessor
+   returns to planning rather than being bypassed.
 2. Consult `docs/capabilities.md` and `docs/architecture.md` before touching
    code; note what the change touches. For a material product, UX, interaction,
    or visual-design change, require the plan's settled `DESIGN_INTENT`; if it is

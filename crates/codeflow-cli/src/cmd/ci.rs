@@ -22,6 +22,11 @@ use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
     any_blocking, git_hook, policy_schema, repo, standards, GitPolicy, PolicyLevel, Violation,
 };
+use codeflow_core::validate::validate_workgraph;
+use codeflow_core::workgraph::{
+    check_work_start_for_branch, declared_work_target, durable_work_tracking_enabled,
+    resolve_work_target, task_id_from_branch,
+};
 
 #[derive(Debug, Args)]
 pub struct CiArgs {
@@ -76,6 +81,12 @@ struct DetectedRange {
     head: String,
     /// Human description of how the range was derived.
     source: String,
+}
+
+struct CommitRangeEvaluation {
+    files: Option<Vec<String>>,
+    violations: Vec<TaggedViolation>,
+    ran: bool,
 }
 
 pub fn run(args: &CiArgs) -> i32 {
@@ -142,31 +153,11 @@ pub fn run(args: &CiArgs) -> i32 {
     let mut tagged: Vec<TaggedViolation> = Vec::new();
     // Every path the range touches, for the PR-structure docs-only test.
     // `None` = the range could not be resolved (unknown = code, conservative).
-    let mut range_files: Option<Vec<String>> = None;
-    if let Some(base_sha) = resolve_base(&root, &base_candidates) {
-        match enumerate_commits(&root, &base_sha, &head) {
-            Ok(commits) => {
-                println!(
-                    "codeflow ci: range {}..{} ({}) — {} non-merge commit(s)",
-                    short(&base_sha),
-                    head,
-                    range_source,
-                    commits.len()
-                );
-                range_files = Some(commits.iter().flat_map(|c| c.files.clone()).collect());
-                tagged.extend(evaluate_commits(git, &commits));
-                ran.push("commit");
-            }
-            Err(e) => {
-                eprintln!("codeflow ci: warning: could not enumerate commits ({e}) — commit checks skipped");
-                skipped.push("commit");
-            }
-        }
+    let range = evaluate_commit_range(&root, &base_candidates, &head, &range_source, git);
+    tagged.extend(range.violations);
+    if range.ran {
+        ran.push("commit");
     } else {
-        eprintln!(
-            "codeflow ci: warning: could not resolve a base ref (tried: {}) — commit checks skipped. Pass --base/--head explicitly.",
-            base_candidates.join(", ")
-        );
         skipped.push("commit");
     }
 
@@ -182,12 +173,20 @@ pub fn run(args: &CiArgs) -> i32 {
         ran.push("branch-naming");
     }
 
+    // A durable task branch may contain implementation only after its planning
+    // record is present on the declared integration target. This uses the same
+    // read-only merge-base preflight as `codeflow work start` and pre-commit.
+    if branch.starts_with("task/") && durable_work_tracking_enabled(&root) {
+        evaluate_work_start(&root, &branch, &mut tagged);
+        ran.push("work-start");
+    }
+
     // --- PR-body check ----------------------------------------------------
     if let Some(body) = &pr_body {
         tagged.extend(
             evaluate_pr_body(git, body)
                 .into_iter()
-                .chain(evaluate_pr_structure(git, body, range_files.as_deref()))
+                .chain(evaluate_pr_structure(git, body, range.files.as_deref()))
                 .map(|violation| TaggedViolation {
                     sha: None,
                     violation,
@@ -197,6 +196,106 @@ pub fn run(args: &CiArgs) -> i32 {
     }
 
     report(&tagged, &ran, &skipped)
+}
+
+fn evaluate_commit_range(
+    root: &Path,
+    base_candidates: &[String],
+    head: &str,
+    range_source: &str,
+    git: &codeflow_core::hooks::policy::GitPolicy,
+) -> CommitRangeEvaluation {
+    let Some(base_sha) = resolve_base(root, base_candidates) else {
+        eprintln!(
+            "codeflow ci: warning: could not resolve a base ref (tried: {}) — commit checks skipped. Pass --base/--head explicitly.",
+            base_candidates.join(", ")
+        );
+        return CommitRangeEvaluation {
+            files: None,
+            violations: Vec::new(),
+            ran: false,
+        };
+    };
+    match enumerate_commits(root, &base_sha, head) {
+        Ok(commits) => {
+            println!(
+                "codeflow ci: range {}..{} ({}) — {} non-merge commit(s)",
+                short(&base_sha),
+                head,
+                range_source,
+                commits.len()
+            );
+            CommitRangeEvaluation {
+                files: Some(
+                    commits
+                        .iter()
+                        .flat_map(|commit| commit.files.clone())
+                        .collect(),
+                ),
+                violations: evaluate_commits(git, &commits),
+                ran: true,
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "codeflow ci: warning: could not enumerate commits ({error}) — commit checks skipped"
+            );
+            CommitRangeEvaluation {
+                files: None,
+                violations: Vec::new(),
+                ran: false,
+            }
+        }
+    }
+}
+
+fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolation>) {
+    let workgraph = validate_workgraph(root);
+    if !workgraph.is_clean() {
+        let findings = workgraph
+            .issues
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("; ");
+        tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                "work.valid_graph",
+                PolicyLevel::Block,
+                format!("visible durable workgraph is invalid: {findings}"),
+                "repair the workgraph until `codeflow validate --docs` passes".to_string(),
+            ),
+        });
+    }
+    if let Some(task_id) = task_id_from_branch(root, branch) {
+        let declared = declared_work_target(root, &task_id);
+        let target =
+            resolve_work_target(root, declared.as_deref()).unwrap_or_else(|| "main".to_string());
+        if let Err(error) = check_work_start_for_branch(root, &task_id, &target, branch) {
+            tagged.push(TaggedViolation {
+                sha: None,
+                violation: Violation::new(
+                    "work.stable_planning_anchor",
+                    PolicyLevel::Block,
+                    error.to_string(),
+                    format!(
+                        "merge the validated planning record into '{target}', then run `codeflow work start {task_id}`"
+                    ),
+                ),
+            });
+        }
+    } else {
+        tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                "work.task_record",
+                PolicyLevel::Block,
+                format!("task branch '{branch}' does not identify a visible task record"),
+                "create and merge the durable task record before implementation".to_string(),
+            ),
+        });
+    }
 }
 
 /// Report the ruleset actually enforced: the loader falls back to the
@@ -227,7 +326,17 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        eprintln!("{}", t.violation.render(&plane));
+        if t.violation.rule.starts_with("work.") {
+            eprintln!(
+                "{}",
+                t.violation.render_invariant(
+                    &plane,
+                    ".codeflow/project.toml full tier or an existing durable task layout"
+                )
+            );
+        } else {
+            eprintln!("{}", t.violation.render(&plane));
+        }
     }
 
     let violations: Vec<Violation> = tagged.iter().map(|t| t.violation.clone()).collect();

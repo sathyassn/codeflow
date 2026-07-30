@@ -1,12 +1,11 @@
 ---
 id: EPC-{{NNN}}
-format_id: EPC-{{NNN}}   # EPC-NNN — must match the filename
-title: {{TITLE}}
+title: {{TITLE_YAML}}
 status: draft            # draft | planning | in_progress | blocked | complete | archived
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 capabilities: []         # CAP-### ids this epic creates or changes
 adrs: []                 # ADR ids consumed or produced
-specs: []                # SPC-### inputs, if any
+specs: []                # SPC-### inputs consumed by this epic
 external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
 ---
@@ -16,15 +15,18 @@ created: {{DATE}}
 ## Summary
 
 <!-- 2-4 sentences: the problem, who it serves, and what done looks like.
-     If you cannot write this without guessing, go back and ask. -->
+     Research repository and authoritative-source facts first. Ask only when
+     the remaining ambiguity is a consequential operator-owned choice under
+     the cf-plan clarity gate. -->
 
 ## Acceptance Criteria
 
 <!-- Testable statements, preferably in EARS ("When <trigger>, the system shall
-     <response>") or Given/When/Then form. Each criterion names a concrete,
-     machine-verifiable check — a command, a test path, or an observable with a
-     threshold. "Works correctly" is not a criterion. If the list will not fit
-     on one screen, split the epic. -->
+     <response>") or Given/When/Then form. Each criterion names concrete,
+     claim-matched evidence: automate where meaningful, otherwise name a
+     bounded observable or review. Do not invent a hard-coded or meaningless
+     test merely to make the record look verifiable. "Works correctly" is not
+     a criterion. If the list will not fit on one screen, split the epic. -->
 
 - [ ]
 
@@ -41,6 +43,6 @@ created: {{DATE}}
 
 ## Tasks
 
-<!-- TSK-NNN-NNN links once broken down; small epics may have none. For a
+<!-- TSK-NNN links once broken down; small epics may have none. For a
      multi-task body, include or link the exact dual-approved TASK_GRAPH vN.
      Task frontmatter carries the same direct edges in `depends_on`. -->

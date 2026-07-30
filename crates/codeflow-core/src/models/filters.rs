@@ -12,7 +12,7 @@ pub struct EpicFilter {
 
 #[derive(Debug, Default, Clone)]
 pub struct TaskFilter {
-    /// Parent epic's ULID-based id.
+    /// Parent epic's stable id.
     pub epic_id: Option<String>,
     pub status: Option<TaskStatus>,
 }

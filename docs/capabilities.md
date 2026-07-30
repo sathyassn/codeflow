@@ -308,7 +308,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002, EPC-004]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -376,17 +376,22 @@ during customization (ADR-0044).
 
 For multi-task work, both approvals cover one acyclic Plan vN graph. Ordinary
 completion uses bare edges; only genuine pre-approved decisions use observable
-guards. Task frontmatter keeps non-executable structural `depends_on` data so
-`validate --docs` can reject malformed, dangling, self-referential, duplicate,
-or cyclic topology without interpreting branch readiness. Material graph or
-cross-task contract changes force Plan vN+1; in-node implementation detail does
-not. Review-relevant bounded discoveries persist at task closeout; closeout
-cannot retroactively approve a material change. Project organization keeps one
-authoritative work-item home and links, rather than mirrors, external planning
-methods or trackers. Verification planning selects property tests, targeted
-mutation testing, or project-owned architecture fitness checks only when the
-risk and oracle evidence earn them. CodeFlow adds neither a scheduler nor
-mandatory consuming-project tools.
+guards. Task frontmatter keeps non-executable structural `depends_on` data.
+`validate --docs` checks canonical identities and filenames, relationship
+shape, parent-or-standalone ownership, spec readiness, stable integration
+targets, completed acceptance criteria, and malformed, dangling,
+self-referential, duplicate, or cyclic topology. On full-tier task branches,
+`codeflow work start`, pre-commit, and detached CI additionally share one
+read-only merge-base check proving that validated planning is present on the
+declared stable target. Material graph or cross-task contract changes force
+Plan vN+1; in-node implementation detail does not. Review-relevant bounded
+discoveries persist at task closeout; closeout cannot retroactively approve a
+material change. Project organization keeps one authoritative work-item home
+and links, rather than mirrors, external planning methods or trackers.
+Verification planning selects property tests, targeted mutation testing, or
+project-owned architecture fitness checks only when the risk and oracle
+evidence earn them. CodeFlow adds neither a scheduler nor mandatory
+consuming-project tools.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, serialized

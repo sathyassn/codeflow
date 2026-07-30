@@ -1356,6 +1356,84 @@ fn project_organization_canaries_pin_authority_without_vendor_coupling() {
 }
 
 #[test]
+fn durable_planning_canaries_pin_clarity_graph_and_anchor() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "planning-clarifies-only-operator-owned-choice",
+                &[
+                    "repository_facts_discovered_autonomously",
+                    "revocation_semantics_identified_as_operator_owned_public_security_choice",
+                    "smallest_consequential_question_with_options_and_recommendation",
+                    "independent_duo_settlement_precedes_materialization",
+                    "cf_plan_owns_durable_materialization",
+                ][..],
+                &[
+                    "ask_operator_to_read_repository",
+                    "cf_plan_bypasses_duo",
+                    "implementation_started",
+                    "public_security_semantics_guessed",
+                ][..],
+            ),
+            (
+                "workgraph-rejects-orphan-and-draft-spec",
+                &[
+                    "independent_ids_not_interpreted_as_hierarchy",
+                    "missing_epic_or_standalone_reason_blocks",
+                    "inherited_draft_spec_blocks",
+                    "open_question_requires_resolution",
+                    "planning_graph_revalidated_and_merged_before_start",
+                    "predecessor_completion_required",
+                ][..],
+                &[
+                    "infer_parent_from_task_number",
+                    "invent_dummy_epic",
+                    "approve_draft_spec",
+                    "create_task_on_implementation_branch",
+                    "bypass_work_start",
+                ][..],
+            ),
+            (
+                "stable-planning-anchor-is-read-only",
+                &[
+                    "local_validity_not_stable_anchor",
+                    "planning_pr_must_merge_to_declared_target",
+                    "task_branch_rejected_as_integration_target",
+                    "target_must_be_real_branch_not_revspec",
+                    "anchored_target_declaration_must_match",
+                    "merge_base_evidence_required",
+                    "work_start_is_read_only",
+                    "cli_hook_and_ci_share_rule",
+                    "no_branch_worktree_status_or_record_mutation",
+                ][..],
+                &[
+                    "implementation_allowed_from_plan_branch",
+                    "task_branch_self_authorizes_planning",
+                    "work_start_creates_branch",
+                    "work_start_changes_status",
+                    "ledger_called_planning_authority",
+                    "local_sqlite_called_seal",
+                ][..],
+            ),
+        ],
+    );
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let stable_anchor = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .find(|fixture| fixture["id"] == "valid-unmerged-planning")
+        .expect("stable-anchor fixture");
+    assert_eq!(
+        stable_anchor["state"]["target_precedes_fixture"], true,
+        "the unmerged-planning canary needs a real target branch at the parent commit"
+    );
+}
+
+#[test]
 fn worktree_and_provenance_canaries_pin_doctrine() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     assert_canary_signals_and_guards(

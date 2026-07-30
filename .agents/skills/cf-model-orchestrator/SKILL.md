@@ -146,7 +146,10 @@ Never simulate a missing vendor with another host-model instance.
 ## Preflight
 
 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
-   non-goals. If any are missing, run the `cf-plan` clarity gate first.
+   non-goals. Use `cf-plan`'s clarity gate: discover repository and external
+   facts autonomously, and ask only when a missing answer changes an
+   operator-owned outcome, public behavior, authority, material security
+   boundary, or irreversible action.
 2. Identify the active host and required lane from the matrix. Set the current
    session role to `host`; the first line of every cross-harness task declares
    `ROLE: peer` or `ROLE: worker`, limits the task to that bounded assignment,
@@ -295,6 +298,15 @@ If implementation has independent tasks, add an explicit execution graph:
 Do not parallelize a short task when coordination costs more than it saves.
 Never use concurrent writers in one worktree or rebase a shared integration
 branch.
+
+After both seats approve the exact Plan vN and task graph, invoke `cf-plan` to
+materialize only the warranted epic/spec/task/ADR records on a `plan/` branch.
+Validate them and merge that planning PR into each task's declared
+`integration_target`. Before implementation, each durable task uses
+`task/TSK-NNN-<slug>` and passes the read-only `codeflow work start TSK-NNN`
+anchor check. The orchestrator owns independent discovery and settlement;
+`cf-plan` owns clarification discipline and durable materialization. Neither
+silently replaces the other.
 
 ### 4. Routed production and producer verification
 
