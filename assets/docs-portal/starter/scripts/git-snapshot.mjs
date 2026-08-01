@@ -9,6 +9,7 @@ const MAX_PATHS_PER_STATUS = 64;
 const MAX_STATUS_PATHSPEC_UTF16_UNITS = 8 * 1024;
 const GIT_TIMEOUT_MS = 30_000;
 const REGULAR_MODES = new Set(["100644", "100755"]);
+const FULL_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
 export class GitSnapshot {
   constructor(repositoryRoot, { onCommand = () => {} } = {}) {
@@ -19,12 +20,12 @@ export class GitSnapshot {
 
   resolveHead() {
     const commit = this.text(["rev-parse", "--verify", "HEAD^{commit}"], 1024, "repository HEAD").trim();
-    if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("repository HEAD must resolve to a full Git commit");
+    if (!FULL_OBJECT_ID.test(commit)) throw new Error("repository HEAD must resolve to a full Git commit");
     return commit;
   }
 
   loadInventory(commit) {
-    if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("Git inventory requires a full commit ID");
+    if (!FULL_OBJECT_ID.test(commit)) throw new Error("Git inventory requires a full commit ID");
     const listing = this.text(["ls-tree", "-r", "-z", "--full-tree", commit], MAX_GIT_TREE_BYTES, "repository tree");
     const inventory = new Map();
     const portable = new Set();
@@ -34,7 +35,7 @@ export class GitSnapshot {
       if (separator < 0) throw new Error("Git repository tree contains an invalid record");
       const [mode, type, oid] = raw.slice(0, separator).split(" ");
       const file = safeRelative(raw.slice(separator + 1), "committed repository path");
-      if (!/^[a-f0-9]{40,64}$/.test(oid ?? "") || !["blob", "commit"].includes(type)) throw new Error(`unsupported Git tree entry: ${file}`);
+      if (!FULL_OBJECT_ID.test(oid ?? "") || !["blob", "commit"].includes(type)) throw new Error(`unsupported Git tree entry: ${file}`);
       const key = portablePathKey(file, "committed repository path");
       if (portable.has(key)) throw new Error(`committed repository has a portable path collision: ${file}`);
       portable.add(key);
@@ -77,7 +78,7 @@ export class GitSnapshot {
   readBlobs(records, { perObjectBytes, totalBytes, label }) {
     const unique = new Map();
     for (const record of records) {
-      if (!record || record.type !== "blob" || !REGULAR_MODES.has(record.mode) || !/^[a-f0-9]{40,64}$/.test(record.oid ?? "")) {
+      if (!record || record.type !== "blob" || !REGULAR_MODES.has(record.mode) || !FULL_OBJECT_ID.test(record.oid ?? "")) {
         throw new Error(`${label} contains an invalid committed object record`);
       }
       unique.set(record.oid, record);

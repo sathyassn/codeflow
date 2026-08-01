@@ -6,10 +6,10 @@ import {
   amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
   findRepositoryRoot, localRouteFor, parseMarkdown,
   referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
-  strictUrlSegment, validatePortalConfig, validatePrimitiveTokens, withBase,
+  strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
-import { publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
+import { isReservedPublicPath, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
 
 const MAX_CONFIG_BYTES = 64 * 1024;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
@@ -42,13 +42,24 @@ if (typeof repoRelative !== "string" || !repoRelative || repoRelative.includes("
 const configuredRepositoryRoot = await realpath(path.resolve(portalRoot, repoRelative));
 if (!filesystemPathsEqual(repositoryRoot, configuredRepositoryRoot)) throw new Error("repository_root must resolve to the owning CodeFlow repository");
 const adapterRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const runtimeInputs = filesystemPathsEqual(path.resolve(adapterRoot), path.resolve(portalRoot))
-  ? ["astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/content.config.ts", "src/styles", "public/portal-preview.js"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
+const selfContainedRuntime = filesystemPathsEqual(path.resolve(adapterRoot), path.resolve(portalRoot));
+const runtimeInputs = selfContainedRuntime
+  ? [".node-version", "astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/content.config.ts", "src/styles", "tsconfig.json"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
   : [];
-const snapshotPaths = [portalConfigRelative, ...runtimeInputs, ...config.source_roots, ...(config.primitive_tokens === null ? [] : [config.primitive_tokens])].map((item) => safeRelative(item, "snapshot path"));
+const publicRootRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "public")).split(path.sep).join("/"), "portal public path");
+const publicRecords = selfContainedRuntime
+  ? git.requireDirectory(publicRootRelative, "portal public directory").filter((record) => {
+    const relative = record.path.slice(publicRootRelative.length + 1);
+    return relative !== ".codeflow-generated.json" && !isReservedPublicPath(relative);
+  })
+  : [];
+const snapshotPaths = [portalConfigRelative, ...runtimeInputs, ...publicRecords.map((record) => record.path), ...config.source_roots, ...(config.primitive_tokens === null ? [] : [config.primitive_tokens])].map((item) => safeRelative(item, "snapshot path"));
 git.assertClean(snapshotPaths);
 const runtimeRecords = git.recordsForInputs([portalConfigRelative, ...runtimeInputs], "portal runtime input");
-await assertRuntimeMatchesCommit(runtimeRecords);
+const authorityRecords = [...runtimeRecords, ...publicRecords];
+const authorityBlobs = git.readBlobs(authorityRecords, { perObjectBytes: MAX_RUNTIME_FILE_BYTES, totalBytes: MAX_TOTAL_RUNTIME_BYTES, label: "portal runtime input" });
+await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
+const committedPublicFiles = new Map(publicRecords.map((record) => [record.path.slice(publicRootRelative.length + 1), authorityBlobs.get(record.path)]));
 let primitiveTokens = null;
 let primitiveTokenEvidence = null;
 let primitiveTokenRecord = null;
@@ -86,6 +97,7 @@ for (const sourcePath of sources) {
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const { frontmatter, body } = parseMarkdown(text, sourcePath);
+    validatePageMetadata(frontmatter, sourcePath);
     const layer = chooseLayer(sourcePath, layers);
     const route = sourceRoutes.get(sourcePath);
     const title = titleFor(frontmatter, body, sourcePath);
@@ -100,7 +112,7 @@ for (const sourcePath of sources) {
 git.assertClean(snapshotPaths);
 await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "portal source");
 if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
-await assertRuntimeMatchesCommit(runtimeRecords);
+await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while the portal snapshot was being read");
 
 const ownerById = new Map();
@@ -164,10 +176,10 @@ git.assertClean([...snapshotPaths, ...mediaReferences.keys()]);
 await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "portal source");
 if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
 await assertWorktreeMatchesCommit(mediaRecords, mediaBlobs, MAX_MEDIA_BYTES, MAX_TOTAL_MEDIA_BYTES, "referenced media");
-await assertRuntimeMatchesCommit(runtimeRecords);
+await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while referenced media was being read");
 
-const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
+const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route.split("/").map(strictUrlSegment).join("/")}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
 const evidence = {
   schema_version: 1,
   generator: { name: "@codeflow/docs-portal", version: "1.0.0" },
@@ -180,11 +192,11 @@ const evidence = {
   artifacts: [],
 };
 const contentFiles = new Map([...renderedPages.map((page) => [`${page.route}.md`, page.rendered]), ...renderedLandings.map((landing) => [landing.path, landing.rendered]), ["index.md", renderedIndex]]);
-const publicFiles = new Map([...renderedPages.map((page) => [`markdown/${page.route}.md`, page.rendered]), ...mediaFiles, ["llms.txt", llms]]);
+const publicFiles = new Map([...committedPublicFiles, ...renderedPages.map((page) => [`markdown/${page.route}.md`, page.rendered]), ...mediaFiles, ["llms.txt", llms]]);
 await publishOwnedCorpus(portalRoot, [
   { live: ".portal/generated", files: new Map([["evidence.json", `${JSON.stringify(evidence, null, 2)}\n`], ["project-tokens.css", primitiveTokenCss]]) },
   { live: "src/content/docs", files: contentFiles },
-  { live: "public", files: publicFiles, preserveUnknown: true },
+  { live: "public", files: publicFiles, preserveUnknown: false },
 ]);
 console.log(`portal: adapted ${pages.length} source page(s) across ${layers.length} layer(s)`);
 
@@ -260,11 +272,11 @@ function renderPage(page, routesById, referencedMedia) {
   if (backlinks) context.push(`### Inverse links\n\n${backlinks}`);
   const recordContext = context.length ? `\n\n---\n\n${context.join("\n\n")}` : "";
   const release = config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`;
-  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)} · built from <code>${commit}</code>${release} · portal <code>1.0.0</code></div>${snippetMarker}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContext}\n\n</div>\n`;
+  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)} · built from <code>${commit}</code>${release} · portal <code>1.0.0</code></div>${snippetMarker}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContext}\n\n</div>\n`;
 }
 
 function renderStaleStub(page) {
-  const rendered = `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(`Source failed to build: ${page.source_path}`)}\npagefind: false\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)} · built from <code>${commit}</code> · portal <code>1.0.0</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Source unavailable:** This page's source failed to build at commit <code>${commit.slice(0, 12)}</code>. Fix <code>${escapeHtml(page.source_path)}</code> and rebuild; the previous version of this page is not shown.\n\n<details><summary>Build diagnostic</summary>\n\n${escapeMarkdownInline(page.stale_reason)}\n\n</details>\n\n</div>\n`;
+  const rendered = `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(`Source failed to build: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\npagefind: false\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)} · built from <code>${commit}</code> · portal <code>1.0.0</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Source unavailable:** This page's source failed to build at commit <code>${commit.slice(0, 12)}</code>. Fix <code>${escapeHtml(page.source_path)}</code> and rebuild; the previous version of this page is not shown.\n\n<details><summary>Build diagnostic</summary>\n\n${escapeMarkdownInline(page.stale_reason)}\n\n</details>\n\n</div>\n`;
   if (Buffer.byteLength(rendered) > MAX_STALE_STUB_BYTES) throw new Error(`${page.source_path}: stale stub exceeds ${MAX_STALE_STUB_BYTES} bytes`);
   return rendered;
 }
@@ -274,7 +286,7 @@ function provenanceMarker(page) {
 }
 
 function renderLayerLanding(layer, layerPages) {
-  const preface = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\n---\n\n${escapeMarkdownInline(layer.description)}\n`;
+  const preface = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\nslug: ${JSON.stringify(layer.id)}\n---\n\n${escapeMarkdownInline(layer.description)}\n`;
   if (layer.id === "records") {
     const groups = [["Epics", "EPC-"], ["Specifications", "SPC-"], ["Tasks", "TSK-"]];
     const sections = groups.map(([label, prefix]) => {
@@ -309,7 +321,7 @@ function escapeMarkdownInline(value) {
 
 function renderIndex(definitions, allPages) {
   const steps = definitions.map((layer, index) => `<li><a href="${withBase(base, layer.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(layer.label)}</strong><small>${escapeHtml(layer.description)}</small><em>${allPages.filter((page) => page.route.startsWith(`${layer.id}/`) && !page.stale).length} sources</em></a></li>`).join("\n");
-  return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
+  return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\nslug: "index"\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
 }
 
 function staleStubPage(sourcePath, sourceHash, error) {
@@ -365,11 +377,6 @@ function committedMarkdownSources(configuredRoots, excluded) {
   }
   if (!sources.size) throw new Error("configured source roots contain no publishable Markdown files");
   return [...sources.values()].sort((left, right) => compareDeterministicText(left.path, right.path));
-}
-
-async function assertRuntimeMatchesCommit(records) {
-  const committedBlobs = git.readBlobs(records, { perObjectBytes: MAX_RUNTIME_FILE_BYTES, totalBytes: MAX_TOTAL_RUNTIME_BYTES, label: "portal runtime input" });
-  await assertWorktreeMatchesCommit(records, committedBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
 }
 
 async function assertWorktreeMatchesCommit(records, committedBlobs, perFileBytes, totalLimit, label) {

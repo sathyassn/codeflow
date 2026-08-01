@@ -96,6 +96,17 @@
           "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
         }
       }
+    },
+    {
+      "name": "docs-portal",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "npm ci --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal"
+        }
+      },
+      "timeout_seconds": 300
     }
   ]
 }

@@ -71,6 +71,15 @@ export function titleFor(frontmatter, body, sourcePath) {
   return headingText || path.posix.basename(sourcePath, ".md").replaceAll("-", " ");
 }
 
+export function validatePageMetadata(frontmatter, sourcePath) {
+  for (const [field, maximum] of [["title", 256], ["description", 400], ["status", 128]]) {
+    if (!Object.hasOwn(frontmatter, field)) continue;
+    const value = frontmatter[field];
+    if (typeof value !== "string" || !value.trim() || value.length > maximum) throw new Error(`${sourcePath}: declared ${field} is invalid`);
+  }
+  return frontmatter;
+}
+
 export function rewriteRepositoryMarkdown(body, {
   sourcePath, sourceRoutes, repositoryFiles = new Map(), pinnedSourceUrl = () => null,
   commit = "", base, strictTargets, mediaReferences,
@@ -216,7 +225,7 @@ function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles
 
 function sourceReferenceNode(node, sourcePath, commit) {
   const label = visibleNodeText(node).trim() || sourcePath;
-  const revision = /^[a-f0-9]{40}$/.test(commit) ? commit.slice(0, 12) : "pinned commit";
+  const revision = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit) ? commit.slice(0, 12) : "pinned commit";
   return {
     type: "html",
     value: `<span class="portal-source-reference">${escapeGeneratedHtml(label)} (<code>${escapeGeneratedHtml(sourcePath)}</code> at <code>${revision}</code>)</span>`,
@@ -246,7 +255,10 @@ export function strictId(value) {
 
 export function collectPageIds(frontmatter, text, sourcePath) {
   const declared = [];
-  if (typeof frontmatter.id === "string" && strictId(frontmatter.id)) declared.push(frontmatter.id);
+  if (Object.hasOwn(frontmatter, "id")) {
+    if (typeof frontmatter.id !== "string" || !strictId(frontmatter.id)) throw new Error(`${sourcePath}: declared id is invalid`);
+    declared.push(frontmatter.id);
+  }
   if (sourcePath !== "docs/capabilities.md") {
     if (declared.length) return declared;
     const filenameId = path.posix.basename(sourcePath, ".md").toUpperCase();
@@ -254,7 +266,9 @@ export function collectPageIds(frontmatter, text, sourcePath) {
   }
   for (const block of yamlFences(text)) {
     const record = YAML.parse(block);
-    if (record && typeof record === "object" && !Array.isArray(record) && strictId(record.id ?? "")) declared.push(record.id);
+    if (!record || typeof record !== "object" || Array.isArray(record) || !Object.hasOwn(record, "id")) continue;
+    if (typeof record.id !== "string" || !strictId(record.id)) throw new Error(`${sourcePath}: declared capability id is invalid`);
+    declared.push(record.id);
   }
   const duplicates = declared.filter((id, index) => declared.indexOf(id) !== index);
   if (duplicates.length) throw new Error(`${sourcePath}: duplicate identity declaration ${[...new Set(duplicates)].join(", ")}`);
@@ -267,22 +281,24 @@ const relationshipFields = [
   ["adrs", "decision"], ["related", "related"], ["superseded_by", "superseded_by"],
 ];
 
-export function extractRelationships(frontmatter) {
+export function extractRelationships(frontmatter, sourcePath = "frontmatter") {
   return relationshipFields.flatMap(([field, kind]) => {
+    if (!Object.hasOwn(frontmatter, field)) return [];
     const value = frontmatter[field];
-    const values = Array.isArray(value) ? value : value == null ? [] : [value];
-    return values.filter((item) => typeof item === "string" && strictId(item)).map((target) => ({ type: kind, target }));
+    const values = Array.isArray(value) ? value : [value];
+    if (values.some((item) => typeof item !== "string" || !strictId(item))) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
+    return values.map((target) => ({ type: kind, target }));
   });
 }
 
 export function extractPageRelationships(frontmatter, text, sourcePath) {
   const sourceId = typeof frontmatter.id === "string" && strictId(frontmatter.id) ? frontmatter.id : null;
-  const relationships = extractRelationships(frontmatter).map((relationship) => ({ ...relationship, source_id: sourceId }));
+  const relationships = extractRelationships(frontmatter, sourcePath).map((relationship) => ({ ...relationship, source_id: sourceId }));
   if (sourcePath !== "docs/capabilities.md") return relationships;
   for (const block of yamlFences(text)) {
     const record = YAML.parse(block);
     if (record && typeof record === "object" && !Array.isArray(record) && strictId(record.id ?? "")) {
-      relationships.push(...extractRelationships(record).map((relationship) => ({ ...relationship, source_id: record.id })));
+      relationships.push(...extractRelationships(record, sourcePath).map((relationship) => ({ ...relationship, source_id: record.id })));
     }
   }
   return relationships;
@@ -316,7 +332,8 @@ export function validateBase(value) {
 
 export function withBase(base, route) {
   const safeRoute = safeRelative(route, "route");
-  return `${validateBase(base)}${safeRoute}/`.replace(/^\/\//, "/");
+  const encodedRoute = safeRoute.split("/").map(strictUrlSegment).join("/");
+  return `${validateBase(base)}${encodedRoute}/`.replace(/^\/\//, "/");
 }
 
 export function validatePortalConfig(value) {
@@ -329,8 +346,7 @@ export function validatePortalConfig(value) {
   if (!["signal", "folio"].includes(value.theme)) throw new Error("portal.config.json: theme must be signal or folio");
   if (value.repository_url !== null) {
     boundedString(value.repository_url, "repository_url", 1, 2048);
-    const url = new URL(value.repository_url);
-    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("repository_url: expected an HTTPS repository URL without credentials, query, or fragment");
+    if (!validRepositoryUrl(value.repository_url)) throw new Error("repository_url: expected an HTTPS repository URL with an ASCII or punycode host and without credentials, query, or fragment");
   }
   if (value.release_version !== null && (typeof value.release_version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(value.release_version))) throw new Error("release_version: expected a bounded printable version identifier or null");
   if (value.primitive_tokens !== null) safeRelative(value.primitive_tokens, "primitive_tokens");
@@ -356,6 +372,30 @@ export function validatePortalConfig(value) {
   }
   if (fallback !== 1) throw new Error("portal.config.json: exactly one layer must be the fallback");
   return value;
+}
+
+export function validRepositoryUrl(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2048 || /[\s\\]/u.test(value) || !value.startsWith("https://")) return false;
+  const rawAuthority = value.slice("https://".length).split("/", 1)[0];
+  if (!rawAuthority || !/^[\x21-\x7e]+$/.test(rawAuthority) || rawAuthority.includes("@")) return false;
+  if (rawAuthority.startsWith("[")) {
+    const close = rawAuthority.indexOf("]");
+    const suffix = close < 0 ? "invalid" : rawAuthority.slice(close + 1);
+    if (close < 2 || suffix && !validPortSuffix(suffix)) return false;
+  } else {
+    const parts = rawAuthority.split(":");
+    if (parts.length > 2 || parts.length === 2 && !validPortSuffix(`:${parts[1]}`)) return false;
+  }
+  let url;
+  try { url = new URL(value); } catch { return false; }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return false;
+  const host = url.hostname;
+  if (host.startsWith("[")) return /^\[(?=.*:)[0-9a-f:.]+\]$/i.test(host);
+  return host.length <= 253 && host.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+}
+
+function validPortSuffix(value) {
+  return /^:\d{1,5}$/.test(value) && Number(value.slice(1)) <= 65_535;
 }
 
 export function validatePrimitiveTokens(value, theme) {
@@ -386,7 +426,7 @@ export function localRouteFor(sourcePath, configuredRoots) {
   const parts = route.split("/");
   if (parts.at(-1) === "index") parts.pop();
   if (!parts.length || parts.at(-1) === "404") throw new Error(`source claims a reserved generated route: ${sourcePath}`);
-  return parts.map(strictUrlSegment).join("/");
+  return safeRelative(parts.join("/"), "route");
 }
 
 export function strictUrlSegment(value) {

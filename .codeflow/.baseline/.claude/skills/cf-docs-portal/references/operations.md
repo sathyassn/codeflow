@@ -16,7 +16,7 @@ content-addressed names prevent a second browsable lockfile/dependency surface.
 
 ## Dependency discipline
 
-Use the committed lockfile and `npm ci`. Review install scripts before relaxing
+Use the committed `.node-version`, lockfile, and `npm ci`. Review install scripts before relaxing
 an `--ignore-scripts` install; native packages may require their pinned scripts,
 so an unavailable build is better than an unrecorded exception. Run `npm audit`
 and the repository's dependency scanner. Rehearse upgrades in a disposable
@@ -69,6 +69,7 @@ allowlist; model, cloud, credential, loader-injection, and Git configuration
 variables are never inherited. It runs without fsmonitor, prompts, lazy
 fetching, replacement objects, optional locks, pagers, or inherited
 repository/config redirection. Missing local objects, output overflow, and
-timeouts fail closed. Unknown public files
-are preserved only through stable no-follow handles with actual-byte accounting;
-a file that grows or changes identity during the copy aborts publication.
+timeouts fail closed. Non-reserved public files are preserved only when they
+are committed regular runtime inputs whose worktree bytes match the snapshot.
+Publication writes the committed blobs; untracked active content, symlinks,
+masked edits, or a file that changes identity during verification aborts.

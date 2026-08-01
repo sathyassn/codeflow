@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePortalConfig, validatePrimitiveTokens, withBase } from "../scripts/lib.mjs";
-import { collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
+import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { assertExpectedPageArtifacts, collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
+const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
 
 test("semantic route fixtures stay in parity with the Rust validator", async () => {
@@ -28,6 +29,73 @@ test("safe paths reject traversal and platform separators", () => {
   assert.throws(() => safeRelative(`docs/${"é".repeat(128)}`));
   assert.equal(safeRelative(`docs/${"é".repeat(127)}`), `docs/${"é".repeat(127)}`);
   assert.equal(safeRelative("docs/guide.md"), "docs/guide.md");
+});
+
+test("built page identity is case-sensitive", () => {
+  const pages = [{ route: "records/EPC-001" }];
+  assert.doesNotThrow(() => assertExpectedPageArtifacts(pages, [{ path: "dist/records/EPC-001/index.html" }]));
+  assert.throws(() => assertExpectedPageArtifacts(pages, [{ path: "dist/records/epc-001/index.html" }]), /exact page route/);
+});
+
+test("Astro preserves the explicit canonical route in output and links", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const name = "Mixed Case + café.md";
+    await writeFile(path.join(root, "docs", name), "# Exact route\n");
+    commitFixture(root, "add exact route source");
+    runLocalAdapter(root);
+    const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const route = "reference/Mixed Case + café";
+    assert.equal((await readFile(path.join(root, `src/content/docs/${route}.md`), "utf8")).split("\n").includes(`slug: ${JSON.stringify(route)}`), true);
+    assert.match(await readFile(path.join(root, "dist/reference/index.html"), "utf8"), /href="\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\/"/);
+    assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /data-codeflow-search-root="reference\/Mixed Case \+ café"/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("repository URLs and bounded page metadata use the portable contract", () => {
+  for (const value of ["https://github.com/example/repository", "https://xn--bcher-kva.example/repo", "https://127.0.0.1:8443/repo", "https://[2001:db8::1]:443/repo"]) assert.equal(validRepositoryUrl(value), true, value);
+  for (const value of ["http://example.com/repo", "https://user:secret@example.com/repo", "https://bücher.example/repo", "https://bad_host.example/repo", "https://example.com:/repo", "https://[2001:db8::1/repo", "https://example.com/repo?token=x"]) assert.equal(validRepositoryUrl(value), false, value);
+  assert.equal(validatePageMetadata({ title: "Title", status: "planned" }, "docs/page.md").title, "Title");
+  assert.throws(() => validatePageMetadata({ title: "" }, "docs/page.md"), /title is invalid/);
+  assert.throws(() => validatePageMetadata({ status: 1 }, "docs/page.md"), /status is invalid/);
+});
+
+test("shared authority contract is enforced by the JavaScript producer", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/authority-contract.json", import.meta.url), "utf8"));
+  for (const value of fixture.repository_urls.accepted) assert.equal(validRepositoryUrl(value), true, value);
+  for (const value of fixture.repository_urls.rejected) assert.equal(validRepositoryUrl(value), false, value);
+  const baseConfig = { schema_version: 1, title: "Guide", description: "Repository guide", theme: "signal", repository_url: null, repository_root: "..", release_version: null, primitive_tokens: null, source_roots: ["docs"], exclude: [], layers: [
+    { id: "orient", label: "Orient", description: "Start", paths: ["docs/product.md"] },
+    { id: "system", label: "System", description: "Architecture", prefixes: ["docs/decisions"] },
+    { id: "reference", label: "Reference", description: "Other", fallback: true },
+  ], base: "/" };
+  for (const value of fixture.release_versions.accepted) assert.doesNotThrow(() => validatePortalConfig({ ...baseConfig, release_version: value }), value);
+  for (const value of fixture.release_versions.rejected) assert.throws(() => validatePortalConfig({ ...baseConfig, release_version: value }), /release_version/, value);
+  for (const value of fixture.page_titles.accepted) assert.doesNotThrow(() => validatePageMetadata({ title: value }, "fixture.md"), value);
+  for (const value of fixture.page_titles.rejected) assert.throws(() => validatePageMetadata({ title: value }, "fixture.md"), /title/, value);
+  for (const value of fixture.page_statuses.accepted) assert.doesNotThrow(() => validatePageMetadata({ status: value }, "fixture.md"), value);
+  for (const value of fixture.page_statuses.rejected) assert.throws(() => validatePageMetadata({ status: value }, "fixture.md"), /status/, value);
+  for (const item of fixture.frontmatter.accepted) {
+    const { frontmatter } = parseMarkdown(`---\n${item.yaml}\n---\n`, item.source_path);
+    assert.deepEqual(collectPageIds(frontmatter, "", item.source_path), item.ids);
+    assert.deepEqual(extractPageRelationships(frontmatter, "", item.source_path).map(({ type, target }) => [type, target]), item.relationships);
+  }
+  for (const item of fixture.frontmatter.rejected) {
+    assert.throws(() => {
+      const { frontmatter } = parseMarkdown(`---\n${item.yaml}\n---\n`, "project-management/tasks/TSK-101.md");
+      collectPageIds(frontmatter, "", "project-management/tasks/TSK-101.md");
+      extractPageRelationships(frontmatter, "", "project-management/tasks/TSK-101.md");
+    }, item.error === "duplicate_key" ? /unique|duplicate/i : new RegExp(item.error, "i"));
+  }
+});
+
+test("explicit record authority fails closed while absent ids may be inferred", () => {
+  assert.deepEqual(collectPageIds({}, "", "project-management/tasks/TSK-101.md"), ["TSK-101"]);
+  assert.throws(() => collectPageIds({ id: "bad" }, "", "project-management/tasks/TSK-101.md"), /declared id is invalid/);
+  assert.throws(() => extractPageRelationships({ depends_on: ["TSK-102", 7] }, "", "project-management/tasks/TSK-101.md"), /relationship is invalid/);
+  assert.throws(() => extractPageRelationships({ depends_on: "not-an-id" }, "", "project-management/tasks/TSK-101.md"), /relationship is invalid/);
+  assert.deepEqual(extractPageRelationships({ depends_on: "TSK-102", related: ["ADR-0001"] }, "", "project-management/tasks/TSK-101.md").map(({ type, target }) => [type, target]), [["depends_on", "TSK-102"], ["related", "ADR-0001"]]);
 });
 
 test("evidence ordering is explicit and independent of the process locale", () => {
@@ -180,6 +248,18 @@ test("corpus publication preserves unknown files and rolls every directory back 
     assert.equal(await readFile(path.join(root, "public/notes.txt"), "utf8"), "keep me");
     await assert.rejects(readFile(path.join(root, "public/markdown/deleted.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(root, "public/media/deleted.png")), /ENOENT/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("authoritative public publication refuses unknown active files", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-authority-"));
+  try {
+    await mkdir(path.join(root, "public"));
+    await writeFile(path.join(root, "public/rogue.html"), "<script>rogue()</script>");
+    await assert.rejects(publishOwnedCorpus(root, [
+      { live: "public", preserveUnknown: false, files: new Map([["favicon.svg", "committed"]]) },
+    ]), /refusing uncommitted portal file/);
+    assert.equal(await readFile(path.join(root, "public/rogue.html"), "utf8"), "<script>rogue()</script>");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -380,6 +460,24 @@ test("Git snapshot reads scale by corpus phase and disable configured fsmonitor 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("Git snapshot accepts native SHA-256 object identities", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-sha256-"));
+  try {
+    const initialized = spawnSync("git", ["-C", root, "init", "-q", "--object-format=sha256"], { encoding: "utf8" });
+    if (initialized.status !== 0) return context.skip("installed Git does not support SHA-256 repositories");
+    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+    git(root, ["config", "user.name", "CodeFlow portal tests"]);
+    await writeFile(path.join(root, "page.md"), "# SHA-256\n");
+    commitFixture(root, "sha256 fixture");
+    const snapshot = new GitSnapshot(root);
+    const commit = snapshot.resolveHead();
+    assert.equal(commit.length, 64);
+    snapshot.loadInventory(commit);
+    const record = snapshot.requireRegular("page.md", ["100644"], "fixture");
+    assert.equal(snapshot.readBlobs([record], { perObjectBytes: 1024, totalBytes: 1024, label: "fixture" }).get("page.md").toString(), "# SHA-256\n");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("Git snapshot child environments exclude inherited credentials and injection controls", () => {
   const environment = hardenedGitEnvironment({
     PATH: "/safe/bin",
@@ -558,6 +656,23 @@ test("masked source, token, and media edits block publication", async () => {
   }
 });
 
+test("tracked public runtime bytes are authoritative and untracked active content is refused", async () => {
+  for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+    const root = await selfContainedPortalFixture();
+    try {
+      const favicon = path.join(root, "public/favicon.svg");
+      git(root, ["update-index", flag, "public/favicon.svg"]);
+      await writeFile(favicon, "<svg><script>masked()</script></svg>");
+      assert.match(runLocalAdapter(root, false).stderr, /portal runtime input does not match/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+  const root = await selfContainedPortalFixture();
+  try {
+    await writeFile(path.join(root, "public/rogue.html"), "<script>rogue()</script>");
+    assert.match(runLocalAdapter(root, false).stderr, /must match HEAD exactly|refusing uncommitted portal file/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("Git status pathspecs are split below Windows process limits", () => {
   const pathspecs = Array.from({ length: 1_000 }, (_, index) => `:(top,literal)assets/media/${String(index).padStart(4, "0")}/${"x".repeat(80)}.png`);
   const batches = boundedPathspecBatches(pathspecs);
@@ -692,7 +807,7 @@ test("pinned source links use known provider routes and fall back visibly", asyn
       commitFixture(root, "configure source provider");
       const commit = git(root, ["rev-parse", "HEAD"]).trim();
       runAdapter(root);
-      const output = await readFile(path.join(root, "src/content/docs/reference/guide%20%28one%29.md"), "utf8");
+      const output = await readFile(path.join(root, "src/content/docs/reference/guide (one).md"), "utf8");
       assert.match(output, /<code>docs\/guide \(one\)\.md<\/code> at <code>[a-f0-9]{12}<\/code>/);
       if (expected === null) {
         assert.doesNotMatch(output, /<a[^>]+>Excluded source<\/a>/);
@@ -843,6 +958,39 @@ async function portalFixture() {
   return root;
 }
 
+async function selfContainedPortalFixture() {
+  const root = await mkdtemp(path.join(starterRoot, ".portal-test-runtime-"));
+  for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
+    await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
+  }
+  await mkdir(path.join(root, ".codeflow"));
+  await mkdir(path.join(root, "docs"));
+  await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
+  const configPath = path.join(root, "portal.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  Object.assign(config, {
+    repository_root: ".",
+    source_roots: ["docs"],
+    exclude: [],
+    primitive_tokens: null,
+    repository_url: null,
+    release_version: null,
+    layers: [
+      { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+      { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
+      { id: "reference", label: "Reference", description: "Reference", fallback: true },
+    ],
+    base: "/",
+  });
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
+  git(root, ["init", "-q"]);
+  git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+  git(root, ["config", "user.name", "CodeFlow portal tests"]);
+  commitFixture(root, "initialize self-contained fixture");
+  return root;
+}
+
 function commitFixture(root, message, allowEmpty = false) {
   git(root, ["add", "-A"]);
   git(root, ["commit", "-q", ...(allowEmpty ? ["--allow-empty"] : []), "-m", message]);
@@ -856,6 +1004,13 @@ function git(root, args) {
 
 function runAdapter(root, expectSuccess = true) {
   const result = spawnSync(process.execPath, [adapterPath], { cwd: root, encoding: "utf8" });
+  if (expectSuccess) assert.equal(result.status, 0, result.stderr);
+  else assert.notEqual(result.status, 0, result.stdout);
+  return result;
+}
+
+function runLocalAdapter(root, expectSuccess = true) {
+  const result = spawnSync(process.execPath, [path.join(root, "scripts/adapter.mjs")], { cwd: root, encoding: "utf8" });
   if (expectSuccess) assert.equal(result.status, 0, result.stderr);
   else assert.notEqual(result.status, 0, result.stdout);
   return result;

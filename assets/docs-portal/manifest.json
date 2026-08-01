@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "files": [
     { "path": ".gitignore", "ownership": "managed" },
+    { "path": ".node-version", "ownership": "managed" },
     { "path": "astro.config.mjs", "ownership": "managed" },
     { "path": "package-lock.json", "ownership": "managed" },
     { "path": "package.json", "ownership": "managed" },
@@ -18,6 +19,7 @@
     { "path": "src/content.config.ts", "ownership": "managed" },
     { "path": "src/styles/portal.css", "ownership": "managed" },
     { "path": "tests/adapter.test.mjs", "ownership": "managed" },
+    { "path": "tests/fixtures/authority-contract.json", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tsconfig.json", "ownership": "managed" }
   ]

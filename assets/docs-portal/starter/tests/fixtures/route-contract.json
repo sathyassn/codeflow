@@ -3,17 +3,22 @@
     {
       "source_path": "docs/getting started.md",
       "source_roots": ["docs"],
-      "local_route": "getting%20started"
+      "local_route": "getting started"
     },
     {
       "source_path": "docs/café.md",
       "source_roots": ["docs"],
-      "local_route": "caf%C3%A9"
+      "local_route": "café"
     },
     {
-      "source_path": "docs/a(b)!*.md",
+      "source_path": "docs/a(b)!.md",
       "source_roots": ["docs"],
-      "local_route": "a%28b%29%21%2A"
+      "local_route": "a(b)!"
+    },
+    {
+      "source_path": "docs/Mixed Case + café.md",
+      "source_roots": ["docs"],
+      "local_route": "Mixed Case + café"
     },
     {
       "source_path": "docs/guides/index.md",

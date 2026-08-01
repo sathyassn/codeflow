@@ -5,6 +5,7 @@ dist/
 src/content/docs/
 public/llms.txt
 public/markdown/
+public/media/
 public/.codeflow-generated.json
 playwright-report/
 test-results/

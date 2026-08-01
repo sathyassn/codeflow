@@ -29,6 +29,11 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: docs-portal/package-lock.json
 
       - name: Build codeflow from source
         run: |
@@ -76,6 +81,17 @@ jobs:
 
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: docs-portal/package-lock.json
+
+      - name: docs portal JavaScript authority suite
+        run: |
+          npm ci --prefix docs-portal
+          node --test docs-portal/tests/adapter.test.mjs
 
   secret-scan:
     name: secret scan

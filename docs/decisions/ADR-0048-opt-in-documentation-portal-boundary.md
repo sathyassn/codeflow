@@ -70,10 +70,16 @@ Markdown twins, and `llms.txt`. Rendering
 and graph-generation semantics remain in the exact-pinned Node build and test
 lanes; Rust does not implement a second content graph.
 
-Routes combine the selected semantic layer with the source path relative to
-the most-specific configured source root. Generated public Markdown twins,
-media, and `llms.txt` occupy reserved namespaces that are fully replaced on
-publication; bounded user-owned public files outside them remain preserved.
+Routes combine the selected semantic layer with the exact NFC portable source
+path relative to the most-specific configured source root. That text remains
+the content slug and evidence/artifact identity; URL boundaries percent-encode
+each segment. Case folding detects collisions but never defines identity.
+Generator upgrades requalify this seam with a real mixed-case, space,
+punctuation, and Unicode build. Generated public Markdown twins, media, and
+`llms.txt` occupy reserved namespaces that are fully replaced on publication.
+Committed user-owned public files outside them remain preserved from their Git
+blobs after byte equality is checked; untracked active files, symlinks, masked
+edits, and changing inputs fail closed.
 
 The starter source is capped at 2 MiB unpacked, its archive-equivalent content
 at 1 MiB, and its measured release-binary increase at 1 MiB. `SKILL.md` remains

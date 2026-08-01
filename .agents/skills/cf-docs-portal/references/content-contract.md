@@ -17,6 +17,9 @@
   locale-independent comparator. Never label worktree bytes with `HEAD`.
 - Resolve relationships from declared frontmatter and strict stable IDs. Inline
   ID mentions may become links, but never invent a declared dependency.
+- Treat an explicit ID or relationship field as authority: a wrong type,
+  malformed ID, invalid target, or duplicate key produces the bounded error
+  page. Infer a supported ID from the filename only when `id` is absent.
 - Treat ADR amendment headings as current history. Do not flatten a later Note,
   Update, or Correction into the original decision date.
 
@@ -24,9 +27,14 @@
 
 Accept only project-supported strict IDs such as `CAP-001`, `ADR-001`,
 `EPC-001`, `SPC-001`, and `TSK-001`. Derive each route from its semantic layer
-plus its path relative to the most-specific configured source root; physical
-root moves therefore need not leak into reader-facing URLs. Routes must be
-unique and deterministic.
+plus its NFC, portable path relative to the most-specific configured source
+root; physical root moves therefore need not leak into reader-facing URLs.
+That exact text is the content slug, generated-file identity, and evidence
+route. Percent-encode each segment only when producing a URL. Never compare
+case-folded build paths: case folding is collision detection, not identity.
+Routes must be unique and deterministic. A pinned generator upgrade must pass
+the real-build route fixture for mixed case, spaces, punctuation, and Unicode,
+not only a string-transformation unit test.
 Every relationship target must exist. Derived backlinks must be the exact
 inverse of declared forward relationships.
 Repository-relative document links resolve through the source-to-route graph.
@@ -57,8 +65,10 @@ evidence as content authority.
 
 Generated public namespaces are `public/markdown/`, `public/media/`, and
 `public/llms.txt`; each publication replaces them completely so deleted sources
-cannot survive as reachable output. Other project-owned public files may be
-preserved only through the bounded no-follow publication contract.
+cannot survive as reachable output. Other committed project-owned public files
+are runtime inputs: inventory their regular Git blobs, compare worktree bytes,
+and republish the committed bytes. Untracked active public content, symlinks,
+masked edits, and changing files block publication rather than being copied.
 
 ## Rendering
 

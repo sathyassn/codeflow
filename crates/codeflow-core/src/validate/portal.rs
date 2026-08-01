@@ -358,13 +358,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         .repository
         .release_version
         .as_ref()
-        .is_some_and(|version| {
-            version.is_empty()
-                || version.len() > 128
-                || !version.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-')
-                })
-        })
+        .is_some_and(|version| !valid_release_version(version))
     {
         report
             .issues
@@ -478,7 +472,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 page.route
             ));
         }
-        if page.title.trim().is_empty() || page.title.len() > 256 {
+        if page.title.trim().is_empty() || page.title.encode_utf16().count() > 256 {
             report
                 .issues
                 .push(format!("{} has an invalid title", page.route));
@@ -486,7 +480,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         if page
             .status
             .as_ref()
-            .is_some_and(|status| status.is_empty() || status.len() > 128)
+            .is_some_and(|status| status.trim().is_empty() || status.encode_utf16().count() > 128)
         {
             report
                 .issues
@@ -751,6 +745,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
     );
     verify_reserved_public_inventory(&portal, &evidence, &mut report);
     let mut artifact_paths = BTreeSet::new();
+    let mut portable_artifact_paths = BTreeSet::new();
     for artifact in &evidence.artifacts {
         if !artifact.path.starts_with("dist/") || !safe_path_text(&artifact.path) {
             report.issues.push(format!(
@@ -759,7 +754,9 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             ));
             continue;
         }
-        if !artifact_paths.insert(portable_key(&artifact.path)) {
+        if !artifact_paths.insert(artifact.path.clone())
+            || !portable_artifact_paths.insert(portable_key(&artifact.path))
+        {
             report
                 .issues
                 .push(format!("duplicate built artifact path: {}", artifact.path));
@@ -789,7 +786,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         } else {
             format!("dist/{}/index.html", page.route)
         };
-        if !artifact_paths.contains(&portable_key(&built)) {
+        if !artifact_paths.contains(&built) {
             report
                 .issues
                 .push(format!("page is missing its built output: {}", page.route));
@@ -970,6 +967,7 @@ fn verify_config_evidence_fields(
         .get("release_version")
         .and_then(serde_json::Value::as_str);
     if release != evidence.repository.release_version.as_deref()
+        || release.is_some_and(|value| !valid_release_version(value))
         || (release.is_none()
             && !object
                 .get("release_version")
@@ -1000,6 +998,16 @@ fn verify_config_evidence_fields(
         return false;
     }
     true
+}
+
+fn valid_release_version(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
 }
 
 fn configured_layers(
@@ -1148,7 +1156,7 @@ fn bounded_config_string(
 fn valid_repository_url(value: &str) -> bool {
     if value.encode_utf16().count() > 2_048
         || value.chars().any(char::is_whitespace)
-        || value.contains(['?', '#'])
+        || value.contains(['?', '#', '\\'])
     {
         return false;
     }
@@ -1156,30 +1164,57 @@ fn valid_repository_url(value: &str) -> bool {
         return false;
     };
     let authority = remainder.split('/').next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') {
+    if authority.is_empty() || !authority.is_ascii() || authority.contains('@') {
         return false;
     }
     let host = if authority.starts_with('[') {
         let Some(end) = authority.find(']') else {
             return false;
         };
-        if end == 1
-            || !authority[1..end]
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.'))
+        if authority[1..end].parse::<std::net::Ipv6Addr>().is_err()
+            || !valid_port_suffix(&authority[end + 1..])
         {
             return false;
         }
-        &authority[..=end]
+        return true;
     } else {
-        authority.split(':').next().unwrap_or_default()
+        let mut parts = authority.split(':');
+        let host = parts.next().unwrap_or_default();
+        let port = parts.next();
+        if parts.next().is_some()
+            || port.is_some_and(|value| !valid_port_suffix(&format!(":{value}")))
+        {
+            return false;
+        }
+        host
     };
     !host.is_empty()
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-        && !host.starts_with(['.', '-'])
-        && !host.ends_with(['.', '-'])
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+fn valid_port_suffix(value: &str) -> bool {
+    value.is_empty()
+        || value.strip_prefix(':').is_some_and(|port| {
+            !port.is_empty()
+                && port.len() <= 5
+                && port.bytes().all(|byte| byte.is_ascii_digit())
+                && port.parse::<u16>().is_ok()
+        })
 }
 
 fn valid_portal_base(value: &str) -> bool {
@@ -1388,24 +1423,10 @@ fn local_route_for(source_path: &str, source_roots: &[String]) -> Result<String,
             "source claims a reserved generated route: {source_path}"
         ));
     }
-    Ok(parts
-        .into_iter()
-        .map(percent_encode_segment)
-        .collect::<Vec<_>>()
-        .join("/"))
-}
-
-fn percent_encode_segment(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            use std::fmt::Write as _;
-            write!(encoded, "%{byte:02X}").expect("writing to a string cannot fail");
-        }
-    }
-    encoded
+    let route = parts.join("/");
+    safe_path_text(&route)
+        .then_some(route)
+        .ok_or_else(|| format!("source has no portable route: {source_path}"))
 }
 
 fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRecord>> {
@@ -1446,8 +1467,7 @@ fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRec
         if fields.next().is_some()
             || !safe_path_text(path)
             || !matches!(kind, "blob" | "commit")
-            || object.len() < 40
-            || !object.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !valid_commit(object)
             || !portable.insert(portable_key(path))
         {
             return Err(std::io::Error::new(
@@ -1644,15 +1664,11 @@ fn verify_reserved_public_inventory(
     let expected: BTreeSet<String> = evidence
         .pages
         .iter()
-        .map(|page| portable_key(&page.markdown_twin))
-        .chain(
-            evidence
-                .media
-                .iter()
-                .map(|media| portable_key(&media.output_path)),
-        )
+        .map(|page| page.markdown_twin.clone())
+        .chain(evidence.media.iter().map(|media| media.output_path.clone()))
         .collect();
     let mut actual = BTreeSet::new();
+    let mut portable_actual = BTreeSet::new();
     let mut count = 0;
     let mut bytes = 0;
     for namespace in ["public/markdown", "public/media"] {
@@ -1663,6 +1679,7 @@ fn verify_reserved_public_inventory(
             &mut count,
             &mut bytes,
             &mut actual,
+            &mut portable_actual,
             report,
         );
     }
@@ -1686,6 +1703,7 @@ fn collect_reserved_public_files(
     count: &mut usize,
     bytes: &mut u64,
     paths: &mut BTreeSet<String>,
+    portable_paths: &mut BTreeSet<String>,
     report: &mut PortalValidationReport,
 ) {
     if depth > 32 {
@@ -1730,7 +1748,16 @@ fn collect_reserved_public_files(
                 child.display()
             ));
         } else if kind.is_dir() {
-            collect_reserved_public_files(portal, &child, depth + 1, count, bytes, paths, report);
+            collect_reserved_public_files(
+                portal,
+                &child,
+                depth + 1,
+                count,
+                bytes,
+                paths,
+                portable_paths,
+                report,
+            );
         } else if kind.is_file() {
             *count += 1;
             *bytes = bytes.saturating_add(entry.metadata().map_or(u64::MAX, |item| item.len()));
@@ -1747,12 +1774,13 @@ fn collect_reserved_public_files(
                     .push("reserved public output exceeds its corpus limit".into());
                 return;
             }
-            if !paths.insert(portable_key(&text)) {
+            if !portable_paths.insert(portable_key(&text)) {
                 report.issues.push(format!(
                     "reserved public output collides portably: {}",
                     child.display()
                 ));
             }
+            paths.insert(text);
         } else {
             report.issues.push(format!(
                 "reserved public output is not a regular file: {}",
@@ -1867,6 +1895,7 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
         depth: usize,
         total_bytes: &mut u64,
         paths: &mut BTreeSet<String>,
+        portable_paths: &mut BTreeSet<String>,
         report: &mut PortalValidationReport,
     ) {
         if depth > 32 {
@@ -1913,7 +1942,15 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
                     child.display()
                 ));
             } else if kind.is_dir() {
-                visit(root, &child, depth + 1, total_bytes, paths, report);
+                visit(
+                    root,
+                    &child,
+                    depth + 1,
+                    total_bytes,
+                    paths,
+                    portable_paths,
+                    report,
+                );
             } else if kind.is_file() {
                 let metadata = match entry.metadata() {
                     Ok(metadata) => metadata,
@@ -1945,12 +1982,13 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
                     ));
                     continue;
                 };
-                let artifact = portable_key(&format!("dist/{relative_path}"));
-                if !paths.insert(artifact.clone()) {
+                let artifact = format!("dist/{relative_path}");
+                if !portable_paths.insert(portable_key(&artifact)) {
                     report.issues.push(format!(
                         "built artifact path collides case-insensitively: {artifact}"
                     ));
                 }
+                paths.insert(artifact);
             } else {
                 report.issues.push(format!(
                     "non-regular built artifact is refused: {}",
@@ -1960,6 +1998,7 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
         }
     }
     let mut paths = BTreeSet::new();
+    let mut portable_paths = BTreeSet::new();
     let mut total_bytes = 0;
     let dist = portal.join("dist");
     match std::fs::symlink_metadata(&dist) {
@@ -1985,6 +2024,7 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
         0,
         &mut total_bytes,
         &mut paths,
+        &mut portable_paths,
         report,
     );
     paths
@@ -2245,7 +2285,7 @@ fn valid_sha256(value: &str) -> bool {
 }
 
 fn valid_commit(value: &str) -> bool {
-    value.len() == 40
+    matches!(value.len(), 40 | 64)
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -2328,8 +2368,7 @@ fn parse_git_batch(
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| std::io::Error::other("Git batch size is invalid"))?;
         if fields.next().is_some()
-            || object_id.len() < 40
-            || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !valid_commit(object_id)
             || object_type != "blob"
             || size > maximum_blob_bytes
         {
@@ -2776,7 +2815,15 @@ fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> Auth
                 continue;
             }
         };
+        let id_key = serde_yaml::Value::String("id".to_string());
         let source_id = mapping_string(&frontmatter, "id").filter(|id| strict_id(id));
+        if frontmatter.contains_key(&id_key) && source_id.is_none() {
+            authority.issues.push(format!(
+                "authoritative frontmatter declares an invalid id: {}",
+                page.source_path
+            ));
+            continue;
+        }
         if let Some(id) = source_id {
             add_authoritative_id(id, &page.source_path, &mut authority);
         } else if let Some(stem) = Path::new(&page.source_path)
@@ -2788,12 +2835,18 @@ fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> Auth
                 add_authoritative_id(&id, &page.source_path, &mut authority);
             }
         }
-        for relationship in relationships_from_mapping(&frontmatter, source_id) {
-            authority
-                .relationships
-                .entry(page.source_path.clone())
-                .or_default()
-                .insert(relationship);
+        match relationships_from_mapping(&frontmatter, source_id) {
+            Ok(relationships) => {
+                authority
+                    .relationships
+                    .entry(page.source_path.clone())
+                    .or_default()
+                    .extend(relationships);
+            }
+            Err(error) => authority.issues.push(format!(
+                "authoritative frontmatter is invalid {}: {error}",
+                page.source_path
+            )),
         }
     }
     authority
@@ -2879,7 +2932,7 @@ fn mapping_string<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a
 fn relationships_from_mapping(
     mapping: &serde_yaml::Mapping,
     source_id: Option<&str>,
-) -> BTreeSet<Relationship> {
+) -> Result<BTreeSet<Relationship>, String> {
     const FIELDS: [(&str, &str); 8] = [
         ("epic_id", "epic"),
         ("epics", "epic"),
@@ -2897,13 +2950,24 @@ fn relationships_from_mapping(
         };
         let targets: Vec<&str> = match value {
             serde_yaml::Value::String(target) => vec![target],
-            serde_yaml::Value::Sequence(targets) => targets
-                .iter()
-                .filter_map(serde_yaml::Value::as_str)
-                .collect(),
-            _ => Vec::new(),
+            serde_yaml::Value::Sequence(targets) => {
+                let parsed: Option<Vec<&str>> =
+                    targets.iter().map(serde_yaml::Value::as_str).collect();
+                parsed
+                    .ok_or_else(|| format!("declared {field} relationship is not a string list"))?
+            }
+            _ => {
+                return Err(format!(
+                    "declared {field} relationship is not a string or string list"
+                ))
+            }
         };
-        for target in targets.into_iter().filter(|target| strict_id(target)) {
+        if targets.iter().any(|target| !strict_id(target)) {
+            return Err(format!(
+                "declared {field} relationship has an invalid target"
+            ));
+        }
+        for target in targets {
             relationships.insert(Relationship {
                 kind: kind.to_string(),
                 target: target.to_string(),
@@ -2911,7 +2975,7 @@ fn relationships_from_mapping(
             });
         }
     }
-    relationships
+    Ok(relationships)
 }
 
 fn strict_id(value: &str) -> bool {
@@ -2936,6 +3000,48 @@ fn strict_id(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[derive(serde::Deserialize)]
+    struct AuthorityContract {
+        repository_urls: ContractValues,
+        release_versions: ContractValues,
+        page_titles: ContractValues,
+        page_statuses: ContractValues,
+        frontmatter: FrontmatterContract,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ContractValues {
+        accepted: Vec<String>,
+        rejected: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FrontmatterContract {
+        accepted: Vec<FrontmatterAccepted>,
+        rejected: Vec<FrontmatterRejected>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FrontmatterAccepted {
+        source_path: String,
+        yaml: String,
+        ids: Vec<String>,
+        relationships: Vec<(String, String)>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FrontmatterRejected {
+        yaml: String,
+        error: String,
+    }
+
+    fn authority_contract() -> AuthorityContract {
+        serde_json::from_str(include_str!(
+            "../../../../assets/docs-portal/starter/tests/fixtures/authority-contract.json"
+        ))
+        .expect("shared authority contract must be valid")
+    }
+
     fn page(source_path: &str) -> Page {
         Page {
             source_path: source_path.into(),
@@ -2955,6 +3061,89 @@ mod tests {
             backlinks: Vec::new(),
             snippets: Vec::new(),
             stale_reason: None,
+        }
+    }
+
+    #[test]
+    fn shared_authority_contract_matches_the_rust_verifier() {
+        let fixture = authority_contract();
+        for value in fixture.repository_urls.accepted {
+            assert!(valid_repository_url(&value), "accepted URL: {value}");
+        }
+        for value in fixture.repository_urls.rejected {
+            assert!(!valid_repository_url(&value), "rejected URL: {value}");
+        }
+        for value in fixture.release_versions.accepted {
+            assert!(valid_release_version(&value), "accepted release: {value}");
+        }
+        for value in fixture.release_versions.rejected {
+            assert!(!valid_release_version(&value), "rejected release: {value}");
+        }
+        for value in fixture.page_titles.accepted {
+            assert!(!value.trim().is_empty() && value.encode_utf16().count() <= 256);
+        }
+        for value in fixture.page_titles.rejected {
+            assert!(value.trim().is_empty() || value.encode_utf16().count() > 256);
+        }
+        for value in fixture.page_statuses.accepted {
+            assert!(!value.trim().is_empty() && value.encode_utf16().count() <= 128);
+        }
+        for value in fixture.page_statuses.rejected {
+            assert!(value.trim().is_empty() || value.encode_utf16().count() > 128);
+        }
+        for item in fixture.frontmatter.accepted {
+            let text = format!("---\n{}\n---\n", item.yaml);
+            let mapping = parse_frontmatter_mapping(&text).expect("accepted frontmatter");
+            let declared = mapping_string(&mapping, "id").map(str::to_string);
+            let ids = declared.clone().map_or_else(
+                || {
+                    Path::new(&item.source_path)
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(str::to_ascii_uppercase)
+                        .filter(|id| strict_id(id))
+                        .into_iter()
+                        .collect()
+                },
+                |id| vec![id],
+            );
+            assert_eq!(ids, item.ids);
+            let relationships = relationships_from_mapping(&mapping, declared.as_deref())
+                .expect("accepted relationships")
+                .into_iter()
+                .map(|relationship| (relationship.kind, relationship.target))
+                .collect::<Vec<_>>();
+            assert_eq!(relationships, item.relationships);
+        }
+        for item in fixture.frontmatter.rejected {
+            let text = format!("---\n{}\n---\n", item.yaml);
+            let rejected = match parse_frontmatter_mapping(&text) {
+                Err(error) => error,
+                Ok(mapping) => {
+                    let id = mapping_string(&mapping, "id");
+                    if mapping.contains_key(serde_yaml::Value::String("id".into()))
+                        && id.is_none_or(|value| !strict_id(value))
+                    {
+                        "invalid id".into()
+                    } else {
+                        match relationships_from_mapping(&mapping, id) {
+                            Ok(_) => panic!("rejected authority must fail"),
+                            Err(error) => error,
+                        }
+                    }
+                }
+            };
+            let expected = if item.error == "duplicate_key" {
+                "duplicate"
+            } else {
+                &item.error
+            };
+            assert!(
+                rejected.to_ascii_lowercase().contains(expected),
+                "expected {:?} in {:?}",
+                item.error,
+                rejected
+            );
         }
     }
 
@@ -3582,6 +3771,52 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("byte limit"));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn git_authority_accepts_sha256_repositories_when_supported() {
+        let repository = tempfile::tempdir().unwrap();
+        let initialized = Command::new("git")
+            .args(["-C"])
+            .arg(repository.path())
+            .args(["init", "-q", "--object-format=sha256"])
+            .status()
+            .unwrap();
+        if !initialized.success() {
+            return;
+        }
+        std::fs::write(repository.path().join("page.md"), "# SHA-256\n").unwrap();
+        for args in [
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "page.md"][..],
+            &["commit", "-q", "-m", "sha256 fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(repository.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let commit = git_text_bounded(repository.path(), &["rev-parse", "HEAD"], 1024)
+            .unwrap()
+            .trim()
+            .to_owned();
+        assert_eq!(commit.len(), 64);
+        assert!(valid_commit(&commit));
+        assert_eq!(
+            git_tree_records(repository.path(), &commit).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            git_batch_blobs(repository.path(), &commit, &["page.md"], 1024, 1024)
+                .unwrap()
+                .get("page.md")
+                .map(Vec::as_slice),
+            Some(b"# SHA-256\n".as_slice())
+        );
     }
 
     #[test]

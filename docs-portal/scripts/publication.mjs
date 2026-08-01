@@ -277,7 +277,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
 }
 
 async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnknown, testHooks) {
-  const { inventory } = await inspectOwnedDirectory(live, preserveUnknown);
+  const { inventory } = await inspectOwnedDirectory(live, preserveUnknown, logicalLive === "public");
   const owned = new Set(inventory ?? []);
   await rm(stage, { recursive: true, force: true });
   await mkdir(stage, { recursive: true });
@@ -285,6 +285,8 @@ async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnkn
   for (const relative of await walkFiles(live)) {
     if (relative === ".codeflow-generated.json" || owned.has(relative)) continue;
     if (logicalLive === "public" && isReservedPublicPath(relative)) continue;
+    if (logicalLive === "public" && planned.has(relative)) continue;
+    if (!preserveUnknown) throw new Error(`refusing uncommitted portal file: ${path.join(live, relative)}`);
     if (planned.has(relative)) throw new Error(`refusing to overwrite unowned generated path: ${path.join(live, relative)}`);
     const source = path.join(live, relative);
     const remaining = MAX_PRESERVED_UNKNOWN_BYTES - preservedBytes;
@@ -302,7 +304,7 @@ async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnkn
   await writeText(path.join(stage, ".codeflow-generated.json"), `${JSON.stringify({ schema_version: 1, files: [...planned.keys()].sort(compareDeterministicText) }, null, 2)}\n`);
 }
 
-function isReservedPublicPath(relative) {
+export function isReservedPublicPath(relative) {
   const key = portablePathKey(relative, "public file");
   return [...RESERVED_PUBLIC_FILES].some((reserved) => key === portablePathKey(reserved, "reserved public file"))
     || RESERVED_PUBLIC_PREFIXES.some((prefix) => {
@@ -311,14 +313,14 @@ function isReservedPublicPath(relative) {
     });
 }
 
-async function inspectOwnedDirectory(dir, preserveUnknown) {
+async function inspectOwnedDirectory(dir, preserveUnknown, allowPlannedExisting = false) {
   const marker = path.join(dir, ".codeflow-generated.json");
   let inventory = null;
   try {
     const rootMetadata = await lstat(dir);
     if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw new Error(`generated corpus root is not a regular directory: ${dir}`);
     const entries = await readdir(dir);
-    if (!preserveUnknown && entries.length && !entries.includes(".codeflow-generated.json")) throw new Error(`refusing to manage unowned generated directory: ${dir}`);
+    if (!preserveUnknown && !allowPlannedExisting && entries.length && !entries.includes(".codeflow-generated.json")) throw new Error(`refusing to manage unowned generated directory: ${dir}`);
     if (entries.includes(".codeflow-generated.json")) {
       const parsed = JSON.parse(await readBoundedRegularFile(marker, 1024 * 1024, "generated ownership inventory"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).sort().join(",") !== "files,schema_version" || parsed.schema_version !== 1 || !Array.isArray(parsed.files) || parsed.files.length > MAX_PRESERVED_UNKNOWN_FILES) throw new Error(`invalid generated ownership inventory: ${marker}`);
@@ -483,6 +485,16 @@ export async function collectBuiltArtifacts(root, limits = {}) {
   }
   await visit();
   return files;
+}
+
+export function assertExpectedPageArtifacts(pages, artifacts) {
+  if (!Array.isArray(pages) || !Array.isArray(artifacts)) throw new Error("page artifact evidence must be arrays");
+  const paths = new Set(artifacts.map((artifact) => safeRelative(artifact?.path, "built artifact")));
+  for (const page of pages) {
+    const route = safeRelative(page?.route, "page route");
+    const expected = route === "index" ? "dist/index.html" : `dist/${route}/index.html`;
+    if (!paths.has(expected)) throw new Error(`built artifacts omit the exact page route: ${expected}`);
+  }
 }
 
 async function hashRegularFile(file, maximumBytes) {
