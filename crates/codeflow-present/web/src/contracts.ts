@@ -11,6 +11,35 @@ export type ReviewVerdict =
   | "approve"
   | "approve_with_notes"
   | "request_changes";
+export type FeedbackLifecycle = "received" | "delivered" | "addressed" | "dismissed";
+export type FeedbackAnchor =
+  | Readonly<{ state: "block"; block_id: string }>
+  | Readonly<{ state: "anchored" | "reanchored"; start_utf16: number; end_utf16: number }>
+  | Readonly<{ state: "orphaned"; reason: string }>;
+
+export interface FeedbackHistoryNote {
+  readonly id: string;
+  readonly block_label: string;
+  readonly kind: FeedbackKind;
+  readonly body: string;
+  readonly quote?: string;
+  readonly anchor: FeedbackAnchor;
+}
+
+export interface FeedbackHistoryItem {
+  readonly event_id: string;
+  readonly source_revision: number;
+  readonly event_version: number;
+  readonly lifecycle: FeedbackLifecycle;
+  readonly verdict: ReviewVerdict;
+  readonly instruction?: string;
+  readonly notes: readonly FeedbackHistoryNote[];
+}
+
+export interface FeedbackSnapshot {
+  readonly items: readonly FeedbackHistoryItem[];
+  readonly omitted_older: number;
+}
 
 export interface ChromeConfig {
   readonly schema_version: 1;
@@ -23,6 +52,7 @@ export interface ChromeConfig {
     readonly src: string;
     readonly alt: string;
   }>;
+  readonly feedback?: FeedbackSnapshot;
   readonly keymap?: Readonly<{
     next: string;
     previous: string;
@@ -102,6 +132,10 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
   if (identity !== undefined && identity !== null && !isIdentity(identity)) {
     throw new Error("Malformed cf-present identity configuration");
   }
+  const feedback = value.feedback;
+  if (feedback !== undefined && feedback !== null && !isFeedbackSnapshot(feedback)) {
+    throw new Error("Malformed cf-present feedback snapshot");
+  }
 
   return {
     schema_version: 1,
@@ -111,8 +145,57 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     title: value.title,
     shortcuts_enabled: value.shortcuts_enabled,
     ...(identity ? { identity } : {}),
+    ...(feedback ? { feedback } : {}),
     ...(keymap ? { keymap } : {}),
   };
+}
+
+function isFeedbackSnapshot(value: unknown): value is FeedbackSnapshot {
+  if (!isRecord(value) || !Array.isArray(value.items) || value.items.length > 256) return false;
+  if (
+    typeof value.omitted_older !== "number" ||
+    !Number.isSafeInteger(value.omitted_older) ||
+    value.omitted_older < 0
+  ) return false;
+  return value.items.every((item) => {
+    if (!isRecord(item) || !Array.isArray(item.notes) || item.notes.length > 100) return false;
+    if (
+      typeof item.event_id !== "string" ||
+      typeof item.source_revision !== "number" ||
+      !Number.isSafeInteger(item.source_revision) ||
+      item.source_revision < 1 ||
+      typeof item.event_version !== "number" ||
+      !Number.isSafeInteger(item.event_version) ||
+      item.event_version < 1 ||
+      (item.instruction !== undefined && typeof item.instruction !== "string") ||
+      !["received", "delivered", "addressed", "dismissed"].includes(String(item.lifecycle)) ||
+      !["approve", "approve_with_notes", "request_changes"].includes(String(item.verdict))
+    ) return false;
+    return item.notes.every((note) =>
+      isRecord(note) &&
+      typeof note.id === "string" &&
+      typeof note.block_label === "string" &&
+      typeof note.body === "string" &&
+      (note.quote === undefined || typeof note.quote === "string") &&
+      ["comment", "question", "decision", "suggestion"].includes(String(note.kind)) &&
+      isFeedbackAnchor(note.anchor)
+    );
+  });
+}
+
+function isFeedbackAnchor(value: unknown): value is FeedbackAnchor {
+  if (!isRecord(value) || typeof value.state !== "string") return false;
+  if (value.state === "block") return typeof value.block_id === "string";
+  if (value.state === "orphaned") return typeof value.reason === "string";
+  return (
+    (value.state === "anchored" || value.state === "reanchored") &&
+    typeof value.start_utf16 === "number" &&
+    Number.isSafeInteger(value.start_utf16) &&
+    value.start_utf16 >= 0 &&
+    typeof value.end_utf16 === "number" &&
+    Number.isSafeInteger(value.end_utf16) &&
+    value.end_utf16 > value.start_utf16
+  );
 }
 
 function isIdentity(value: unknown): value is NonNullable<ChromeConfig["identity"]> {

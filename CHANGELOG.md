@@ -427,10 +427,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   self-contained read-only export. State is owner-private, project-keyed,
   bounded, and cleanup is identity-scoped; event recovery uses one bounded
   opened handle, diagram count/source/enhancement are capped, and native
-  adapters use trusted platform paths plus exact process identity. No daemon,
-  remote viewer, product UI framework, or documentation portal is introduced.
-  Native platform and browser qualification remains the explicit
-  CAP-016/TSK-007 release boundary.
+  adapters use trusted platform paths, exact process identity, a shared
+  allowlist-only child environment, creation-only Windows ACL hardening, and
+  read-only owner/DACL verification. No daemon, remote viewer, product UI
+  framework, or documentation portal is introduced. Native-path project keys,
+  serialized creation quota enforcement, collection cardinality, versioned feedback
+  resolution, exact re-anchoring/visible orphan states, and fail-closed orphan
+  process recovery keep the bounded contract explicit. Native platform and
+  browser qualification remains the explicit CAP-016/TSK-007 release boundary.
 
 - **Transport-neutral durable delegate lifecycle (ADR-0036).** New
   `codeflow delegate init|arm|wait` commands and a schema-v2

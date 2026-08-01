@@ -452,6 +452,10 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
             alt: &tokens.identity.as_ref()?.alt,
         })
     });
+    let feedback = match state.store.feedback_snapshot(state.session_id) {
+        Ok(feedback) => feedback,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
     let body = match revision.content {
         RevisionContent::Supported { document } => render_document(
             &document,
@@ -464,6 +468,7 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
                 prepaint_source: prepaint.map(|asset| asset.source.as_str()),
                 utility_style: utility_style.as_deref(),
                 identity,
+                feedback: Some(&feedback),
                 read_only_warning: None,
                 interactive: true,
             },

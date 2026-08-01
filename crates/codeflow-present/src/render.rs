@@ -3,7 +3,10 @@ use std::fmt::Write as _;
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 
-use crate::document::{Block, EvidenceState, PresentationDocument, TreeNode};
+use crate::{
+    document::{Block, EvidenceState, PresentationDocument, TreeNode},
+    state::FeedbackSnapshot,
+};
 
 pub struct RenderOptions<'a> {
     pub session_id: &'a str,
@@ -14,6 +17,7 @@ pub struct RenderOptions<'a> {
     pub prepaint_source: Option<&'a str>,
     pub utility_style: Option<&'a str>,
     pub identity: Option<RenderIdentity<'a>>,
+    pub feedback: Option<&'a FeedbackSnapshot>,
     pub read_only_warning: Option<&'a str>,
     pub interactive: bool,
 }
@@ -90,7 +94,8 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
             "event_sequence": options.event_sequence,
             "title": document.title,
             "shortcuts_enabled": true,
-            "identity": identity
+            "identity": identity,
+            "feedback": options.feedback
         })
         .to_string()
         .replace('<', "\\u003c")
@@ -558,6 +563,7 @@ mod tests {
                 prepaint_source: None,
                 utility_style: None,
                 identity: None,
+                feedback: None,
                 read_only_warning: None,
                 interactive: true,
             },
@@ -639,6 +645,7 @@ mod tests {
                 prepaint_source: None,
                 utility_style: None,
                 identity: None,
+                feedback: None,
                 read_only_warning: None,
                 interactive: true,
             },

@@ -66,12 +66,15 @@ files. Release builds consume only the committed assets, and consumer machines
 do not need Node.
 
 Repeat the runtime journey on every claimed native platform. Windows evidence
-must cover Unicode known-folder/profile paths, creation-time ACLs, trusted
-system tools, exact quoted command-line identity, file URLs, and process-tree
-cleanup. Linux/WSL2 evidence must cover bounded no-follow `/proc` identity and
-process-group cleanup; macOS must prove its equivalent ownership boundary.
-Cross-compilation is useful adapter-shape evidence, but it does not satisfy
-these native qualification cases.
+must cover Unicode known-folder/profile paths, creation-time ACL hardening,
+read-only rejection of weakened owner/protected-DACL/trustee/inheritance state,
+trusted system tools, exact quoted command-line identity, file URLs, and
+process-tree cleanup. All browser and auxiliary tool routes must exclude
+provider-secret environment canaries through the shared restricted environment. Linux/WSL2
+evidence must cover bounded no-follow `/proc` identity and process-group
+cleanup; macOS must prove its equivalent ownership boundary. Cross-compilation
+is useful adapter-shape evidence, but it does not satisfy these native
+qualification cases.
 
 Measure the stripped release binary against the recorded pre-presentation
 reference build, and record the embedded service/export payload contribution

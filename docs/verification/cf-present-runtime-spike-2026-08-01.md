@@ -1,7 +1,7 @@
 # `cf-present` bounded runtime spike
 
-**Task:** TSK-011  
-**Date:** 2026-08-01  
+**Task:** TSK-011
+**Date:** 2026-08-01
 **Status:** decision evidence; not production verification
 
 ## Purpose and boundary

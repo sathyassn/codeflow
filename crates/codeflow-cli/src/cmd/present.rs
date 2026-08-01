@@ -14,7 +14,7 @@ use codeflow_present::{
     document::parse_document,
     export::{export_session, ExportMode, ExportTheme},
     service::{serve_session, HealthRecord, ReadyRecord},
-    state::{SessionStatus, SessionStore},
+    state::{FeedbackResolution, SessionStatus, SessionStore},
     PresentError,
 };
 use uuid::Uuid;
@@ -56,6 +56,16 @@ enum PresentCommand {
         /// Continue until the session closes.
         #[arg(long)]
         follow: bool,
+    },
+    /// Mark one delivered feedback event addressed or dismissed.
+    Resolve {
+        session_id: String,
+        event_id: String,
+        /// Current event version printed by the review surface/history.
+        #[arg(long)]
+        event_version: u64,
+        #[arg(long, value_parser = ["addressed", "dismissed"])]
+        status: String,
     },
     /// Close a presentation session. Repeating close is safe.
     Close { session_id: String },
@@ -126,60 +136,106 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<()> {
         PresentCommand::Feedback { session_id, follow } => {
             deliver_feedback(&store, parse_id(session_id)?, *follow)
         }
-        PresentCommand::Close { session_id } => {
-            let id = parse_id(session_id)?;
-            let session = store.close(id)?;
-            if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance)
-            {
-                let profile = store.runtime_dir(id)?.join("browser-profile");
-                browser::terminate_isolated(&store, id, pid, instance_id, &profile)?;
-            }
-            store.enforce_retention()?;
-            println!("closed {id}");
-            Ok(())
-        }
+        PresentCommand::Resolve {
+            session_id,
+            event_id,
+            event_version,
+            status,
+        } => resolve_feedback(&store, session_id, event_id, *event_version, status),
+        PresentCommand::Close { session_id } => close(&store, session_id),
         PresentCommand::Export {
             session_id,
             out,
             theme,
             mode,
-        } => {
-            let theme = match theme.as_str() {
-                "editorial" => ExportTheme::Editorial,
-                "technical" => ExportTheme::Technical,
-                _ => unreachable!("clap validates export themes"),
-            };
-            let mode = match mode.as_str() {
-                "system" => ExportMode::System,
-                "light" => ExportMode::Light,
-                "dark" => ExportMode::Dark,
-                _ => unreachable!("clap validates export modes"),
-            };
-            export_session(&store, parse_id(session_id)?, out, theme, mode)?;
-            println!("exported {}", out.display());
-            Ok(())
-        }
+        } => export(&store, session_id, out, theme, mode),
         PresentCommand::Clear {
             session_id,
             older_than,
             dry_run,
-        } => {
-            let selected = session_id.as_deref().map(parse_id).transpose()?;
-            let removed = store.clear(selected, parse_duration(older_than)?, *dry_run)?;
-            for id in removed {
-                println!("{} {id}", if *dry_run { "would remove" } else { "removed" });
-            }
-            Ok(())
-        }
-        PresentCommand::ServeInternal { session_id } => {
-            let id = parse_id(session_id)?;
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
-            runtime.block_on(serve_session(project, id))
-        }
+        } => clear(&store, session_id.as_deref(), older_than, *dry_run),
+        PresentCommand::ServeInternal { session_id } => serve(project, session_id),
     }
+}
+
+fn resolve_feedback(
+    store: &SessionStore,
+    session_id: &str,
+    event_id: &str,
+    event_version: u64,
+    status: &str,
+) -> codeflow_present::Result<()> {
+    let resolution = match status {
+        "addressed" => FeedbackResolution::Addressed,
+        "dismissed" => FeedbackResolution::Dismissed,
+        _ => unreachable!("clap validates feedback resolution"),
+    };
+    let sequence = store.resolve_feedback(
+        parse_id(session_id)?,
+        parse_id(event_id)?,
+        event_version,
+        resolution,
+    )?;
+    println!("resolved {event_id} as {status} at version {sequence}");
+    Ok(())
+}
+
+fn close(store: &SessionStore, session_id: &str) -> codeflow_present::Result<()> {
+    let id = parse_id(session_id)?;
+    let session = store.close(id)?;
+    if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
+        let profile = store.runtime_dir(id)?.join("browser-profile");
+        browser::terminate_isolated(store, id, pid, instance_id, &profile)?;
+    }
+    store.enforce_retention()?;
+    println!("closed {id}");
+    Ok(())
+}
+
+fn export(
+    store: &SessionStore,
+    session_id: &str,
+    out: &Path,
+    theme: &str,
+    mode: &str,
+) -> codeflow_present::Result<()> {
+    let theme = match theme {
+        "editorial" => ExportTheme::Editorial,
+        "technical" => ExportTheme::Technical,
+        _ => unreachable!("clap validates export themes"),
+    };
+    let mode = match mode {
+        "system" => ExportMode::System,
+        "light" => ExportMode::Light,
+        "dark" => ExportMode::Dark,
+        _ => unreachable!("clap validates export modes"),
+    };
+    export_session(store, parse_id(session_id)?, out, theme, mode)?;
+    println!("exported {}", out.display());
+    Ok(())
+}
+
+fn clear(
+    store: &SessionStore,
+    session_id: Option<&str>,
+    older_than: &str,
+    dry_run: bool,
+) -> codeflow_present::Result<()> {
+    let selected = session_id.map(parse_id).transpose()?;
+    let removed = store.clear(selected, parse_duration(older_than)?, dry_run)?;
+    for id in removed {
+        println!("{} {id}", if dry_run { "would remove" } else { "removed" });
+    }
+    Ok(())
+}
+
+fn serve(project: PathBuf, session_id: &str) -> codeflow_present::Result<()> {
+    let id = parse_id(session_id)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
+    runtime.block_on(serve_session(project, id))
 }
 
 fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_present::Result<()> {

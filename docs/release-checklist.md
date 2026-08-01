@@ -65,14 +65,21 @@ named human release decision.
       and proves close/crash/retention teardown. An unqualified adapter fails
       closed and `--no-launch` remains usable.
 - [ ] Presentation platform evidence covers Windows Unicode known-folder and
-      profile paths, creation-time ACLs, trusted system tools, exact quoted
+      profile paths, creation-time ACL hardening, read-only rejection of weak
+      owners/DACL inheritance/trustees, trusted system tools, exact quoted
       process identity, file URLs, and process-tree cleanup; Linux/WSL2 bounded
       no-follow `/proc` identity and process-group cleanup; and the equivalent
-      macOS ownership checks. Cross-target compilation does not replace these
-      native cases.
+      macOS ownership checks. Every external child proves the shared restricted
+      environment excludes provider-secret environment canaries. Cross-target compilation
+      does not replace these native cases.
 - [ ] Browser evidence includes the bounded dense multi-diagram corpus, records
       long-task behavior, and proves that budget exhaustion leaves escaped
       source without blocking feedback, export, close, or cleanup.
+- [ ] Presentation adversarial evidence covers invalid native-path bytes,
+      per-block and aggregate collection amplification, impossible and
+      concurrent project quotas, exact/ambiguous/missing feedback re-anchoring,
+      stale/cross-session resolution, and leader-loss cleanup that retains
+      recovery state unless group/tree absence is proven.
 - [ ] The shell installer selects the correct macOS/Linux artifact, the
       PowerShell installer selects `codeflow.exe` on native Windows, and WSL2
       selects the Linux artifact. Each installed binary reports the release

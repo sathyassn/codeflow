@@ -284,6 +284,48 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           </button>
         </div>
         <p class="cf-guidance">Select text within one block, then add a focused note.</p>
+        {config.feedback?.items.length || config.feedback?.omitted_older ? (
+          <section class="cf-feedback-history" aria-labelledby="cf-feedback-history-title">
+            <div class="cf-history-heading">
+              <h3 id="cf-feedback-history-title">Earlier feedback</h3>
+              {config.feedback.omitted_older ? (
+                <span>{config.feedback.omitted_older} older in session history</span>
+              ) : null}
+            </div>
+            <ol>
+              {config.feedback.items.map((item) => (
+                <li key={item.event_id}>
+                  <div class="cf-history-meta">
+                    <strong>{item.verdict.replaceAll("_", " ")}</strong>
+                    <span>{item.lifecycle}</span>
+                    <span>Revision {item.source_revision}</span>
+                    <span>Version {item.event_version}</span>
+                  </div>
+                  {item.instruction ? <p>{item.instruction}</p> : null}
+                  {item.notes.length ? (
+                    <ul>
+                      {item.notes.map((note) => (
+                        <li key={note.id} data-anchor-state={note.anchor.state}>
+                          <div class="cf-note-heading">
+                            <strong>{note.block_label}</strong>
+                            <span>{note.anchor.state}</span>
+                          </div>
+                          {note.quote ? <blockquote>{note.quote}</blockquote> : null}
+                          <p>{note.body}</p>
+                          {note.anchor.state === "orphaned" ? (
+                            <p class="cf-anchor-warning">Unpositioned: {note.anchor.reason}</p>
+                          ) : note.anchor.state === "reanchored" ? (
+                            <p class="cf-anchor-note">Matched uniquely in this revision.</p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
         <button class="cf-secondary-action" type="button" disabled={busy} onClick={addNote}>
           Add selected text
         </button>

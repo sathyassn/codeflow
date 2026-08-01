@@ -47,6 +47,7 @@ pub fn export_session(
                     prepaint_source: None,
                     utility_style: None,
                     identity: None,
+                    feedback: None,
                     read_only_warning: None,
                     interactive: false,
                 },

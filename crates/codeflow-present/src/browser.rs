@@ -61,8 +61,7 @@ fn launch_url(
     let executable = qualified_browser()?;
 
     let instance_id = Uuid::new_v4();
-    let mut command = Command::new(&executable);
-    apply_minimal_environment(&mut command);
+    let mut command = browser_launch_command(&executable);
     command
         .arg(format!("--user-data-dir={}", profile_dir.display()))
         .arg(format!("--cf-present-instance={instance_id}"))
@@ -97,25 +96,8 @@ fn launch_url(
     Ok(())
 }
 
-fn apply_minimal_environment(command: &mut Command) {
-    const ALLOWED: &[&str] = &[
-        "HOME",
-        "TMPDIR",
-        "LANG",
-        "LC_ALL",
-        "DISPLAY",
-        "WAYLAND_DISPLAY",
-        "XDG_RUNTIME_DIR",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "SYSTEMROOT",
-        "WINDIR",
-    ];
-    command.env_clear();
-    for name in ALLOWED {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
+fn browser_launch_command(executable: &Path) -> Command {
+    crate::platform::restricted_command(executable)
 }
 
 pub fn is_isolated_running(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<bool> {
@@ -170,15 +152,14 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
 
 #[cfg(target_os = "macos")]
 fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<bool> {
-    let output = Command::new("/bin/ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
+    let output = macos_identity_command(pid)
         .output()
         .map_err(|error| PresentError::io("/bin/ps", error))?;
     let pid_i32 = i32::try_from(pid).map_err(|_| {
         PresentError::BrowserUnavailable("browser PID is outside the platform range".to_string())
     })?;
     if !output.status.success() || output.stdout.is_empty() {
-        if unsafe { libc::kill(-pid_i32, 0) } == 0 {
+        if !process_group_is_absent(pid_i32)? {
             return Err(PresentError::BrowserUnavailable(
                 "browser process group exists without its verifiable leader".to_string(),
             ));
@@ -205,12 +186,32 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
     Ok(true)
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn macos_identity_command(pid: u32) -> Command {
+    let mut command = crate::platform::restricted_command("/bin/ps");
+    command.args(["-p", &pid.to_string(), "-o", "command="]);
+    command
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<bool> {
     let command_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
     let metadata = match fs::symlink_metadata(&command_path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let pid = i32::try_from(pid).map_err(|_| {
+                PresentError::BrowserUnavailable(
+                    "browser PID is outside the platform range".to_string(),
+                )
+            })?;
+            if !process_group_is_absent(pid)? {
+                return Err(PresentError::BrowserUnavailable(
+                    "browser process group exists without its verifiable leader; recovery state was retained"
+                        .to_string(),
+                ));
+            }
+            return Ok(false);
+        }
         Err(error) => return Err(PresentError::io(command_path, error)),
     };
     if !metadata.is_file() || metadata.len() > 64 * 1024 {
@@ -251,24 +252,33 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
     Ok(true)
 }
 
+#[cfg(unix)]
+fn process_group_is_absent(pid: i32) -> Result<bool> {
+    if unsafe { libc::kill(-pid, 0) } == 0 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(true)
+    } else {
+        Err(PresentError::io("browser process group", error))
+    }
+}
+
 #[cfg(windows)]
 fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<bool> {
     let script = format!(
         "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $p=Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' -ErrorAction SilentlyContinue; if($null -eq $p){{exit 3}}; [Console]::Out.Write($p.CommandLine)"
     );
     let powershell = crate::platform::trusted_system_path("WindowsPowerShell/v1.0/powershell.exe")?;
-    let output = Command::new(&powershell)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &script,
-        ])
+    let output = windows_identity_command(&powershell, &script)
         .output()
         .map_err(|error| PresentError::io(&powershell, error))?;
     if output.status.code() == Some(3) {
-        return Ok(false);
+        return Err(PresentError::BrowserUnavailable(
+            "browser leader is absent, so Windows process-tree cleanup cannot be proven; recovery state was retained"
+                .to_string(),
+        ));
     }
     if !output.status.success() || output.stdout.len() > 64 * 1024 {
         return Err(PresentError::BrowserUnavailable(
@@ -286,6 +296,19 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
         ));
     }
     Ok(true)
+}
+
+#[cfg(any(windows, test))]
+fn windows_identity_command(executable: &Path, script: &str) -> Command {
+    let mut command = crate::platform::restricted_command(executable);
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+    ]);
+    command
 }
 
 #[cfg(windows)]
@@ -313,7 +336,8 @@ fn windows_command_line_arguments(command: &str) -> Result<Vec<String>> {
     }
 
     let parsed = (|| {
-        let pointers = unsafe { std::slice::from_raw_parts(argv, count as usize) };
+        let count = usize::try_from(count).expect("positive bounded Windows argument count");
+        let pointers = unsafe { std::slice::from_raw_parts(argv, count) };
         let mut arguments = Vec::with_capacity(pointers.len());
         for pointer in pointers {
             if pointer.is_null() {
@@ -351,8 +375,7 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
         return Ok(());
     }
     let taskkill = crate::platform::trusted_system_path("taskkill.exe")?;
-    let output = Command::new(&taskkill)
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+    let output = windows_terminate_command(&taskkill, pid)
         .output()
         .map_err(|error| PresentError::io(&taskkill, error))?;
     if !output.status.success() || output.stdout.len() + output.stderr.len() > 64 * 1024 {
@@ -361,6 +384,13 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
         ));
     }
     Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn windows_terminate_command(executable: &Path, pid: u32) -> Command {
+    let mut command = crate::platform::restricted_command(executable);
+    command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    command
 }
 
 fn qualified_browser() -> Result<PathBuf> {
@@ -547,6 +577,34 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn orphan_process_group_retains_recovery_state_when_leader_is_absent() {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut command = crate::platform::restricted_command("/bin/sh");
+        command
+            .args(["-c", "sleep 10 &"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut leader = command.spawn().unwrap();
+        let pid = leader.id();
+        leader.wait().unwrap();
+        let pid_i32 = i32::try_from(pid).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while process_group_is_absent(pid_i32).unwrap() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let termination =
+            terminate_qualified_process(pid, Uuid::new_v4(), Path::new("/state/browser-profile"));
+        let group_remained = !process_group_is_absent(pid_i32).unwrap();
+        unsafe { libc::kill(-pid_i32, libc::SIGKILL) };
+        assert!(termination.is_err());
+        assert!(group_remained);
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_command_line_identity_parses_quoted_unicode_arguments_exactly() {
@@ -586,7 +644,7 @@ mod tests {
         let profile = temp.path().join("browser-profile");
         fs::create_dir(&profile).unwrap();
         let instance = Uuid::new_v4();
-        let mut command = Command::new("/bin/sh");
+        let mut command = crate::platform::restricted_command("/bin/sh");
         command
             .args([
                 "-c",
@@ -622,13 +680,33 @@ mod tests {
     }
 
     #[test]
-    fn browser_environment_excludes_provider_secrets() {
-        let mut command = Command::new("browser");
-        command.env("OPENAI_API_KEY", "sentinel");
-        apply_minimal_environment(&mut command);
-        let environment = command.get_envs().collect::<Vec<_>>();
-        assert!(!environment.iter().any(|(name, value)| {
-            *name == "OPENAI_API_KEY" && value.and_then(|value| value.to_str()) == Some("sentinel")
-        }));
+    fn every_external_command_route_uses_the_restricted_environment() {
+        let commands = [
+            browser_launch_command(Path::new("browser")),
+            macos_identity_command(42),
+            windows_identity_command(
+                Path::new("powershell.exe"),
+                "[Console]::Out.Write('identity')",
+            ),
+            windows_terminate_command(Path::new("taskkill.exe"), 42),
+        ];
+        for command in &commands {
+            let environment = command.get_envs().collect::<Vec<_>>();
+            assert!(
+                !environment.is_empty(),
+                "test host has no allowed runtime environment"
+            );
+            for secret in [
+                "AWS_SECRET_ACCESS_KEY",
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+            ] {
+                assert!(environment.iter().all(|(name, _)| *name != secret));
+            }
+            assert!(environment.iter().any(|(name, value)| matches!(
+                name.to_str(),
+                Some("HOME" | "SYSTEMROOT")
+            ) && value.is_some()));
+        }
     }
 }

@@ -675,8 +675,8 @@ feedback materially helps.
 
 The runtime validates the declarative block tree, embeds its deterministic
 renderer, stores immutable revisions and append-only feedback in owner-private
-project-keyed state, and exposes open/update/list/show/history/feedback/export/
-close/clear through the CLI. A one-time tokenless file bootstrap opens a
+project-keyed state, and exposes open/update/list/show/history/feedback/resolve/
+export/close/clear through the CLI. A one-time tokenless file bootstrap opens a
 CodeFlow-owned isolated browser profile against an authenticated loopback-only
 service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
 sandboxing, strict primitive-token import, crash recovery, bounded retention,
@@ -684,15 +684,30 @@ and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
 repair are self-bounded and operate through one opened handle. Mermaid input is
 capped per diagram and per document; browser enhancement is serialized, yields
 between diagrams, and fails remaining items to escaped source when the eager
-fallback exhausts its cumulative budget. Static export remains self-contained
-and excludes review/authentication/runtime state.
+fallback exhausts its cumulative budget. Browser and auxiliary system-tool
+children share one allowlist-only environment. Windows ACL mutation is confined
+to creation; existing state uses native read-only owner/protected-DACL/trustee/
+inheritance verification. Static export remains self-contained and excludes
+review/authentication/runtime state.
+
+Native-path repository identity, per-block and whole-document collection
+cardinality, a serialized create lease, impossible-session preflight, and
+post-write rollback before successful return keep path and quota boundaries
+deterministic under concurrent creation. The browser loads a bounded recent
+feedback snapshot, uniquely re-anchors exact selectors across revisions, leaves
+missing/ambiguous selectors visibly orphaned, and exposes the current lifecycle
+version. Resolve accepts only a current delivered event and appends
+addressed/dismissed state.
+Unverifiable orphan process groups/trees retain recovery state rather than
+deleting their identity and profile.
 
 The capability remains `building` until TSK-007 records the full native
 macOS/Linux/WSL2/Windows and qualified-browser matrix, adversarial service and
 state evidence, design/accessibility/responsive comparisons, deterministic
 asset/release checks, and fresh native interactive model trials. That matrix
-includes Windows Unicode known-folder/profile paths, creation-time ACLs,
-trusted system tools, exact process-tree identity and file URLs; Linux/WSL2
+includes Windows Unicode known-folder/profile paths, creation-time ACL
+hardening plus read-only weakened-ACL rejection, trusted system tools, exact
+process-tree identity and file URLs; Linux/WSL2
 bounded `/proc` identity and group signaling; and a dense multi-diagram browser
 corpus with long-task evidence. Cross-builds alone do not claim native runtime
 support.

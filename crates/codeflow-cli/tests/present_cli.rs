@@ -251,6 +251,49 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
         ),
     );
     assert!(missing_brotli.starts_with("HTTP/1.1 406 "));
+
+    let event_id = "019f9b53-a341-7fa7-84c2-5f198ceea099";
+    let review = format!(
+        r#"{{"event_id":"{event_id}","session_id":"{}","revision":1,"verdict":"approve","notes":[]}}"#,
+        running.session_id
+    );
+    let submitted = http(
+        running.port,
+        &format!(
+            "POST /app/api/reviews HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{review}",
+            running.authority,
+            running.authority,
+            running.cookie,
+            review.len()
+        ),
+    );
+    assert!(submitted.starts_with("HTTP/1.1 201 "));
+    let delivered = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &running.session_id],
+    ));
+    assert!(delivered.contains(event_id));
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "resolve",
+            &running.session_id,
+            event_id,
+            "--event-version",
+            "2",
+            "--status",
+            "addressed",
+        ],
+    ));
+    let history = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &running.session_id],
+    ));
+    assert!(history.contains("\"event\": \"addressed\""));
 }
 
 fn update_export_close_and_clear(fixture: &TestProject, running: &RunningPresentation) {
@@ -287,7 +330,7 @@ fn update_export_close_and_clear(fixture: &TestProject, running: &RunningPresent
     );
     assert!(poll.starts_with("HTTP/1.1 200 "));
     assert!(poll.contains("\"kind\":\"revision\""));
-    assert!(poll.contains("\"cursor\":\"2:0\""));
+    assert!(poll.contains("\"cursor\":\"2:3\""));
 
     let exported_path = fixture.project.join("review.html");
     require_success(&codeflow(

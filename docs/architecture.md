@@ -155,6 +155,14 @@ content-addressed Preact/Shiki/Mermaid distribution built reproducibly from its
 exact lockfile, SBOM, license inventory, integrity manifest, audit, and size
 budgets; consumer builds and runtime use require no Node toolchain.
 
+Repository state keys hash the canonical path's native OS representation, not
+a lossy display string. Creation holds one project lease across pre-retention,
+publication, and post-write quota enforcement; an impossible single-session
+configuration is rejected before publication and a failed post-write quota
+check rolls the unpublished session back. Block, diagram, per-collection, and
+whole-document collection cardinalities bound renderer amplification in
+addition to encoded byte limits.
+
 Each active review has one project-keyed owner-private state authority, one
 loopback service, one single-use file bootstrap, and one CodeFlow-owned isolated
 browser profile. Host/Origin/cookie/CSP checks protect the review chrome;
@@ -163,7 +171,8 @@ scripts, same-origin, forms, navigation, or network. Full-fidelity export is a
 self-contained read-only HTML artifact with no credentials, review controls,
 profile paths, feedback history, or service state. Platform adapters fail
 closed rather than falling back to the operator's browser. The `present` CLI
-adapter exposes open/update/list/show/history/feedback/export/close/clear but
+adapter exposes open/update/list/show/history/feedback/resolve/export/close/
+clear but
 does not become a resident service, product UI framework, or documentation
 portal.
 
@@ -179,11 +188,26 @@ diagram, so TSK-007 must qualify a dense adversarial corpus in real browsers.
 Platform boundaries are native and fail closed: Windows discovers trusted
 system and known-folder paths without `PATH` lookup, rejects reparse traversal,
 parses process identity with Windows command-line rules, emits UTF-8 from
-Windows PowerShell, and applies private ACLs when state is created. Linux/WSL2
-reads bounded, no-follow `/proc` identity and terminates only the proven process
-group; macOS uses delimiter-aware identity and the same ownership rule.
+Windows PowerShell, hardens private ACLs only when state is created, and verifies
+owner, protected DACL, trustees, and inheritance read-only whenever existing
+state is opened. Every browser or auxiliary system-tool child starts from one
+allowlist-only environment, so provider-secret environment variables are not
+inherited.
+Linux/WSL2 reads bounded, no-follow `/proc` identity and terminates only the
+proven process group; macOS uses delimiter-aware identity and the same ownership
+rule. If a leader disappears while its process group/tree cannot be proven
+absent, cleanup retains the profile and durable identity for recovery rather
+than declaring success.
 Cross-target compilation checks adapter shape only. Native runtime, Unicode
 path, ACL, process-tree, browser, and cleanup evidence remains a release gate.
+
+The current review surface loads a bounded recent feedback snapshot. Same-
+revision selectors retain their exact offsets; older selectors re-anchor only
+when exact quote plus prefix/suffix context has one match. Missing or ambiguous
+matches remain visibly orphaned. Agent-side `resolve` transitions require the
+event's current delivered version and append addressed/dismissed state; stale
+or cross-session updates fail closed. Full append-only history remains available
+explicitly without being injected into unrelated work.
 
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite

@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "title": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 512},
-    "language": {"type": "string"},
+    "language": {"type": "string", "pattern": "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$", "x-codeflow-max-bytes": 64},
     "provenance": {"$ref": "#/$defs/provenance"},
     "blocks": {
       "type": "array",
@@ -17,7 +17,7 @@
       "items": {"$ref": "#/$defs/block"}
     }
   },
-  "$comment": "The CodeFlow runtime additionally enforces an 8 MiB encoded document limit, no more than 512 blocks across the full nested tree, 12 levels of nesting, globally unique block IDs, decoded-media limits, row width, and byte-oriented string limits marked with x-codeflow-max-bytes.",
+  "$comment": "The CodeFlow runtime additionally enforces an 8 MiB encoded document limit, no more than 512 blocks across the full nested tree, 12 levels of nesting, 16,384 collection items across the full document, globally unique block IDs, decoded-media limits, row width, and byte-oriented string limits marked with x-codeflow-max-bytes.",
   "$defs": {
     "provenance": {
       "type": "object",
@@ -72,7 +72,7 @@
         "type": {"const": "bullets"},
         "id": {"$ref": "#/$defs/id"},
         "ordered": {"type": "boolean", "default": false},
-        "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/markdown"}}
+        "items": {"type": "array", "minItems": 1, "maxItems": 2048, "items": {"$ref": "#/$defs/markdown"}}
       }
     },
     "callout": {
@@ -151,7 +151,7 @@
       "properties": {
         "type": {"const": "status"},
         "id": {"$ref": "#/$defs/id"},
-        "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/status_item"}}
+        "items": {"type": "array", "minItems": 1, "maxItems": 2048, "items": {"$ref": "#/$defs/status_item"}}
       }
     },
     "code": {
@@ -183,7 +183,7 @@
       "required": ["label"],
       "properties": {
         "label": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 512},
-        "children": {"type": "array", "items": {"$ref": "#/$defs/tree_node"}}
+        "children": {"type": "array", "maxItems": 2048, "items": {"$ref": "#/$defs/tree_node"}}
       }
     },
     "tree": {
@@ -194,7 +194,7 @@
         "type": {"const": "tree"},
         "id": {"$ref": "#/$defs/id"},
         "label": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 512},
-        "nodes": {"type": "array", "items": {"$ref": "#/$defs/tree_node"}}
+        "nodes": {"type": "array", "minItems": 1, "maxItems": 2048, "items": {"$ref": "#/$defs/tree_node"}}
       }
     },
     "diagram": {
@@ -219,7 +219,7 @@
         "id": {"$ref": "#/$defs/id"},
         "mime_type": {"enum": ["image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/webm", "audio/mpeg", "audio/ogg"]},
         "data_base64": {"type": "string", "contentEncoding": "base64", "x-codeflow-max-decoded-bytes": 4194304},
-        "alt": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 524288},
+        "alt": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 4096},
         "caption": {"type": "string", "x-codeflow-max-bytes": 524288}
       }
     },
@@ -260,7 +260,7 @@
       "properties": {
         "type": {"const": "feedback_prompt"},
         "id": {"$ref": "#/$defs/id"},
-        "prompt": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 524288}
+        "prompt": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 4096}
       }
     },
     "html": {

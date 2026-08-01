@@ -182,6 +182,11 @@ async function checkInteractiveSurface(browser, origin) {
   });
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /Review/ }).click();
+  await page.getByRole("heading", { name: "Earlier feedback" }).waitFor();
+  await page.getByText("Matched uniquely in this revision.").waitFor();
+  await page.getByText("Unpositioned: the referenced block is absent").waitFor();
+  await page.getByRole("button", { name: "Close" }).click();
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
@@ -339,6 +344,37 @@ function fixtureHtml(proseOnly) {
     identity: {
       src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       alt: "Fixture project",
+    },
+    feedback: proseOnly ? { items: [], omitted_older: 0 } : {
+      omitted_older: 2,
+      items: [
+        {
+          event_id: "019f9b53-a341-7fa7-84c2-5f198ceea010",
+          source_revision: 1,
+          event_version: 3,
+          lifecycle: "addressed",
+          verdict: "request_changes",
+          instruction: "Keep the boundary explicit.",
+          notes: [
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea011",
+              block_label: "Summary",
+              kind: "comment",
+              body: "This exact quote moved once.",
+              quote: "bounded review runtime",
+              anchor: { state: "reanchored", start_utf16: 2, end_utf16: 24 },
+            },
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea012",
+              block_label: "Removed detail",
+              kind: "question",
+              body: "This remains visible without a fabricated location.",
+              quote: "removed text",
+              anchor: { state: "orphaned", reason: "the referenced block is absent" },
+            },
+          ],
+        },
+      ],
     },
   }).replaceAll("<", "\\u003c");
   return `<!doctype html>

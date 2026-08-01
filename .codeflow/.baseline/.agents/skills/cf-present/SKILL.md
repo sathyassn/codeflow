@@ -85,6 +85,10 @@ copy automatically.
   blocks so anchored feedback can be explained across revisions.
 - Use `codeflow present feedback <session-id> [--follow]` to deliver review
   envelopes. Deduplicate by stable `event_id`; delivery is at least once.
+- After acting on or intentionally declining a delivered event, use
+  `codeflow present resolve <session-id> <event-id> --event-version <n>
+  --status addressed|dismissed`. Use the current version shown by the review
+  surface/history; a stale or cross-session transition fails closed.
 - Treat `request_changes` as work to resolve or explicitly route. An approval
   is review evidence, not authority to bypass deterministic gates, the accepted
   plan, or the human merge boundary.

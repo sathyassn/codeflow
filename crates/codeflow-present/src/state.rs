@@ -163,6 +163,60 @@ pub struct FeedbackAppend {
     pub created: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackResolution {
+    Addressed,
+    Dismissed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackLifecycle {
+    Received,
+    Delivered,
+    Addressed,
+    Dismissed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum FeedbackAnchor {
+    Block { block_id: String },
+    Anchored { start_utf16: u32, end_utf16: u32 },
+    Reanchored { start_utf16: u32, end_utf16: u32 },
+    Orphaned { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackNoteView {
+    pub id: Uuid,
+    pub block_label: String,
+    pub kind: FeedbackKind,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    pub anchor: FeedbackAnchor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackView {
+    pub event_id: Uuid,
+    pub source_revision: u64,
+    pub event_version: u64,
+    pub lifecycle: FeedbackLifecycle,
+    pub verdict: FeedbackVerdict,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+    pub notes: Vec<FeedbackNoteView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedbackSnapshot {
+    pub items: Vec<FeedbackView>,
+    pub omitted_older: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FeedbackEvent {
@@ -216,7 +270,7 @@ impl SessionStore {
             .commondir()
             .canonicalize()
             .map_err(|error| PresentError::io(repository.commondir(), error))?;
-        let project_key = hex_digest(common.as_os_str().to_string_lossy().as_bytes());
+        let project_key = hex_digest(&canonical_path_identity(&common));
         let worktree = repository.workdir().ok_or_else(|| {
             PresentError::InvalidDocument(
                 "cf-present requires a non-bare Git working tree".to_string(),
@@ -268,7 +322,6 @@ impl SessionStore {
     }
 
     pub fn create(&self, parsed: ParsedDocument) -> Result<SessionRecord> {
-        self.enforce_retention()?;
         let id = Uuid::new_v4();
         let sessions_root = self.root.join("sessions");
         create_private_dir_all(&sessions_root)?;
@@ -276,10 +329,9 @@ impl SessionStore {
         create_lease
             .lock_exclusive()
             .map_err(|error| PresentError::io(sessions_root.join(".create.lock"), error))?;
+        self.enforce_retention()?;
         let final_session = self.session_dir(id);
         let staging = sessions_root.join(format!(".creating-{id}-{}", Uuid::new_v4().simple()));
-        create_private_dir_all(&staging)?;
-        create_private_dir_all(&staging.join("revisions"))?;
         let now = now_unix()?;
         let (title, provenance, content) = match parsed {
             ParsedDocument::Supported(document) => (
@@ -316,15 +368,31 @@ impl SessionStore {
             browser_instance: None,
             provenance,
         };
+        let initial_revision = RevisionRecord {
+            state_schema_version: STATE_SCHEMA_VERSION,
+            revision: 1,
+            created_at_unix: now,
+            content,
+        };
+        let minimum_bytes = serialized_json_bytes(&initial_revision)?
+            .checked_add(serialized_json_bytes(&session)?)
+            .ok_or_else(|| {
+                PresentError::InvalidDocument(
+                    "initial presentation state size overflow".to_string(),
+                )
+            })?;
+        if minimum_bytes > self.retention.max_project_bytes {
+            return Err(PresentError::InvalidDocument(format!(
+                "initial presentation requires {minimum_bytes} bytes but the project state limit is {} bytes",
+                self.retention.max_project_bytes
+            )));
+        }
+        create_private_dir_all(&staging)?;
+        create_private_dir_all(&staging.join("revisions"))?;
         let result = (|| {
             write_json_atomic(
                 &staging.join("revisions/00000000000000000001.json"),
-                &RevisionRecord {
-                    state_schema_version: STATE_SCHEMA_VERSION,
-                    revision: 1,
-                    created_at_unix: now,
-                    content,
-                },
+                &initial_revision,
             )?;
             write_json_atomic(&staging.join("session.json"), &session)?;
             create_private_file(&staging.join("events.jsonl"))?;
@@ -334,10 +402,15 @@ impl SessionStore {
             fs::rename(&staging, &final_session)
                 .map_err(|error| PresentError::io(&final_session, error))?;
             sync_directory(&sessions_root)?;
+            self.enforce_retention()?;
             Ok(session)
         })();
         if result.is_err() && staging.exists() {
             let _ = remove_dir_confined(&sessions_root, &staging);
+        }
+        if result.is_err() && final_session.exists() {
+            let _ = remove_dir_confined(&sessions_root, &final_session);
+            let _ = sync_directory(&sessions_root);
         }
         result
     }
@@ -847,6 +920,86 @@ impl SessionStore {
         Ok(())
     }
 
+    pub fn resolve_feedback(
+        &self,
+        id: Uuid,
+        event_id: Uuid,
+        expected_version: u64,
+        resolution: FeedbackResolution,
+    ) -> Result<u64> {
+        let _lock = self.lock_session(id)?;
+        self.load(id)?;
+        let events = self.read_events_unlocked(id)?;
+        let mut lifecycle = None;
+        for event in &events {
+            match event {
+                FeedbackEvent::Received { sequence, envelope } if envelope.event_id == event_id => {
+                    lifecycle = Some((FeedbackLifecycle::Received, *sequence));
+                }
+                FeedbackEvent::Delivered {
+                    sequence,
+                    event_id: candidate,
+                    ..
+                } if *candidate == event_id => {
+                    lifecycle = Some((FeedbackLifecycle::Delivered, *sequence));
+                }
+                FeedbackEvent::Addressed {
+                    sequence,
+                    event_id: candidate,
+                    ..
+                } if *candidate == event_id => {
+                    lifecycle = Some((FeedbackLifecycle::Addressed, *sequence));
+                }
+                FeedbackEvent::Dismissed {
+                    sequence,
+                    event_id: candidate,
+                    ..
+                } if *candidate == event_id => {
+                    lifecycle = Some((FeedbackLifecycle::Dismissed, *sequence));
+                }
+                _ => {}
+            }
+        }
+        let Some((current, current_version)) = lifecycle else {
+            return Err(PresentError::InvalidDocument(format!(
+                "feedback event {event_id} does not belong to session {id}"
+            )));
+        };
+        if current_version != expected_version {
+            return Err(PresentError::InvalidDocument(format!(
+                "feedback event {event_id} is at version {current_version}, not {expected_version}"
+            )));
+        }
+        if current != FeedbackLifecycle::Delivered {
+            return Err(PresentError::InvalidDocument(format!(
+                "feedback event {event_id} must be delivered before it can be resolved"
+            )));
+        }
+        let sequence = next_sequence(&events)?;
+        let event = match resolution {
+            FeedbackResolution::Addressed => FeedbackEvent::Addressed {
+                sequence,
+                event_id,
+                at_unix: now_unix()?,
+            },
+            FeedbackResolution::Dismissed => FeedbackEvent::Dismissed {
+                sequence,
+                event_id,
+                at_unix: now_unix()?,
+            },
+        };
+        self.append_event_unlocked(id, &event)?;
+        Ok(sequence)
+    }
+
+    pub fn feedback_snapshot(&self, id: Uuid) -> Result<FeedbackSnapshot> {
+        let _lock = self.lock_session(id)?;
+        let session = self.load(id)?;
+        let revision = self.revision(id, session.current_revision)?;
+        let events = self.read_events_unlocked(id)?;
+        build_feedback_snapshot(&events, &revision.content, session.current_revision)
+    }
+
     pub fn clear(
         &self,
         selected: Option<Uuid>,
@@ -1268,10 +1421,11 @@ fn validate_feedback(
     }
     let mut bytes = envelope.actor.len() + envelope.instruction.as_deref().map_or(0, str::len);
     let mut ids = std::collections::HashSet::new();
-    if envelope.notes.len() > 100 {
-        return Err(PresentError::InvalidDocument(
-            "a review may contain at most 100 notes".to_string(),
-        ));
+    if envelope.notes.len() > limits::MAX_FEEDBACK_NOTES {
+        return Err(PresentError::InvalidDocument(format!(
+            "a review may contain at most {} notes",
+            limits::MAX_FEEDBACK_NOTES
+        )));
     }
     for note in &envelope.notes {
         if !ids.insert(note.id) {
@@ -1348,6 +1502,142 @@ fn find_block<'a>(
             _ => None,
         }
     })
+}
+
+fn build_feedback_snapshot(
+    events: &[FeedbackEvent],
+    current: &RevisionContent,
+    current_revision: u64,
+) -> Result<FeedbackSnapshot> {
+    let mut lifecycle = std::collections::HashMap::new();
+    let mut received = Vec::new();
+    for event in events {
+        match event {
+            FeedbackEvent::Received { sequence, envelope } => {
+                lifecycle.insert(envelope.event_id, (FeedbackLifecycle::Received, *sequence));
+                received.push(envelope);
+            }
+            FeedbackEvent::Delivered {
+                sequence, event_id, ..
+            } => {
+                lifecycle.insert(*event_id, (FeedbackLifecycle::Delivered, *sequence));
+            }
+            FeedbackEvent::Addressed {
+                sequence, event_id, ..
+            } => {
+                lifecycle.insert(*event_id, (FeedbackLifecycle::Addressed, *sequence));
+            }
+            FeedbackEvent::Dismissed {
+                sequence, event_id, ..
+            } => {
+                lifecycle.insert(*event_id, (FeedbackLifecycle::Dismissed, *sequence));
+            }
+        }
+    }
+    let omitted_older = received.len().saturating_sub(limits::MAX_VISIBLE_FEEDBACK);
+    let visible = received.into_iter().skip(omitted_older);
+    let mut items = Vec::new();
+    for envelope in visible {
+        let (state, event_version) =
+            lifecycle.get(&envelope.event_id).copied().ok_or_else(|| {
+                PresentError::CorruptState("feedback lifecycle is missing".to_string())
+            })?;
+        let notes = envelope
+            .notes
+            .iter()
+            .map(|note| FeedbackNoteView {
+                id: note.id,
+                block_label: note.block_label.clone(),
+                kind: note.kind.clone(),
+                body: note.body.clone(),
+                quote: note
+                    .selector
+                    .as_ref()
+                    .map(|selector| selector.exact.clone()),
+                anchor: reanchor_note(note, envelope.revision, current, current_revision),
+            })
+            .collect();
+        items.push(FeedbackView {
+            event_id: envelope.event_id,
+            source_revision: envelope.revision,
+            event_version,
+            lifecycle: state,
+            verdict: envelope.verdict.clone(),
+            instruction: envelope.instruction.clone(),
+            notes,
+        });
+    }
+    Ok(FeedbackSnapshot {
+        items,
+        omitted_older,
+    })
+}
+
+fn reanchor_note(
+    note: &FeedbackNote,
+    source_revision: u64,
+    current: &RevisionContent,
+    current_revision: u64,
+) -> FeedbackAnchor {
+    let RevisionContent::Supported { document } = current else {
+        return FeedbackAnchor::Orphaned {
+            reason: "current document schema is unsupported".to_string(),
+        };
+    };
+    let Some(block) = find_block(&document.blocks, &note.block_id) else {
+        return FeedbackAnchor::Orphaned {
+            reason: "the referenced block is absent from the current revision".to_string(),
+        };
+    };
+    let Some(selector) = &note.selector else {
+        return FeedbackAnchor::Block {
+            block_id: note.block_id.clone(),
+        };
+    };
+    if source_revision == current_revision {
+        return FeedbackAnchor::Anchored {
+            start_utf16: selector.start_utf16,
+            end_utf16: selector.end_utf16,
+        };
+    }
+    let canonical = block.canonical_review_text();
+    let matches = canonical
+        .match_indices(&selector.exact)
+        .filter(|(start, exact)| {
+            canonical[..*start].ends_with(&selector.prefix)
+                && canonical[start + exact.len()..].starts_with(&selector.suffix)
+        })
+        .map(|(start, exact)| {
+            let start_utf16 = canonical[..start].encode_utf16().count();
+            let end_utf16 = start_utf16 + exact.encode_utf16().count();
+            (start_utf16, end_utf16)
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [(start, end)] => {
+            let Ok(start_utf16) = u32::try_from(*start) else {
+                return FeedbackAnchor::Orphaned {
+                    reason: "re-anchored selection exceeds the offset bound".to_string(),
+                };
+            };
+            let Ok(end_utf16) = u32::try_from(*end) else {
+                return FeedbackAnchor::Orphaned {
+                    reason: "re-anchored selection exceeds the offset bound".to_string(),
+                };
+            };
+            FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+            }
+        }
+        [] => FeedbackAnchor::Orphaned {
+            reason: "the exact quote and context no longer match".to_string(),
+        },
+        _ => FeedbackAnchor::Orphaned {
+            reason: "the exact quote and context match more than once".to_string(),
+        },
+    }
 }
 
 fn validate_selector_anchor(selector: &TextSelector, canonical: &str) -> Result<()> {
@@ -1438,6 +1728,45 @@ fn hex_digest(bytes: &[u8]) -> String {
     output
 }
 
+fn serialized_json_bytes<T: Serialize>(value: &T) -> Result<u64> {
+    let bytes = serde_json::to_vec_pretty(value)?
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| {
+            PresentError::InvalidDocument("serialized state size overflow".to_string())
+        })?;
+    u64::try_from(bytes).map_err(|_| {
+        PresentError::InvalidDocument("serialized state is not addressable".to_string())
+    })
+}
+
+fn canonical_path_identity(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let mut identity = b"unix\0".to_vec();
+        identity.extend_from_slice(path.as_os_str().as_bytes());
+        identity
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+
+        let mut identity = b"windows-utf16le\0".to_vec();
+        for unit in path.as_os_str().encode_wide() {
+            identity.extend_from_slice(&unit.to_le_bytes());
+        }
+        identity
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let mut identity = b"fallback\0".to_vec();
+        identity.extend_from_slice(path.as_os_str().to_string_lossy().as_bytes());
+        identity
+    }
+}
+
 pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -1481,6 +1810,8 @@ pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .map_err(|error| PresentError::io(path, error))?;
     }
+    #[cfg(windows)]
+    crate::platform::verify_private_directory(path)?;
     Ok(())
 }
 
@@ -1498,7 +1829,10 @@ fn trusted_system_symlink(path: &Path, metadata: &fs::Metadata) -> bool {
 
 fn create_private_file(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => return Ok(()),
+        Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => {
+            open_private_read(path)?;
+            return Ok(());
+        }
         Ok(_) => return Err(PresentError::UnsafePath(path.to_path_buf())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(PresentError::io(path, error)),
@@ -1510,7 +1844,7 @@ fn create_private_file(path: &Path) -> Result<()> {
 
 fn open_private_create_new(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
+    options.read(true).write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1521,6 +1855,8 @@ fn open_private_create_new(path: &Path) -> Result<File> {
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
     harden_private_path(path, false)?;
+    #[cfg(any(unix, windows))]
+    validate_private_file(path, &file)?;
     Ok(file)
 }
 
@@ -1564,7 +1900,7 @@ fn open_private_append(path: &Path) -> Result<File> {
         }
         Err(error) => return Err(PresentError::io(path, error)),
     };
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     validate_private_file(path, &file)?;
     Ok(file)
 }
@@ -1576,7 +1912,7 @@ fn open_private_read(path: &Path) -> Result<File> {
     let file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     validate_private_file(path, &file)?;
     Ok(file)
 }
@@ -1588,7 +1924,7 @@ fn repair_partial_tail(path: &Path) -> Result<()> {
     let mut file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     validate_private_file(path, &file)?;
     let length = file
         .metadata()
@@ -1671,6 +2007,11 @@ fn validate_private_file(path: &Path, file: &File) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn validate_private_file(path: &Path, file: &File) -> Result<()> {
+    crate::platform::verify_private_file(path, file)
+}
+
 fn ensure_safe_dir(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
     if !metadata.is_dir() || is_link_like(&metadata) {
@@ -1685,6 +2026,8 @@ fn ensure_safe_dir(path: &Path) -> Result<()> {
             return Err(PresentError::UnsafePath(path.to_path_buf()));
         }
     }
+    #[cfg(windows)]
+    crate::platform::verify_private_directory(path)?;
     Ok(())
 }
 
@@ -1702,7 +2045,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Resul
     let file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     validate_private_file(path, &file)?;
     let opened = file
         .metadata()
@@ -1772,10 +2115,7 @@ fn ensure_confined_child(root: &Path, child: &Path) -> Result<()> {
 
 fn remove_dir_confined(root: &Path, path: &Path) -> Result<()> {
     ensure_confined_child(root, path)?;
-    let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
-    if !metadata.is_dir() || is_link_like(&metadata) {
-        return Err(PresentError::UnsafePath(path.to_path_buf()));
-    }
+    ensure_safe_dir(path)?;
     fs::remove_dir_all(path).map_err(|error| PresentError::io(path, error))
 }
 
@@ -1784,6 +2124,7 @@ fn remove_file_if_regular(path: &Path) -> Result<()> {
     if !metadata.is_file() || is_link_like(&metadata) {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
+    open_private_read(path)?;
     fs::remove_file(path).map_err(|error| PresentError::io(path, error))
 }
 
@@ -1796,6 +2137,7 @@ fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
     let mut pending = vec![(root.to_path_buf(), 0_usize)];
     let mut entries = 0_usize;
     while let Some((directory, depth)) = pending.pop() {
+        ensure_safe_dir(&directory)?;
         if depth > limits::MAX_STATE_DEPTH {
             return Err(PresentError::CorruptState(
                 "presentation state exceeds the directory-depth bound".to_string(),
@@ -1822,6 +2164,7 @@ fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
             if metadata.is_dir() {
                 pending.push((path, depth + 1));
             } else if metadata.is_file() {
+                open_private_read(&path)?;
                 total = total.checked_add(metadata.len()).ok_or_else(|| {
                     PresentError::CorruptState("presentation state size overflow".to_string())
                 })?;
@@ -1839,6 +2182,23 @@ fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn project_identity_preserves_non_utf8_path_bytes() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let first = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/repo-\x80"));
+        let second = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/repo-\x81"));
+        assert_ne!(
+            canonical_path_identity(first),
+            canonical_path_identity(second)
+        );
+        assert_ne!(
+            hex_digest(&canonical_path_identity(first)),
+            hex_digest(&canonical_path_identity(second))
+        );
+    }
     use crate::document::{Block, ParsedDocument};
 
     fn store() -> (tempfile::TempDir, SessionStore) {
@@ -1871,6 +2231,21 @@ mod tests {
             notes: Vec::new(),
             created_at_unix: 0,
         }
+    }
+
+    fn parsed_code(bytes: usize) -> ParsedDocument {
+        ParsedDocument::Supported(PresentationDocument {
+            schema_version: 1,
+            title: "Large review".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![Block::Code {
+                id: "code".to_string(),
+                language: "text".to_string(),
+                code: "x".repeat(bytes),
+                caption: None,
+            }],
+        })
     }
 
     #[test]
@@ -1923,6 +2298,55 @@ mod tests {
                 assert_eq!(persisted.browser_instance, None);
             }
         }
+    }
+
+    #[test]
+    fn project_quota_serializes_creates_and_rolls_back_the_losing_session() {
+        use std::sync::{Arc, Barrier};
+
+        let (_temp, mut store) = store();
+        store.retention.max_project_bytes = 1024 * 1024;
+        let store = Arc::new(store);
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.create(parsed_code(600 * 1024))
+            }));
+        }
+        barrier.wait();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes.iter().filter(|outcome| outcome.is_err()).count(),
+            1
+        );
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert!(
+            directory_size_bounded(store.root(), store.retention.max_project_bytes).unwrap()
+                <= store.retention.max_project_bytes
+        );
+    }
+
+    #[test]
+    fn impossible_single_session_quota_fails_before_publication() {
+        let (_temp, mut store) = store();
+        store.retention.max_project_bytes = 1024 * 1024;
+        assert!(store.create(parsed_code(1024 * 1024)).is_err());
+        assert!(fs::read_dir(store.root().join("sessions"))
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".creating-")));
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]
@@ -2100,6 +2524,72 @@ mod tests {
             created_at_unix: 0,
         };
         assert!(store.append_feedback(envelope).is_err());
+    }
+
+    #[test]
+    fn feedback_resolution_requires_current_version_and_reanchoring_never_guesses() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let event_id = Uuid::new_v4();
+        let mut envelope = feedback(session.id, event_id);
+        envelope.notes.push(FeedbackNote {
+            id: Uuid::new_v4(),
+            block_id: "intro".to_string(),
+            block_label: "intro".to_string(),
+            kind: FeedbackKind::Comment,
+            body: "Keep this wording.".to_string(),
+            selector: Some(TextSelector {
+                exact: "Hello".to_string(),
+                prefix: String::new(),
+                suffix: String::new(),
+                start_utf16: 0,
+                end_utf16: 5,
+            }),
+        });
+        assert_eq!(store.append_feedback(envelope).unwrap().sequence, 1);
+        store.mark_delivered(session.id, &[event_id]).unwrap();
+        assert!(store
+            .resolve_feedback(session.id, event_id, 1, FeedbackResolution::Addressed)
+            .is_err());
+        assert_eq!(
+            store
+                .resolve_feedback(session.id, event_id, 2, FeedbackResolution::Addressed)
+                .unwrap(),
+            3
+        );
+
+        let mut moved = parsed();
+        let ParsedDocument::Supported(document) = &mut moved else {
+            unreachable!()
+        };
+        let Block::Narrative { markdown, .. } = &mut document.blocks[0] else {
+            unreachable!()
+        };
+        *markdown = "Before Hello after".to_string();
+        store.update_document(session.id, moved).unwrap();
+        let snapshot = store.feedback_snapshot(session.id).unwrap();
+        assert_eq!(snapshot.items[0].lifecycle, FeedbackLifecycle::Addressed);
+        assert!(matches!(
+            snapshot.items[0].notes[0].anchor,
+            FeedbackAnchor::Reanchored {
+                start_utf16: 7,
+                end_utf16: 12
+            }
+        ));
+
+        let mut ambiguous = parsed();
+        let ParsedDocument::Supported(document) = &mut ambiguous else {
+            unreachable!()
+        };
+        let Block::Narrative { markdown, .. } = &mut document.blocks[0] else {
+            unreachable!()
+        };
+        *markdown = "Hello and Hello".to_string();
+        store.update_document(session.id, ambiguous).unwrap();
+        assert!(matches!(
+            store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
+            FeedbackAnchor::Orphaned { .. }
+        ));
     }
 
     #[test]

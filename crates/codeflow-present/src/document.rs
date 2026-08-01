@@ -289,7 +289,15 @@ impl PresentationDocument {
         let mut ids = HashSet::new();
         let mut count = 0;
         let mut diagram_count = 0;
-        validate_blocks(&self.blocks, 1, &mut count, &mut diagram_count, &mut ids)
+        let mut collection_items = 0;
+        validate_blocks(
+            &self.blocks,
+            1,
+            &mut count,
+            &mut diagram_count,
+            &mut collection_items,
+            &mut ids,
+        )
     }
 }
 
@@ -423,6 +431,7 @@ fn validate_blocks(
     depth: usize,
     count: &mut usize,
     diagram_count: &mut usize,
+    collection_items: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     if depth > limits::MAX_NESTING {
@@ -452,7 +461,7 @@ fn validate_blocks(
         if !ids.insert(block.id().to_string()) {
             return Err(invalid(format!("duplicate block id {}", block.id())));
         }
-        validate_block(block, depth, count, diagram_count, ids)?;
+        validate_block(block, depth, count, diagram_count, collection_items, ids)?;
     }
     Ok(())
 }
@@ -463,14 +472,13 @@ fn validate_block(
     depth: usize,
     count: &mut usize,
     diagram_count: &mut usize,
+    collection_items: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     match block {
         Block::Narrative { markdown, .. } => bounded("markdown", markdown, limits::MAX_PROSE_BYTES),
         Block::Bullets { items, .. } => {
-            if items.is_empty() {
-                return Err(invalid("bullets must contain at least one item"));
-            }
+            validate_collection_count("bullets", items.len(), collection_items)?;
             for item in items {
                 bounded("bullet", item, limits::MAX_PROSE_BYTES)?;
             }
@@ -486,6 +494,7 @@ fn validate_block(
             if !(2..=4).contains(&columns.len()) {
                 return Err(invalid("comparison must contain two to four columns"));
             }
+            add_collection_items(columns.len(), collection_items)?;
             for column in columns {
                 require_nonempty_bounded(
                     "comparison title",
@@ -513,6 +522,12 @@ fn validate_block(
             if rows.len() > limits::MAX_TABLE_ROWS {
                 return Err(invalid("table has too many rows"));
             }
+            let cells = rows
+                .len()
+                .checked_mul(columns.len())
+                .and_then(|count| count.checked_add(columns.len()))
+                .ok_or_else(|| invalid("table item count overflow"))?;
+            add_collection_items(cells, collection_items)?;
             for column in columns {
                 require_nonempty_bounded("table column", column, limits::MAX_TITLE_BYTES)?;
             }
@@ -527,9 +542,7 @@ fn validate_block(
             Ok(())
         }
         Block::Status { items, .. } => {
-            if items.is_empty() {
-                return Err(invalid("status block must contain at least one item"));
-            }
+            validate_collection_count("status", items.len(), collection_items)?;
             for item in items {
                 require_nonempty_bounded("status label", &item.label, limits::MAX_LABEL_BYTES)?;
                 optional_bounded(
@@ -556,7 +569,11 @@ fn validate_block(
         }
         Block::Tree { label, nodes, .. } => {
             require_nonempty_bounded("tree label", label, limits::MAX_TITLE_BYTES)?;
-            validate_tree(nodes, depth + 1)
+            if nodes.is_empty() {
+                return Err(invalid("tree must contain at least one node"));
+            }
+            let mut tree_items = 0;
+            validate_tree(nodes, depth + 1, &mut tree_items, collection_items)
         }
         Block::Diagram {
             source,
@@ -602,15 +619,30 @@ fn validate_block(
             summary, blocks, ..
         } => {
             require_nonempty_bounded("disclosure summary", summary, limits::MAX_TITLE_BYTES)?;
-            validate_blocks(blocks, depth + 1, count, diagram_count, ids)
+            validate_blocks(
+                blocks,
+                depth + 1,
+                count,
+                diagram_count,
+                collection_items,
+                ids,
+            )
         }
         Block::Tabs { tabs, .. } => {
             if tabs.is_empty() || tabs.len() > 12 {
                 return Err(invalid("tabs must contain one to twelve entries"));
             }
+            add_collection_items(tabs.len(), collection_items)?;
             for tab in tabs {
                 require_nonempty_bounded("tab label", &tab.label, limits::MAX_TITLE_BYTES)?;
-                validate_blocks(&tab.blocks, depth + 1, count, diagram_count, ids)?;
+                validate_blocks(
+                    &tab.blocks,
+                    depth + 1,
+                    count,
+                    diagram_count,
+                    collection_items,
+                    ids,
+                )?;
             }
             Ok(())
         }
@@ -647,13 +679,47 @@ fn validate_language(language: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_tree(nodes: &[TreeNode], depth: usize) -> Result<()> {
+fn validate_collection_count(name: &str, items: usize, document_items: &mut usize) -> Result<()> {
+    if items == 0 || items > limits::MAX_COLLECTION_ITEMS_PER_BLOCK {
+        return Err(invalid(format!(
+            "{name} item count is outside the allowed range"
+        )));
+    }
+    add_collection_items(items, document_items)
+}
+
+fn add_collection_items(items: usize, document_items: &mut usize) -> Result<()> {
+    *document_items = document_items
+        .checked_add(items)
+        .ok_or_else(|| invalid("document collection item count overflow"))?;
+    if *document_items > limits::MAX_DOCUMENT_COLLECTION_ITEMS {
+        return Err(invalid(format!(
+            "document collection item count exceeds {}",
+            limits::MAX_DOCUMENT_COLLECTION_ITEMS
+        )));
+    }
+    Ok(())
+}
+
+fn validate_tree(
+    nodes: &[TreeNode],
+    depth: usize,
+    tree_items: &mut usize,
+    document_items: &mut usize,
+) -> Result<()> {
     if depth > limits::MAX_NESTING {
         return Err(invalid("tree nesting exceeds the allowed depth"));
     }
+    *tree_items = tree_items
+        .checked_add(nodes.len())
+        .ok_or_else(|| invalid("tree item count overflow"))?;
+    if *tree_items > limits::MAX_COLLECTION_ITEMS_PER_BLOCK {
+        return Err(invalid("tree has too many nodes"));
+    }
+    add_collection_items(nodes.len(), document_items)?;
     for node in nodes {
         require_nonempty_bounded("tree node", &node.label, limits::MAX_TITLE_BYTES)?;
-        validate_tree(&node.children, depth + 1)?;
+        validate_tree(&node.children, depth + 1, tree_items, document_items)?;
     }
     Ok(())
 }
@@ -860,5 +926,72 @@ mod tests {
             .map(|index| diagram(index, "flowchart LR\nA-->B".to_string()))
             .collect();
         assert!(document(diagrams).validate().is_err());
+    }
+
+    #[test]
+    fn collection_cardinality_is_bounded_per_block_and_across_the_document() {
+        let oversized_bullets = document(vec![Block::Bullets {
+            id: "bullets".to_string(),
+            ordered: false,
+            items: vec!["x".to_string(); limits::MAX_COLLECTION_ITEMS_PER_BLOCK + 1],
+        }]);
+        assert!(oversized_bullets.validate().is_err());
+
+        let status_blocks = (0..9)
+            .map(|index| Block::Status {
+                id: format!("status-{index}"),
+                items: (0..limits::MAX_COLLECTION_ITEMS_PER_BLOCK)
+                    .map(|item| StatusItem {
+                        label: format!("item-{item}"),
+                        state: EvidenceState::Pending,
+                        detail: None,
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(document(status_blocks).validate().is_err());
+
+        let oversized_tree = document(vec![Block::Tree {
+            id: "tree".to_string(),
+            label: "Tree".to_string(),
+            nodes: (0..=limits::MAX_COLLECTION_ITEMS_PER_BLOCK)
+                .map(|index| TreeNode {
+                    label: format!("node-{index}"),
+                    children: Vec::new(),
+                })
+                .collect(),
+        }]);
+        assert!(oversized_tree.validate().is_err());
+    }
+
+    #[test]
+    fn language_media_alt_and_feedback_prompt_match_public_byte_boundaries() {
+        let mut value = document(vec![Block::FeedbackPrompt {
+            id: "prompt".to_string(),
+            prompt: "x".repeat(limits::MAX_LABEL_BYTES),
+        }]);
+        value.language = Some("en-Latn-CA".to_string());
+        assert!(value.validate().is_ok());
+
+        let Block::FeedbackPrompt { prompt, .. } = &mut value.blocks[0] else {
+            unreachable!()
+        };
+        prompt.push('x');
+        assert!(value.validate().is_err());
+
+        value.language =
+            Some("en-abcdef12-abcdef12-abcdef12-abcdef12-abcdef12-abcdef12-abcdef12".to_string());
+        assert!(value.validate().is_err());
+        value.language = Some("e-US".to_string());
+        assert!(value.validate().is_err());
+
+        let media = document(vec![Block::Media {
+            id: "media".to_string(),
+            mime_type: MediaMime::ImagePng,
+            data_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".to_string(),
+            alt: "x".repeat(limits::MAX_LABEL_BYTES + 1),
+            caption: None,
+        }]);
+        assert!(media.validate().is_err());
     }
 }
