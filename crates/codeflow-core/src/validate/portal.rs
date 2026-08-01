@@ -1219,7 +1219,8 @@ fn valid_ipv6(value: &str) -> bool {
     if value.is_empty()
         || value.contains(":::")
         || compressed && value.matches("::").count() != 1
-        || !compressed && (value.starts_with(':') || value.ends_with(':'))
+        || value.starts_with(':') && !value.starts_with("::")
+        || value.ends_with(':') && !value.ends_with("::")
     {
         return false;
     }
