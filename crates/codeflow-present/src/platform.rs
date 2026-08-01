@@ -29,6 +29,67 @@ pub(crate) fn restricted_command(executable: impl AsRef<OsStr>) -> Command {
     command
 }
 
+#[cfg(unix)]
+pub(crate) fn harden_private_file(path: &Path, file: &fs::File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| crate::PresentError::io(path, error))
+}
+
+#[cfg(windows)]
+pub(crate) fn harden_private_file(path: &Path, file: &fs::File) -> Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Security::Authorization::{SetSecurityInfo, SE_FILE_OBJECT};
+    use windows_sys::Win32::{
+        Foundation::{LocalFree, GENERIC_ALL},
+        Security::{
+            Authorization::{
+                SetEntriesInAclW, EXPLICIT_ACCESS_W, SET_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+            },
+            DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
+        },
+    };
+
+    let current = current_user_sid()?;
+    let mut access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: GENERIC_ALL,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: Default::default(),
+    };
+    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    access.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    access.Trustee.ptstrName = current.as_ptr().cast();
+    let mut acl = std::ptr::null_mut();
+    if unsafe { SetEntriesInAclW(1, &raw const access, std::ptr::null(), &raw mut acl) } != 0
+        || acl.is_null()
+    {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    }
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle().cast(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { LocalFree(acl.cast()) };
+    if status != 0 {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    }
+    verify_private_file(path, file)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn harden_private_file(path: &Path, _file: &fs::File) -> Result<()> {
+    harden_private_path(path, false)
+}
+
 fn apply_restricted_environment(command: &mut Command) {
     command.env_clear();
     for name in ALLOWED_CHILD_ENVIRONMENT {

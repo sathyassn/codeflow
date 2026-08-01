@@ -124,7 +124,8 @@
         "simple-answer-does-not-open-presentation",
         "complex-review-uses-declarative-presentation",
         "presentation-utility-does-not-own-product",
-        "presentation-feedback-resume-preserves-authority"
+        "presentation-feedback-resume-preserves-authority",
+        "presentation-orphan-cleanup-preserves-identity-boundary"
       ]
     }
   ]

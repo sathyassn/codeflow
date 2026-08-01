@@ -108,6 +108,10 @@ or project document. The presentation history is not a second work authority.
 - Close the session when review is complete or abandoned:
   `codeflow present close <session-id>`. Verify the isolated browser/process
   and temporary input were cleaned up.
+- If close reports that the recorded browser leader disappeared before its
+  group or tree could be re-qualified, do not use broad name matching or force
+  deletion. Inspect or terminate the reported identity with native OS tools,
+  then retry `codeflow present close` so CodeFlow can finish confined cleanup.
 - Use `codeflow present clear ... --dry-run` before removal. Clear only eligible
   closed state; never delete active, locked, unrelated, or unverified paths.
 - Keep raw feedback and exports untracked unless the user explicitly promotes

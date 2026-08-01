@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     document::{Block, EvidenceState, PresentationDocument, TreeNode},
+    limits,
     state::FeedbackSnapshot,
 };
 
@@ -94,6 +95,13 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
             "event_sequence": options.event_sequence,
             "title": document.title,
             "shortcuts_enabled": true,
+            "review_limits": {
+                "max_notes": limits::MAX_FEEDBACK_NOTES,
+                "max_visible_feedback": limits::MAX_VISIBLE_FEEDBACK,
+                "max_text_utf16": limits::MAX_FEEDBACK_TEXT_UTF16,
+                "max_selector_utf16": limits::MAX_SELECTOR_EXACT_UTF16,
+                "max_payload_bytes": limits::MAX_FEEDBACK_BYTES
+            },
             "identity": identity,
             "feedback": options.feedback
         })

@@ -156,11 +156,14 @@ exact lockfile, SBOM, license inventory, integrity manifest, audit, and size
 budgets; consumer builds and runtime use require no Node toolchain.
 
 Repository state keys hash the canonical path's native OS representation, not
-a lossy display string. Creation holds one project lease across pre-retention,
-publication, and post-write quota enforcement; an impossible single-session
-configuration is rejected before publication and a failed post-write quota
-check rolls the unpublished session back. Block, diagram, per-collection, and
-whole-document collection cardinalities bound renderer amplification in
+a lossy display string. One project mutation lease serializes every durable
+growth path before the per-session lock. Creation, immutable revisions,
+feedback transitions, and runtime identity publication reserve exact bounded
+disk headroom before publication; they never commit over quota and then invoke
+retention. A control reserve and separate non-growth path keep close, runtime
+identity release, and clear available for recovery even when legacy active
+state is already over its configured bound. Block, diagram, per-collection,
+and whole-document collection cardinalities bound renderer amplification in
 addition to encoded byte limits.
 
 Each active review has one project-keyed owner-private state authority, one
@@ -176,8 +179,11 @@ clear but
 does not become a resident service, product UI framework, or documentation
 portal.
 
-Every state read and recovery path is self-bounded. Event tails are read from
-the same opened handle used for size and repair decisions; aggregate history,
+Every state read and recovery path is self-bounded. A single feedback ledger
+replay rejects duplicate receipts/deliveries, delivery before receipt,
+resolution before delivery, and every post-terminal transition; exact receipt
+and delivery retries append nothing. Event tails are read from the same opened
+handle used for size and repair decisions; aggregate history,
 records, revisions, media, and state entries have explicit limits. A document
 may contain at most 24 Mermaid diagrams of at most 64 KiB each. The browser pins
 Mermaid's text and edge limits, enhances diagrams serially, yields between

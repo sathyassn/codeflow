@@ -691,15 +691,20 @@ inheritance verification. Static export remains self-contained and excludes
 review/authentication/runtime state.
 
 Native-path repository identity, per-block and whole-document collection
-cardinality, a serialized create lease, impossible-session preflight, and
-post-write rollback before successful return keep path and quota boundaries
-deterministic under concurrent creation. The browser loads a bounded recent
+cardinality, one project-before-session mutation lease, pre-publication
+capacity admission for every durable growth route, and an over-quota-safe
+control path keep quota boundaries deterministic under concurrent creation,
+revision, feedback, and runtime registration. The browser loads a bounded recent
 feedback snapshot, uniquely re-anchors exact selectors across revisions, leaves
 missing/ambiguous selectors visibly orphaned, and exposes the current lifecycle
 version. Resolve accepts only a current delivered event and appends
 addressed/dismissed state.
-Unverifiable orphan process groups/trees retain recovery state rather than
-deleting their identity and profile.
+Verified Unix process groups receive bounded graceful shutdown and then an
+identity recheck before forced termination. Unverifiable orphan process
+groups/trees retain recovery state rather than killing an unproven process or
+deleting its profile; after the group/tree exits or an operator verifies and
+terminates it, retrying close completes cleanup. Review input controls expose
+the Rust-owned note, text, selection, and payload bounds before submission.
 
 The capability remains `building` until TSK-007 records the full native
 macOS/Linux/WSL2/Windows and qualified-browser matrix, adversarial service and

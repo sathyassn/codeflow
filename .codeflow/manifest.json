@@ -77,13 +77,13 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "e7d9e9e2d3d17a38affd9832d62ac4739e35a9a4a7f8583acaa2a73776d1f613",
+      "sha256": "94066e9f4e57f041e6ce95ebd0e1f8579581d0a95399f3fba7388d71e30861e8",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "ae4d4c4d1423ada6d447dcfc064341dd9d8f8c64c73c08f1e7dba432743a30d0",
+      "sha256": "0d27562a42668a17340009f395bb2d42048c2f53721e1fde6ea62945a08ec291",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -101,7 +101,7 @@
     ".agents/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "03beda2400916ee6effe892eb14bf6d45b1fd9a2fc9e2418546f6531abc5b087",
+      "sha256": "6f7d3ef6bdb56740cfd5ccacfb681ef20f78457b2e0d3958d8e079ff2d10983d",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
@@ -113,7 +113,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "ba15d41f5e871069c0795a8b6111a5cd33427329dc47b4d59992afa1a248d8e5",
+      "sha256": "ea0080e0db43f3f488c9a0a838983c71ead528ccfe9a94c0e6e6951b810de00f",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
@@ -179,7 +179,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "dfa3b980d7658319ca88ae0c3655b8a19f456ca9af64323e365376d9923fffdb",
+      "sha256": "e4e2f20e5b295c2da82862cca0c9414dab72f882a14d9c8064b5c4cef8ca01da",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -317,13 +317,13 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "e7d9e9e2d3d17a38affd9832d62ac4739e35a9a4a7f8583acaa2a73776d1f613",
+      "sha256": "94066e9f4e57f041e6ce95ebd0e1f8579581d0a95399f3fba7388d71e30861e8",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "ae4d4c4d1423ada6d447dcfc064341dd9d8f8c64c73c08f1e7dba432743a30d0",
+      "sha256": "0d27562a42668a17340009f395bb2d42048c2f53721e1fde6ea62945a08ec291",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -341,7 +341,7 @@
     ".claude/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "03beda2400916ee6effe892eb14bf6d45b1fd9a2fc9e2418546f6531abc5b087",
+      "sha256": "6f7d3ef6bdb56740cfd5ccacfb681ef20f78457b2e0d3958d8e079ff2d10983d",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
@@ -353,7 +353,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "ba15d41f5e871069c0795a8b6111a5cd33427329dc47b4d59992afa1a248d8e5",
+      "sha256": "ea0080e0db43f3f488c9a0a838983c71ead528ccfe9a94c0e6e6951b810de00f",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
@@ -419,7 +419,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "dfa3b980d7658319ca88ae0c3655b8a19f456ca9af64323e365376d9923fffdb",
+      "sha256": "e4e2f20e5b295c2da82862cca0c9414dab72f882a14d9c8064b5c4cef8ca01da",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {

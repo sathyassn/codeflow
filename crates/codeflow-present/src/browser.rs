@@ -145,8 +145,29 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
         }
         thread::sleep(Duration::from_millis(50));
     }
+    let raw_pid = u32::try_from(pid).map_err(|_| {
+        PresentError::BrowserUnavailable("browser PID is outside the platform range".to_string())
+    })?;
+    if !qualified_process_identity(raw_pid, instance_id, profile_dir)? {
+        return Ok(());
+    }
+    if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(PresentError::io("browser process group", error));
+        }
+        return Ok(());
+    }
+    let kill_deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < kill_deadline {
+        if process_group_is_absent(pid)? {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
     Err(PresentError::BrowserUnavailable(
-        "the owned presentation browser process group did not exit after SIGTERM".to_string(),
+        "the reverified owned presentation browser process group did not exit after SIGKILL"
+            .to_string(),
     ))
 }
 
@@ -160,9 +181,9 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
     })?;
     if !output.status.success() || output.stdout.is_empty() {
         if !process_group_is_absent(pid_i32)? {
-            return Err(PresentError::BrowserUnavailable(
-                "browser process group exists without its verifiable leader".to_string(),
-            ));
+            return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+                "browser process group exists without its verifiable leader",
+            )));
         }
         return Ok(false);
     }
@@ -205,10 +226,9 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
                 )
             })?;
             if !process_group_is_absent(pid)? {
-                return Err(PresentError::BrowserUnavailable(
-                    "browser process group exists without its verifiable leader; recovery state was retained"
-                        .to_string(),
-                ));
+                return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+                    "browser process group exists without its verifiable leader",
+                )));
             }
             return Ok(false);
         }
@@ -275,10 +295,9 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
         .output()
         .map_err(|error| PresentError::io(&powershell, error))?;
     if output.status.code() == Some(3) {
-        return Err(PresentError::BrowserUnavailable(
-            "browser leader is absent, so Windows process-tree cleanup cannot be proven; recovery state was retained"
-                .to_string(),
-        ));
+        return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+            "browser leader is absent, so Windows process-tree cleanup cannot be proven",
+        )));
     }
     if !output.status.success() || output.stdout.len() > 64 * 1024 {
         return Err(PresentError::BrowserUnavailable(
@@ -296,6 +315,12 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
         ));
     }
     Ok(true)
+}
+
+fn orphan_recovery_message(reason: &str) -> String {
+    format!(
+        "{reason}; no unproven process will be signalled and recovery state was retained. Wait for the process group or tree to exit, or inspect and terminate it through an operator-controlled OS tool, then retry `codeflow present close`"
+    )
 }
 
 #[cfg(any(windows, test))]
@@ -677,6 +702,42 @@ mod tests {
         terminate_qualified_process(pid, instance, &profile).unwrap();
         let _status = waiter.join().unwrap();
         assert!(!qualified_process_identity(pid, instance, &profile).unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn process_group_cleanup_reverifies_before_forced_escalation() {
+        use std::os::unix::process::CommandExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("browser-profile");
+        fs::create_dir(&profile).unwrap();
+        let instance = Uuid::new_v4();
+        let mut command = crate::platform::restricted_command("/bin/sh");
+        command
+            .args([
+                "-c",
+                "trap '' TERM; while :; do sleep 1; done",
+                "cf-present-browser",
+                &format!("--user-data-dir={}", profile.display()),
+                &format!("--cf-present-instance={instance}"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !qualified_process_identity(pid, instance, &profile).unwrap() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        terminate_qualified_process(pid, instance, &profile).unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+        assert!(process_group_is_absent(i32::try_from(pid).unwrap()).unwrap());
     }
 
     #[test]

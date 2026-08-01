@@ -149,6 +149,14 @@ partial failure. Process/profile/bootstrap cleanup is idempotent and scoped by
 the recorded session identity; broad process-name matching and recursive
 deletion of an unverified path are forbidden.
 
+A qualified process group receives a bounded graceful stop before cleanup
+re-proves its exact recorded identity and may escalate to a forced stop. If the
+recorded leader disappears before group or tree identity can be proved, the
+runtime retains the recovery state and never signals the unproven processes.
+The operator inspects or terminates that identity with native OS tools and then
+retries `codeflow present close`; CodeFlow does not turn ambiguity into a broad
+kill.
+
 ## Consequences
 
 - Normal use gains one coherent, inspectable review document without turning

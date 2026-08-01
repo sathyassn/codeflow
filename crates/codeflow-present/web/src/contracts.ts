@@ -48,6 +48,13 @@ export interface ChromeConfig {
   readonly event_sequence: number;
   readonly title: string;
   readonly shortcuts_enabled: boolean;
+  readonly review_limits: Readonly<{
+    readonly max_notes: number;
+    readonly max_visible_feedback: number;
+    readonly max_text_utf16: number;
+    readonly max_selector_utf16: number;
+    readonly max_payload_bytes: number;
+  }>;
   readonly identity?: Readonly<{
     readonly src: string;
     readonly alt: string;
@@ -132,8 +139,15 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
   if (identity !== undefined && identity !== null && !isIdentity(identity)) {
     throw new Error("Malformed cf-present identity configuration");
   }
+  if (!isReviewLimits(value.review_limits)) {
+    throw new Error("Malformed cf-present review limits");
+  }
   const feedback = value.feedback;
-  if (feedback !== undefined && feedback !== null && !isFeedbackSnapshot(feedback)) {
+  if (
+    feedback !== undefined &&
+    feedback !== null &&
+    !isFeedbackSnapshot(feedback, value.review_limits)
+  ) {
     throw new Error("Malformed cf-present feedback snapshot");
   }
 
@@ -144,21 +158,32 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     event_sequence: value.event_sequence,
     title: value.title,
     shortcuts_enabled: value.shortcuts_enabled,
+    review_limits: value.review_limits,
     ...(identity ? { identity } : {}),
     ...(feedback ? { feedback } : {}),
     ...(keymap ? { keymap } : {}),
   };
 }
 
-function isFeedbackSnapshot(value: unknown): value is FeedbackSnapshot {
-  if (!isRecord(value) || !Array.isArray(value.items) || value.items.length > 256) return false;
+function isReviewLimits(value: unknown): value is ChromeConfig["review_limits"] {
+  if (!isRecord(value)) return false;
+  return ["max_notes", "max_visible_feedback", "max_text_utf16", "max_selector_utf16", "max_payload_bytes"].every(
+    (key) => typeof value[key] === "number" && Number.isSafeInteger(value[key]) && value[key] > 0,
+  );
+}
+
+function isFeedbackSnapshot(
+  value: unknown,
+  limits: ChromeConfig["review_limits"],
+): value is FeedbackSnapshot {
+  if (!isRecord(value) || !Array.isArray(value.items) || value.items.length > limits.max_visible_feedback) return false;
   if (
     typeof value.omitted_older !== "number" ||
     !Number.isSafeInteger(value.omitted_older) ||
     value.omitted_older < 0
   ) return false;
   return value.items.every((item) => {
-    if (!isRecord(item) || !Array.isArray(item.notes) || item.notes.length > 100) return false;
+    if (!isRecord(item) || !Array.isArray(item.notes) || item.notes.length > limits.max_notes) return false;
     if (
       typeof item.event_id !== "string" ||
       typeof item.source_revision !== "number" ||

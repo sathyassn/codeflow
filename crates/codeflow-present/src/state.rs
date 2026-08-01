@@ -16,11 +16,13 @@ use crate::{
     document::{ParsedDocument, PresentationDocument, Provenance},
     error::{PresentError, Result},
     limits,
-    platform::{harden_private_path, is_link_like},
+    platform::{harden_private_file, harden_private_path, is_link_like},
 };
 
 const STATE_SCHEMA_VERSION: u32 = 1;
 const UPDATE_MARKER: &str = ".updating.json";
+const PROJECT_MUTATION_LOCK: &str = ".create.lock";
+const CONTROL_MUTATION_RESERVE_BYTES: u64 = limits::MAX_SESSION_STATE_BYTES;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -252,6 +254,111 @@ impl FeedbackEvent {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FeedbackLedgerState {
+    lifecycle: FeedbackLifecycle,
+    version: u64,
+    resolution: Option<FeedbackResolution>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FeedbackLedger {
+    states: std::collections::HashMap<Uuid, FeedbackLedgerState>,
+    next_sequence: u64,
+}
+
+impl FeedbackLedger {
+    fn replay(events: &[FeedbackEvent]) -> Result<Self> {
+        let mut ledger = Self {
+            states: std::collections::HashMap::new(),
+            next_sequence: 1,
+        };
+        for event in events {
+            if event.sequence() != ledger.next_sequence {
+                return Err(PresentError::CorruptState(
+                    "feedback log has a non-contiguous event sequence".to_string(),
+                ));
+            }
+            ledger.apply(event)?;
+            ledger.next_sequence = ledger
+                .next_sequence
+                .checked_add(1)
+                .ok_or_else(|| PresentError::CorruptState("event sequence overflow".to_string()))?;
+        }
+        Ok(ledger)
+    }
+
+    fn apply(&mut self, event: &FeedbackEvent) -> Result<()> {
+        match event {
+            FeedbackEvent::Received { sequence, envelope } => {
+                if self.states.contains_key(&envelope.event_id) {
+                    return Err(PresentError::CorruptState(format!(
+                        "feedback event {} was received more than once",
+                        envelope.event_id
+                    )));
+                }
+                self.states.insert(
+                    envelope.event_id,
+                    FeedbackLedgerState {
+                        lifecycle: FeedbackLifecycle::Received,
+                        version: *sequence,
+                        resolution: None,
+                    },
+                );
+            }
+            FeedbackEvent::Delivered {
+                sequence, event_id, ..
+            } => {
+                let state = self.states.get_mut(event_id).ok_or_else(|| {
+                    PresentError::CorruptState(format!(
+                        "feedback event {event_id} was delivered before it was received"
+                    ))
+                })?;
+                if state.lifecycle != FeedbackLifecycle::Received {
+                    return Err(PresentError::CorruptState(format!(
+                        "feedback event {event_id} has an invalid duplicate or post-terminal delivery"
+                    )));
+                }
+                state.lifecycle = FeedbackLifecycle::Delivered;
+                state.version = *sequence;
+            }
+            FeedbackEvent::Addressed {
+                sequence, event_id, ..
+            }
+            | FeedbackEvent::Dismissed {
+                sequence, event_id, ..
+            } => {
+                let resolution = if matches!(event, FeedbackEvent::Addressed { .. }) {
+                    FeedbackResolution::Addressed
+                } else {
+                    FeedbackResolution::Dismissed
+                };
+                let state = self.states.get_mut(event_id).ok_or_else(|| {
+                    PresentError::CorruptState(format!(
+                        "feedback event {event_id} was resolved before it was received"
+                    ))
+                })?;
+                if state.lifecycle != FeedbackLifecycle::Delivered {
+                    return Err(PresentError::CorruptState(format!(
+                        "feedback event {event_id} has an invalid resolution transition"
+                    )));
+                }
+                state.lifecycle = match resolution {
+                    FeedbackResolution::Addressed => FeedbackLifecycle::Addressed,
+                    FeedbackResolution::Dismissed => FeedbackLifecycle::Dismissed,
+                };
+                state.version = *sequence;
+                state.resolution = Some(resolution);
+            }
+        }
+        Ok(())
+    }
+
+    fn state(&self, event_id: Uuid) -> Option<FeedbackLedgerState> {
+        self.states.get(&event_id).copied()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     root: PathBuf,
@@ -315,6 +422,8 @@ impl SessionStore {
     }
 
     pub fn runtime_dir(&self, id: Uuid) -> Result<PathBuf> {
+        let _project_lease = self.prepare_control_mutation()?;
+        let _session_lock = self.lock_session(id)?;
         self.load(id)?;
         let path = self.session_dir(id).join("runtime");
         create_private_dir_all(&path)?;
@@ -325,11 +434,9 @@ impl SessionStore {
         let id = Uuid::new_v4();
         let sessions_root = self.root.join("sessions");
         create_private_dir_all(&sessions_root)?;
-        let create_lease = open_private_append(&sessions_root.join(".create.lock"))?;
-        create_lease
-            .lock_exclusive()
-            .map_err(|error| PresentError::io(sessions_root.join(".create.lock"), error))?;
-        self.enforce_retention()?;
+        let _project_lease = self.lock_project_mutation()?;
+        Self::cleanup_staged_creates_unlocked(&sessions_root)?;
+        self.enforce_retention_unlocked()?;
         let final_session = self.session_dir(id);
         let staging = sessions_root.join(format!(".creating-{id}-{}", Uuid::new_v4().simple()));
         let now = now_unix()?;
@@ -381,12 +488,7 @@ impl SessionStore {
                     "initial presentation state size overflow".to_string(),
                 )
             })?;
-        if minimum_bytes > self.retention.max_project_bytes {
-            return Err(PresentError::InvalidDocument(format!(
-                "initial presentation requires {minimum_bytes} bytes but the project state limit is {} bytes",
-                self.retention.max_project_bytes
-            )));
-        }
+        self.ensure_project_capacity_unlocked(minimum_bytes, true)?;
         create_private_dir_all(&staging)?;
         create_private_dir_all(&staging.join("revisions"))?;
         let result = (|| {
@@ -402,7 +504,6 @@ impl SessionStore {
             fs::rename(&staging, &final_session)
                 .map_err(|error| PresentError::io(&final_session, error))?;
             sync_directory(&sessions_root)?;
-            self.enforce_retention()?;
             Ok(session)
         })();
         if result.is_err() && staging.exists() {
@@ -430,6 +531,15 @@ impl SessionStore {
         }
         ensure_safe_dir(&sessions_dir)?;
         Self::cleanup_staged_creates(&sessions_dir)?;
+        self.list_unlocked()
+    }
+
+    fn list_unlocked(&self) -> Result<Vec<SessionRecord>> {
+        let sessions_dir = self.root.join("sessions");
+        if !sessions_dir.exists() {
+            return Ok(Vec::new());
+        }
+        ensure_safe_dir(&sessions_dir)?;
         let mut sessions = Vec::new();
         let mut entries = 0_usize;
         for entry in
@@ -465,12 +575,21 @@ impl SessionStore {
     }
 
     fn cleanup_staged_creates(sessions_dir: &Path) -> Result<()> {
-        let lease = open_private_append(&sessions_dir.join(".create.lock"))?;
+        let lease = open_private_append(&sessions_dir.join(PROJECT_MUTATION_LOCK))?;
         match lease.try_lock_exclusive() {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
-            Err(error) => return Err(PresentError::io(sessions_dir.join(".create.lock"), error)),
+            Err(error) => {
+                return Err(PresentError::io(
+                    sessions_dir.join(PROJECT_MUTATION_LOCK),
+                    error,
+                ))
+            }
         }
+        Self::cleanup_staged_creates_unlocked(sessions_dir)
+    }
+
+    fn cleanup_staged_creates_unlocked(sessions_dir: &Path) -> Result<()> {
         for entry in
             fs::read_dir(sessions_dir).map_err(|error| PresentError::io(sessions_dir, error))?
         {
@@ -516,6 +635,7 @@ impl SessionStore {
     }
 
     pub fn update_document(&self, id: Uuid, parsed: ParsedDocument) -> Result<u64> {
+        let _project_lease = self.prepare_growth_mutation()?;
         let _lock = self.lock_session(id)?;
         self.reconcile_update_unlocked(id)?;
         let mut session = self.load(id)?;
@@ -551,30 +671,40 @@ impl SessionStore {
             ),
         };
         let marker_path = self.session_dir(id).join(UPDATE_MARKER);
-        write_json_atomic(
-            &marker_path,
-            &UpdateMarker {
-                from_revision: session.current_revision,
-                to_revision: revision,
-            },
-        )?;
-        write_json_atomic(
-            &self.revision_path(id, revision),
-            &RevisionRecord {
-                state_schema_version: STATE_SCHEMA_VERSION,
-                revision,
-                created_at_unix: now,
-                content,
-            },
-        )?;
         session.title = title;
         session.provenance = provenance;
         session.current_revision = revision;
         session.updated_at_unix = now;
-        write_json_atomic(&self.session_path(id), &session)?;
-        remove_file_if_regular(&marker_path)?;
-        sync_directory(&self.session_dir(id))?;
-        Ok(revision)
+        let marker = UpdateMarker {
+            from_revision: revision - 1,
+            to_revision: revision,
+        };
+        let revision_record = RevisionRecord {
+            state_schema_version: STATE_SCHEMA_VERSION,
+            revision,
+            created_at_unix: now,
+            content,
+        };
+        let session_bytes = serialized_json_bytes(&session)?;
+        let peak_growth = serialized_json_bytes(&marker)?
+            .checked_add(serialized_json_bytes(&revision_record)?)
+            .and_then(|bytes| bytes.checked_add(session_bytes))
+            .ok_or_else(|| {
+                PresentError::InvalidDocument("presentation update size overflow".to_string())
+            })?;
+        self.ensure_project_capacity_unlocked(peak_growth, true)?;
+        let result = (|| {
+            write_json_atomic(&marker_path, &marker)?;
+            write_json_atomic(&self.revision_path(id, revision), &revision_record)?;
+            write_json_atomic(&self.session_path(id), &session)?;
+            remove_file_if_regular(&marker_path)?;
+            sync_directory(&self.session_dir(id))?;
+            Ok(revision)
+        })();
+        if result.is_err() {
+            let _ = self.reconcile_update_unlocked(id);
+        }
+        result
     }
 
     fn reconcile_update_unlocked(&self, id: Uuid) -> Result<()> {
@@ -698,6 +828,7 @@ impl SessionStore {
     }
 
     pub fn set_service(&self, id: Uuid, port: u16, pid: u32, instance: Uuid) -> Result<()> {
+        let _project_lease = self.prepare_growth_mutation()?;
         let _lock = self.lock_session(id)?;
         let mut session = self.load(id)?;
         if session.status != SessionStatus::Active {
@@ -707,10 +838,11 @@ impl SessionStore {
         session.service_pid = Some(pid);
         session.service_instance = Some(instance);
         session.updated_at_unix = now_unix()?;
-        write_json_atomic(&self.session_path(id), &session)
+        self.write_session_unlocked(id, &session, true)
     }
 
     pub fn clear_service(&self, id: Uuid, instance: Uuid) -> Result<bool> {
+        let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
         let mut session = self.load(id)?;
         if session.service_instance != Some(instance) {
@@ -720,11 +852,12 @@ impl SessionStore {
         session.service_pid = None;
         session.service_instance = None;
         session.updated_at_unix = now_unix()?;
-        write_json_atomic(&self.session_path(id), &session)?;
+        self.write_session_unlocked(id, &session, false)?;
         Ok(true)
     }
 
     pub fn set_browser(&self, id: Uuid, pid: u32, instance: Uuid) -> Result<()> {
+        let _project_lease = self.prepare_growth_mutation()?;
         let _lock = self.lock_session(id)?;
         let mut session = self.load(id)?;
         if session.status != SessionStatus::Active {
@@ -738,10 +871,11 @@ impl SessionStore {
         session.browser_pid = Some(pid);
         session.browser_instance = Some(instance);
         session.updated_at_unix = now_unix()?;
-        write_json_atomic(&self.session_path(id), &session)
+        self.write_session_unlocked(id, &session, true)
     }
 
     pub fn clear_browser(&self, id: Uuid, instance: Uuid) -> Result<bool> {
+        let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
         let mut session = self.load(id)?;
         if session.browser_instance != Some(instance) {
@@ -750,11 +884,12 @@ impl SessionStore {
         session.browser_pid = None;
         session.browser_instance = None;
         session.updated_at_unix = now_unix()?;
-        write_json_atomic(&self.session_path(id), &session)?;
+        self.write_session_unlocked(id, &session, false)?;
         Ok(true)
     }
 
     pub fn close(&self, id: Uuid) -> Result<SessionRecord> {
+        let _project_lease = self.prepare_control_mutation()?;
         let lock = self.lock_session(id)?;
         let mut session = self.load(id)?;
         if session.status == SessionStatus::Closed {
@@ -764,15 +899,21 @@ impl SessionStore {
         session.status = SessionStatus::Closed;
         session.closed_at_unix = Some(now);
         session.updated_at_unix = now;
-        write_json_atomic(&self.session_path(id), &session)?;
+        self.write_session_unlocked(id, &session, false)?;
         drop(lock);
         Ok(session)
     }
 
     pub fn enforce_retention(&self) -> Result<Vec<Uuid>> {
+        let _project_lease = self.lock_project_mutation()?;
+        Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
+        self.enforce_retention_unlocked()
+    }
+
+    fn enforce_retention_unlocked(&self) -> Result<Vec<Uuid>> {
         let now = now_unix()?;
         let mut closed: Vec<_> = self
-            .list()?
+            .list_unlocked()?
             .into_iter()
             .filter(|session| session.status == SessionStatus::Closed)
             .collect();
@@ -813,6 +954,7 @@ impl SessionStore {
 
     pub fn append_feedback(&self, mut envelope: FeedbackEnvelope) -> Result<FeedbackAppend> {
         let id = envelope.session_id;
+        let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
         let session = self.load(id)?;
         if session.status != SessionStatus::Active {
@@ -843,8 +985,13 @@ impl SessionStore {
             )));
         }
         envelope.created_at_unix = now_unix()?;
-        let sequence = next_sequence(&events)?;
-        self.append_event_unlocked(id, &FeedbackEvent::Received { sequence, envelope })?;
+        let ledger = FeedbackLedger::replay(&events)?;
+        let sequence = ledger.next_sequence;
+        let event = FeedbackEvent::Received { sequence, envelope };
+        let mut candidate = events;
+        candidate.push(event.clone());
+        FeedbackLedger::replay(&candidate)?;
+        self.append_events_unlocked(id, &[event], true)?;
         Ok(FeedbackAppend {
             sequence,
             created: true,
@@ -860,26 +1007,20 @@ impl SessionStore {
     pub fn latest_event_sequence(&self, id: Uuid) -> Result<u64> {
         let _lock = self.lock_session(id)?;
         self.load(id)?;
-        self.read_last_event_unlocked(id)
-            .map(|event| event.map_or(0, |event| event.sequence()))
+        self.read_events_unlocked(id)
+            .map(|events| events.last().map_or(0, FeedbackEvent::sequence))
     }
 
     pub fn pending_feedback(&self, id: Uuid) -> Result<Vec<FeedbackEnvelope>> {
         let events = self.events(id)?;
-        let delivered: std::collections::HashSet<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                FeedbackEvent::Delivered { event_id, .. }
-                | FeedbackEvent::Addressed { event_id, .. }
-                | FeedbackEvent::Dismissed { event_id, .. } => Some(*event_id),
-                FeedbackEvent::Received { .. } => None,
-            })
-            .collect();
+        let ledger = FeedbackLedger::replay(&events)?;
         Ok(events
             .into_iter()
             .filter_map(|event| match event {
                 FeedbackEvent::Received { envelope, .. }
-                    if !delivered.contains(&envelope.event_id) =>
+                    if ledger
+                        .state(envelope.event_id)
+                        .is_some_and(|state| state.lifecycle == FeedbackLifecycle::Received) =>
                 {
                     Some(envelope)
                 }
@@ -889,34 +1030,41 @@ impl SessionStore {
     }
 
     pub fn mark_delivered(&self, id: Uuid, event_ids: &[Uuid]) -> Result<()> {
+        let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
         let events = self.read_events_unlocked(id)?;
-        let received: std::collections::HashSet<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                FeedbackEvent::Received { envelope, .. } => Some(envelope.event_id),
-                _ => None,
-            })
-            .collect();
-        let mut sequence = next_sequence(&events)?;
+        let ledger = FeedbackLedger::replay(&events)?;
+        let mut sequence = ledger.next_sequence;
+        let mut seen = std::collections::HashSet::new();
+        let mut additions = Vec::new();
         for event_id in event_ids {
-            if !received.contains(event_id) {
+            if !seen.insert(*event_id) {
+                continue;
+            }
+            let Some(state) = ledger.state(*event_id) else {
                 return Err(PresentError::CorruptState(format!(
                     "cannot deliver unknown event {event_id}"
                 )));
+            };
+            if state.lifecycle != FeedbackLifecycle::Received {
+                continue;
             }
-            self.append_event_unlocked(
-                id,
-                &FeedbackEvent::Delivered {
-                    sequence,
-                    event_id: *event_id,
-                    at_unix: now_unix()?,
-                },
-            )?;
+            additions.push(FeedbackEvent::Delivered {
+                sequence,
+                event_id: *event_id,
+                at_unix: now_unix()?,
+            });
             sequence = sequence
                 .checked_add(1)
                 .ok_or_else(|| PresentError::CorruptState("event sequence overflow".to_string()))?;
         }
+        if additions.is_empty() {
+            return Ok(());
+        }
+        let mut candidate = events;
+        candidate.extend(additions.iter().cloned());
+        FeedbackLedger::replay(&candidate)?;
+        self.append_events_unlocked(id, &additions, true)?;
         Ok(())
     }
 
@@ -927,55 +1075,28 @@ impl SessionStore {
         expected_version: u64,
         resolution: FeedbackResolution,
     ) -> Result<u64> {
+        let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
         self.load(id)?;
         let events = self.read_events_unlocked(id)?;
-        let mut lifecycle = None;
-        for event in &events {
-            match event {
-                FeedbackEvent::Received { sequence, envelope } if envelope.event_id == event_id => {
-                    lifecycle = Some((FeedbackLifecycle::Received, *sequence));
-                }
-                FeedbackEvent::Delivered {
-                    sequence,
-                    event_id: candidate,
-                    ..
-                } if *candidate == event_id => {
-                    lifecycle = Some((FeedbackLifecycle::Delivered, *sequence));
-                }
-                FeedbackEvent::Addressed {
-                    sequence,
-                    event_id: candidate,
-                    ..
-                } if *candidate == event_id => {
-                    lifecycle = Some((FeedbackLifecycle::Addressed, *sequence));
-                }
-                FeedbackEvent::Dismissed {
-                    sequence,
-                    event_id: candidate,
-                    ..
-                } if *candidate == event_id => {
-                    lifecycle = Some((FeedbackLifecycle::Dismissed, *sequence));
-                }
-                _ => {}
-            }
-        }
-        let Some((current, current_version)) = lifecycle else {
+        let ledger = FeedbackLedger::replay(&events)?;
+        let Some(state) = ledger.state(event_id) else {
             return Err(PresentError::InvalidDocument(format!(
                 "feedback event {event_id} does not belong to session {id}"
             )));
         };
-        if current_version != expected_version {
+        if state.version != expected_version {
             return Err(PresentError::InvalidDocument(format!(
-                "feedback event {event_id} is at version {current_version}, not {expected_version}"
+                "feedback event {event_id} is at version {}, not {expected_version}",
+                state.version
             )));
         }
-        if current != FeedbackLifecycle::Delivered {
+        if state.lifecycle != FeedbackLifecycle::Delivered {
             return Err(PresentError::InvalidDocument(format!(
                 "feedback event {event_id} must be delivered before it can be resolved"
             )));
         }
-        let sequence = next_sequence(&events)?;
+        let sequence = ledger.next_sequence;
         let event = match resolution {
             FeedbackResolution::Addressed => FeedbackEvent::Addressed {
                 sequence,
@@ -988,7 +1109,10 @@ impl SessionStore {
                 at_unix: now_unix()?,
             },
         };
-        self.append_event_unlocked(id, &event)?;
+        let mut candidate = events;
+        candidate.push(event.clone());
+        FeedbackLedger::replay(&candidate)?;
+        self.append_events_unlocked(id, &[event], true)?;
         Ok(sequence)
     }
 
@@ -1006,8 +1130,10 @@ impl SessionStore {
         older_than: Duration,
         dry_run: bool,
     ) -> Result<Vec<Uuid>> {
+        let _project_lease = self.lock_project_mutation()?;
+        Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
         let mut removed = Vec::new();
-        for session in self.list()? {
+        for session in self.list_unlocked()? {
             if selected.is_some_and(|selected| selected != session.id) {
                 continue;
             }
@@ -1145,6 +1271,73 @@ impl SessionStore {
         self.session_dir(id).join("events.jsonl")
     }
 
+    fn lock_project_mutation(&self) -> Result<File> {
+        let sessions = self.root.join("sessions");
+        create_private_dir_all(&sessions)?;
+        let path = sessions.join(PROJECT_MUTATION_LOCK);
+        let lock = open_private_append(&path)?;
+        lock.lock_exclusive()
+            .map_err(|error| PresentError::io(path, error))?;
+        Ok(lock)
+    }
+
+    fn prepare_growth_mutation(&self) -> Result<File> {
+        let lease = self.lock_project_mutation()?;
+        Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
+        self.enforce_retention_unlocked()?;
+        Ok(lease)
+    }
+
+    fn prepare_control_mutation(&self) -> Result<File> {
+        let lease = self.lock_project_mutation()?;
+        Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
+        Ok(lease)
+    }
+
+    fn ensure_project_capacity_unlocked(
+        &self,
+        additional_bytes: u64,
+        preserve_control_reserve: bool,
+    ) -> Result<()> {
+        let reserve = if preserve_control_reserve {
+            CONTROL_MUTATION_RESERVE_BYTES
+        } else {
+            0
+        };
+        let required = additional_bytes.checked_add(reserve).ok_or_else(|| {
+            PresentError::InvalidDocument("project quota size overflow".to_string())
+        })?;
+        if required > self.retention.max_project_bytes {
+            return Err(PresentError::InvalidDocument(format!(
+                "presentation mutation requires {required} bytes of project headroom but the project state limit is {} bytes",
+                self.retention.max_project_bytes
+            )));
+        }
+        let current = directory_size_bounded(&self.root, self.retention.max_project_bytes)?;
+        if current
+            .checked_add(required)
+            .is_none_or(|projected| projected > self.retention.max_project_bytes)
+        {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "presentation state has insufficient capacity for this mutation under the {} byte project bound; close and clear unused sessions or raise the configured bound",
+                self.retention.max_project_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    fn write_session_unlocked(
+        &self,
+        id: Uuid,
+        session: &SessionRecord,
+        enforce_capacity: bool,
+    ) -> Result<()> {
+        if enforce_capacity {
+            self.ensure_project_capacity_unlocked(serialized_json_bytes(session)?, true)?;
+        }
+        write_json_atomic(&self.session_path(id), session)
+    }
+
     fn lock_session(&self, id: Uuid) -> Result<File> {
         let lock = self.open_lock_raw(id)?;
         lock.lock_exclusive()
@@ -1247,15 +1440,28 @@ impl SessionStore {
         parse_event_log(&path, &raw, limits::MAX_FEEDBACK_EVENTS)
     }
 
-    fn append_event_unlocked(&self, id: Uuid, event: &FeedbackEvent) -> Result<()> {
+    fn append_events_unlocked(
+        &self,
+        id: Uuid,
+        events: &[FeedbackEvent],
+        preserve_control_reserve: bool,
+    ) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
         let path = self.events_path(id);
         self.ensure_session_layout(id)?;
         repair_partial_tail(&path)?;
-        let encoded = serde_json::to_vec(event)?;
-        if encoded.len() as u64 > limits::MAX_EVENT_RECORD_BYTES {
-            return Err(PresentError::InvalidDocument(
-                "feedback event exceeds the event-record bound".to_string(),
-            ));
+        let mut encoded = Vec::new();
+        for event in events {
+            let line = serde_json::to_vec(event)?;
+            if line.len() as u64 > limits::MAX_EVENT_RECORD_BYTES {
+                return Err(PresentError::InvalidDocument(
+                    "feedback event exceeds the event-record bound".to_string(),
+                ));
+            }
+            encoded.extend_from_slice(&line);
+            encoded.push(b'\n');
         }
         let mut file = open_private_append(&path)?;
         let current = file
@@ -1263,94 +1469,24 @@ impl SessionStore {
             .map_err(|error| PresentError::io(&path, error))?
             .len();
         if current
-            .checked_add(encoded.len() as u64 + 1)
+            .checked_add(encoded.len() as u64)
             .is_none_or(|size| size > limits::MAX_EVENT_LOG_BYTES)
         {
             return Err(PresentError::InvalidDocument(
                 "feedback history reached its bounded event-log capacity".to_string(),
             ));
         }
+        self.enforce_retention_unlocked()?;
+        self.ensure_project_capacity_unlocked(encoded.len() as u64, preserve_control_reserve)?;
         file.write_all(&encoded)
-            .and_then(|()| file.write_all(b"\n"))
             .map_err(|error| PresentError::io(&path, error))?;
         file.sync_data()
             .map_err(|error| PresentError::io(&path, error))
-    }
-
-    fn read_last_event_unlocked(&self, id: Uuid) -> Result<Option<FeedbackEvent>> {
-        let path = self.events_path(id);
-        self.ensure_session_layout(id)?;
-        let mut file = open_private_read(&path)?;
-        let length = file
-            .metadata()
-            .map_err(|error| PresentError::io(&path, error))?
-            .len();
-        if length == 0 {
-            return Ok(None);
-        }
-        if length > limits::MAX_EVENT_LOG_BYTES {
-            return Err(PresentError::CorruptState(format!(
-                "{} exceeds the event-log bound",
-                path.display()
-            )));
-        }
-        let window = (limits::MAX_EVENT_RECORD_BYTES * 2).min(length);
-        file.seek(SeekFrom::Start(length - window))
-            .map_err(|error| PresentError::io(&path, error))?;
-        let capacity = usize::try_from(window).map_err(|_| {
-            PresentError::CorruptState(
-                "event tail exceeds this platform's address space".to_string(),
-            )
-        })?;
-        let mut bytes = Vec::with_capacity(capacity);
-        let mut bounded = file.take(window + 1);
-        bounded
-            .read_to_end(&mut bytes)
-            .map_err(|error| PresentError::io(&path, error))?;
-        if bytes.len() as u64 > window {
-            return Err(PresentError::CorruptState(
-                "event tail grew while it was being read".to_string(),
-            ));
-        }
-        if window < length {
-            let first_newline = bytes
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .ok_or_else(|| {
-                    PresentError::CorruptState("event tail has an oversized record".to_string())
-                })?;
-            bytes.drain(..=first_newline);
-        }
-        let complete_end = if bytes.last() == Some(&b'\n') {
-            bytes.len()
-        } else {
-            bytes
-                .iter()
-                .rposition(|byte| *byte == b'\n')
-                .map_or(0, |index| index + 1)
-        };
-        let complete = &bytes[..complete_end];
-        let Some(line) = complete
-            .split(|byte| *byte == b'\n')
-            .rev()
-            .find(|line| !line.is_empty())
-        else {
-            return Ok(None);
-        };
-        if line.len() as u64 > limits::MAX_EVENT_RECORD_BYTES {
-            return Err(PresentError::CorruptState(
-                "event tail has an oversized record".to_string(),
-            ));
-        }
-        serde_json::from_slice(line)
-            .map(Some)
-            .map_err(|error| PresentError::CorruptState(format!("invalid event tail: {error}")))
     }
 }
 
 fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<FeedbackEvent>> {
     let mut events = Vec::new();
-    let mut previous_sequence = None;
     for (index, line) in raw.split_inclusive('\n').enumerate() {
         let value = line.strip_suffix('\n').unwrap_or(line);
         if value.is_empty() {
@@ -1372,13 +1508,6 @@ fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<Feed
                         max_events
                     )));
                 }
-                if previous_sequence.is_some_and(|sequence| event.sequence() != sequence + 1) {
-                    return Err(PresentError::CorruptState(format!(
-                        "{} has a non-contiguous event sequence",
-                        path.display()
-                    )));
-                }
-                previous_sequence = Some(event.sequence());
                 events.push(event);
             }
             Err(_) if !line.ends_with('\n') => break,
@@ -1391,6 +1520,12 @@ fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<Feed
             }
         }
     }
+    FeedbackLedger::replay(&events).map_err(|error| match error {
+        PresentError::CorruptState(message) => {
+            PresentError::CorruptState(format!("{}: {message}", path.display()))
+        }
+        other => other,
+    })?;
     Ok(events)
 }
 
@@ -1419,6 +1554,14 @@ fn validate_feedback(
             "request_changes requires a nonempty instruction".to_string(),
         ));
     }
+    if envelope.instruction.as_deref().is_some_and(|instruction| {
+        instruction.encode_utf16().count() > limits::MAX_FEEDBACK_TEXT_UTF16
+    }) {
+        return Err(PresentError::InvalidDocument(format!(
+            "feedback instruction exceeds {} UTF-16 units",
+            limits::MAX_FEEDBACK_TEXT_UTF16
+        )));
+    }
     let mut bytes = envelope.actor.len() + envelope.instruction.as_deref().map_or(0, str::len);
     let mut ids = std::collections::HashSet::new();
     if envelope.notes.len() > limits::MAX_FEEDBACK_NOTES {
@@ -1441,6 +1584,12 @@ fn validate_feedback(
                 "feedback note body, block id, and block label are required".to_string(),
             ));
         }
+        if note.body.encode_utf16().count() > limits::MAX_FEEDBACK_TEXT_UTF16 {
+            return Err(PresentError::InvalidDocument(format!(
+                "feedback note exceeds {} UTF-16 units",
+                limits::MAX_FEEDBACK_TEXT_UTF16
+            )));
+        }
         let block = content_block(content, &note.block_id).ok_or_else(|| {
             PresentError::InvalidDocument(format!(
                 "feedback block {} is not present in the current revision",
@@ -1458,6 +1607,7 @@ fn validate_feedback(
             let range_units = selector.end_utf16.saturating_sub(selector.start_utf16) as usize;
             if selector.end_utf16 <= selector.start_utf16
                 || selector.exact.trim().is_empty()
+                || selected_units > limits::MAX_SELECTOR_EXACT_UTF16
                 || selected_units != range_units
                 || selector.prefix.encode_utf16().count() > 32
                 || selector.suffix.encode_utf16().count() > 32
@@ -1668,15 +1818,6 @@ fn validate_selector_anchor(selector: &TextSelector, canonical: &str) -> Result<
     Ok(())
 }
 
-fn next_sequence(events: &[FeedbackEvent]) -> Result<u64> {
-    events.last().map_or(Ok(1), |event| {
-        event
-            .sequence()
-            .checked_add(1)
-            .ok_or_else(|| PresentError::CorruptState("event sequence overflow".to_string()))
-    })
-}
-
 fn platform_state_root() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -1785,12 +1926,16 @@ pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
             }
             Ok(_) => return Err(PresentError::UnsafePath(current)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let mut builder = fs::DirBuilder::new();
+                let builder = fs::DirBuilder::new();
                 #[cfg(unix)]
-                {
+                let builder = {
                     use std::os::unix::fs::DirBuilderExt;
+                    let mut builder = builder;
                     builder.mode(0o700);
-                }
+                    builder
+                };
+                #[cfg(not(unix))]
+                let builder = builder;
                 builder
                     .create(&current)
                     .map_err(|error| PresentError::io(&current, error))?;
@@ -1842,7 +1987,7 @@ fn create_private_file(path: &Path) -> Result<()> {
         .map_err(|error| PresentError::io(path, error))
 }
 
-fn open_private_create_new(path: &Path) -> Result<File> {
+pub(crate) fn open_private_create_new(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create_new(true);
     #[cfg(unix)]
@@ -1850,14 +1995,59 @@ fn open_private_create_new(path: &Path) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::{
+            Foundation::{GENERIC_READ, GENERIC_WRITE},
+            Storage::FileSystem::{DELETE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE},
+        };
+        options
+            .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    }
     add_no_follow(&mut options);
     let file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
-    harden_private_path(path, false)?;
+    if let Err(error) = harden_private_file(path, &file) {
+        discard_new_file(&file, path);
+        return Err(error);
+    }
     #[cfg(any(unix, windows))]
-    validate_private_file(path, &file)?;
+    if let Err(error) = validate_private_file(path, &file) {
+        discard_new_file(&file, path);
+        return Err(error);
+    }
     Ok(file)
+}
+
+pub(crate) fn discard_new_file(file: &File, path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+        };
+
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle().cast(),
+                FileDispositionInfo,
+                (&raw const disposition).cast(),
+                u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>())
+                    .expect("file disposition size fits u32"),
+            )
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = file;
+        let _ = fs::remove_file(path);
+    }
+    #[cfg(windows)]
+    let _ = path;
 }
 
 #[cfg(unix)]
@@ -2103,6 +2293,8 @@ fn sync_directory(path: &Path) -> Result<()> {
             .and_then(|file| file.sync_all())
             .map_err(|error| PresentError::io(path, error))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -2331,6 +2523,66 @@ mod tests {
         assert!(
             directory_size_bounded(store.root(), store.retention.max_project_bytes).unwrap()
                 <= store.retention.max_project_bytes
+        );
+    }
+
+    #[test]
+    fn project_quota_serializes_updates_before_publication() {
+        use std::sync::{Arc, Barrier};
+
+        let (_temp, mut store) = store();
+        let first = store.create(parsed()).unwrap();
+        let second = store.create(parsed()).unwrap();
+        store.retention.max_project_bytes = 1024 * 1024;
+        let store = Arc::new(store);
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for session in [first.id, second.id] {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.update_document(session, parsed_code(600 * 1024))
+            }));
+        }
+        barrier.wait();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes.iter().filter(|outcome| outcome.is_err()).count(),
+            1
+        );
+        assert!(
+            directory_size_bounded(store.root(), store.retention.max_project_bytes).unwrap()
+                <= store.retention.max_project_bytes
+        );
+        assert!(!store.session_dir(first.id).join(UPDATE_MARKER).exists());
+        assert!(!store.session_dir(second.id).join(UPDATE_MARKER).exists());
+    }
+
+    #[test]
+    fn overquota_control_paths_can_close_release_runtime_and_clear() {
+        let (_temp, mut store) = store();
+        let session = store.create(parsed()).unwrap();
+        let instance = Uuid::new_v4();
+        store.set_browser(session.id, 42, instance).unwrap();
+        let current = directory_size_bounded(store.root(), u64::MAX - 1).unwrap();
+        store.retention.max_project_bytes = current.saturating_sub(1);
+
+        assert!(store.runtime_dir(session.id).is_ok());
+        assert_eq!(
+            store.close(session.id).unwrap().status,
+            SessionStatus::Closed
+        );
+        assert!(store.clear_browser(session.id, instance).unwrap());
+        assert_eq!(
+            store
+                .clear(Some(session.id), Duration::ZERO, false)
+                .unwrap(),
+            vec![session.id]
         );
     }
 
@@ -2606,10 +2858,10 @@ mod tests {
     #[test]
     fn newline_dense_event_log_is_parsed_without_an_intermediate_line_index() {
         let path = Path::new("events.jsonl");
-        let event = FeedbackEvent::Delivered {
+        let event_id = Uuid::new_v4();
+        let event = FeedbackEvent::Received {
             sequence: 1,
-            event_id: Uuid::new_v4(),
-            at_unix: 0,
+            envelope: feedback(Uuid::new_v4(), event_id),
         };
         let mut raw = "\n".repeat(2 * 1024 * 1024);
         raw.push_str(&serde_json::to_string(&event).unwrap());
@@ -2621,14 +2873,14 @@ mod tests {
 
     #[test]
     fn event_log_fails_as_soon_as_count_or_sequence_exceeds_its_contract() {
-        let first = FeedbackEvent::Delivered {
+        let event_id = Uuid::new_v4();
+        let first = FeedbackEvent::Received {
             sequence: 1,
-            event_id: Uuid::new_v4(),
-            at_unix: 0,
+            envelope: feedback(Uuid::new_v4(), event_id),
         };
-        let second = FeedbackEvent::Addressed {
+        let second = FeedbackEvent::Delivered {
             sequence: 2,
-            event_id: Uuid::new_v4(),
+            event_id,
             at_unix: 0,
         };
         let raw = format!(
@@ -2638,9 +2890,9 @@ mod tests {
         );
         assert!(parse_event_log(Path::new("events.jsonl"), &raw, 1).is_err());
 
-        let gap = FeedbackEvent::Addressed {
+        let gap = FeedbackEvent::Delivered {
             sequence: 3,
-            event_id: Uuid::new_v4(),
+            event_id,
             at_unix: 0,
         };
         let raw = format!(
@@ -2710,6 +2962,104 @@ mod tests {
         conflicting.actor = "another operator".to_string();
         assert!(store.append_feedback(conflicting).is_err());
         assert_eq!(store.events(session.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn overquota_feedback_retries_are_zero_growth_idempotent_operations() {
+        let (_temp, mut store) = store();
+        let session = store.create(parsed()).unwrap();
+        let event_id = Uuid::new_v4();
+        let envelope = feedback(session.id, event_id);
+        store.append_feedback(envelope.clone()).unwrap();
+        store.mark_delivered(session.id, &[event_id]).unwrap();
+        let current = directory_size_bounded(store.root(), u64::MAX - 1).unwrap();
+        store.retention.max_project_bytes = current.saturating_sub(1);
+
+        assert_eq!(
+            store.append_feedback(envelope).unwrap(),
+            FeedbackAppend {
+                sequence: 1,
+                created: false
+            }
+        );
+        store.mark_delivered(session.id, &[event_id]).unwrap();
+        assert_eq!(store.events(session.id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn concurrent_delivery_is_one_durable_transition() {
+        use std::sync::{Arc, Barrier};
+
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let event_id = Uuid::new_v4();
+        store
+            .append_feedback(feedback(session.id, event_id))
+            .unwrap();
+        let store = Arc::new(store);
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.mark_delivered(session.id, &[event_id])
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(store.events(session.id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn malformed_feedback_lifecycle_logs_fail_closed() {
+        let path = Path::new("events.jsonl");
+        let session_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        let received = FeedbackEvent::Received {
+            sequence: 1,
+            envelope: feedback(session_id, event_id),
+        };
+        let delivered = FeedbackEvent::Delivered {
+            sequence: 2,
+            event_id,
+            at_unix: 0,
+        };
+        let addressed = FeedbackEvent::Addressed {
+            sequence: 3,
+            event_id,
+            at_unix: 0,
+        };
+        let post_terminal = FeedbackEvent::Delivered {
+            sequence: 4,
+            event_id,
+            at_unix: 0,
+        };
+        let invalid = format!(
+            "{}\n{}\n{}\n{}\n",
+            serde_json::to_string(&received).unwrap(),
+            serde_json::to_string(&delivered).unwrap(),
+            serde_json::to_string(&addressed).unwrap(),
+            serde_json::to_string(&post_terminal).unwrap()
+        );
+        assert!(matches!(
+            parse_event_log(path, &invalid, 8),
+            Err(PresentError::CorruptState(_))
+        ));
+
+        let duplicate = FeedbackEvent::Received {
+            sequence: 2,
+            envelope: feedback(session_id, event_id),
+        };
+        let invalid = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&received).unwrap(),
+            serde_json::to_string(&duplicate).unwrap()
+        );
+        assert!(parse_event_log(path, &invalid, 8).is_err());
     }
 
     #[test]

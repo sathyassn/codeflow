@@ -105,6 +105,13 @@ redelivery of the same stable event ID, not loss. Consumers deduplicate by event
 ID. Address/dismiss transitions require the current event version and reject
 stale or cross-session updates.
 
+One replayed ledger is the feedback-lifecycle authority. It requires exactly
+one `received` record before `delivered`, permits at most one `delivered` and
+one terminal record, and rejects duplicate, missing, or post-terminal
+transitions as corruption. Exact receipt, delivery, and resolution retries are
+no-ops, including when an older project has already exceeded its current
+storage budget; a retry cannot manufacture another durable transition.
+
 The append-only log is written under a per-session lock, synchronizes accepted
 records, and treats only an interrupted final record as recoverable; corruption
 before the tail is a loud state error. Session summaries use write-to-new-file,
@@ -125,6 +132,9 @@ authentication, profile, service, event-log, and session-private state by
 construction; it opens without a server or network and writes only to the
 explicit confined output path. A separate explicit history export uses the
 public session schema and is never implicitly included in the HTML.
+Every export is created as a new owner-private file or refused. On Windows the
+restricted DACL is applied and verified through the already-open file handle,
+so path replacement cannot create a hardening gap.
 
 ## Consequences
 

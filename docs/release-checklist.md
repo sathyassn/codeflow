@@ -77,9 +77,14 @@ named human release decision.
       source without blocking feedback, export, close, or cleanup.
 - [ ] Presentation adversarial evidence covers invalid native-path bytes,
       per-block and aggregate collection amplification, impossible and
-      concurrent project quotas, exact/ambiguous/missing feedback re-anchoring,
-      stale/cross-session resolution, and leader-loss cleanup that retains
-      recovery state unless group/tree absence is proven.
+      concurrent project quotas across create, update, runtime, and feedback
+      mutations; zero-growth retries and cleanup in legacy over-quota state;
+      malformed, duplicate, post-terminal, and concurrent feedback transitions;
+      exact/ambiguous/missing feedback re-anchoring; stale/cross-session
+      resolution; client/server review-limit parity; owner-private export
+      creation; and leader-loss cleanup that retains recovery state unless
+      group/tree absence is proven. Qualified forced cleanup re-proves the exact
+      identity after its graceful-stop window.
 - [ ] The shell installer selects the correct macOS/Linux artifact, the
       PowerShell installer selects `codeflow.exe` on native Windows, and WSL2
       selects the Linux artifact. Each installed binary reports the release

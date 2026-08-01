@@ -256,7 +256,18 @@ async function checkInteractiveSurface(browser, origin) {
   });
   await page.getByRole("button", { name: /^Review /u }).click();
   await page.getByRole("button", { name: "Add selected text" }).click();
+  if (await page.locator(".cf-notes textarea").getAttribute("maxlength") !== "32") {
+    throw new Error("Review text input did not expose the server-provided length limit");
+  }
   await page.locator(".cf-notes textarea").fill("Keep this exact wording.");
+  await selectFixtureText(page);
+  await page.getByRole("button", { name: "Add selected text" }).click();
+  await selectFixtureText(page);
+  await page.getByRole("button", { name: "Add selected text" }).click();
+  await page.getByText("A review can contain at most 2 notes.").waitFor();
+  if (await page.locator(".cf-notes li").count() !== 2) {
+    throw new Error("Review note limit was not enforced before creating an unsendable review");
+  }
   await page.getByLabel("Theme").selectOption("technical");
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
@@ -279,6 +290,19 @@ async function checkInteractiveSurface(browser, origin) {
   }
   assertNetworkStayedLoopback(network);
   await context.close();
+}
+
+async function selectFixtureText(page) {
+  await page.evaluate(() => {
+    const text = document.getElementById("selection-target")?.firstChild;
+    if (!text) throw new Error("Selection fixture missing");
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 11);
+    const selection = getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
 }
 
 function isExpectedAttackConsoleError(message, origin) {
@@ -341,6 +365,13 @@ function fixtureHtml(proseOnly) {
     event_sequence: 0,
     title: proseOnly ? "Plain-language review" : "Runtime review",
     shortcuts_enabled: true,
+    review_limits: {
+      max_notes: 2,
+      max_visible_feedback: 256,
+      max_text_utf16: 32,
+      max_selector_utf16: 16,
+      max_payload_bytes: 65536,
+    },
     identity: {
       src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       alt: "Fixture project",

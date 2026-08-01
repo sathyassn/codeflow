@@ -74,6 +74,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const block = button?.closest<HTMLElement>("[data-cf-block-id]");
       const blockId = block?.dataset.cfBlockId;
       if (!button || !block || !blockId || !documentRoot.contains(block)) return;
+      if (notes.length >= config.review_limits.max_notes) {
+        setStatus(noteLimitMessage(config.review_limits.max_notes));
+        setReviewOpen(true);
+        return;
+      }
       const blockLabel = block.dataset.cfBlockLabel ?? blockId;
       setNotes((current) => [
         ...current,
@@ -91,13 +96,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     };
     documentRoot.addEventListener("click", handleAnchor);
     return () => documentRoot.removeEventListener("click", handleAnchor);
-  }, [busy, documentRoot]);
+  }, [busy, config.review_limits.max_notes, documentRoot, notes.length]);
 
   const addNote = (): void => {
     if (busy) return;
+    if (notes.length >= config.review_limits.max_notes) {
+      setStatus(noteLimitMessage(config.review_limits.max_notes));
+      setReviewOpen(true);
+      return;
+    }
     const selected = captureSelection(documentRoot);
     if (!selected) {
       setStatus("Select text inside one reviewable block, then add a note.");
+      return;
+    }
+    if (selected.selector.exact.length > config.review_limits.max_selector_utf16) {
+      setStatus(`Selected text is too long. Select at most ${config.review_limits.max_selector_utf16} characters.`);
       return;
     }
     setNotes((current) => [
@@ -130,6 +144,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus("Request changes needs a clear instruction.");
       return;
     }
+    if (
+      instruction.length > config.review_limits.max_text_utf16 ||
+      normalizedNotes.some((note) => note.body.length > config.review_limits.max_text_utf16)
+    ) {
+      setStatus(`Each note or review summary is limited to ${config.review_limits.max_text_utf16} characters.`);
+      return;
+    }
     const payload = {
       session_id: config.session_id,
       revision: config.revision,
@@ -142,6 +163,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     const eventId = previous?.fingerprint === fingerprint ? previous.eventId : crypto.randomUUID();
     submitAttemptRef.current = { fingerprint, eventId };
     const request: ReviewRequest = { event_id: eventId, ...payload };
+    if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
+      setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
+      return;
+    }
     setBusy(true);
     setStatus("Submitting review…");
     try {
@@ -364,6 +389,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 <textarea
                   disabled={busy}
                   rows={3}
+                  maxLength={config.review_limits.max_text_utf16}
                   value={note.body}
                   data-empty={note.body ? "false" : "true"}
                   onInput={(event) => updateNote(index, { body: event.currentTarget.value })}
@@ -384,7 +410,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           </label>
           <label>
             <span>{verdict === "request_changes" ? "Required change" : "Review summary (optional)"}</span>
-            <textarea rows={3} disabled={busy} value={instruction} onInput={(event) => setInstruction(event.currentTarget.value)} />
+            <textarea
+              rows={3}
+              maxLength={config.review_limits.max_text_utf16}
+              disabled={busy}
+              value={instruction}
+              onInput={(event) => setInstruction(event.currentTarget.value)}
+            />
           </label>
           <button type="button" class="cf-primary-action" disabled={busy} onClick={() => void submitReview()}>
             {busy ? "Submitting…" : "Submit review"}
@@ -399,6 +431,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   function updateNote(index: number, patch: Partial<Pick<PendingFeedback, "body" | "kind">>): void {
     setNotes((current) => current.map((note, noteIndex) => (noteIndex === index ? { ...note, ...patch } : note)));
   }
+}
+
+function noteLimitMessage(limit: number): string {
+  return `A review can contain at most ${limit} ${limit === 1 ? "note" : "notes"}.`;
 }
 
 function readSections(root: HTMLElement): readonly Section[] {

@@ -435,6 +435,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   resolution, exact re-anchoring/visible orphan states, and fail-closed orphan
   process recovery keep the bounded contract explicit. Native platform and
   browser qualification remains the explicit CAP-016/TSK-007 release boundary.
+  All durable growth now reserves capacity before publication under one
+  project-to-session lock order, while exact retries and cleanup remain usable
+  for legacy over-quota state. One strict feedback ledger rejects impossible
+  transitions; browser cleanup re-qualifies identity before forced escalation;
+  exports are owner-private from creation; and browser limits mirror the
+  server's note, text, selector, and payload bounds.
 
 - **Transport-neutral durable delegate lifecycle (ADR-0036).** New
   `codeflow delegate init|arm|wait` commands and a schema-v2

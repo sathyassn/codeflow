@@ -1,4 +1,4 @@
-use std::{fmt::Write as _, fs::OpenOptions, io::Write as _, path::Path};
+use std::{fmt::Write as _, io::Write as _, path::Path};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
@@ -9,7 +9,7 @@ use crate::{
     limits,
     render::{render_document, render_unsupported, RenderOptions},
     service::{load_manifest, EmbeddedAssets},
-    state::{RevisionContent, SessionStore},
+    state::{discard_new_file, open_private_create_new, RevisionContent, SessionStore},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,19 +159,9 @@ fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
     if !metadata.is_dir() {
         return Err(PresentError::UnsafePath(parent.to_path_buf()));
     }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|error| PresentError::io(path, error))?;
+    let mut file = open_private_create_new(path)?;
     if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-        drop(file);
-        let _ = std::fs::remove_file(path);
+        discard_new_file(&file, path);
         return Err(PresentError::io(path, error));
     }
     Ok(())
@@ -179,11 +169,41 @@ fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::write_new_private;
+
     #[test]
     fn export_bootstrap_never_contains_network_endpoint_or_auth_name() {
         let source = "(async()=>{const e=document.getElementById('cf-present-export-payload').textContent.trim();const b=Uint8Array.from(atob(e),c=>c.charCodeAt(0));if(!globalThis.DecompressionStream)return;const s=new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'));const j=await new Response(s).text();const u=URL.createObjectURL(new Blob([j],{type:'text/javascript'}));try{await import(u)}finally{URL.revokeObjectURL(u)}})()";
         assert!(!source.contains("http:"));
         assert!(!source.contains("cookie"));
         assert!(!source.contains("feedback"));
+    }
+
+    #[test]
+    fn export_writer_is_private_and_refuses_an_existing_destination() {
+        let temporary = tempdir().expect("temporary directory");
+        let output = temporary.path().join("review.html");
+
+        write_new_private(&output, b"first").expect("create private export");
+        let error = write_new_private(&output, b"second").expect_err("refuse overwrite");
+
+        assert_eq!(fs::read(&output).expect("read export"), b"first");
+        assert!(error.to_string().contains("review.html"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = fs::metadata(&output)
+                .expect("export metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 }
