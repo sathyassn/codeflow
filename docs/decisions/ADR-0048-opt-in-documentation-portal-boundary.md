@@ -86,7 +86,7 @@ at 1 MiB, and its measured release-binary increase at 1 MiB. `SKILL.md` remains
 within the existing 300-line skill limit. The macOS arm64 release baseline at
 commit `88215cc977039ed405b8875a38ae00cd61f614c5` is 10,473,952 bytes; the final
 task implementation is 11,161,104 bytes, a 687,152-byte increase. The starter
-is 459,410 tracked bytes and 103,155 archive-equivalent bytes. Release builds
+is 459,633 tracked bytes and 103,182 archive-equivalent bytes. Release builds
 use `rust-embed`'s upstream compression support so the offline starter does not
 consume its unpacked size in every binary; debug builds retain the existing
 disk-backed development behavior. The compression dependency set remains
