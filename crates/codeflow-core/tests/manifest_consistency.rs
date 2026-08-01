@@ -266,7 +266,20 @@ fn portal_bundle_is_single_complete_and_bounded() {
         unpacked <= 2 * 1024 * 1024,
         "portal starter is {unpacked} bytes"
     );
-    assert!(bundle.join("package-lock.json").is_file());
+    let package_lock: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(bundle.join("package-lock.json")).expect("portal lockfile is readable"),
+    )
+    .expect("portal lockfile is JSON");
+    assert_eq!(
+        package_lock["packages"]["node_modules/astro"]["bin"]["astro"], "bin/astro.mjs",
+        "the pinned Astro executable changed; update the workflow deliberately"
+    );
+    let workflow = std::fs::read_to_string(bundle.join("scripts/workflow.mjs"))
+        .expect("portal workflow is readable");
+    assert!(
+        workflow.contains("path.join(\"node_modules\", \"astro\", \"bin\", \"astro.mjs\")"),
+        "the portal workflow must execute the pinned Astro package entrypoint"
+    );
     for forbidden in [
         root.join("assets/base/agents/skills/cf-docs-portal/package-lock.json"),
         root.join(".agents/skills/cf-docs-portal/package-lock.json"),

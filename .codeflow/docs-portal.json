@@ -53,7 +53,7 @@
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "402e0f74deeda80681348cd71eb28361b0d2edb8fd424b4e0101168a20e1d9cf"
+      "pristine_sha256": "d0190843dc5538d2d107005e098a3d31ae5ffe96ac76500147850a2edfd1d1e9"
     },
     "src/content.config.ts": {
       "ownership": "managed",

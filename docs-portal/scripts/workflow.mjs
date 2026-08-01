@@ -9,7 +9,7 @@ const root = process.cwd();
 await withWorkflowLease(root, async () => {
   if (workflow === "check") await run(process.execPath, ["--test", "tests/adapter.test.mjs"]);
   await run(process.execPath, ["scripts/adapter.mjs"]);
-  await run(process.execPath, [path.join("node_modules", "astro", "astro.js"), workflow]);
+  await run(process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), workflow]);
   if (workflow === "build") await run(process.execPath, ["scripts/evidence.mjs"]);
 });
 
