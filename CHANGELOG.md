@@ -68,6 +68,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Repository guide portals are now explicit, source-linked, and verifiable.**
+  Standard/full projects receive the concise cross-harness `cf-docs-portal`
+  workflow, while the exact-pinned Starlight/Pagefind starter remains absent
+  until `codeflow portal setup --path <dir>` adopts it offline. Adopted files
+  reconcile through ordinary never-clobber updates and opaque pristine
+  baselines; `codeflow validate --portal <dir>` checks bounded evidence claims
+  against repository/output bytes without executing project code. CodeFlow
+  dogfoods the optional utility under `docs-portal/` (ADR-0048, CAP-015).
+
 - **Multi-task epics now default to one topology-aware integration branch.**
   Planning creates the shared non-protected target from the intended protected
   branch before task allocation; independent nodes may branch concurrently

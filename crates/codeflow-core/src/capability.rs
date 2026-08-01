@@ -90,14 +90,18 @@ pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<Capabilit
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        if trimmed != "```yaml" && trimmed != "```yml" {
-            i += 1;
-            continue;
-        }
+        let closing = match trimmed {
+            "```yaml" | "```yml" => "```",
+            "~~~yaml" | "~~~yml" => "~~~",
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
         let fence_line = i + 1; // 1-based
         let block_start = i + 1;
         let mut j = block_start;
-        while j < lines.len() && lines[j].trim() != "```" {
+        while j < lines.len() && lines[j].trim() != closing {
             j += 1;
         }
         let block = lines[block_start..j].join("\n");
@@ -177,6 +181,15 @@ Generated status views.
         assert_eq!(entries[0].adrs, vec!["ADR-0001"]);
         assert_eq!(entries[1].id, "CAP-002");
         assert!(entries[1].verified_by.is_empty());
+    }
+
+    #[test]
+    fn parses_tilde_fenced_entries_without_treating_other_fences_as_records() {
+        let content = "~~~yaml\nid: CAP-101\nname: tilde\narea: test\nstatus: planned\n~~~\n\n~~~text\nid: CAP-999\n~~~\n";
+        let (entries, issues) = parse_capabilities(content);
+        assert!(issues.is_empty());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "CAP-101");
     }
 
     #[test]

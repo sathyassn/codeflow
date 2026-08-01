@@ -1,0 +1,29 @@
+{
+  "name": "@codeflow/docs-portal",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node scripts/adapter.mjs && astro build && node scripts/evidence.mjs",
+    "check": "node --test tests/*.test.mjs && node scripts/adapter.mjs && astro check",
+    "dev": "node scripts/adapter.mjs && astro dev",
+    "preview": "astro preview",
+    "update": "node scripts/adapter.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.6",
+    "astro": "7.1.6",
+    "pagefind": "1.5.2",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "sharp": "0.35.3"
+  }
+}

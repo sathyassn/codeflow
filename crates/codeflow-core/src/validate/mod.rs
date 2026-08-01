@@ -11,6 +11,7 @@
 //! D22).
 
 pub mod docs;
+pub mod portal;
 
 use std::collections::HashMap;
 use std::path::Path;

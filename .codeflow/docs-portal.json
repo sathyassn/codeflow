@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "root": "docs-portal",
+  "starter_version": "1.0.0",
+  "files": {
+    ".gitignore": {
+      "ownership": "managed",
+      "pristine_sha256": "574429a643f5386fa95712bd67bc0cf6ace2a0a8776a9f3ebfadcee1c1dbba32"
+    },
+    "astro.config.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "2e73f6e1a19169ebb83a55e6e8371e8bc8f59a41ed66562a5cd938e56ad80808"
+    },
+    "package-lock.json": {
+      "ownership": "managed",
+      "pristine_sha256": "f5bcda69594f3aca735992f5120c887df48f3c226708181988adb9782f45ec4c"
+    },
+    "package.json": {
+      "ownership": "managed",
+      "pristine_sha256": "bafe161167fd9fe8a084c58bdec39ebd5a675389923721a7478a007b04ffe426"
+    },
+    "portal.config.json": {
+      "ownership": "user-owned",
+      "pristine_sha256": "e633039baca0908f2ee188273038d81f560c09babef2a819cac1ffe875f3e6a1"
+    },
+    "public/favicon.svg": {
+      "ownership": "managed",
+      "pristine_sha256": "b4023a362ccb997311a10ebe6c9f684888db90b82450a6da5909b094eb75f139"
+    },
+    "scripts/adapter.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "c451b04108ecd724b0f6d579b574f4ce100f36797d30d51ffdef397bf47f188a"
+    },
+    "scripts/evidence.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "ee985911fb56618fecf73ffc3df6d5650bd46fa81d8854e70bab5d97ad646f3d"
+    },
+    "scripts/lib.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "43f56d775fa348dc94e1985cf4c0ec5684231327b70abce8dd6c8d9de3787e8e"
+    },
+    "src/content.config.ts": {
+      "ownership": "managed",
+      "pristine_sha256": "1f8b206b5f7c0afb44c3715a3fe79954b448885fe9e753ba372dddf1210ecfd5"
+    },
+    "src/styles/portal.css": {
+      "ownership": "managed",
+      "pristine_sha256": "9ca9b5d5da71935c0a3d824d15d5003b442a442b64e0802eee637459fad1d3d8"
+    },
+    "tests/adapter.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "e20efea923bfd88a339c8818c4ec38a40b00adc5bbb1ac0b0a7ad4c33c94e113"
+    },
+    "tsconfig.json": {
+      "ownership": "managed",
+      "pristine_sha256": "974b0a3b37e52f3649d9df63e72e374794e9e797c8ae61eca4812f844406f7ef"
+    }
+  }
+}

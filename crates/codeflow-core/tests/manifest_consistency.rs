@@ -221,6 +221,58 @@ fn every_manifest_src_resolves_to_a_shipped_asset() {
     );
 }
 
+#[test]
+fn portal_bundle_is_single_complete_and_bounded() {
+    let root = repo_root();
+    let assets = root.join("assets");
+    let bundle = assets.join("docs-portal/starter");
+    let manifest_path = assets.join("docs-portal/manifest.json");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&manifest_path).expect("portal manifest is readable"),
+    )
+    .expect("portal manifest is JSON");
+    assert_eq!(manifest["schema_version"], 1);
+    let files = manifest["files"].as_array().expect("portal files array");
+    let declared: BTreeSet<String> = files
+        .iter()
+        .map(|entry| {
+            entry["path"]
+                .as_str()
+                .expect("portal path string")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(declared.len(), files.len(), "portal paths must be unique");
+    let authored: BTreeSet<String> = walk_files(&bundle)
+        .iter()
+        .map(|path| rel(&bundle, path))
+        .collect();
+    assert_eq!(
+        authored, declared,
+        "portal manifest must cover the starter exactly"
+    );
+    let unpacked: u64 = walk_files(&bundle)
+        .iter()
+        .map(|path| std::fs::metadata(path).expect("portal file metadata").len())
+        .sum();
+    assert!(
+        unpacked <= 2 * 1024 * 1024,
+        "portal starter is {unpacked} bytes"
+    );
+    assert!(bundle.join("package-lock.json").is_file());
+    for forbidden in [
+        root.join("assets/base/agents/skills/cf-docs-portal/package-lock.json"),
+        root.join(".agents/skills/cf-docs-portal/package-lock.json"),
+        root.join(".claude/skills/cf-docs-portal/package-lock.json"),
+    ] {
+        assert!(
+            !forbidden.exists(),
+            "lockfile escaped the opt-in bundle: {}",
+            forbidden.display()
+        );
+    }
+}
+
 /// MIRROR-SHIPPING: every skill the manifest ships must ship to BOTH harness
 /// mirrors — a `.claude/skills/…` dest and an `.agents/skills/…` dest per
 /// src. A skill added with only one dest reaches consumers half-mirrored.

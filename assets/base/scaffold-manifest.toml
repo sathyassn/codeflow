@@ -408,6 +408,33 @@ dest = ".claude/skills/cf-present/agents/openai.yaml"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+# Optional repository-guide workflow. The concise skill ships cross-harness;
+# its lockfile-bearing starter is embedded separately and materialized only by
+# an explicit `codeflow portal setup` adoption.
+[[entry]]
+src = "agents/skills/cf-docs-portal/SKILL.md"
+dest = ".claude/skills/cf-docs-portal/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/content-contract.md"
+dest = ".claude/skills/cf-docs-portal/references/content-contract.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/operations.md"
+dest = ".claude/skills/cf-docs-portal/references/operations.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/agents/openai.yaml"
+dest = ".claude/skills/cf-docs-portal/agents/openai.yaml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Contextual editorial review stays on demand: the always-loaded contract carries
 # only the principle and this skill owns the detailed, cross-harness workflow.
 [[entry]]
@@ -639,6 +666,30 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-present/agents/openai.yaml"
 dest = ".agents/skills/cf-present/agents/openai.yaml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/SKILL.md"
+dest = ".agents/skills/cf-docs-portal/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/content-contract.md"
+dest = ".agents/skills/cf-docs-portal/references/content-contract.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/operations.md"
+dest = ".agents/skills/cf-docs-portal/references/operations.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/agents/openai.yaml"
+dest = ".agents/skills/cf-docs-portal/agents/openai.yaml"
 ownership = "managed"
 tiers = ["standard", "full"]
 

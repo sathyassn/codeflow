@@ -82,11 +82,12 @@ ordinary task execution and adds no model-running CLI command.
 |---|---|
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
 | `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
+| `portal setup --path <dir>` | Explicitly adopt or reconcile the offline documentation-portal starter |
 | `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate; `test setup` safely detects root stacks, lists/applies embedded templates, or appends explicit targets |
-| `validate` | Validate `.codeflow/policy.json` (loudly) + record frontmatter; `--docs` adds the doc-graph lint |
+| `validate` | Validate policy + records; `--docs` adds doc-graph integrity and `--portal <dir>` verifies portal evidence without running project code |
 | `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |

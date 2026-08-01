@@ -729,3 +729,31 @@ process-tree identity and file URLs; Linux/WSL2
 bounded `/proc` identity and group signaling; and a dense multi-diagram browser
 corpus with long-task evidence. Cross-builds alone do not claim native runtime
 support.
+## CAP-015 — opt-in-documentation-portal
+
+```yaml
+id: CAP-015
+name: opt-in-documentation-portal
+area: scaffold
+status: building
+verified_by: ["cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "npm run check --prefix docs-portal", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/"]
+epics: [EPC-005]
+adrs: [ADR-0048]
+```
+
+`codeflow portal setup --path <repository-relative-directory>` explicitly
+adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
+starter is absent from ordinary initialization, materializes offline once at
+the selected root, preserves user-owned configuration, and participates in
+ordinary never-clobber updates through opaque content-addressed pristine
+baselines. The source-in-place adapter generates disposable pages, Markdown
+twins, `llms.txt`, search output, and a versioned evidence manifest. `codeflow
+validate --portal <directory>` executes no project code and writes nothing; it
+independently checks bounded path, hash, identity, relationship, staleness,
+provenance, version, output-coverage, twin, and `llms.txt` claims.
+
+The mirrored `cf-docs-portal` skill owns proportional adoption, layered
+information design, safe source interpretation, exact dependency operations,
+browser/accessibility evidence, and cleanup. The repository dogfoods the
+starter under `docs-portal/`; a generated local site is evidence and never an
+implicit publish action.

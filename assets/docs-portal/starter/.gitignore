@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.astro/
+.portal/generated/
+src/content/docs/
+public/llms.txt
+public/markdown/
+public/.codeflow-generated.json
+playwright-report/
+test-results/

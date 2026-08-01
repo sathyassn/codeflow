@@ -417,6 +417,19 @@ reported and never mutating a value you set, while the write-once doc seeds (all
 of `docs/`) are seeded once at init and never touched again — yours to edit and
 own. `scaffold-manifest.toml` is the update contract.
 
+The optional documentation portal is a separate managed bundle, not part of
+that default scaffold. One starter source lives under `assets/docs-portal/`
+and is embedded in the binary. `codeflow portal setup --path <dir>` explicitly
+adopts it and records its root, version, ownership, pristine hashes, and opaque
+content-addressed baselines in `.codeflow/`; ordinary `codeflow update` then
+reconciles it by the same never-clobber semantics. A non-adopter receives no
+portal directory, Node workspace, lockfile, or baseline. The project-owned
+configuration points at source Markdown in place; the exact-pinned Node adapter
+is the sole author of disposable Starlight content, Pagefind output, Markdown
+twins, `llms.txt`, and a bounded evidence manifest. `codeflow validate
+--portal <dir>` is a read-only Rust verifier over those byte claims and never
+executes or rewrites installed project code (ADR-0048).
+
 ### docs — `docs/`
 
 The six-layer knowledge model this file belongs to, plus `docs/plan/v2/` (the

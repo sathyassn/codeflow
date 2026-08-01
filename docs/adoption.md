@@ -202,6 +202,30 @@ New policy keys arrive this way too. When a codeflow upgrade adds a
 `update` inserts it with its shipped default and reports it, and never touches
 the values you already set — so tightening ships without a manual migration.
 
+## Optional repository guide portal
+
+Standard and full tiers include the concise `cf-docs-portal` workflow, but no
+Node workspace or lockfile. Adopt the utility only when layered navigation,
+search, source links, and machine-readable documentation twins justify it:
+
+```sh
+codeflow portal setup --path docs-portal
+cd docs-portal
+npm ci
+npm run check
+npm run build
+cd ..
+codeflow validate --portal docs-portal
+```
+
+The setup is offline and repository-relative. It records one adopted root;
+repeated setup and ordinary `codeflow update` reconcile the managed starter
+without replacing `portal.config.json`. Configure source roots there rather
+than copying authoritative prose into the portal. Generated content and search
+output remain disposable, and local generation never publishes a site. Read
+`cf-docs-portal` for content, dependency, browser, accessibility, evidence, and
+cleanup obligations.
+
 ## Network, tools, and autonomy
 
 These are enabled in runtime settings as well as described in the skills

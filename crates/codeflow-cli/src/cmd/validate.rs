@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::validate::docs::lint_docs;
+use codeflow_core::validate::portal::validate_portal;
 use codeflow_core::validate::{
     validate_epic, validate_spec, validate_task, validate_workgraph, ValidateOptions,
 };
@@ -18,6 +19,10 @@ pub struct ValidateArgs {
     /// Also run the doc-graph referential-integrity lint
     #[arg(long)]
     pub docs: bool,
+
+    /// Verify a portal evidence manifest without executing project code.
+    #[arg(long, value_name = "DIR", conflicts_with = "path")]
+    pub portal: Option<PathBuf>,
 }
 
 pub fn run(args: &ValidateArgs) -> i32 {
@@ -25,7 +30,12 @@ pub fn run(args: &ValidateArgs) -> i32 {
     let mut failed = false;
 
     failed |= !validate_policy(&root);
-    if args.docs && args.path.is_none() {
+    if let Some(portal) = &args.portal {
+        failed |= !run_portal_validation(&root, portal);
+        if args.docs {
+            failed |= !run_docs_lint(&root);
+        }
+    } else if args.docs && args.path.is_none() {
         failed |= !run_workgraph_validation(&root);
     } else {
         failed |= !validate_records(&root, args.path.as_deref());
@@ -35,6 +45,23 @@ pub fn run(args: &ValidateArgs) -> i32 {
     }
 
     i32::from(failed)
+}
+
+fn run_portal_validation(root: &Path, portal: &Path) -> bool {
+    let report = validate_portal(root, portal);
+    for issue in &report.issues {
+        eprintln!("validate --portal: error: {issue}");
+    }
+    if report.is_clean() {
+        println!("validate --portal: {} page(s) clean", report.checked_pages);
+        true
+    } else {
+        eprintln!(
+            "validate --portal: {} integrity error(s)",
+            report.issues.len()
+        );
+        false
+    }
 }
 
 fn run_workgraph_validation(root: &Path) -> bool {

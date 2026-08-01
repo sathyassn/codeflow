@@ -99,6 +99,12 @@ named human release decision.
       version and passes `codeflow doctor` in a disposable greenfield repo.
 - [ ] A brownfield update canary preserves user-owned files and intentional
       sidecars, reports conflicts, and is idempotent when repeated.
+- [ ] Portal starter bytes, archive-equivalent bytes, and release-binary delta
+      remain within ADR-0048. A non-adopter receives no portal workspace,
+      lockfile, or baseline; an adopter passes setup/update/conflict/idempotence,
+      locked install/build/audit/upgrade, `validate --portal`, source/manifest
+      negative fixtures, and Chromium/Firefox/WebKit accessibility journeys.
+      Generated output is not published by these checks.
 
 ## 4. Harness and model qualification
 
