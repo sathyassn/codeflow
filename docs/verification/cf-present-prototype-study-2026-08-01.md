@@ -7,15 +7,18 @@
 **Scope:** research and disposable prototypes only; no production renderer or
 scaffold code
 
-**Decision status:** Codex recommendation, awaiting independent Claude research,
-rendered critique, and exact dual-model settlement
+**Decision status:** independent Codex evidence retained; the exact dual-model
+direction is settled in
+[`cf-present-design-settlement-2026-08-01.md`](cf-present-design-settlement-2026-08-01.md)
 
 ## Outcome
 
 Three materially different directions were built against the same representative
 CodeFlow decision content, rendered in light and dark at desktop and phone
-widths, and exercised as interactive review surfaces. The Codex recommendation
-is **Review workbench** as the default `cf-present` experience.
+widths, and exercised as interactive review surfaces. This independent lane
+recommended **Review workbench** as the default `cf-present` experience. The
+later cross-seat reconciliation retained that document-first shell and added
+the manuscript lane's reading discipline as **the reviewer's document**.
 
 The recommendation is not a generic dashboard. It is a document-first review
 surface:
@@ -81,7 +84,7 @@ The evidence supports six decisions.
 ## Candidate directions
 
 All three candidates contain an outcome, contextual explanation, comparison,
-task plan/flow, code diff, diagram, evidence envelope, open question, and
+task plan/flow, code diff, diagram, evidence envelope, review state, and
 attributable feedback entry. The content is intentionally identical enough to
 expose layout strengths rather than reward a candidate for better prose.
 
@@ -158,16 +161,18 @@ Renders:
 [light mobile](evidence/tsk-006/renders/map-light-mobile.webp),
 [dark mobile](evidence/tsk-006/renders/map-dark-mobile.webp).
 
-## Technical recommendation for TSK-011
+## Independent technical analysis for TSK-011
 
-The design does not authorize production code, but it narrows the implementation
-choice.
+This lane examined implementation options, but TSK-006 does not authorize
+production code or select a renderer. The settled design requires a
+selection/annotation-compatible inspectable document boundary; TSK-011 owns a
+bounded spike and Tier-3 ADR across the qualified options.
 
 | Option | Strength | Material concern | Codex position |
 |---|---|---|---|
 | Rust-rendered HTML + bespoke controller | Small runtime and direct security ownership | Review, revision, annotation, and block state can become an untyped DOM state machine | Keep as the fallback baseline; do not assume it stays smaller |
-| Lit + TypeScript, prebuilt and embedded | Small standards-based component layer; declarative reusable blocks; no Node runtime | Default shadow DOM complicates selection anchors, global themes, and test queries | **Preferred starting point**, using a deliberately tested light-DOM document boundary |
-| Preact + TypeScript, prebuilt and embedded | Familiar state/test ecosystem and direct light DOM | Easier to grow a general app/framework dependency surface than this closed utility needs | Qualified alternative if a TSK-011 spike proves Lit's annotation/state boundary worse |
+| Lit + TypeScript, prebuilt and embedded | Small standards-based component layer; declarative reusable blocks; no Node runtime | DOM composition must prove selection, annotation, theming, and test boundaries | Qualified spike candidate; not selected here |
+| Preact + TypeScript, prebuilt and embedded | Familiar state/test ecosystem and inspectable DOM composition | Easier to grow a general app/framework dependency surface than this closed utility needs | Qualified spike candidate; not selected here |
 | Agent-authored HTML plus injected editor SDK | Maximum visual freedom | Rebuilds every response, expands trust surface, and bypasses the typed catalog | Reject for the normal path; SPC-004 already confines one sandbox escape block |
 
 Proposed split of responsibility:
@@ -215,54 +220,12 @@ strict optional renderers
 10. Unsupported schema version that remains completely inspectable in a safe
     read-only/raw representation.
 
-## Proposed utility `DESIGN_INTENT`
+## Settled utility `DESIGN_INTENT`
 
-This is the Codex candidate for Claude-led settlement. It is deliberately exact
-enough for TSK-011 to test, but it is not final until both primary seats approve
-the same text.
-
-```text
-DESIGN_INTENT:
-  APPLICABILITY: direction pass — new CodeFlow utility surface
-  CREATOR_INTENT: turn a complex agent response into a reusable, local,
-    reviewable document without making page construction a second task
-  AUDIENCE_JOB_CONTEXT: an operator reviewing explanation, plans, changes,
-    evidence, and open decisions in an active agent session; sourced from
-    EPC-005, SPC-004, and the operator brief
-  EXPERIENCE_TARGET: focused, calm, exact, and quietly elegant; document first,
-    review state always legible; never a generic dashboard or slide deck
-  LANGUAGE_AND_VOICE: plain, direct, session-aware explanation; exact technical
-    terms; outcome first; bullets, tables, diagrams, code, and prose chosen by
-    information shape; no canned personality or decorative emoji
-  APPEARANCE_MODES: system-following light/dark default with persisted manual
-    override and no incorrect-mode flash; mode-safe code, diagrams, media,
-    controls, focus, warnings, and print/export; reduced motion respected
-  SYSTEMS_AND_CONSTRAINTS: closed versioned JSON+Markdown block schema; reusable
-    semantic catalog; CodeFlow-owned utility tokens only; optional closed
-    project primitive import flows one way and never changes product direction;
-    no remote resources or consuming-product runtime/components
-  OPERATOR_DIRECTION: modern, elegant, aesthetically coherent, pleasing, and
-    functional; use real information-bearing visuals; avoid text-card grids and
-    prose walls; keep history/feedback attributable and clearable
-  RESEARCH_OR_REFERENCES: W3C WCAG/APG and Web Annotation, GitHub review,
-    JSON Schema, Lit/Preact/Shiki/Mermaid official docs, and observed
-    lavish-axi interaction/source behavior; no single product is a template
-  DIRECTIONS_CONSIDERED: Decision briefing (best reading, weak persistent
-    review); Review workbench (best balanced default); Decision map (best only
-    when topology carries meaning)
-  SETTLED_DIRECTION: proposed Review workbench — restrained top bar, narrow
-    section route, dominant document canvas, subordinate feedback queue;
-    responsive collapse preserves one reading order; narrative and graph
-    arrangements remain earned templates/blocks rather than alternate apps
-  ACCESSIBILITY_TARGET: WCAG 2.2 AA; semantic landmarks/headings/forms; visible
-    focus; keyboard-operable feedback and disclosures; labelled focusable local
-    scrollers for true two-dimensional blocks; no page overflow at 320 CSS px
-  FIDELITY_EVIDENCE_PLAN: representative schema fixtures; light/dark/system/
-    persisted-mode renders at phone, compact, and desktop widths; automated
-    accessibility plus keyboard and assistive-technology checks; exact block,
-    diff, code, diagram, media, feedback, empty/error/loading/stale-revision,
-    print/export, console/network, and cleanup evidence
-```
+The Codex candidate above was superseded through independent Claude research,
+Claude-led rendered critique, Codex feasibility counter-review, and exact
+cross-seat reconciliation. The durable verbatim contract and approvals are in
+[`cf-present-design-settlement-2026-08-01.md`](cf-present-design-settlement-2026-08-01.md).
 
 ## Prototype evidence
 
@@ -270,7 +233,7 @@ The disposable source is
 [`prototype.html`](evidence/tsk-006/prototype.html),
 [`prototype.css`](evidence/tsk-006/prototype.css), and
 [`prototype.js`](evidence/tsk-006/prototype.js). It is evidence, not a production
-starter. The 12 optimized WebP renders total 490 KiB.
+starter. The 12 optimized WebP renders total 488 KiB.
 
 An isolated Playwright 1.62.1 + Chrome run used one fresh browser context per
 direction/mode/viewport. Axe-core 4.10.3 checked WCAG 2 A/AA, 2.1 AA, and 2.2 AA
@@ -286,32 +249,34 @@ case) reported:
 | Non-loopback requests | 0/12 |
 | Annotation control moves focus to feedback | 12/12 |
 | Feedback send updates live status | 12/12 |
-| Manual mode toggle | 12/12 |
+| Manual mode toggle and exposed active/next state | 12/12 |
+| Evidence marker matches explicit pass/fail/pending/not-run state | every retained evidence item |
+| Diff element/sign/boundary semantics | every retained diff line |
+| Workbench route changes from its initial section after scrolling | 4/4 workbench cases |
+| Map inspector updates from a focused semantic control | 4/4 map cases |
 | Reduced-motion computed scroll behavior | `auto`, 12/12 |
 | Dark system preference + persisted manual override | dark initially; light after toggle and reload |
 
-The run initially found real defects: mobile page overflow from grid min-content,
+The initial Codex run found mobile page overflow from grid min-content,
 unfocusable local diff/table/flow scrollers, and light-mode warning contrast.
-Those were corrected and the exact final surface was rerun. Visual inspection of
-all 12 final renders checked hierarchy, mode coherence, information-bearing
-visuals, code/diagram legibility, and mobile collapse.
+Cross-seat reconciliation later identified decorative blanket evidence checks,
+pointer-only map inspection, simulated section-route state, hidden mode state,
+colour-led diff markup, and a host-font dependency. All were corrected and the
+exact final surface was rerun. Visual inspection of all 12 final renders checked
+hierarchy, mode coherence, information-bearing visuals, code/diagram
+legibility, and mobile collapse.
 
 Not verified in this disposable lane: production CSP/auth/sandbox/history,
 screen-reader behavior, Windows high-contrast/forced-colours, RTL/localized
 copy, print/export fidelity, or real text-selection rebasing across revisions.
 TSK-011/TSK-007 own those claims.
 
-## Remaining task-level settlement
+## Task-level settlement
 
-Before TSK-006 can be complete and before TSK-011 starts:
-
-- Claude must complete its independent research without being primed by this
-  recommendation, then review the exact candidates and rendered evidence.
-- Claude leads the final direction and language/design critique; Codex reviews
-  the resulting exact choice for feasibility, durability, size, and testability.
-- Both primary seats approve the same `DESIGN_INTENT`. A material change from
-  the three examined directions requires the evidence appropriate to that
-  change rather than a preference-only rewrite.
+Claude and Codex approved the same exact `DESIGN_INTENT`; no operator decision
+remains. Production renderer selection, real Mermaid integration, and the full
+fidelity matrix remain explicitly owned by TSK-011 and TSK-007 rather than this
+disposable research lane.
 
 ## Sources
 

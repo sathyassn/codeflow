@@ -16,6 +16,19 @@ function updateLinks(nextTheme) {
 
 updateLinks(theme);
 
+const themeToggle = document.querySelector(".theme-toggle");
+
+function updateThemeControl(nextTheme) {
+  const dark = nextTheme === "dark";
+  themeToggle.setAttribute("aria-pressed", String(dark));
+  themeToggle.querySelector(".theme-state").textContent = dark
+    ? "Dark mode active; switch to light mode"
+    : "Light mode active; switch to dark mode";
+  themeToggle.title = dark ? "Use light mode" : "Use dark mode";
+}
+
+updateThemeControl(theme);
+
 document.querySelectorAll(".flow-figure, .table-scroll, pre").forEach((region) => {
   region.tabIndex = 0;
   if (!region.getAttribute("aria-label")) {
@@ -23,13 +36,47 @@ document.querySelectorAll(".flow-figure, .table-scroll, pre").forEach((region) =
   }
 });
 
-document.querySelector(".theme-toggle").addEventListener("click", () => {
+themeToggle.addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   localStorage.setItem("cf-present-theme", next);
   updateLinks(next);
+  updateThemeControl(next);
   history.replaceState(null, "", `?variant=${variant}&theme=${next}`);
 });
+
+const route = document.querySelector("[data-section-route]");
+if (route && variant === "workbench") {
+  const links = [...route.querySelectorAll("a[href^='#']")];
+  const sections = links.map((link) => document.querySelector(link.hash)).filter(Boolean);
+  let routeFrame;
+
+  const selectRoute = (id) => {
+    links.forEach((link) => {
+      if (link.hash === `#${id}`) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  };
+
+  const updateRoute = () => {
+    routeFrame = undefined;
+    const threshold = Math.min(innerHeight * 0.35, 220);
+    const current = sections.reduce((nearest, section) => {
+      const distance = Math.abs(section.getBoundingClientRect().top - threshold);
+      return distance < nearest.distance ? { section, distance } : nearest;
+    }, { section: sections[0], distance: Number.POSITIVE_INFINITY }).section;
+    if (current) selectRoute(current.id);
+  };
+
+  const requestRouteUpdate = () => {
+    if (!routeFrame) routeFrame = requestAnimationFrame(updateRoute);
+  };
+
+  links.forEach((link) => link.addEventListener("click", () => selectRoute(link.hash.slice(1))));
+  addEventListener("scroll", requestRouteUpdate, { passive: true });
+  addEventListener("resize", requestRouteUpdate);
+  updateRoute();
+}
 
 const targets = document.querySelectorAll(".feedback-target");
 document.querySelectorAll("[data-annotate]").forEach((button) => {
@@ -44,12 +91,17 @@ document.querySelectorAll("[data-annotate]").forEach((button) => {
   });
 });
 
-document.querySelectorAll("[data-node]").forEach((node) => {
-  node.addEventListener("click", (event) => {
-    if (event.target.closest("button")) return;
+const inspectorButtons = document.querySelectorAll("[data-inspect-node]");
+inspectorButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const node = button.closest("[data-node]");
+    inspectorButtons.forEach((candidate) => {
+      candidate.setAttribute("aria-pressed", String(candidate === button));
+    });
     document.querySelector(".inspector-title").textContent = node.querySelector("h2").textContent;
-    document.querySelector(".inspector-copy").textContent =
-      node.querySelector("p:last-child")?.textContent || "Inspect the evidence attached to this decision.";
+    document.querySelector(".inspector-copy").textContent = node.dataset.inspectorCopy;
+    const target = document.querySelector(".map .feedback-target");
+    if (target) target.textContent = `${node.querySelector("h2").textContent} node`;
   });
 });
 
