@@ -18,14 +18,17 @@ reconciliation passes. Their retained transcript digests are:
 - first exact-branch reconciliation:
   `sha256:9a54f8b12be53fdf03580a6022b2811d6aca0221de50938eebe830bd962c8cef`;
 - final settlement reconciliation:
-  `sha256:9f961b039935b92d6d7367bd5e2c0ac16f3f5c50e68956f7fbe8d074ca664e54`.
+  `sha256:9f961b039935b92d6d7367bd5e2c0ac16f3f5c50e68956f7fbe8d074ca664e54`;
+- corrected exact-diff approval:
+  `sha256:1d7debc3b00cdf0759d8b159abead9a8f03f2c155674467fa910484cc62118b6`.
 
 The lanes converged on the core direction independently. Codex accepted the
 final expanded contract. The Claude judgment primary accepted the same
 contract and resolved the remaining toolchain, theme, version, agent-output,
-and snippet-integrity details. No operator choice remains: EPC-005 Plan v2 was
-approved by the operator and both primary seats on 2026-08-01, including this
-portal utility and the downstream adoption sequence.
+and snippet-integrity details. Its final exact-diff review approved the
+corrected branch with no blocking finding. No operator choice remains: EPC-005
+Plan v2 was approved by the operator and both primary seats on 2026-08-01,
+including this portal utility and the downstream adoption sequence.
 
 ## Settled direction
 
