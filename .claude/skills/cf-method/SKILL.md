@@ -114,6 +114,11 @@ task.
 
 ## Managing a body of work
 
+If the request arrives as a task set or batch, first partition it by coherent
+durable outcome and direct dependencies. A batch may yield several epics,
+standalone tasks, or both; it is not itself a reason to share a branch. Apply
+the flow below independently to each coherent multi-task epic.
+
 When an epic is a multi-task body — serial chains and/or parallel tasks — do
 **not** land each task on `main`. Land them on a shared **integration branch**
 so agents proceed autonomously and the human reviews **one** final PR. Every
@@ -129,6 +134,12 @@ The orchestrating agent chooses this routine mechanism without an operator
 question once the outcome, acceptance boundaries, and dependency graph are
 clear. An explicit operator request is valid input, but cannot waive those
 clarity, safety, review, or protected-branch conditions.
+
+The shared branch does not defer or replace task-level orchestration. Each task
+still completes its approved producer-verification and cross-lineage review
+loop before landing, including qualified Claude judgment at material design or
+decision points. The final combined-diff review is an additional integration
+layer for cross-task and emergent behavior, not a substitute for those reviews.
 
 1. **Integration branch.** Cut `integration/<epic-id>-<slug>` off the current
    protected target and push it. It is **non-protected** — agents merge into it
@@ -153,7 +164,8 @@ clarity, safety, review, or protected-branch conditions.
    tool limits; reserve headroom and reduce it before swap pressure, duplicate
    heavyweight builds/browsers, or context sprawl harms quality. Parallelism is
    optional when its coordination cost exceeds its critical-path gain.
-4. **Land a task** by one of two sanctioned modes:
+4. **Land a reviewed task** only after its producer evidence and cross-lineage
+   review are complete, using one of two sanctioned modes:
    - **Local** — `codeflow integrate <task-branch> --into integration/<…>`:
      flock-serialized (safe for parallel agents), rebases the task branch, runs
      the full test gate, fast-forward-merges. Preferred for tight loops.

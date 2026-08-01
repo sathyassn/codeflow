@@ -20,6 +20,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Claude's OS sandbox now keeps installed plugin code executable without
+  exposing mutable plugin or private Claude state.** The broad `~/.claude`
+  subprocess-read denial remains, while the higher-precedence filesystem
+  carveout permits only `~/.claude/plugins/cache`; plugin job data, credentials,
+  histories, sessions, settings, memory, and other private state remain denied.
+  Updates retire superseded CodeFlow-managed sandbox array entries from the
+  prior shipped baseline while preserving project-owned entries.
 - **Delegate interruption coverage now waits for the process handler.** The
   SIGINT lifecycle test allows a bounded child-initialization window, avoiding
   a false failure under parallel or instrumented test startup while still

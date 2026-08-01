@@ -1483,21 +1483,51 @@ fn durable_planning_canaries_pin_clarity_graph_and_anchor() {
                     "local_sqlite_called_seal",
                 ][..],
             ),
+        ],
+    );
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let fixtures = fixtures["fixtures"].as_array().expect("fixtures array");
+    for fixture_id in [
+        "valid-unmerged-planning",
+        "multi-task-direct-main-plan",
+        "single-task-direct-target",
+    ] {
+        let fixture = fixtures
+            .iter()
+            .find(|fixture| fixture["id"] == fixture_id)
+            .unwrap_or_else(|| panic!("missing stable-anchor fixture {fixture_id}"));
+        assert_eq!(
+            fixture["state"]["target_precedes_fixture"], true,
+            "{fixture_id} needs a real target branch at the parent commit"
+        );
+    }
+}
+
+#[test]
+fn integration_branch_canaries_pin_batch_and_review_boundaries() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
             (
                 "multi-task-epic-defaults-to-one-integration-branch",
                 &[
+                    "supplied_batch_partitioned_by_coherent_outcome_and_dependencies",
                     "coherent_clear_multi_task_body_confirmed",
                     "routine_integration_shape_selected_without_operator_prompt",
                     "plan_v_next_required_before_target_rewrite",
-                    "shared_branch_created_before_allocation_and_declared_by_all_tasks",
+                    "shared_branch_created_before_allocation_and_declared_by_all_epic_tasks",
                     "resource_safe_parallelism_only_for_independent_nodes",
                     "topology_drives_task_branch_tips_and_work_start",
+                    "per_task_producer_verification_and_cross_lineage_review_before_landing",
                     "graph_order_landings_are_serialized",
-                    "aggregate_gates_and_cross_lineage_review_on_combined_diff",
+                    "aggregate_gates_and_both_family_review_on_combined_diff",
                     "one_final_human_reviewed_pr_to_protected_target",
                     "different_landing_shape_requires_plan_rationale_and_dual_approval",
                 ][..],
                 &[
+                    "treat_request_batch_as_automatic_epic_boundary",
                     "ask_operator_to_choose_routine_landing_mechanism",
                     "unclear_acceptance_bypassed",
                     "unrelated_tasks_batched_on_integration_branch",
@@ -1506,6 +1536,7 @@ fn durable_planning_canaries_pin_clarity_graph_and_anchor() {
                     "integration_branch_called_optional_optimization",
                     "dependent_task_cut_from_stale_integration",
                     "parallelize_dependency",
+                    "final_combined_review_substituted_for_task_review",
                     "concurrent_integration_writers",
                     "exception_approved_for_convenience",
                     "implementation_started",
@@ -1530,18 +1561,6 @@ fn durable_planning_canaries_pin_clarity_graph_and_anchor() {
                 ][..],
             ),
         ],
-    );
-
-    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
-    let stable_anchor = fixtures["fixtures"]
-        .as_array()
-        .expect("fixtures array")
-        .iter()
-        .find(|fixture| fixture["id"] == "valid-unmerged-planning")
-        .expect("stable-anchor fixture");
-    assert_eq!(
-        stable_anchor["state"]["target_precedes_fixture"], true,
-        "the unmerged-planning canary needs a real target branch at the parent commit"
     );
 }
 

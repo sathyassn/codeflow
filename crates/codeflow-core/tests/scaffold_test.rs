@@ -177,7 +177,8 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
   "hooks": {{
     "PreToolUse": [ {{"matcher": "Bash", "hooks": [{{"type": "command", "command": "codeflow hook git-guard"}}]}} ],
     "SessionStart": [ {{"hooks": [{{"type": "command", "command": "codeflow hook session-orient"}}]}} ]
-  }}
+  }},
+  "sandbox": {{ "filesystem": {{ "allowRead": ["~/.claude/plugins/cache"] }} }}
 }}"#
             )
         } else {
@@ -186,7 +187,8 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
   "permissions": {{ "defaultMode": "{mode}", "deny": ["Read(**/.env)"] }},
   "hooks": {{
     "PreToolUse": [ {{"matcher": "Bash", "hooks": [{{"type": "command", "command": "codeflow hook git-guard"}}]}} ]
-  }}
+  }},
+  "sandbox": {{ "filesystem": {{ "allowRead": ["~/.claude/plugins"] }} }}
 }}"#
             )
         }
@@ -1268,6 +1270,10 @@ fn update_settings_merge_preserves_foreign_keys() {
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({"type": "command", "command": "./mine.sh"}));
+    settings["sandbox"]["filesystem"]["allowRead"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("~/project-owned-reference"));
     std::fs::write(
         root.join(".claude/settings.json"),
         serde_json::to_string_pretty(&settings).unwrap(),
@@ -1295,6 +1301,16 @@ fn update_settings_merge_preserves_foreign_keys() {
         deny.iter().any(|d| d == "Read(**/*.pem)"),
         "new v2 deny rule arrived"
     );
+    let allow_read = after["sandbox"]["filesystem"]["allowRead"]
+        .as_array()
+        .unwrap();
+    assert!(allow_read
+        .iter()
+        .any(|entry| entry == "~/.claude/plugins/cache"));
+    assert!(allow_read
+        .iter()
+        .any(|entry| entry == "~/project-owned-reference"));
+    assert!(!allow_read.iter().any(|entry| entry == "~/.claude/plugins"));
 }
 
 #[test]

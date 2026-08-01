@@ -280,6 +280,9 @@
         "~/.cargo/credentials",
         "~/.cargo/credentials.toml",
         "~/.claude"
+      ],
+      "allowRead": [
+        "~/.claude/plugins/cache"
       ]
     }
   }

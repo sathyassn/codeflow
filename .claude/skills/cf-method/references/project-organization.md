@@ -40,6 +40,10 @@ Relationships, not encoded numbers, form the graph:
 Use `codeflow epic new`, `codeflow spec new --for EPC-NNN|TSK-NNN`, and
 `codeflow task new --epic EPC-NNN` (or `--standalone-reason "..."`), with
 `--into integration/<epic-id>-<slug>` for every task in a multi-task epic.
+For a supplied task set or batch, first partition by coherent durable outcome
+and direct dependencies; the request boundary is not automatically an epic or
+integration boundary. A batch may therefore produce multiple epics, standalone
+tasks, or both, each with its own appropriate landing route.
 Create that one shared branch from the intended protected target before
 allocating the tasks. The integration branch is the default for a multi-task
 body; a different landing shape requires an explicit Plan vN rationale and
@@ -83,7 +87,7 @@ cf-model-orchestrator: independent Claude + Codex discovery
 settle and dual-approve Plan vN
         |
         v
-cf-plan materializes only the durable artifacts warranted
+cf-plan partitions any supplied batch, then materializes warranted records
         |
         +-- one bounded durable outcome ----------> TSK-NNN
         +-- multi-session/PR/capability outcome --> EPC-NNN + TSK-NNN...

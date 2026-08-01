@@ -46,7 +46,7 @@ use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
-use super::settings_merge::merge_settings;
+use super::settings_merge::merge_settings_from_baseline;
 use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
     InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
@@ -347,8 +347,14 @@ fn update_entry(
                 }
                 let current = std::fs::read_to_string(&dest_path)
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
+                let previous = Baseline::read(root, &entry.dest);
                 let mut lines = vec![];
-                let merged = merge_settings(&current, &rendered, &mut lines)?;
+                let merged = merge_settings_from_baseline(
+                    &current,
+                    previous.as_deref(),
+                    &rendered,
+                    &mut lines,
+                )?;
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
