@@ -61,7 +61,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "475f807832f80f8f3cd968f3284ba084cb70f946a640e7a4ea08d8b8b49701d3"
+      "pristine_sha256": "7244cab84043482f3a157bc29a5636bb087a1a063cfbe826a037fb6bc374d69a"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
