@@ -33,7 +33,8 @@ The command works offline from the CodeFlow binary, writes the starter only at
 the chosen path, and records adoption in `.codeflow/docs-portal.json`.
 Non-adopters receive no Node workspace or lockfile. Repeated setup and ordinary
 `codeflow update` reconcile managed starter files without clobbering project
-changes; resolve any reported `.new` conflict deliberately.
+changes; resolve any reported `<path>.codeflow-<hash>.new` conflict sidecar
+deliberately.
 
 ## 2. Configure source-in-place
 

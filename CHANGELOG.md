@@ -76,10 +76,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   baselines; `codeflow validate --portal <dir>` checks bounded evidence claims
   against repository/output bytes without executing project code. CodeFlow
   dogfoods the optional utility under `docs-portal/`. The pinned GFM adapter
-  now requires one clean committed runtime/source/media snapshot, uses bounded
-  no-follow reads and locale-independent ordering, neutralizes derived
-  metadata, and publishes under recoverable corpus and whole-workflow leases
-  (ADR-0048, CAP-015).
+  now requires one clean committed runtime/source/media snapshot, reads source
+  claims from bounded Git blobs, detects index-masked worktree changes, rebuilds
+  stale pages only from authenticated ancestor source, uses bounded no-follow
+  reads and locale-independent ordering, neutralizes derived metadata, and
+  publishes under recoverable corpus and whole-workflow leases (ADR-0048,
+  CAP-015).
 
 - **Multi-task epics now default to one topology-aware integration branch.**
   Planning creates the shared non-protected target from the intended protected

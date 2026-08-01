@@ -482,10 +482,12 @@ async function hashRegularFile(file, maximumBytes) {
   } finally { await handle.close(); }
 }
 
-export async function readBoundedRegularFile(file, maximumBytes, label = "file") {
+export async function readBoundedRegularFile(file, maximumBytes, label = "file", testHooks = {}) {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) throw new Error("maximumBytes: expected a non-negative safe integer");
+  if (testHooks.afterOpen !== undefined && typeof testHooks.afterOpen !== "function") throw new Error("afterOpen: expected a function");
   const { handle, opened } = await openStableRegularFile(file, maximumBytes, label);
   try {
+    if (testHooks.afterOpen) await testHooks.afterOpen();
     const chunks = [];
     let bytes = 0;
     let position = 0;

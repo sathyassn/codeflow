@@ -6,77 +6,57 @@ import path from "node:path";
 import {
   amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
   findRepositoryRoot, parseMarkdown,
-  referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, strictId, titleFor,
+  referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
-import { assertNoSymlink, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
+import { publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
 
 const MAX_CONFIG_BYTES = 64 * 1024;
-const MAX_EVIDENCE_BYTES = 8 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_SOURCE_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCES = 10_000;
-const MAX_LAST_GOOD_BYTES = 8 * 1024 * 1024;
 const MAX_GIT_LIST_BYTES = 8 * 1024 * 1024;
+const MAX_RUNTIME_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_RUNTIME_BYTES = 64 * 1024 * 1024;
+const MAX_STALE_HISTORY = 128;
 const MAX_PRIMITIVE_TOKEN_BYTES = 16 * 1024;
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_MEDIA_BYTES = 64 * 1024 * 1024;
 const MAX_MEDIA_FILES = 1_000;
 const portalRoot = process.cwd();
 await recoverOwnedCorpus(portalRoot);
-await assertNoSymlink(portalRoot, "portal.config.json");
-const configBytes = await readBoundedRegularFile(path.join(portalRoot, "portal.config.json"), MAX_CONFIG_BYTES, "portal configuration");
+const discoveredRepositoryRoot = await findRepositoryRoot(portalRoot);
+const repositoryRoot = await realpath(discoveredRepositoryRoot);
+const commit = gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim();
+if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("repository HEAD must resolve to a full Git commit");
+
+const portalConfigRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "portal.config.json")).split(path.sep).join("/"), "portal configuration path");
+assertCommittedFileAt(commit, portalConfigRelative, ["100644"], "portal configuration");
+const configBytes = readCommittedBlob(commit, portalConfigRelative, MAX_CONFIG_BYTES, "portal configuration");
 const config = validatePortalConfig(JSON.parse(configBytes));
 const base = config.base;
 const layers = config.layers;
 const repoRelative = config.repository_root;
 if (typeof repoRelative !== "string" || !repoRelative || repoRelative.includes("\\") || path.isAbsolute(repoRelative)) throw new Error("repository_root: expected a relative POSIX path");
-const configuredRepositoryRoot = path.resolve(portalRoot, repoRelative);
-const discoveredRepositoryRoot = await findRepositoryRoot(portalRoot);
-const [repositoryRoot, canonicalDiscoveredRoot] = await Promise.all([realpath(configuredRepositoryRoot), realpath(discoveredRepositoryRoot)]);
-if (!filesystemPathsEqual(repositoryRoot, canonicalDiscoveredRoot)) throw new Error("repository_root must resolve to the owning CodeFlow repository");
-const commit = gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim();
-if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("repository HEAD must resolve to a full Git commit");
-
-const portalConfigRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "portal.config.json")).split(path.sep).join("/"), "portal configuration path");
+const configuredRepositoryRoot = await realpath(path.resolve(portalRoot, repoRelative));
+if (!filesystemPathsEqual(repositoryRoot, configuredRepositoryRoot)) throw new Error("repository_root must resolve to the owning CodeFlow repository");
 const adapterRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const runtimeInputs = filesystemPathsEqual(path.resolve(adapterRoot), path.resolve(portalRoot))
   ? ["astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/content.config.ts", "src/styles", "public/portal-preview.js"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
   : [];
 const snapshotPaths = [portalConfigRelative, ...runtimeInputs, ...config.source_roots, ...(config.primitive_tokens === null ? [] : [config.primitive_tokens])].map((item) => safeRelative(item, "snapshot path"));
 assertCleanSnapshot(snapshotPaths);
+await assertRuntimeMatchesCommit([portalConfigRelative, ...runtimeInputs]);
 let primitiveTokens = null;
 let primitiveTokenEvidence = null;
 if (config.primitive_tokens !== null) {
   assertCommittedPrimitiveToken(config.primitive_tokens);
-  await assertNoSymlink(repositoryRoot, config.primitive_tokens);
-  const bytes = await readBoundedRegularFile(path.join(repositoryRoot, config.primitive_tokens), MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
+  const bytes = readCommittedBlob(commit, config.primitive_tokens, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
   primitiveTokens = validatePrimitiveTokens(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), config.theme);
   primitiveTokenEvidence = { source_path: config.primitive_tokens, source_sha256: sha256(bytes) };
 }
 const primitiveTokenCss = renderPrimitiveTokenCss(primitiveTokens);
 if (primitiveTokenEvidence !== null) Object.assign(primitiveTokenEvidence, { output_path: ".portal/generated/project-tokens.css", output_sha256: sha256(primitiveTokenCss) });
-
-const evidencePath = path.join(portalRoot, ".portal/generated/evidence.json");
-let previous = { pages: [] };
-try { previous = JSON.parse(await readBoundedRegularFile(evidencePath, MAX_EVIDENCE_BYTES, "prior evidence")); } catch {}
-const previousBySource = new Map();
-const ambiguousPriorSources = new Set();
-for (const page of Array.isArray(previous.pages) ? previous.pages : []) {
-  if (!isSafePriorPage(page) || ambiguousPriorSources.has(page.source_path)) continue;
-  if (previousBySource.has(page.source_path)) {
-    previousBySource.delete(page.source_path);
-    ambiguousPriorSources.add(page.source_path);
-  } else previousBySource.set(page.source_path, page);
-}
-const previousRendered = new Map();
-for (const page of previousBySource.values()) {
-  try {
-    await assertNoSymlink(portalRoot, page.output_markdown);
-    const rendered = await readBoundedRegularFile(path.join(portalRoot, page.output_markdown), MAX_LAST_GOOD_BYTES, "prior rendered page");
-    if (sha256(rendered) === page.output_markdown_sha256) previousRendered.set(page.source_path, rendered.toString("utf8"));
-  } catch {}
-}
 
 const excludes = (config.exclude ?? []).map((item) => safeRelative(item, "exclude"));
 const sources = committedMarkdownSources(config.source_roots, excludes);
@@ -92,8 +72,7 @@ for (const sourcePath of sources) {
 const pages = [];
 let totalSourceBytes = 0;
 for (const sourcePath of sources) {
-  await assertNoSymlink(repositoryRoot, sourcePath);
-  const bytes = await readBoundedRegularFile(path.join(repositoryRoot, sourcePath), MAX_SOURCE_BYTES, sourcePath);
+  const bytes = readCommittedBlob(commit, sourcePath, MAX_SOURCE_BYTES, sourcePath);
   totalSourceBytes += bytes.length;
   if (totalSourceBytes > MAX_TOTAL_SOURCE_BYTES) throw new Error(`source corpus exceeds ${MAX_TOTAL_SOURCE_BYTES} bytes`);
   const sourceHash = sha256(bytes);
@@ -110,14 +89,11 @@ for (const sourcePath of sources) {
     const excerpt = excerptFor(text);
     pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
   } catch (error) {
-    const prior = previousBySource.get(sourcePath);
-    const rendered = previousRendered.get(sourcePath);
-    if (!prior || !rendered) throw error;
-    if (prior.route !== sourceRoutes.get(sourcePath)) throw new Error(`${sourcePath}: last-good route no longer matches current routing`);
-    pages.push({ ...prior, source_sha256: sourceHash, built_from_commit: commit, stale: true, searchable: false, rendered, rendered_is_stale: prior.stale === true, snippets: [], backlinks: prior.backlinks ?? [], stale_reason: String(error.message ?? error), last_good_commit: prior.built_from_commit });
+    pages.push(findLastGoodPage(sourcePath, sourceHash, error));
   }
 }
 assertCleanSnapshot(snapshotPaths);
+await assertRuntimeMatchesCommit([portalConfigRelative, ...runtimeInputs]);
 if (gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim() !== commit) throw new Error("repository HEAD changed while the portal snapshot was being read");
 
 const ownerById = new Map();
@@ -139,9 +115,12 @@ for (const page of pages) page.backlinks.sort((a, b) => compareDeterministicText
 const renderedPages = [];
 const mediaReferences = new Map();
 for (const page of pages) {
-  let rendered = page.rendered;
-  if (!page.stale) rendered = renderPage(page, ownerById, mediaReferences);
-  else rendered = renderStalePage(page, rendered);
+  const referencedMedia = page.stale ? new Map() : mediaReferences;
+  let rendered = renderPage(page, ownerById, referencedMedia);
+  if (page.stale) {
+    if (referencedMedia.size) throw new Error(`${page.source_path}: stale fallback cannot import ancestor media`);
+    rendered = renderStalePage(page, rendered);
+  }
   const outputMarkdown = `src/content/docs/${page.route}.md`;
   const twin = `public/markdown/${page.route}.md`;
   renderedPages.push({ route: page.route, rendered });
@@ -151,7 +130,7 @@ for (const page of pages) {
   page.markdown_twin_sha256 = sha256(rendered);
   page.snippets = page.stale || !page.excerpt ? [] : [{ start_line: page.excerpt.start, end_line: page.excerpt.end, sha256: sha256(page.excerpt.text) }];
   page.status = typeof page.frontmatter?.status === "string" ? page.frontmatter.status : null;
-  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.rendered; delete page.rendered_is_stale; delete page.layer; delete page.stale_reason;
+  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer; delete page.stale_reason;
 }
 
 const renderedLandings = [];
@@ -169,8 +148,7 @@ const mediaEvidence = [];
 let totalMediaBytes = 0;
 for (const [sourcePath, outputPath] of [...mediaReferences].sort(([left], [right]) => compareDeterministicText(left, right))) {
   assertCommittedFile(sourcePath, ["100644"], "referenced media");
-  await assertNoSymlink(repositoryRoot, sourcePath);
-  const bytes = await readBoundedRegularFile(path.join(repositoryRoot, sourcePath), MAX_MEDIA_BYTES, `referenced media ${sourcePath}`);
+  const bytes = readCommittedBlob(commit, sourcePath, MAX_MEDIA_BYTES, `referenced media ${sourcePath}`);
   assertRasterSignature(sourcePath, bytes);
   totalMediaBytes += bytes.length;
   if (totalMediaBytes > MAX_TOTAL_MEDIA_BYTES) throw new Error(`referenced media corpus exceeds ${MAX_TOTAL_MEDIA_BYTES} bytes`);
@@ -178,6 +156,7 @@ for (const [sourcePath, outputPath] of [...mediaReferences].sort(([left], [right
   mediaEvidence.push({ source_path: sourcePath, source_sha256: sha256(bytes), output_path: `public/${outputPath}`, output_sha256: sha256(bytes) });
 }
 assertCleanSnapshot([...snapshotPaths, ...mediaReferences.keys()]);
+await assertRuntimeMatchesCommit([portalConfigRelative, ...runtimeInputs]);
 if (gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim() !== commit) throw new Error("repository HEAD changed while referenced media was being read");
 
 const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
@@ -224,10 +203,20 @@ function localRouteFor(sourcePath) {
 
 function sourceLink(sourcePath) {
   const label = `<code>${escapeHtml(sourcePath)}</code> at <code>${escapeHtml(commit.slice(0, 12))}</code>`;
-  if (typeof config.repository_url !== "string" || !/^https:\/\//.test(config.repository_url)) return label;
-  const encodedPath = sourcePath.split("/").map(encodeURIComponent).join("/");
-  const href = `${config.repository_url.replace(/\/$/, "")}/blob/${commit}/${encodedPath}`;
+  const href = pinnedSourceUrl(sourcePath);
+  if (href === null) return label;
   return `<a href="${escapeHtml(href)}">${label}</a>`;
+}
+
+function pinnedSourceUrl(sourcePath) {
+  if (typeof config.repository_url !== "string") return null;
+  const repository = new URL(config.repository_url);
+  const root = config.repository_url.replace(/\/$/, "").replace(/\.git$/, "");
+  const encodedPath = sourcePath.split("/").map(strictUrlSegment).join("/");
+  if (repository.hostname.toLowerCase() === "github.com") return `${root}/blob/${commit}/${encodedPath}`;
+  if (repository.hostname.toLowerCase() === "gitlab.com") return `${root}/-/blob/${commit}/${encodedPath}`;
+  if (repository.hostname.toLowerCase() === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}`;
+  return null;
 }
 
 function renderPage(page, routesById, referencedMedia) {
@@ -272,7 +261,8 @@ function renderStalePage(page, priorRendered) {
     .replace(/\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> \*\*Stale rendering:\*\*[^\n]*\n\n([\s\S]*)\n<\/div>\n$/, "\n$1\n")
     .replace(/<div data-pagefind-body data-codeflow-search-root="[^"]+">/, "<div>")
     .replace(/^---\n(?:pagefind: false\n)?/, "---\npagefind: false\n");
-  const opening = `\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Current source ${sourceLink(page.source_path)} · snapshot <code>${commit}</code> · last good rendering <code>${escapeHtml(page.last_good_commit ?? "unknown")}</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Stale rendering:** ${escapeMarkdownInline(page.stale_reason)}. This page is excluded from search until its source is valid again.\n\n`;
+  const lastGoodMarker = `<!-- codeflow-last-good-provenance source_sha256=${page.last_good_source_sha256} built_from_commit=${page.last_good_commit} -->`;
+  const opening = `\n---\n\n${provenanceMarker(page)}\n${lastGoodMarker}\n<div class="portal-provenance">Current source ${sourceLink(page.source_path)} · snapshot <code>${commit}</code> · last good source <code>${escapeHtml(page.last_good_commit)}</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Stale rendering:** ${escapeMarkdownInline(page.stale_reason)}. This page is excluded from search until its source is valid again.\n\n`;
   body = body.replace(/\n---\n/, opening);
   return `${body.trimEnd()}\n\n</div>\n`;
 }
@@ -324,16 +314,41 @@ function renderIndex(definitions, allPages) {
   return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
 }
 
-function isSafePriorPage(page) {
-  if (!page || typeof page !== "object" || typeof page.source_path !== "string" || typeof page.built_from_commit !== "string" || !/^[a-f0-9]{40}$/.test(page.built_from_commit) || typeof page.route !== "string" || typeof page.output_markdown !== "string" || typeof page.output_markdown_sha256 !== "string") return false;
+function findLastGoodPage(sourcePath, currentSourceHash, currentError) {
+  let history;
   try {
-    safeRelative(page.source_path, "prior source");
-    safeRelative(page.route, "prior route");
-    safeRelative(page.output_markdown, "prior output");
-    const relationships = Array.isArray(page.relationships) && page.relationships.every((item) => item && typeof item === "object" && ["epic", "spec", "depends_on", "capability", "decision", "related", "superseded_by"].includes(item.type) && strictId(item.target) && (item.source_id === null || item.source_id === undefined || strictId(item.source_id)));
-    const backlinks = Array.isArray(page.backlinks) && page.backlinks.every((item) => item && typeof item === "object" && typeof item.source_route === "string" && safeRelative(item.source_route, "prior backlink") && strictId(item.target) && (item.source_id === null || item.source_id === undefined || strictId(item.source_id)));
-    return page.output_markdown === `src/content/docs/${page.route}.md` && /^[a-f0-9]{64}$/.test(page.output_markdown_sha256) && Array.isArray(page.ids) && page.ids.every(strictId) && relationships && backlinks;
-  } catch { return false; }
+    history = gitText(["rev-list", `--max-count=${MAX_STALE_HISTORY + 1}`, commit, "--", gitLiteralPathspec(sourcePath)], (MAX_STALE_HISTORY + 1) * 41)
+      .trim().split("\n").filter((candidate) => candidate && candidate !== commit);
+  } catch { throw currentError; }
+  for (const ancestor of history.slice(0, MAX_STALE_HISTORY)) {
+    if (!/^[a-f0-9]{40}$/.test(ancestor)) continue;
+    try {
+      const bytes = readCommittedBlob(ancestor, sourcePath, MAX_SOURCE_BYTES, `last-good source ${sourcePath}`);
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const { frontmatter, body } = parseMarkdown(text, sourcePath);
+      const layer = chooseLayer(sourcePath, layers);
+      return {
+        source_path: sourcePath,
+        source_sha256: currentSourceHash,
+        built_from_commit: commit,
+        route: sourceRoutes.get(sourcePath),
+        layer: layer.id,
+        title: titleFor(frontmatter, body, sourcePath),
+        frontmatter,
+        body,
+        ids: collectPageIds(frontmatter, text, sourcePath),
+        relationships: extractPageRelationships(frontmatter, text, sourcePath),
+        backlinks: [],
+        stale: true,
+        searchable: false,
+        excerpt: null,
+        stale_reason: String(currentError.message ?? currentError),
+        last_good_commit: ancestor,
+        last_good_source_sha256: sha256(bytes),
+      };
+    } catch {}
+  }
+  throw currentError;
 }
 
 function escapeHtml(value) {
@@ -346,7 +361,7 @@ function filesystemPathsEqual(left, right) {
 
 function committedMarkdownSources(configuredRoots, excluded) {
   const roots = configuredRoots.map((item) => safeRelative(item, "source_root"));
-  const listing = gitText(["ls-tree", "-r", "-z", commit, "--", ...roots], MAX_GIT_LIST_BYTES);
+  const listing = gitText(["ls-tree", "-r", "-z", commit, "--", ...roots.map((root) => gitLiteralPathspec(root, true))], MAX_GIT_LIST_BYTES);
   const sources = [];
   const keys = new Set();
   for (const record of listing.split("\0")) {
@@ -366,12 +381,48 @@ function committedMarkdownSources(configuredRoots, excluded) {
   return sources.sort(compareDeterministicText);
 }
 
+async function assertRuntimeMatchesCommit(inputs) {
+  const records = committedRegularFiles(commit, inputs, "portal runtime input");
+  let totalBytes = 0;
+  for (const record of records) {
+    const committed = readCommittedBlob(commit, record.path, MAX_RUNTIME_FILE_BYTES, "portal runtime input");
+    const worktree = await readBoundedRegularFile(path.join(repositoryRoot, record.path), MAX_RUNTIME_FILE_BYTES, `portal runtime input ${record.path}`);
+    totalBytes += committed.length;
+    if (totalBytes > MAX_TOTAL_RUNTIME_BYTES) throw new Error(`portal runtime inputs exceed ${MAX_TOTAL_RUNTIME_BYTES} bytes`);
+    if (!committed.equals(worktree)) throw new Error(`portal runtime input does not match ${commit}: ${record.path}`);
+  }
+}
+
+function committedRegularFiles(commitish, inputs, label) {
+  const listing = gitText(["ls-tree", "-r", "-z", commitish, "--", ...inputs.map((input) => gitObjectPathspec(commitish, input))], MAX_GIT_LIST_BYTES);
+  const records = [];
+  const keys = new Set();
+  for (const raw of listing.split("\0")) {
+    if (!raw) continue;
+    const separator = raw.indexOf("\t");
+    if (separator < 0) throw new Error(`${label} has an invalid Git tree record`);
+    const [mode, type] = raw.slice(0, separator).split(" ");
+    const file = safeRelative(raw.slice(separator + 1), label);
+    if (type !== "blob" || !["100644", "100755"].includes(mode)) throw new Error(`${label} is not a regular Git file: ${file}`);
+    const key = file.normalize("NFC").toLowerCase();
+    if (keys.has(key)) throw new Error(`${label} has a portable path collision: ${file}`);
+    keys.add(key);
+    records.push({ path: file, mode });
+  }
+  if (!records.length) throw new Error(`${label} set is empty at ${commitish}`);
+  return records.sort((left, right) => compareDeterministicText(left.path, right.path));
+}
+
 function assertCommittedPrimitiveToken(sourcePath) {
   assertCommittedFile(sourcePath, ["100644"], "primitive token import");
 }
 
 function assertCommittedFile(sourcePath, allowedModes, label) {
-  const listing = gitText(["ls-tree", "-z", commit, "--", sourcePath], 4096);
+  assertCommittedFileAt(commit, sourcePath, allowedModes, label);
+}
+
+function assertCommittedFileAt(commitish, sourcePath, allowedModes, label) {
+  const listing = gitText(["ls-tree", "-z", commitish, "--", gitLiteralPathspec(sourcePath)], 4096);
   const records = listing.split("\0").filter(Boolean);
   if (records.length !== 1) throw new Error(`${label} must be one committed regular file: ${sourcePath}`);
   const separator = records[0].indexOf("\t");
@@ -381,6 +432,13 @@ function assertCommittedFile(sourcePath, allowedModes, label) {
   if (actual !== sourcePath || type !== "blob" || !allowedModes.includes(mode)) {
     throw new Error(`${label} must be a committed regular file with an allowed mode: ${sourcePath}`);
   }
+}
+
+function readCommittedBlob(commitish, sourcePath, maximumBytes, label) {
+  assertCommittedFileAt(commitish, sourcePath, ["100644", "100755"], label);
+  const bytes = gitBytes(["cat-file", "blob", `${commitish}:${sourcePath}`], maximumBytes, label);
+  if (bytes.length > maximumBytes) throw new Error(`${label} exceeds ${maximumBytes} bytes`);
+  return bytes;
 }
 
 function assertRasterSignature(sourcePath, bytes) {
@@ -396,14 +454,33 @@ function assertRasterSignature(sourcePath, bytes) {
 }
 
 function assertCleanSnapshot(paths) {
-  const status = gitText(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...paths], MAX_GIT_LIST_BYTES);
+  const status = gitText(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...paths.map((input) => gitObjectPathspec(commit, input))], MAX_GIT_LIST_BYTES);
   if (status.length) throw new Error("configured portal sources must match HEAD exactly; commit or remove staged, modified, deleted, untracked, and ignored source-root changes");
 }
 
+function gitLiteralPathspec(value, tree = false) {
+  const safe = safeRelative(value, "Git snapshot path");
+  return `:(top,literal)${safe}${tree ? "/" : ""}`;
+}
+
+function gitObjectPathspec(commitish, value) {
+  const safe = safeRelative(value, "Git snapshot path");
+  let type;
+  try { type = gitText(["cat-file", "-t", `${commitish}:${safe}`], 64).trim(); }
+  catch { return gitLiteralPathspec(safe, true); }
+  if (!['blob', 'tree'].includes(type)) throw new Error(`Git snapshot path has an unsupported object type: ${safe}`);
+  return gitLiteralPathspec(safe, type === "tree");
+}
+
 function gitText(args, maximumBytes) {
+  return new TextDecoder("utf-8", { fatal: true }).decode(gitBytes(args, maximumBytes, `Git ${args[0]}`));
+}
+
+function gitBytes(args, maximumBytes, label) {
   try {
-    const output = execFileSync("git", ["-C", repositoryRoot, ...args], { encoding: "buffer", maxBuffer: maximumBytes });
-    return new TextDecoder("utf-8", { fatal: true }).decode(output);
+    const output = execFileSync("git", ["-C", repositoryRoot, ...args], { encoding: "buffer", maxBuffer: maximumBytes + 1 });
+    if (output.length > maximumBytes) throw new Error(`${label} exceeds ${maximumBytes} bytes`);
+    return output;
   } catch (error) {
     throw new Error(`Git snapshot command failed (${args[0]}): ${String(error.stderr ?? error.message ?? error).trim()}`);
   }

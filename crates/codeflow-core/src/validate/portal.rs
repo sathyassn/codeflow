@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -142,6 +143,8 @@ struct Page {
     snippets: Vec<Snippet>,
     #[serde(default)]
     last_good_commit: Option<String>,
+    #[serde(default)]
+    last_good_source_sha256: Option<String>,
 }
 
 fn deserialize_adoption_files<'de, D>(
@@ -287,6 +290,15 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             .issues
             .push("repository commit is not a full Git object ID".into());
     }
+    match git_text_bounded(repo_root, &["rev-parse", "--verify", "HEAD^{commit}"], 1024) {
+        Ok(head) if head.trim() == evidence.repository.commit => {}
+        Ok(_) => report
+            .issues
+            .push("evidence repository commit does not match HEAD".into()),
+        Err(error) => report
+            .issues
+            .push(format!("repository HEAD cannot be verified: {error}")),
+    }
     if evidence
         .repository
         .release_version
@@ -335,7 +347,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         return report;
     }
     let repository = repo_root.to_path_buf();
-    let authority = collect_ids(&repository, &evidence.pages);
+    let authority = collect_ids(&repository, &evidence.pages, &evidence.repository.commit);
     report.issues.extend(authority.issues);
     let ids: BTreeSet<String> = authority.owners.keys().cloned().collect();
     let mut routes = BTreeSet::new();
@@ -377,15 +389,27 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             ));
         }
         if page.stale {
-            if !page.last_good_commit.as_deref().is_some_and(valid_commit) {
+            if !page.last_good_commit.as_deref().is_some_and(valid_commit)
+                || !page
+                    .last_good_source_sha256
+                    .as_deref()
+                    .is_some_and(valid_sha256)
+            {
                 report.issues.push(format!(
-                    "{} stale page lacks a valid last-good commit",
+                    "{} stale page lacks valid last-good source provenance",
                     page.route
                 ));
+            } else {
+                verify_last_good_source(
+                    &repository,
+                    &evidence.repository.commit,
+                    page,
+                    &mut report,
+                );
             }
-        } else if page.last_good_commit.is_some() {
+        } else if page.last_good_commit.is_some() || page.last_good_source_sha256.is_some() {
             report.issues.push(format!(
-                "{} active page unexpectedly claims a last-good commit",
+                "{} active page unexpectedly claims last-good source provenance",
                 page.route
             ));
         }
@@ -1064,6 +1088,19 @@ fn verify_rendered_claims(
             page.route
         ));
     }
+    if page.stale {
+        let last_good_marker = format!(
+            "<!-- codeflow-last-good-provenance source_sha256={} built_from_commit={} -->",
+            page.last_good_source_sha256.as_deref().unwrap_or_default(),
+            page.last_good_commit.as_deref().unwrap_or_default()
+        );
+        if !output.lines().take(20).any(|line| line == last_good_marker) {
+            report.issues.push(format!(
+                "{} lacks its exact last-good source marker",
+                page.route
+            ));
+        }
+    }
     if !output.contains(&format!("<code>{}</code>", page.source_path))
         || !output.contains(&format!("<code>{}</code>", evidence.repository.commit))
         || evidence
@@ -1096,6 +1133,47 @@ fn verify_rendered_claims(
                 page.route
             ));
         }
+    }
+}
+
+fn verify_last_good_source(
+    repository: &Path,
+    current_commit: &str,
+    page: &Page,
+    report: &mut PortalValidationReport,
+) {
+    let Some(ancestor) = page.last_good_commit.as_deref() else {
+        return;
+    };
+    let status = Command::new("git")
+        .args(["-C"])
+        .arg(repository)
+        .args(["merge-base", "--is-ancestor", ancestor, current_commit])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if !status.is_ok_and(|status| status.success()) {
+        report.issues.push(format!(
+            "{} last-good commit is not an ancestor of the evidenced commit",
+            page.route
+        ));
+        return;
+    }
+    match git_blob_bounded(repository, ancestor, &page.source_path, MAX_SOURCE_BYTES) {
+        Ok(bytes)
+            if page
+                .last_good_source_sha256
+                .as_ref()
+                .is_some_and(|expected| sha256_hex(&bytes) == *expected) => {}
+        Ok(_) => report.issues.push(format!(
+            "{} last-good Git blob hash does not match evidence",
+            page.route
+        )),
+        Err(error) => report.issues.push(format!(
+            "{} last-good Git blob cannot be verified: {error}",
+            page.route
+        )),
     }
 }
 
@@ -1226,9 +1304,67 @@ fn relationship_kind(value: &str) -> bool {
     )
 }
 
+fn git_text_bounded(root: &Path, args: &[&str], maximum_bytes: u64) -> std::io::Result<String> {
+    String::from_utf8(git_output_bounded(root, args, maximum_bytes)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+}
+
+fn git_blob_bounded(
+    root: &Path,
+    commit: &str,
+    source_path: &str,
+    maximum_bytes: u64,
+) -> std::io::Result<Vec<u8>> {
+    if !valid_commit(commit) || !safe_path_text(source_path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid Git blob identity",
+        ));
+    }
+    let object = format!("{commit}:{source_path}");
+    git_output_bounded(root, &["cat-file", "blob", &object], maximum_bytes)
+}
+
+fn git_output_bounded(root: &Path, args: &[&str], maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
+    let mut child = Command::new("git")
+        .args(["-C"])
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut bytes = Vec::new();
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("Git stdout was not captured"))?
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(std::io::Error::other("Git object lookup failed"));
+    }
+    if bytes.len() as u64 > maximum_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Git output exceeds its byte limit",
+        ));
+    }
+    Ok(bytes)
+}
+
 fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum_bytes {
+    read_bounded_regular_with_hook(path, maximum_bytes, || Ok(()))
+}
+
+fn read_bounded_regular_with_hook(
+    path: &Path,
+    maximum_bytes: u64,
+    after_open: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<Vec<u8>> {
+    let before = std::fs::symlink_metadata(path)?;
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "file is not regular or exceeds its byte limit",
@@ -1247,21 +1383,50 @@ fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
+    let opened = file.metadata()?;
+    if !opened.is_file() || !same_file_identity(&before, &opened) || opened.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "file changed type while opening",
+            "file changed identity or type while opening",
         ));
     }
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.take(maximum_bytes + 1).read_to_end(&mut bytes)?;
+    after_open()?;
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or(0));
+    file.take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "file grew beyond its byte limit",
         ));
     }
+    let after = std::fs::symlink_metadata(path)?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || !same_file_identity(&opened, &after)
+        || opened.len() != bytes.len() as u64
+        || opened.len() != after.len()
+        || opened.modified()? != after.modified()?
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file changed while it was being read",
+        ));
+    }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
 }
 
 fn read_bounded_text(path: &Path, maximum_bytes: u64) -> std::io::Result<String> {
@@ -1373,7 +1538,7 @@ struct AuthorityIds {
     issues: Vec<String>,
 }
 
-fn collect_ids(root: &Path, pages: &[Page]) -> AuthorityIds {
+fn collect_ids(root: &Path, pages: &[Page], current_commit: &str) -> AuthorityIds {
     let mut authority = AuthorityIds {
         owners: BTreeMap::new(),
         issues: Vec::new(),
@@ -1416,47 +1581,53 @@ fn collect_ids(root: &Path, pages: &[Page]) -> AuthorityIds {
             continue;
         }
         let mut path_report = PortalValidationReport::default();
-        let Some(path) = safe_join(
+        if safe_join(
             root,
             Path::new(&page.source_path),
             "authoritative source",
             &mut path_report,
-        ) else {
+        )
+        .is_none()
+        {
             authority.issues.extend(path_report.issues);
             continue;
+        }
+        let source_commit = if page.stale {
+            page.last_good_commit.as_deref().unwrap_or_default()
+        } else {
+            current_commit
         };
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        let expected_hash = if page.stale {
+            page.last_good_source_sha256.as_deref().unwrap_or_default()
+        } else {
+            &page.source_sha256
+        };
+        let bytes = match git_blob_bounded(root, source_commit, &page.source_path, MAX_SOURCE_BYTES)
+        {
+            Ok(bytes) if sha256_hex(&bytes) == expected_hash => bytes,
+            Ok(_) => {
                 authority.issues.push(format!(
-                    "authoritative source is not a regular file: {}",
+                    "authoritative Git source hash mismatch: {}",
                     page.source_path
                 ));
                 continue;
             }
-            Ok(metadata) if metadata.len() > MAX_SOURCE_BYTES => {
-                authority.issues.push(format!(
-                    "authoritative source exceeds {MAX_SOURCE_BYTES} bytes: {}",
-                    page.source_path
-                ));
-                continue;
-            }
-            Ok(metadata) => metadata,
             Err(error) => {
                 authority.issues.push(format!(
-                    "authoritative source is unreadable {}: {error}",
+                    "authoritative Git source is unreadable {}: {error}",
                     page.source_path
                 ));
                 continue;
             }
         };
-        total_bytes = total_bytes.saturating_add(metadata.len());
+        total_bytes = total_bytes.saturating_add(bytes.len() as u64);
         if total_bytes > MAX_TOTAL_SOURCE_BYTES {
             authority.issues.push(format!(
                 "authoritative source corpus exceeds {MAX_TOTAL_SOURCE_BYTES} bytes"
             ));
             break;
         }
-        let text = match read_bounded_text(&path, MAX_SOURCE_BYTES) {
+        let text = match String::from_utf8(bytes) {
             Ok(text) => text
                 .strip_prefix('\u{feff}')
                 .unwrap_or(&text)
@@ -1480,19 +1651,22 @@ fn collect_ids(root: &Path, pages: &[Page]) -> AuthorityIds {
             }
             for entry in entries {
                 if strict_id(&entry.id) {
-                    add_id(entry.id, &path, root, &mut authority);
+                    add_id(entry.id, Path::new(&page.source_path), root, &mut authority);
                 }
             }
             continue;
         }
         if let Some(id) = frontmatter_id(&text) {
-            add_id(id, &path, root, &mut authority);
+            add_id(id, Path::new(&page.source_path), root, &mut authority);
             continue;
         }
-        if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
+        if let Some(stem) = Path::new(&page.source_path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+        {
             let id = stem.to_ascii_uppercase();
             if strict_id(&id) {
-                add_id(id, &path, root, &mut authority);
+                add_id(id, Path::new(&page.source_path), root, &mut authority);
             }
         }
     }
@@ -1540,6 +1714,7 @@ mod tests {
             backlinks: Vec::new(),
             snippets: Vec::new(),
             last_good_commit: None,
+            last_good_source_sha256: None,
         }
     }
 
@@ -1613,8 +1788,33 @@ mod tests {
             "---\nid: TSK-999\n---\n",
         )
         .unwrap();
-        let pages = vec![page("docs/capabilities.md"), page("docs/example.md")];
-        let authority = collect_ids(temp.path(), &pages);
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "docs"][..],
+            &["commit", "-q", "-m", "fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(temp.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let commit = git_text_bounded(temp.path(), &["rev-parse", "HEAD"], 1024)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let mut capabilities = page("docs/capabilities.md");
+        capabilities.source_sha256 =
+            sha256_hex(&std::fs::read(temp.path().join("docs/capabilities.md")).unwrap());
+        let mut example = page("docs/example.md");
+        example.source_sha256 =
+            sha256_hex(&std::fs::read(temp.path().join("docs/example.md")).unwrap());
+        let pages = vec![capabilities, example];
+        let authority = collect_ids(temp.path(), &pages, &commit);
         assert!(authority.issues.is_empty(), "{:?}", authority.issues);
         assert_eq!(
             authority.owners.get("CAP-101").map(String::as_str),
@@ -1654,6 +1854,97 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bounded_validation_reads_detect_growth_and_path_swaps() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("evidence.json");
+        std::fs::write(&file, "stable").unwrap();
+        assert!(read_bounded_regular_with_hook(&file, 32, || {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)?
+                .write_all(b"-growth")
+        })
+        .is_err());
+
+        std::fs::write(&file, "stable").unwrap();
+        let moved = temp.path().join("moved.json");
+        assert!(read_bounded_regular_with_hook(&file, 32, || {
+            std::fs::rename(&file, &moved)?;
+            std::fs::write(&file, "replacement")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn last_good_source_requires_an_ancestor_git_blob_and_exact_hash() {
+        fn git(root: &Path, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .args(["-C"])
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        }
+        fn initialize(root: &Path, content: &str) -> String {
+            std::fs::create_dir_all(root.join("docs")).unwrap();
+            std::fs::write(root.join("docs/guide.md"), content).unwrap();
+            git(root, &["init", "-q"]);
+            git(
+                root,
+                &["config", "user.email", "portal-tests@codeflow.invalid"],
+            );
+            git(root, &["config", "user.name", "Portal tests"]);
+            git(root, &["add", "docs/guide.md"]);
+            git(root, &["commit", "-q", "-m", "fixture"]);
+            git(root, &["rev-parse", "HEAD"]).trim().to_owned()
+        }
+
+        let repository = tempfile::tempdir().unwrap();
+        let ancestor = initialize(repository.path(), "---\nid: TSK-0102\n---\n# Valid\n");
+        let ancestor_bytes = std::fs::read(repository.path().join("docs/guide.md")).unwrap();
+        std::fs::write(repository.path().join("docs/guide.md"), "---\nbroken\n").unwrap();
+        git(repository.path(), &["add", "docs/guide.md"]);
+        git(repository.path(), &["commit", "-q", "-m", "break source"]);
+        let current = git(repository.path(), &["rev-parse", "HEAD"])
+            .trim()
+            .to_owned();
+
+        let mut stale = page("docs/guide.md");
+        stale.stale = true;
+        stale.searchable = false;
+        stale.last_good_commit = Some(ancestor);
+        stale.last_good_source_sha256 = Some(sha256_hex(&ancestor_bytes));
+        let mut report = PortalValidationReport::default();
+        verify_last_good_source(repository.path(), &current, &stale, &mut report);
+        assert!(report.is_clean(), "{:?}", report.issues);
+
+        let unrelated = tempfile::tempdir().unwrap();
+        stale.last_good_commit = Some(initialize(unrelated.path(), "# Unrelated\n"));
+        let mut report = PortalValidationReport::default();
+        verify_last_good_source(repository.path(), &current, &stale, &mut report);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.contains("not an ancestor")));
+
+        stale.last_good_commit = Some(
+            git(repository.path(), &["rev-list", "--max-parents=0", "HEAD"])
+                .trim()
+                .to_owned(),
+        );
+        stale.last_good_source_sha256 = Some("f".repeat(64));
+        let mut report = PortalValidationReport::default();
+        verify_last_good_source(repository.path(), &current, &stale, &mut report);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.contains("hash does not match")));
+    }
+
     #[cfg(unix)]
     #[test]
     fn authority_and_artifact_roots_refuse_parent_symlinks() {
@@ -1661,7 +1952,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("task.md"), "---\nid: TSK-777\n---\n").unwrap();
         std::os::unix::fs::symlink(outside.path(), temp.path().join("docs")).unwrap();
-        let authority = collect_ids(temp.path(), &[page("docs/task.md")]);
+        let authority = collect_ids(temp.path(), &[page("docs/task.md")], &"0".repeat(40));
         assert!(!authority.owners.contains_key("TSK-777"));
         assert!(authority
             .issues

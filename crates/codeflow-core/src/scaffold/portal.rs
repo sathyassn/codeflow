@@ -20,6 +20,33 @@ const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BUNDLE_FILES: usize = 256;
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const MAX_BASELINE_ENTRIES: usize = 1_024;
+const MAX_MANAGED_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_RECONCILIATION_READ_BYTES: u64 = 64 * 1024 * 1024;
+
+struct ReadBudget {
+    remaining: u64,
+}
+
+impl ReadBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_RECONCILIATION_READ_BYTES,
+        }
+    }
+
+    fn charge(&mut self, bytes: usize) -> std::io::Result<()> {
+        let bytes = u64::try_from(bytes).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "file length overflow")
+        })?;
+        self.remaining = self.remaining.checked_sub(bytes).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "portal reconciliation read budget exceeded",
+            )
+        })?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -196,6 +223,7 @@ pub fn setup_portal(
         "codeflow portal setup ({})",
         relative_root.display()
     ));
+    let mut read_budget = ReadBudget::new();
     let mut next_files = BTreeMap::new();
     for file in &manifest.files {
         let asset = source
@@ -248,10 +276,10 @@ pub fn setup_portal(
             reconcile_managed(
                 repo_root,
                 &dest_text,
-                &dest,
                 prior_baseline_rel.as_deref(),
                 &pristine,
                 old_file,
+                &mut read_budget,
                 &mut report,
             )?;
             write_beneath_root(repo_root, &baseline_rel, pristine.as_bytes())?;
@@ -278,8 +306,12 @@ pub fn setup_portal(
                 continue;
             }
             let dest_text = path_text(&relative_root.join(path));
-            let dest = guard_beneath_root(repo_root, Path::new(&dest_text))?;
-            let current = std::fs::read(&dest).ok();
+            let current = read_project_file(
+                repo_root,
+                &dest_text,
+                "retired managed portal file",
+                &mut read_budget,
+            )?;
             if current
                 .as_deref()
                 .is_some_and(|bytes| sha256_hex(bytes) == state.pristine_sha256)
@@ -317,21 +349,26 @@ pub fn update_adopted_portal(
 fn reconcile_managed(
     root: &Path,
     dest_text: &str,
-    dest: &Path,
     baseline_rel: Option<&str>,
     pristine: &str,
     old: Option<&PortalFileState>,
+    read_budget: &mut ReadBudget,
     report: &mut Report,
 ) -> Result<(), ScaffoldError> {
-    let current = match std::fs::read_to_string(dest) {
-        Ok(value) => value,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            write_beneath_root(root, dest_text, pristine.as_bytes())?;
-            report.file(dest_text, Action::Added);
-            return Ok(());
-        }
-        Err(error) => return Err(ScaffoldError::io(dest, error)),
-    };
+    let current_bytes =
+        match read_project_file(root, dest_text, "managed portal file", read_budget)? {
+            Some(value) => value,
+            None => {
+                write_beneath_root(root, dest_text, pristine.as_bytes())?;
+                report.file(dest_text, Action::Added);
+                return Ok(());
+            }
+        };
+    let current =
+        String::from_utf8(current_bytes).map_err(|error| ScaffoldError::InvalidState {
+            what: dest_text.into(),
+            detail: format!("managed portal file is not UTF-8: {error}"),
+        })?;
     if current == pristine {
         report.file(dest_text, Action::Unchanged);
         return Ok(());
@@ -346,7 +383,14 @@ fn reconcile_managed(
         return Ok(());
     }
     let base = match baseline_rel {
-        Some(path) => super::state::read_beneath_root(root, path)?.unwrap_or_default(),
+        Some(path) => read_project_file(root, path, "portal baseline", read_budget)?
+            .map(String::from_utf8)
+            .transpose()
+            .map_err(|error| ScaffoldError::InvalidState {
+                what: path.into(),
+                detail: format!("portal baseline is not UTF-8: {error}"),
+            })?
+            .unwrap_or_default(),
         None => String::new(),
     };
     let baseline_is_authentic =
@@ -376,6 +420,34 @@ fn reconcile_managed(
         vec![format!("new starter written to {conflict}")],
     );
     Ok(())
+}
+
+fn read_project_file(
+    root: &Path,
+    relative: &str,
+    label: &str,
+    budget: &mut ReadBudget,
+) -> Result<Option<Vec<u8>>, ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(relative))?;
+    let maximum = MAX_MANAGED_FILE_BYTES.min(budget.remaining);
+    match read_bounded_regular(&path, maximum) {
+        Ok(bytes) => {
+            budget
+                .charge(bytes.len())
+                .map_err(|error| ScaffoldError::InvalidState {
+                    what: relative.into(),
+                    detail: format!("{label} exceeds the reconciliation read budget: {error}"),
+                })?;
+            Ok(Some(bytes))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ScaffoldError::InvalidState {
+            what: relative.into(),
+            detail: format!(
+                "{label} is not a stable regular file or exceeds {maximum} bytes: {error}"
+            ),
+        }),
+    }
 }
 
 fn load_state(root: &Path) -> Result<Option<PortalState>, ScaffoldError> {
@@ -580,8 +652,16 @@ fn portable_key(value: &str) -> String {
 }
 
 fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum_bytes {
+    read_bounded_regular_with_hook(path, maximum_bytes, || Ok(()))
+}
+
+fn read_bounded_regular_with_hook(
+    path: &Path,
+    maximum_bytes: u64,
+    after_open: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<Vec<u8>> {
+    let before = std::fs::symlink_metadata(path)?;
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "file is not regular or exceeds its byte limit",
@@ -600,21 +680,50 @@ fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
+    let opened = file.metadata()?;
+    if !opened.is_file() || !same_file_identity(&before, &opened) || opened.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "file changed type while opening",
+            "file changed identity or type while opening",
         ));
     }
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.take(maximum_bytes + 1).read_to_end(&mut bytes)?;
+    after_open()?;
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or(0));
+    file.take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "file grew beyond its byte limit",
         ));
     }
+    let after = std::fs::symlink_metadata(path)?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || !same_file_identity(&opened, &after)
+        || opened.len() != bytes.len() as u64
+        || opened.len() != after.len()
+        || opened.modified()? != after.modified()?
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file changed while it was being read",
+        ));
+    }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
 }
 
 fn validate_asset_path(path: &str) -> Result<(), ScaffoldError> {
@@ -742,6 +851,125 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_refuses_oversized_current_baseline_and_retired_files() {
+        let oversized = vec![b'x'; MAX_MANAGED_FILE_BYTES as usize + 1];
+
+        let current = initialized_root();
+        setup_portal(
+            &source("1.0.0", "old\n"),
+            current.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        std::fs::write(current.path().join("guide/managed.txt"), &oversized).unwrap();
+        assert!(setup_portal(
+            &source("2.0.0", "new\n"),
+            current.path(),
+            Path::new("guide")
+        )
+        .is_err());
+
+        let baseline = initialized_root();
+        setup_portal(
+            &source("1.0.0", "old\n"),
+            baseline.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        std::fs::write(baseline.path().join("guide/managed.txt"), "user edit\n").unwrap();
+        std::fs::write(
+            baseline.path().join(baseline_path(&sha256_hex(b"old\n"))),
+            &oversized,
+        )
+        .unwrap();
+        assert!(setup_portal(
+            &source("2.0.0", "new\n"),
+            baseline.path(),
+            Path::new("guide")
+        )
+        .is_err());
+
+        let retired = initialized_root();
+        setup_portal(
+            &source("1.0.0", "old\n"),
+            retired.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        std::fs::write(retired.path().join("guide/managed.txt"), &oversized).unwrap();
+        let replacement = MapSource(BTreeMap::from([
+            (
+                MANIFEST_ASSET.into(),
+                br#"{"schema_version":1,"version":"2.0.0","files":[{"path":"replacement.txt","ownership":"managed"}]}"#.to_vec(),
+            ),
+            (format!("{ASSET_PREFIX}replacement.txt"), b"replacement\n".to_vec()),
+        ]));
+        assert!(setup_portal(&replacement, retired.path(), Path::new("guide")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconciliation_refuses_symlinked_current_baseline_and_retired_files() {
+        use std::os::unix::fs::symlink;
+
+        let current = initialized_root();
+        setup_portal(
+            &source("1.0.0", "old\n"),
+            current.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        let outside = current.path().join("outside.txt");
+        std::fs::write(&outside, "outside\n").unwrap();
+        std::fs::remove_file(current.path().join("guide/managed.txt")).unwrap();
+        symlink(&outside, current.path().join("guide/managed.txt")).unwrap();
+        assert!(setup_portal(
+            &source("2.0.0", "new\n"),
+            current.path(),
+            Path::new("guide")
+        )
+        .is_err());
+
+        let baseline = initialized_root();
+        setup_portal(
+            &source("1.0.0", "old\n"),
+            baseline.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        std::fs::write(baseline.path().join("guide/managed.txt"), "user edit\n").unwrap();
+        let baseline_file = baseline.path().join(baseline_path(&sha256_hex(b"old\n")));
+        std::fs::remove_file(&baseline_file).unwrap();
+        symlink(&outside, &baseline_file).unwrap();
+        assert!(setup_portal(
+            &source("2.0.0", "new\n"),
+            baseline.path(),
+            Path::new("guide")
+        )
+        .is_err());
+
+        let retired = initialized_root();
+        setup_portal(
+            &source("1.0.0", "old\n"),
+            retired.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        let outside = retired.path().join("outside.txt");
+        std::fs::write(&outside, "outside\n").unwrap();
+        std::fs::remove_file(retired.path().join("guide/managed.txt")).unwrap();
+        symlink(&outside, retired.path().join("guide/managed.txt")).unwrap();
+        let replacement = MapSource(BTreeMap::from([
+            (
+                MANIFEST_ASSET.into(),
+                br#"{"schema_version":1,"version":"2.0.0","files":[{"path":"replacement.txt","ownership":"managed"}]}"#.to_vec(),
+            ),
+            (format!("{ASSET_PREFIX}replacement.txt"), b"replacement\n".to_vec()),
+        ]));
+        assert!(setup_portal(&replacement, retired.path(), Path::new("guide")).is_err());
+    }
+
+    #[test]
     fn conflict_sidecars_never_overwrite_preexisting_files() {
         let temp = initialized_root();
         setup_portal(&source("1.0.0", "old\n"), temp.path(), Path::new("guide")).unwrap();
@@ -847,5 +1075,28 @@ mod tests {
         .unwrap();
         assert!(update_adopted_portal(&source("1.0.0", "old\n"), temp.path()).is_err());
         assert!(!temp.path().join("escape").exists());
+    }
+
+    #[test]
+    fn bounded_reconciliation_reads_detect_growth_and_path_swaps() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("managed.txt");
+        std::fs::write(&file, "stable").unwrap();
+        assert!(read_bounded_regular_with_hook(&file, 32, || {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)?
+                .write_all(b"-growth")
+        })
+        .is_err());
+
+        std::fs::write(&file, "stable").unwrap();
+        let moved = temp.path().join("moved.txt");
+        assert!(read_bounded_regular_with_hook(&file, 32, || {
+            std::fs::rename(&file, &moved)?;
+            std::fs::write(&file, "replacement")
+        })
+        .is_err());
     }
 }

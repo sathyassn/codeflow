@@ -30,17 +30,30 @@ test("evidence ordering is explicit and independent of the process locale", () =
   assert.equal(outputs[0].stdout, outputs[1].stdout);
 });
 
-test("bounded reads refuse oversized files and symlink leaves", { skip: process.platform === "win32" }, async () => {
-  const { symlink } = await import("node:fs/promises");
+test("bounded reads refuse oversized, growing, swapped, and symlinked files", async () => {
+  const { appendFile, rename, symlink } = await import("node:fs/promises");
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-bounded-read-"));
   try {
     const target = path.join(root, "target.txt");
     const link = path.join(root, "link.txt");
     await writeFile(target, "12345");
-    await symlink(target, link);
     await assert.rejects(readBoundedRegularFile(target, 4, "fixture"), /exceeds/);
-    await assert.rejects(readBoundedRegularFile(link, 10, "fixture"), /ELOOP|stable regular file/);
+    if (process.platform !== "win32") {
+      await symlink(target, link);
+      await assert.rejects(readBoundedRegularFile(link, 10, "fixture"), /ELOOP|stable regular file/);
+    }
     assert.equal((await readBoundedRegularFile(target, 5, "fixture")).toString(), "12345");
+
+    await assert.rejects(readBoundedRegularFile(target, 10, "fixture", {
+      afterOpen: () => appendFile(target, "67890"),
+    }), /changed while|exceeds/);
+    await writeFile(target, "stable");
+    await assert.rejects(readBoundedRegularFile(target, 10, "fixture", {
+      afterOpen: async () => {
+        await rename(target, `${target}.old`);
+        await writeFile(target, "replacement");
+      },
+    }), /changed while/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -342,7 +355,7 @@ test("the adapter refuses config and output symlinks without changing their targ
     await writeFile(outsideConfig, config);
     await rm(path.join(configRoot, "portal.config.json"));
     await symlink(outsideConfig, path.join(configRoot, "portal.config.json"));
-    assert.match(runAdapter(configRoot, false).stderr, /symlink refused/);
+    assert.match(runAdapter(configRoot, false).stderr, /symlink refused|must match HEAD exactly/);
 
     const sentinel = path.join(outputRoot, "sentinel.txt");
     await writeFile(sentinel, "safe");
@@ -394,6 +407,48 @@ test("the adapter refuses dirty snapshot states and dangerous source links", asy
   } finally { await rm(unsafe, { recursive: true, force: true }); }
 });
 
+test("committed blobs defeat assume-unchanged and skip-worktree source masking", async () => {
+  for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+    const root = await portalFixture();
+    try {
+      const source = path.join(root, "docs/guide.md");
+      await writeFile(source, "# Committed guide\n\nCommitted truth.\n");
+      commitFixture(root, "add committed guide");
+      git(root, ["update-index", flag, "docs/guide.md"]);
+      await writeFile(source, "# Hidden worktree edit\n\nMust not be published.\n");
+      runAdapter(root);
+      const output = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+      assert.match(output, /Committed truth/);
+      assert.doesNotMatch(output, /Hidden worktree edit/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+
+  const runtime = await portalFixture();
+  try {
+    await writeFile(path.join(runtime, "docs/guide.md"), "# Guide\n");
+    commitFixture(runtime, "add runtime fixture source");
+    git(runtime, ["update-index", "--assume-unchanged", "portal.config.json"]);
+    const config = JSON.parse(await readFile(path.join(runtime, "portal.config.json"), "utf8"));
+    config.title = "Hidden runtime mutation";
+    await writeFile(path.join(runtime, "portal.config.json"), `${JSON.stringify(config)}\n`);
+    assert.match(runAdapter(runtime, false).stderr, /runtime input does not match/);
+  } finally { await rm(runtime, { recursive: true, force: true }); }
+});
+
+test("a source-root pathspec does not capture a similarly prefixed ignored directory", async () => {
+  const root = await portalFixture();
+  try {
+    await writeFile(path.join(root, "docs/guide.md"), "# Guide\n");
+    await writeFile(path.join(root, ".gitignore"), "docs-cache/\n");
+    commitFixture(root, "add literal source root");
+    await mkdir(path.join(root, "docs-cache"));
+    await writeFile(path.join(root, "docs-cache/generated.md"), "# Not a source\n");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.deepEqual(evidence.pages.map((page) => page.source_path), ["docs/guide.md"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("generated strict-ID previews are source-grounded and keyboard-native", async () => {
   const root = await portalFixture();
   try {
@@ -406,6 +461,31 @@ test("generated strict-ID previews are source-grounded and keyboard-native", asy
     assert.match(rendered, /<span class="portal-id-preview"><a href="\/system\/decisions\/ADR-0001\/" aria-describedby="portal-preview-[^"]+">ADR-0001<\/a>/);
     assert.match(rendered, /role="tooltip"><strong>Keep source truth<\/strong><span>Status: accepted<\/span><span>Source: <code>docs\/decisions\/ADR-0001.md<\/code><\/span>/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("pinned source links use known provider routes and fall back visibly", async () => {
+  for (const [repositoryUrl, expected] of [
+    ["https://github.com/example/repository", "/blob/"],
+    ["https://gitlab.com/example/repository", "/-/blob/"],
+    ["https://bitbucket.org/example/repository", "/src/"],
+    ["https://source.example/repository", null],
+  ]) {
+    const root = await portalFixture();
+    try {
+      const configPath = path.join(root, "portal.config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      config.repository_url = repositoryUrl;
+      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      await writeFile(path.join(root, "docs/guide (one).md"), "# Guide\n");
+      commitFixture(root, "configure source provider");
+      const commit = git(root, ["rev-parse", "HEAD"]).trim();
+      runAdapter(root);
+      const output = await readFile(path.join(root, "src/content/docs/reference/guide%20%28one%29.md"), "utf8");
+      assert.match(output, /<code>docs\/guide \(one\)\.md<\/code> at <code>[a-f0-9]{12}<\/code>/);
+      if (expected === null) assert.doesNotMatch(output, new RegExp(`${repositoryUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`));
+      else assert.match(output, new RegExp(`${expected.replaceAll("/", "\\/")}${commit}\\/docs\\/guide%20%28one%29\\.md`));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("source and configuration metadata cannot inject active generated Markdown", async () => {
@@ -436,6 +516,33 @@ test("source and configuration metadata cannot inject active generated Markdown"
     const staleBody = stale.slice(stale.indexOf("---", 4) + 3);
     assert.doesNotMatch(staleBody, /<script>|!\[probe\]\(https:|data-pagefind-body|data-codeflow-search-root/);
     assert.match(staleBody, /Stale rendering:/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("stale output is reconstructed from an authenticated ancestor, never prior generated bytes", async () => {
+  const root = await portalFixture();
+  try {
+    const source = path.join(root, "docs/guide.md");
+    await writeFile(source, "---\nid: TSK-0102\ntitle: Authenticated guide\n---\n\n# Safe ancestor\n\nGrounded content.\n");
+    commitFixture(root, "add valid ancestor");
+    const ancestor = git(root, ["rev-parse", "HEAD"]).trim();
+    runAdapter(root);
+    const output = path.join(root, "src/content/docs/reference/guide.md");
+    await writeFile(output, "<script>globalThis.pwned=1</script><img src=https://attacker.invalid/pixel.png>");
+    const evidencePath = path.join(root, ".portal/generated/evidence.json");
+    const forged = JSON.parse(await readFile(evidencePath, "utf8"));
+    forged.pages[0].built_from_commit = "f".repeat(40);
+    forged.pages[0].source_sha256 = sha256("forged");
+    forged.pages[0].output_markdown_sha256 = sha256(await readFile(output));
+    await writeFile(evidencePath, JSON.stringify(forged));
+
+    await writeFile(source, "---\ntitle: [broken\n---\n");
+    commitFixture(root, "break current source");
+    runAdapter(root);
+    const stale = await readFile(output, "utf8");
+    assert.match(stale, /# Safe ancestor/);
+    assert.match(stale, new RegExp(`codeflow-last-good-provenance source_sha256=[a-f0-9]{64} built_from_commit=${ancestor}`));
+    assert.doesNotMatch(stale, /globalThis\.pwned|<img|attacker\.invalid|built_from_commit=f{40}/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -243,15 +243,22 @@ fn portal_bundle_is_single_complete_and_bounded() {
         })
         .collect();
     assert_eq!(declared.len(), files.len(), "portal paths must be unique");
-    let authored: BTreeSet<String> = walk_files(&bundle)
-        .iter()
-        .map(|path| rel(&bundle, path))
+    let bundle_files: Vec<PathBuf> = walk_files(&bundle)
+        .into_iter()
+        .filter(|path| {
+            !path
+                .strip_prefix(&bundle)
+                .expect("portal file is under bundle")
+                .components()
+                .any(|component| component.as_os_str() == "node_modules")
+        })
         .collect();
+    let authored: BTreeSet<String> = bundle_files.iter().map(|path| rel(&bundle, path)).collect();
     assert_eq!(
         authored, declared,
         "portal manifest must cover the starter exactly"
     );
-    let unpacked: u64 = walk_files(&bundle)
+    let unpacked: u64 = bundle_files
         .iter()
         .map(|path| std::fs::metadata(path).expect("portal file metadata").len())
         .sum();
@@ -271,6 +278,22 @@ fn portal_bundle_is_single_complete_and_bounded() {
             forbidden.display()
         );
     }
+}
+
+#[test]
+fn portal_skill_names_collision_safe_conflict_sidecars() {
+    let skill = std::fs::read_to_string(
+        repo_root().join("assets/base/agents/skills/cf-docs-portal/SKILL.md"),
+    )
+    .expect("canonical portal skill is readable");
+    assert!(
+        skill.contains("<path>.codeflow-<hash>.new"),
+        "portal skill must name the collision-safe conflict-sidecar contract"
+    );
+    assert!(
+        !skill.contains("reported `.new` conflict"),
+        "portal skill must not regress to the ambiguous legacy sidecar name"
+    );
 }
 
 /// MIRROR-SHIPPING: every skill the manifest ships must ship to BOTH harness

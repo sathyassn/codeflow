@@ -746,11 +746,14 @@ adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
 starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 ordinary never-clobber updates through opaque content-addressed pristine
-baselines. The source-in-place adapter generates disposable pages, Markdown
+baselines. The source-authority adapter generates disposable pages, Markdown
 twins, `llms.txt`, search output, and a versioned evidence manifest from one
 clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
-locale-independent ordering, workflow lease, and recoverable publication
-transaction fail closed before mixed or active content can be claimed.
+literal Git pathspecs, committed-blob authority, locale-independent ordering,
+workflow lease, and recoverable publication transaction fail closed before
+mixed or active content can be claimed. Index flags cannot hide changed
+runtime or configuration bytes, and stale output is reconstructed only from a
+verified ancestor source blob rather than previous generated data.
 `codeflow validate --portal <directory>` executes no project code and writes
 nothing; it independently checks bounded path, hash, identity, relationship,
 staleness, provenance, version, raster-media, output-coverage, twin, and
