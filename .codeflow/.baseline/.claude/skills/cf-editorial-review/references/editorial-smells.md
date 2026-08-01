@@ -30,8 +30,12 @@ problem only when it weakens this artifact in its actual context.
   enumerable material.
 - Headings, bold text, tables, or callouts compete for attention instead of
   exposing hierarchy.
+- Titles, navigation, or action labels hide the actual subject or action behind
+  a riddle, slogan, or clever phrase unsupported by the product voice.
 - Emoji, jokes, slogans, or rhetorical flourishes conflict with the medium,
   policy, gravity, or documented voice.
+- Interface words and visual treatment imply conflicting levels of urgency,
+  trust, playfulness, or certainty.
 
 ## False positives to avoid
 

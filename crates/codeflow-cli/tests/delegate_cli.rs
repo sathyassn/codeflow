@@ -385,7 +385,10 @@ fn sigint_after_acceptance_exits_130_and_poisons_the_run() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Coverage and parallel test startup can delay the child before it reaches
+    // the installed SIGINT handler. Allow that bounded initialization window
+    // so this test exercises interruption handling rather than pre-main exit.
+    std::thread::sleep(std::time::Duration::from_secs(1));
     let signal = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .output()

@@ -9,6 +9,10 @@ Review the artifact in its real project, audience, medium, and task context.
 Improve clarity and credibility without flattening a legitimate voice or
 inventing one.
 
+This skill and its contextual-smells reference are the canonical CodeFlow home
+for shared language guidance. Other skills should route here instead of copying
+title, emoji, personality, or authority rules into parallel checklists.
+
 ## Authority order
 
 Resolve conflicts in this order:
@@ -49,7 +53,11 @@ misrepresent the author or project.
 6. **Shape for use.** Lead with the outcome or decision, then supply the context
    and evidence needed at that altitude. Use prose, lists, tables, headings,
    punctuation, and emoji only when they fit the information, documented voice,
-   medium, and repository policy. Keep formatting proportionate: a simple
+   medium, and repository policy. Titles, headings, navigation, and action
+   labels normally name the actual subject or action; a more expressive label
+   must be earned by the product voice and remain understandable in context.
+   Utility copy does not become product voice, and CodeFlow does not supply a
+   personality for either. Keep formatting proportionate: a simple
    answer needs no apparatus, and when relationships, hierarchy, state,
    timelines, mappings, or a decision are materially clearer drawn, use an
    ASCII diagram whose scope and detail fit the explanation. Prefer the least
@@ -60,8 +68,11 @@ misrepresent the author or project.
    universal word, punctuation, formatting, or emoji blacklist.
 7. **Verify the revision.** Compare original and revision for lost meaning,
    changed certainty, dropped caveats, altered terminology, unsupported new
-   claims, and accidental policy violations. For review-only work, report
-   precise findings instead of silently rewriting.
+   claims, accidental policy violations, and visual/verbal mismatch where the
+   copy belongs to an interface. Claim localized quality only from reviewable
+   localized copy and relevant language evidence; English-only review is not
+   localization verification. For review-only work, report precise findings
+   instead of silently rewriting.
 
 ## Duo review
 

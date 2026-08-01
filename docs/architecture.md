@@ -200,10 +200,12 @@ Plan vN: cosmetic work may be inapplicable, established-system work may conform,
 new surfaces settle one direction, and materially open novel surfaces compare
 two or three viable directions before settlement. The qualified Claude
 judgment role leads intent, Codex challenges feasibility and fidelity, and both
-approve the same plan. Rendered review grades evidence-backed drift from the
-brief, intent, accessibility target, or observed behavior; taste alone is not a
-blocking finding. Concrete model releases stay in qualified bindings
-(ADR-0043).
+approve the same plan. Language/voice and appearance modes are contextual,
+collapsible intent dimensions governed by project evidence; utility defaults
+cannot become consuming-product authority. Rendered review grades
+evidence-backed drift from the brief, intent, accessibility target, or observed
+behavior; taste alone is not a blocking finding. Concrete model releases stay
+in qualified bindings (ADR-0043).
 Multi-task plans additionally settle one acyclic task graph whose evidence
 guards represent genuine decisions, not repeated quality gates. Durable task
 metadata preserves its structural candidate predecessors, while Plan evidence

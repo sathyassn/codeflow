@@ -306,7 +306,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
 epics: [EPC-002, EPC-004]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046]
 ```
@@ -332,12 +332,18 @@ orchestrator loads `cf-design` and records a proportionate `DESIGN_INTENT`
 inside that same plan. Cosmetic changes may collapse as not applicable,
 bounded established-system work may conform, new surfaces settle a direction,
 and materially open novel work compares two or three viable directions first.
+Language/voice and appearance modes are resolved only where applicable from
+project evidence: localized quality needs localized evidence, mode claims need
+rendered preference and persistence evidence, and CodeFlow utility defaults do
+not become product design authority.
 The Claude judgment role leads intent, Codex challenges feasibility and
 fidelity, and both approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
 behavior rather than taste. The design-direction eval pack covers this
 selection, operator precedence, evidence-grounded design-choice review,
-accessibility, and rendered fidelity (ADR-0043).
+distinct evidenced product voices, localization honesty, utility/product
+isolation, appearance-mode behavior, accessibility, and rendered fidelity
+(ADR-0043).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
 CLI reaches Claude through an interactive task-scoped tmux session. Another
@@ -487,7 +493,7 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-003, EPC-004]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044]
 ```
@@ -525,6 +531,12 @@ surface-cue policing. Its cases cover technical semantic preservation,
 operator uncertainty, consuming-project voice, sycophancy/inflation/formatting,
 medium-appropriate emoji, and false positives for legitimate punctuation,
 terms, and lists.
+
+The hard `CF-DES-005` contract keeps language/voice and appearance modes
+contextual and collapsible. Its cases require distinct project-evidenced
+voices, legible titles/actions/states, honest localization claims, applicable
+system/user mode and persistence evidence, and isolation between CodeFlow
+utility defaults and consuming-product design authority.
 
 The hard `CF-QA-002` contract separates browser headlessness from interactive
 peer-model transport and requires claim-matched behavior, visual, runtime,

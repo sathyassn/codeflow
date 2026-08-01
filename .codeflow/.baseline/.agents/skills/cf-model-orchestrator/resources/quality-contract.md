@@ -53,11 +53,12 @@ executed evidence.
 unchanged accepted direction; a bounded change inside an established design
 system records `conform` and names that authority. A new or materially reshaped
 user-facing surface applies `cf-design` and records the creator intent,
-audience/job/context evidence, experience target, systems and operator
-direction, proportionate research/options, settled direction, accessibility
-target, and fidelity plan. Collapse irrelevant dimensions instead of filling a
-template. Do not create a separate design document unless the project needs a
-durable product or design-system decision at its normal spec/ADR altitude.
+audience/job/context evidence, experience target, language and voice,
+applicable appearance modes, systems and operator direction, proportionate
+research/options, settled direction, accessibility target, and fidelity plan.
+Collapse irrelevant dimensions instead of filling a template. Do not create a
+separate design document unless the project needs a durable product or
+design-system decision at its normal spec/ADR altitude.
 
 ## Design and implementation quality
 
@@ -422,7 +423,13 @@ only when no narrower driver reaches the surface. Check at least:
 
 - the approved design, its fidelity to the settled intent, and the primary user
   journeys;
-- loading, empty, error, disabled, and success states;
+- navigation, actions, guidance, validation, loading, empty, error, disabled,
+  success, destructive, and recovery copy states where applicable;
+- visual/verbal coherence and terminology against the project voice; localized
+  variants and relevant language review before claiming localization quality;
+- applicable light, dark, high-contrast, system-following, manual-override,
+  persistence, reduced-motion, imagery, and data-visualization behavior without
+  an incorrect-mode flash;
 - responsive/layout behavior at relevant sizes;
 - keyboard navigation, focus, labels, contrast, and other applicable
   accessibility requirements against the project's target; for web surfaces,

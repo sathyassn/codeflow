@@ -48,6 +48,8 @@ design system before proposing a parallel visual language:
 - tokens, typography, colour roles, spacing, imagery, and motion;
 - accessible primitives, application components, and view composition;
 - information architecture, content patterns, journeys, and interaction state;
+- product language, terminology, approved voice examples, and copy states;
+- applicable appearance modes, user or system preferences, and persistence;
 - platform conventions and the constraints of the target medium;
 - previous operator-approved examples and explicit rejected directions.
 
@@ -65,10 +67,20 @@ Resolve only the dimensions that materially steer the surface:
 3. **Experience target.** The interaction qualities and emotional register
    that materially affect decisions: for example calm, dense, playful,
    restrained, authoritative, reassuring, or urgent.
-4. **Systems and constraints.** Existing design system, brand, platform
+4. **Language and voice.** The product's documented voice, terminology,
+   audience literacy, trust and risk context, and the copy needed across
+   navigation, actions, guidance, validation, empty, loading, error, success,
+   destructive, and recovery states. Refer substantial language judgment to
+   `cf-editorial-review`; do not invent a product personality.
+5. **Appearance modes.** Decide only the modes the product and platform need:
+   light, dark, high contrast, system-following, user override, persistence,
+   reduced motion, and mode-safe imagery or data visualization as applicable.
+   The consuming product owns its themes and tokens; CodeFlow supplies no
+   product palette or preset.
+6. **Systems and constraints.** Existing design system, brand, platform
    conventions, content, accessibility target, technical boundaries, and
    accepted non-goals.
-5. **Operator direction.** Treat an explicit direction as a binding constraint
+7. **Operator direction.** Treat an explicit direction as a binding constraint
    owed honest counsel. Surface evidence-backed accessibility, usability, or
    feasibility concerns; never silently override it and never amplify it
    without examination.
@@ -80,6 +92,12 @@ personas, preferences, quotes, metrics, testimonials, or brand history.
 
 Clarify when missing intent would materially change the outcome. Otherwise use
 the safest established convention and disclose the assumption.
+
+CodeFlow utilities may use this reasoning process, but their curated utility
+themes, components, and runtime choices never become the consuming product's
+design direction. Product evidence flows into a utility only when the project
+explicitly chooses that one-way adaptation; utility defaults never flow back as
+product authority.
 
 ## 4. Research and explore proportionately
 
@@ -118,6 +136,8 @@ DESIGN_INTENT:
   CREATOR_INTENT:
   AUDIENCE_JOB_CONTEXT: <evidence source or labeled inference>
   EXPERIENCE_TARGET:
+  LANGUAGE_AND_VOICE: <project authority and applicable copy states | collapsed reason>
+  APPEARANCE_MODES: <applicable modes, preference/persistence behavior | collapsed reason>
   SYSTEMS_AND_CONSTRAINTS:
   OPERATOR_DIRECTION:
   RESEARCH_OR_REFERENCES: <evidence or proportionate N/A>
@@ -150,6 +170,10 @@ For a direction pass, ask:
   Which familiar choices are still right here, and why?
 - Does the direction remain coherent across loading, empty, error, disabled,
   success, destructive, and recovery states?
+- Do words and visuals express the same product character, and are titles,
+  navigation, actions, validation, and recovery copy clear for this audience?
+- Are localization claims and appearance-mode choices backed by the language,
+  rendered, preference, persistence, and accessibility evidence they require?
 - Is the design feasible, maintainable, responsive, accessible, and
   proportionate to the accepted lifetime and scale?
 
@@ -177,7 +201,11 @@ accessibility state, relevant viewports, same-environment screenshots or visual
 comparisons, console/network evidence, and failure traces where material.
 Review hierarchy, interaction, content, type roles, colour roles, spacing,
 imagery, density, motion, states, and platform fit only where the intent makes
-them applicable.
+them applicable. Where language or appearance modes apply, also verify the
+actual copy states and terminology; localized variants rather than English-only
+inference; light, dark, high-contrast, system-following, and manual preference
+behavior; persistence without an incorrect-mode flash; and visual/verbal
+coherence. Record an evidenced `N/A` instead of simulating irrelevant coverage.
 
 A difference from the settled intent is not automatically a defect: determine
 whether it is an approved improvement, an evidence-backed implementation

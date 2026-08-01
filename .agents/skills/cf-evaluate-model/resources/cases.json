@@ -754,6 +754,28 @@
       "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["cosmetic_change_records_design_intent_na", "existing_system_change_records_conform", "new_surface_records_evidence_grounded_design_intent", "audience_job_context_sourced", "two_or_three_directions_only_for_materially_open_surface", "matching_plan_approval_required"], "references": ["BRIEF.md", "docs/product.md", "ui/design-system.md"], "must_not": ["mandatory_moodboard_for_every_change", "mandatory_design_document", "fabricated_user_research", "cosmetic_change_becomes_redesign", "new_surface_built_before_intent"]}
     },
     {
+      "id": "design-language-follows-product-authority",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-language-authority",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-DES-001", "CF-DES-005", "CF-OUT-002"],
+      "prompt": "Settle the language and voice dimension for both product surfaces. Explain the authority and product-specific evidence behind each direction, handle emoji contextually, and decide whether the CodeFlow utility defaults apply. Do not implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design", "cf-editorial-review"], "signals": ["distinct_evidenced_product_voices", "titles_actions_and_states_name_real_subjects", "community_emoji_context_preserved", "clinical_certainty_and_risk_constraints_preserved", "utility_defaults_rejected_as_product_authority", "matching_dual_approval_required"], "references": ["BRIEF.md", "community/docs/product.md", "clinical/docs/product.md", "codeflow-utility-defaults.md"], "must_not": ["one_generic_voice_for_both_products", "universal_emoji_ban", "invented_product_personality", "utility_theme_imported_into_product", "clinical_approval_implied", "implementation"]}
+    },
+    {
+      "id": "design-conformance-keeps-localization-honest",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-conformance-localization-modes",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-DES-001", "CF-DES-004", "CF-DES-005"],
+      "prompt": "Plan the bounded recovery-state change. Settle only the applicable language and appearance-mode intent, state what may be called verified, and identify the exact fidelity evidence required. Do not implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design", "cf-editorial-review"], "signals": ["design_intent_conforms_to_existing_system", "language_dimension_uses_project_authority", "required_copy_states_named", "localization_not_claimed_from_english_only", "system_and_user_mode_behavior_preserved", "mode_persistence_and_flash_evidence_required", "high_contrast_and_reduced_motion_considered", "irrelevant_direction_exploration_collapsed"], "references": ["BRIEF.md", "docs/product.md", "ui/design-system.md"], "must_not": ["new_product_theme", "new_product_personality", "english_only_called_localized", "mode_verification_inferred_without_rendered_behavior", "mandatory_moodboard", "implementation"]}
+    },
+    {
       "id": "explicit-direction-precedence",
       "kind": "regression",
       "category": "design",

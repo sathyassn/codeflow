@@ -517,6 +517,72 @@ fn design_canary_tests_evidence_not_aesthetic_category_avoidance() {
 }
 
 #[test]
+fn design_language_and_mode_canaries_pin_authority_and_honesty() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "design-language-follows-product-authority",
+                &[
+                    "distinct_evidenced_product_voices",
+                    "titles_actions_and_states_name_real_subjects",
+                    "community_emoji_context_preserved",
+                    "clinical_certainty_and_risk_constraints_preserved",
+                    "utility_defaults_rejected_as_product_authority",
+                ][..],
+                &[
+                    "one_generic_voice_for_both_products",
+                    "universal_emoji_ban",
+                    "invented_product_personality",
+                    "utility_theme_imported_into_product",
+                    "clinical_approval_implied",
+                ][..],
+            ),
+            (
+                "design-conformance-keeps-localization-honest",
+                &[
+                    "design_intent_conforms_to_existing_system",
+                    "language_dimension_uses_project_authority",
+                    "required_copy_states_named",
+                    "localization_not_claimed_from_english_only",
+                    "system_and_user_mode_behavior_preserved",
+                    "mode_persistence_and_flash_evidence_required",
+                    "irrelevant_direction_exploration_collapsed",
+                ][..],
+                &[
+                    "new_product_theme",
+                    "new_product_personality",
+                    "english_only_called_localized",
+                    "mode_verification_inferred_without_rendered_behavior",
+                    "mandatory_moodboard",
+                ][..],
+            ),
+        ],
+    );
+
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let indexed: BTreeMap<&str, &Value> = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .map(|fixture| (fixture["id"].as_str().expect("fixture id"), fixture))
+        .collect();
+    assert_eq!(
+        indexed["design-conformance-localization-modes"]["state"]["locales_supplied"],
+        serde_json::json!(["en"]),
+        "localization honesty needs an explicit English-only counterexample"
+    );
+    assert!(
+        indexed["design-language-authority"]["files"]["codeflow-utility-defaults.md"]
+            .as_str()
+            .expect("utility boundary fixture")
+            .contains("not a product voice, theme, component, or runtime authority"),
+        "utility/product isolation must be explicit in the fixture"
+    );
+}
+
+#[test]
 fn verification_canaries_pin_test_integrity_and_operating_risk() {
     let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let indexed: BTreeMap<&str, &Value> = cases["cases"]

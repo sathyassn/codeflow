@@ -40,6 +40,8 @@
         "longitudinal-craftsmanship-erosion",
         "editorial-operator-response-stays-honest",
         "design-intent-proportionality",
+        "design-language-follows-product-authority",
+        "design-conformance-keeps-localization-honest",
         "explicit-direction-precedence",
         "evidence-grounded-design-choice",
         "design-fidelity-review",
@@ -87,6 +89,8 @@
       "includes": [],
       "cases": [
         "design-intent-proportionality",
+        "design-language-follows-product-authority",
+        "design-conformance-keeps-localization-honest",
         "explicit-direction-precedence",
         "evidence-grounded-design-choice",
         "design-fidelity-review",

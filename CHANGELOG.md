@@ -20,6 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Delegate interruption coverage now waits for the process handler.** The
+  SIGINT lifecycle test allows a bounded child-initialization window, avoiding
+  a false failure under parallel or instrumented test startup while still
+  proving exit 130 and run poisoning after prompt acceptance.
 - **New durable records cannot start malformed.** Epic, spec, and task titles
   are encoded safely in YAML and must be non-empty single-line labels. Task
   allocation also proves that its declared integration target already resolves
@@ -57,6 +61,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Product language and appearance are now explicit, contextual design
+  dimensions.** `cf-design` records language/voice and applicable appearance
+  modes inside the proportionate `DESIGN_INTENT`, while `cf-editorial-review`
+  remains the single shared authority for titles, emoji, fabricated
+  personality, and language-quality judgment. New semantic cases protect
+  distinct evidenced product voices, established-system collapse,
+  localization honesty, preference/persistence verification, and the boundary
+  that prevents CodeFlow utility defaults from becoming product design
+  authority.
 - **Durable work now has one explicit, adaptable authority and a stable start
   boundary (ADR-0046).** Full-tier scaffolds write independent `EPC-NNN`,
   `SPC-NNN`, and `TSK-NNN` records in one flat Git Markdown workgraph. Tasks

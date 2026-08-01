@@ -420,6 +420,16 @@
       ]
     },
     {
+      "id": "CF-DES-005",
+      "level": "hard",
+      "statement": "Design intent treats product language, voice, and appearance modes as contextual, collapsible dimensions: project evidence and operator authority govern voice; localization is claimed only from localized evidence; applicable system/user mode, override, persistence, and accessibility behavior is verified; and CodeFlow utility defaults never become consuming-product design authority.",
+      "sources": [
+        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["Language and voice", "Appearance modes", "CodeFlow supplies no product palette or preset", "utility defaults never flow back as product authority"]},
+        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["canonical CodeFlow home for shared language guidance", "Utility copy does not become product voice", "English-only review is not localization verification"]},
+        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["applicable appearance modes", "localized variants and relevant language review", "without an incorrect-mode flash"]}
+      ]
+    },
+    {
       "id": "CF-QA-011",
       "level": "hard",
       "statement": "Every material changed journey maps its affected topology and has faithful end-to-end evidence through each applicable changed in-project and runtime boundary; unit/integration tests remain complementary, controlled external doubles are disclosed and contract-checked where feasible, and an unexercised seam is never reported as whole-flow proof.",
