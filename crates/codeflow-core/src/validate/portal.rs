@@ -1734,7 +1734,7 @@ fn collect_reserved_public_files(
         } else if kind.is_file() {
             *count += 1;
             *bytes = bytes.saturating_add(entry.metadata().map_or(u64::MAX, |item| item.len()));
-            let Some(text) = child.to_str().filter(|path| safe_path_text(path)) else {
+            let Some(text) = portable_relative_path(&child) else {
                 report.issues.push(format!(
                     "reserved public output path is unsafe: {}",
                     child.display()
@@ -1747,7 +1747,7 @@ fn collect_reserved_public_files(
                     .push("reserved public output exceeds its corpus limit".into());
                 return;
             }
-            if !paths.insert(portable_key(text)) {
+            if !paths.insert(portable_key(&text)) {
                 report.issues.push(format!(
                     "reserved public output collides portably: {}",
                     child.display()
@@ -1938,10 +1938,14 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
                         .push(format!("artifact count exceeds {MAX_ARTIFACTS}"));
                     return;
                 }
-                let artifact = portable_key(&format!(
-                    "dist/{}",
-                    child.to_string_lossy().replace('\\', "/")
-                ));
+                let Some(relative_path) = portable_relative_path(&child) else {
+                    report.issues.push(format!(
+                        "built artifact path is unsafe: {}",
+                        child.display()
+                    ));
+                    continue;
+                };
+                let artifact = portable_key(&format!("dist/{relative_path}"));
                 if !paths.insert(artifact.clone()) {
                     report.issues.push(format!(
                         "built artifact path collides case-insensitively: {artifact}"
@@ -2198,6 +2202,18 @@ fn safe_path_text(value: &str) -> bool {
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
         && value.split('/').all(portable_segment)
+}
+
+fn portable_relative_path(path: &Path) -> Option<String> {
+    let mut segments = Vec::new();
+    for component in path.components() {
+        let Component::Normal(segment) = component else {
+            return None;
+        };
+        segments.push(segment.to_str()?);
+    }
+    let value = segments.join("/");
+    safe_path_text(&value).then_some(value)
 }
 
 fn portable_segment(segment: &str) -> bool {
@@ -2955,6 +2971,22 @@ mod tests {
         }
         assert!(!safe_path_text(&format!("docs/{}", "é".repeat(128))));
         assert!(safe_path_text(&format!("docs/{}", "é".repeat(127))));
+    }
+
+    #[test]
+    fn native_relative_paths_normalize_to_portable_slashes_without_aliasing() {
+        let native = PathBuf::from("public").join("markdown").join("guide.md");
+        assert_eq!(
+            portable_relative_path(&native).as_deref(),
+            Some("public/markdown/guide.md")
+        );
+        assert_eq!(portable_relative_path(Path::new("../guide.md")), None);
+        #[cfg(unix)]
+        assert_eq!(
+            portable_relative_path(Path::new("public/markdown\\guide.md")),
+            None,
+            "a literal POSIX backslash must not alias a portable separator"
+        );
     }
 
     #[test]
