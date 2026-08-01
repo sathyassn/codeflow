@@ -35,7 +35,7 @@ which = "7"
 sha2 = "0.11"
 unicode-normalization = "=0.1.24"
 diffy = "0.4"
-rust-embed = "8"
+rust-embed = { version = "8", features = ["include-exclude"] }
 tempfile = "3"
 portable-pty = "0.9"
 libc = "0.2"
