@@ -18,6 +18,7 @@
     { "path": "src/content.config.ts", "ownership": "managed" },
     { "path": "src/styles/portal.css", "ownership": "managed" },
     { "path": "tests/adapter.test.mjs", "ownership": "managed" },
+    { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tsconfig.json", "ownership": "managed" }
   ]
 }

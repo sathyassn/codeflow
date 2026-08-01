@@ -749,17 +749,19 @@ ordinary never-clobber updates through opaque content-addressed pristine
 baselines. The source-authority adapter generates disposable pages, Markdown
 twins, `llms.txt`, search output, and a versioned evidence manifest from one
 clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
-literal Git pathspecs, committed-blob authority, locale-independent ordering,
-workflow lease, and recoverable publication transaction fail closed before
-mixed or active content can be claimed. Index flags cannot hide changed
-runtime or configuration bytes. Git subprocesses receive only a small
+literal bounded Git pathspec batches, committed-blob authority,
+configured-tree source coverage, semantic source-root-relative routes,
+reserved generated-public namespaces, locale-independent ordering, workflow
+lease, and recoverable publication transaction fail closed before mixed or
+active content can be claimed. Index flags cannot hide changed runtime,
+configuration, source, token, or media bytes. Git subprocesses receive only a small
 non-secret environment allowlist; inherited credential, loader, and Git
 configuration variables never cross the boundary. A broken current Markdown blob yields only a
 bounded, visible, non-searchable current-source error page; Git history and
 previous generated data are never republished.
 `codeflow validate --portal <directory>` executes no project code and writes
-nothing; it independently checks bounded path, hash, exact source-derived
-identity/relationship, error-page, provenance, version, raster-dimension,
+nothing; it independently checks bounded path, hash, complete configured-source
+coverage, exact source-derived identity/relationship, error-page, provenance, version, raster-dimension,
 output-coverage, twin, and
 `llms.txt` claims.
 

@@ -378,6 +378,21 @@ export function renderPrimitiveTokenCss(tokens) {
   return `:root { --sl-color-accent: ${tokens.light.accent}; }\n:root[data-theme="dark"] { --sl-color-accent: ${tokens.dark.accent}; }\n`;
 }
 
+export function localRouteFor(sourcePath, configuredRoots) {
+  const matchingRoots = configuredRoots.filter((root) => sourcePath.startsWith(`${root}/`))
+    .sort((left, right) => right.length - left.length || compareDeterministicText(left, right));
+  if (!matchingRoots.length) throw new Error(`source does not belong to a configured source root: ${sourcePath}`);
+  const route = sourcePath.slice(matchingRoots[0].length + 1).replace(/\.md$/, "");
+  const parts = route.split("/");
+  if (parts.at(-1) === "index") parts.pop();
+  if (!parts.length || parts.at(-1) === "404") throw new Error(`source claims a reserved generated route: ${sourcePath}`);
+  return parts.map(strictUrlSegment).join("/");
+}
+
+export function strictUrlSegment(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 function contrastRatio(left, right) {
   const luminance = (hex) => {
     const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);

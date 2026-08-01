@@ -5,6 +5,8 @@ import path from "node:path";
 import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.mjs";
 
 const PUBLICATION_LIVE_PATHS = new Set([".portal/generated", "src/content/docs", "public"]);
+const RESERVED_PUBLIC_FILES = new Set(["llms.txt"]);
+const RESERVED_PUBLIC_PREFIXES = ["markdown", "media"];
 const MAX_PRESERVED_UNKNOWN_BYTES = 64 * 1024 * 1024;
 const MAX_PRESERVED_UNKNOWN_FILES = 10_000;
 const MAX_PRESERVED_UNKNOWN_DEPTH = 32;
@@ -227,7 +229,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
       const stageRelative = `${stageRoot}/${index}`;
       const backupRelative = `${backupRoot}/${index}`;
       transactionGroups.push({ live: group.live, stage: stageRelative, backup: backupRelative, had_live: await exists(live) });
-      preparedGroups.push({ live, stage: path.join(portalRoot, stageRelative), planned, preserveUnknown: group.preserveUnknown === true });
+      preparedGroups.push({ logicalLive: group.live, live, stage: path.join(portalRoot, stageRelative), planned, preserveUnknown: group.preserveUnknown === true });
     }
     const transaction = { schema_version: 1, phase: "preparing", stage_root: stageRoot, backup_root: backupRoot, groups: transactionGroups };
     validateTransaction(transaction);
@@ -237,7 +239,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
     maybeFault("after-journal", faultAt);
     for (const [index, group] of preparedGroups.entries()) {
       await refreshPublicationLease(portalRoot, lease);
-      await prepareOwnedStage(group.live, group.stage, group.planned, group.preserveUnknown, testHooks);
+      await prepareOwnedStage(group.logicalLive, group.live, group.stage, group.planned, group.preserveUnknown, testHooks);
       maybeFault(`after-prepare-${index}`, faultAt);
     }
     transaction.phase = "prepared";
@@ -274,7 +276,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
   }
 }
 
-async function prepareOwnedStage(live, stage, planned, preserveUnknown, testHooks) {
+async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnknown, testHooks) {
   const { inventory } = await inspectOwnedDirectory(live, preserveUnknown);
   const owned = new Set(inventory ?? []);
   await rm(stage, { recursive: true, force: true });
@@ -282,6 +284,7 @@ async function prepareOwnedStage(live, stage, planned, preserveUnknown, testHook
   let preservedBytes = 0;
   for (const relative of await walkFiles(live)) {
     if (relative === ".codeflow-generated.json" || owned.has(relative)) continue;
+    if (logicalLive === "public" && isReservedPublicPath(relative)) continue;
     if (planned.has(relative)) throw new Error(`refusing to overwrite unowned generated path: ${path.join(live, relative)}`);
     const source = path.join(live, relative);
     const remaining = MAX_PRESERVED_UNKNOWN_BYTES - preservedBytes;
@@ -297,6 +300,15 @@ async function prepareOwnedStage(live, stage, planned, preserveUnknown, testHook
   }
   for (const [relative, content] of planned) await writeText(path.join(stage, relative), content);
   await writeText(path.join(stage, ".codeflow-generated.json"), `${JSON.stringify({ schema_version: 1, files: [...planned.keys()].sort(compareDeterministicText) }, null, 2)}\n`);
+}
+
+function isReservedPublicPath(relative) {
+  const key = portablePathKey(relative, "public file");
+  return [...RESERVED_PUBLIC_FILES].some((reserved) => key === portablePathKey(reserved, "reserved public file"))
+    || RESERVED_PUBLIC_PREFIXES.some((prefix) => {
+      const prefixKey = portablePathKey(prefix, "reserved public prefix");
+      return key === prefixKey || key.startsWith(`${prefixKey}/`);
+    });
 }
 
 async function inspectOwnedDirectory(dir, preserveUnknown) {

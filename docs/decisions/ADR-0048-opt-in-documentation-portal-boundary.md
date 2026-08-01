@@ -45,7 +45,8 @@ recoverable single-writer transaction. Git pathspecs are top-anchored and
 literal, and blob comparison defeats index flags that hide worktree changes.
 The adapter inventories the commit once and reads source/media objects in
 bounded batches with prompts, lazy fetching, fsmonitor, pagers, optional locks,
-replacement objects, and inherited Git redirection disabled. Git subprocesses
+replacement objects, and inherited Git redirection disabled. Status pathspecs
+are split beneath a conservative native-Windows command limit. Git subprocesses
 receive only a small non-secret process-environment allowlist; model, cloud,
 credential, loader-injection, and Git configuration variables are excluded. If
 one current source cannot parse, its
@@ -61,12 +62,18 @@ versioned evidence manifest beside disposable build data. The new
 no project code. Rust validates only claims that can be checked independently
 against repository and output bytes: schema and size limits, safe relative
 paths, source and line-range snippet hashes, existing strict IDs, unique
-routes, exact source-derived identities and forward relationships, derived
+routes, exact configured-tree source coverage, source-derived identities and
+forward relationships, derived
 backlink consistency, error-page exclusion, pinned commit/version/source
 metadata, bounded raster headers/dimensions, covered output pages, per-page
 Markdown twins, and `llms.txt`. Rendering
 and graph-generation semantics remain in the exact-pinned Node build and test
 lanes; Rust does not implement a second content graph.
+
+Routes combine the selected semantic layer with the source path relative to
+the most-specific configured source root. Generated public Markdown twins,
+media, and `llms.txt` occupy reserved namespaces that are fully replaced on
+publication; bounded user-owned public files outside them remain preserved.
 
 The starter source is capped at 2 MiB unpacked, its archive-equivalent content
 at 1 MiB, and its measured release-binary increase at 1 MiB. `SKILL.md` remains

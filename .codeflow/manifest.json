@@ -65,13 +65,13 @@
     ".agents/skills/cf-docs-portal/references/content-contract.md": {
       "src": "agents/skills/cf-docs-portal/references/content-contract.md",
       "ownership": "managed",
-      "sha256": "71f8d3e98db0e20b10ef6d48601e0bafa9ac2ac2e5138260fbef8a407b9b95bd",
+      "sha256": "d6ea7ebaac523af6d61b181576785a22bcf318ea477a61ef3c3e00095e43d5fe",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/information-architecture.md": {
       "src": "agents/skills/cf-docs-portal/references/information-architecture.md",
       "ownership": "managed",
-      "sha256": "110880f7ee40f6328269744ea66c2e929f8c6dd6b67524c82693072280c17325",
+      "sha256": "687113e06998498cbbae77145b7cfc3d7ebe3a14f1c30ee7fb38a01cd8c578b4",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/operations.md": {
@@ -335,13 +335,13 @@
     ".claude/skills/cf-docs-portal/references/content-contract.md": {
       "src": "agents/skills/cf-docs-portal/references/content-contract.md",
       "ownership": "managed",
-      "sha256": "71f8d3e98db0e20b10ef6d48601e0bafa9ac2ac2e5138260fbef8a407b9b95bd",
+      "sha256": "d6ea7ebaac523af6d61b181576785a22bcf318ea477a61ef3c3e00095e43d5fe",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/information-architecture.md": {
       "src": "agents/skills/cf-docs-portal/references/information-architecture.md",
       "ownership": "managed",
-      "sha256": "110880f7ee40f6328269744ea66c2e929f8c6dd6b67524c82693072280c17325",
+      "sha256": "687113e06998498cbbae77145b7cfc3d7ebe3a14f1c30ee7fb38a01cd8c578b4",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/operations.md": {

@@ -428,8 +428,12 @@ configuration names authoritative source Markdown; the exact-pinned Node adapter
 is the sole author of disposable Starlight content, Pagefind output, Markdown
 twins, `llms.txt`, and a bounded evidence manifest. It accepts only one clean
 committed configuration/runtime/source/media snapshot: source claims come from
-bounded Git blobs, while current runtime/configuration bytes must match their
-committed blobs even when index flags hide worktree changes. It parses GFM
+bounded Git blobs, while every configured input and the runtime must match
+committed bytes even when index flags hide worktree changes. The Rust verifier
+independently derives complete source coverage and semantic routes from the
+committed configuration and tree. Generated Markdown, media, and `llms.txt`
+namespaces are replaced in full while bounded project-owned public files
+outside them remain preserved. It parses GFM
 through a syntax tree and publishes all generated roots transactionally under
 one workflow lease with locale-independent ordering. Commit inventory and blob
 reads are batched and bounded; Git receives only a small non-secret environment
@@ -438,8 +442,8 @@ optional locks, and inherited redirection are disabled. A broken current source
 gets only a bounded visible error page at its stable route, outside the active
 graph, search, previews, and current-content indexes; history is never walked
 or republished. `codeflow validate --portal <dir>` is a read-only Rust verifier
-over those byte claims—including portable paths, exact source-derived graph
-edges, bounded raster dimensions, and error-page exclusion—and never executes
+over those byte claims—including portable paths, configured-tree coverage,
+exact source-derived graph edges, bounded raster dimensions, and error-page exclusion—and never executes
 or rewrites installed project code (ADR-0048).
 
 ### docs — `docs/`

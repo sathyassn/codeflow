@@ -8,9 +8,10 @@
   output hashes, and bounded line-range snippet hashes in evidence.
 - Build only from one clean, full Git commit. Read configuration, source
   Markdown, optional primitive tokens, and referenced local media from bounded
-  Git blobs at that commit. Compare the adopted runtime and current worktree
-  configuration byte-for-byte with their committed blobs; dirty, staged,
-  deleted, untracked, ignored, inaccessible, masked (`assume-unchanged` or
+  Git blobs at that commit. Compare the adopted runtime and every configured
+  worktree input—configuration, source Markdown, optional primitive tokens,
+  and referenced media—byte-for-byte with those blobs; dirty, staged, deleted,
+  untracked, ignored, inaccessible, masked (`assume-unchanged` or
   `skip-worktree`), or changing inputs block publication. Read worktree files
   through bounded, no-follow handles and order evidence with the starter's
   locale-independent comparator. Never label worktree bytes with `HEAD`.
@@ -22,7 +23,10 @@
 ## Identity and links
 
 Accept only project-supported strict IDs such as `CAP-001`, `ADR-001`,
-`EPC-001`, `SPC-001`, and `TSK-001`. Routes must be unique and deterministic.
+`EPC-001`, `SPC-001`, and `TSK-001`. Derive each route from its semantic layer
+plus its path relative to the most-specific configured source root; physical
+root moves therefore need not leak into reader-facing URLs. Routes must be
+unique and deterministic.
 Every relationship target must exist. Derived backlinks must be the exact
 inverse of declared forward relationships.
 Repository-relative document links resolve through the source-to-route graph.
@@ -40,14 +44,21 @@ commit without manufacturing a route. A genuinely absent document still fails.
 
 Fail closed on malformed configuration, traversal, symlink escape, route
 collision, duplicate identity, invalid configuration, or unsupported evidence
-schema. A configured source root must be a non-empty committed directory. When
-one current committed Markdown blob cannot parse, emit only a bounded visible
+schema. A configured source root must be a non-empty committed directory. Every
+publishable Markdown source selected by the committed configuration and tree
+must have exactly one current page or error stub in evidence. When one current
+committed Markdown blob cannot parse, emit only a bounded visible
 error page at its stable route. Record the current source path, blob hash,
 commit, output hashes, and bounded diagnostic; clear IDs, relationships,
 backlinks, snippets, and status; and exclude the page from search, previews,
 normal `llms.txt`, and the active graph. Continue healthy sibling pages. Never
 walk Git history, republish an ancestor, or trust prior generated output or
 evidence as content authority.
+
+Generated public namespaces are `public/markdown/`, `public/media/`, and
+`public/llms.txt`; each publication replaces them completely so deleted sources
+cannot survive as reachable output. Other project-owned public files may be
+preserved only through the bounded no-follow publication contract.
 
 ## Rendering
 

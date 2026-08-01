@@ -18,6 +18,8 @@ use crate::scaffold::sha256_hex;
 
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PAGES: usize = 10_000;
+const MAX_REPOSITORY_FILES: usize = 100_000;
+const MAX_GIT_TREE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 100_000;
 const MAX_CLAIMED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
@@ -30,6 +32,28 @@ const MAX_TOTAL_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STALE_REASON_BYTES: usize = 512;
 const MAX_STALE_STUB_BYTES: u64 = 4 * 1024;
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+const PORTAL_CONFIG_KEYS: [&str; 12] = [
+    "schema_version",
+    "title",
+    "description",
+    "theme",
+    "repository_url",
+    "repository_root",
+    "release_version",
+    "primitive_tokens",
+    "source_roots",
+    "exclude",
+    "layers",
+    "base",
+];
+const PORTAL_LAYER_KEYS: [&str; 6] = [
+    "id",
+    "label",
+    "description",
+    "paths",
+    "prefixes",
+    "fallback",
+];
 
 #[derive(Debug, Default)]
 pub struct PortalValidationReport {
@@ -154,6 +178,27 @@ struct Page {
     snippets: Vec<Snippet>,
     #[serde(default)]
     stale_reason: Option<String>,
+}
+
+#[derive(Clone)]
+struct PortalSourceContract {
+    source_roots: Vec<String>,
+    excludes: Vec<String>,
+    layers: Vec<PortalLayerContract>,
+}
+
+#[derive(Clone)]
+struct PortalLayerContract {
+    id: String,
+    paths: Vec<String>,
+    prefixes: Vec<String>,
+    fallback: bool,
+}
+
+struct GitTreeRecord {
+    path: String,
+    mode: String,
+    kind: String,
 }
 
 fn deserialize_adoption_files<'de, D>(
@@ -344,7 +389,6 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         "configuration",
         &mut report,
     );
-    verify_config_contract(&portal, &evidence, &mut report);
     let portal_depth = normalized_portal_root
         .components()
         .filter(|component| matches!(component, Component::Normal(_)))
@@ -361,29 +405,45 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         .join("portal.config.json")
         .to_string_lossy()
         .replace('\\', "/");
-    match git_batch_blobs(
+    let authoritative_config = match git_batch_blobs(
         &repository,
         &evidence.repository.commit,
         &[config_source_path.as_str()],
         64 * 1024,
         64 * 1024,
     ) {
-        Ok(blobs)
-            if blobs
-                .get(&config_source_path)
-                .is_some_and(|bytes| sha256_hex(bytes) == evidence.config_sha256) => {}
-        Ok(_) => report
-            .issues
-            .push("configuration does not match its authoritative Git blob".into()),
-        Err(error) => report.issues.push(format!(
-            "authoritative Git configuration blob is unreadable: {error}"
-        )),
-    }
-    let source_paths: Vec<&str> = evidence
-        .pages
-        .iter()
-        .map(|page| page.source_path.as_str())
-        .collect();
+        Ok(blobs) => match blobs.get(&config_source_path) {
+            Some(bytes) if sha256_hex(bytes) == evidence.config_sha256 => Some(bytes.clone()),
+            _ => {
+                report
+                    .issues
+                    .push("configuration does not match its authoritative Git blob".into());
+                None
+            }
+        },
+        Err(error) => {
+            report.issues.push(format!(
+                "authoritative Git configuration blob is unreadable: {error}"
+            ));
+            None
+        }
+    };
+    let source_contract = authoritative_config
+        .as_deref()
+        .and_then(|bytes| verify_config_contract(bytes, &evidence, &mut report));
+    let expected_pages = source_contract
+        .as_ref()
+        .and_then(|contract| {
+            expected_portal_pages(
+                &repository,
+                &evidence.repository.commit,
+                contract,
+                &mut report,
+            )
+        })
+        .unwrap_or_default();
+    verify_page_inventory(&evidence.pages, &expected_pages, &mut report);
+    let source_paths: Vec<&str> = expected_pages.keys().map(String::as_str).collect();
     let source_blobs = match git_batch_blobs(
         &repository,
         &evidence.repository.commit,
@@ -689,6 +749,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         &evidence.media,
         &mut report,
     );
+    verify_reserved_public_inventory(&portal, &evidence, &mut report);
     let mut artifact_paths = BTreeSet::new();
     for artifact in &evidence.artifacts {
         if !artifact.path.starts_with("dist/") || !safe_path_text(&artifact.path) {
@@ -803,47 +864,610 @@ fn escape_markdown_inline(value: &str) -> String {
     escaped
 }
 
-fn verify_config_contract(portal: &Path, evidence: &Evidence, report: &mut PortalValidationReport) {
-    let path = portal.join("portal.config.json");
-    let Some(config): Option<serde_json::Value> = read_bounded_regular(&path, 64 * 1024)
-        .ok()
-        .and_then(|bytes| parse_strict_json(&bytes).ok())
-    else {
+fn verify_config_contract(
+    committed_bytes: &[u8],
+    evidence: &Evidence,
+    report: &mut PortalValidationReport,
+) -> Option<PortalSourceContract> {
+    let Ok(config): Result<serde_json::Value, _> = parse_strict_json(committed_bytes) else {
         report
             .issues
-            .push("portal configuration contract is unreadable or invalid".into());
-        return;
+            .push("committed portal configuration contract is invalid".into());
+        return None;
     };
-    let configured_release = config
+    let Some(object) = config.as_object() else {
+        report
+            .issues
+            .push("portal configuration contract is not an object".into());
+        return None;
+    };
+    if object.len() != PORTAL_CONFIG_KEYS.len()
+        || object
+            .keys()
+            .any(|key| !PORTAL_CONFIG_KEYS.contains(&key.as_str()))
+    {
+        report
+            .issues
+            .push("portal configuration keys do not match the closed schema".into());
+        return None;
+    }
+    if !verify_config_metadata(object, evidence, report) {
+        return None;
+    }
+    let source_roots =
+        configured_path_array(object.get("source_roots"), "source_roots", 1, 32, report)?;
+    let excludes = configured_path_array(object.get("exclude"), "exclude", 0, 128, report)?;
+    let layers = configured_layers(object.get("layers"), report)?;
+    Some(PortalSourceContract {
+        source_roots,
+        excludes,
+        layers,
+    })
+}
+
+fn verify_config_metadata(
+    object: &serde_json::Map<String, serde_json::Value>,
+    evidence: &Evidence,
+    report: &mut PortalValidationReport,
+) -> bool {
+    if object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || !bounded_config_string(object.get("title"), 1, 120)
+        || !bounded_config_string(object.get("description"), 1, 400)
+        || !object
+            .get("theme")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|theme| matches!(theme, "signal" | "folio"))
+    {
+        report
+            .issues
+            .push("portal configuration metadata is invalid".into());
+        return false;
+    }
+    if !matches!(object.get("repository_url"), Some(serde_json::Value::Null))
+        && !object
+            .get("repository_url")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(valid_repository_url)
+    {
+        report
+            .issues
+            .push("portal configuration repository_url is invalid".into());
+        return false;
+    }
+    let repository_root = object
+        .get("repository_root")
+        .and_then(serde_json::Value::as_str);
+    if repository_root.is_none_or(|root| {
+        root.is_empty() || root.encode_utf16().count() > 256 || root != evidence.repository.root
+    }) {
+        report.issues.push(
+            "portal configuration repository_root does not match the evidence contract".into(),
+        );
+        return false;
+    }
+    if !object
+        .get("base")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(valid_portal_base)
+    {
+        report
+            .issues
+            .push("portal configuration base path is invalid".into());
+        return false;
+    }
+    verify_config_evidence_fields(object, evidence, report)
+}
+
+fn verify_config_evidence_fields(
+    object: &serde_json::Map<String, serde_json::Value>,
+    evidence: &Evidence,
+    report: &mut PortalValidationReport,
+) -> bool {
+    let release = object
         .get("release_version")
         .and_then(serde_json::Value::as_str);
-    if configured_release != evidence.repository.release_version.as_deref()
-        || (!config
-            .get("release_version")
-            .is_some_and(serde_json::Value::is_null)
-            && configured_release.is_none())
+    if release != evidence.repository.release_version.as_deref()
+        || (release.is_none()
+            && !object
+                .get("release_version")
+                .is_some_and(serde_json::Value::is_null))
     {
         report
             .issues
             .push("repository release version does not match portal configuration".into());
+        return false;
     }
-    let configured_tokens = config
+    let tokens = object
         .get("primitive_tokens")
         .and_then(serde_json::Value::as_str);
-    if configured_tokens
+    if tokens
         != evidence
             .primitive_tokens
             .as_ref()
             .map(|value| value.source_path.as_str())
-        || (!config
-            .get("primitive_tokens")
-            .is_some_and(serde_json::Value::is_null)
-            && configured_tokens.is_none())
+        || tokens.is_some_and(|path| !safe_path_text(path))
+        || (tokens.is_none()
+            && !object
+                .get("primitive_tokens")
+                .is_some_and(serde_json::Value::is_null))
     {
         report
             .issues
             .push("primitive-token evidence does not match portal configuration".into());
+        return false;
     }
+    true
+}
+
+fn configured_layers(
+    value: Option<&serde_json::Value>,
+    report: &mut PortalValidationReport,
+) -> Option<Vec<PortalLayerContract>> {
+    let Some(layer_values) = value.and_then(serde_json::Value::as_array) else {
+        report
+            .issues
+            .push("portal configuration layers are missing or invalid".into());
+        return None;
+    };
+    if !(3..=12).contains(&layer_values.len()) {
+        report
+            .issues
+            .push("portal configuration must define 3 to 12 layers".into());
+        return None;
+    }
+    let mut layers = Vec::with_capacity(layer_values.len());
+    let mut layer_ids = BTreeSet::new();
+    let mut fallback_count = 0;
+    for value in layer_values {
+        let Some(layer) = value.as_object() else {
+            report
+                .issues
+                .push("portal configuration layer is not an object".into());
+            return None;
+        };
+        if layer
+            .keys()
+            .any(|key| !PORTAL_LAYER_KEYS.contains(&key.as_str()))
+            || !bounded_config_string(layer.get("label"), 1, 80)
+            || !bounded_config_string(layer.get("description"), 1, 300)
+        {
+            report
+                .issues
+                .push("portal configuration layer keys or metadata are invalid".into());
+            return None;
+        }
+        let Some(id) = layer.get("id").and_then(serde_json::Value::as_str) else {
+            report
+                .issues
+                .push("portal configuration layer has no string id".into());
+            return None;
+        };
+        if !valid_layer_id(id) || !layer_ids.insert(id.to_string()) {
+            report.issues.push(format!(
+                "portal configuration layer id is invalid or duplicate: {id:?}"
+            ));
+            return None;
+        }
+        let paths = match layer.get("paths") {
+            Some(value) => configured_path_array(Some(value), "layer paths", 0, 128, report)?,
+            None => Vec::new(),
+        };
+        let prefixes = match layer.get("prefixes") {
+            Some(value) => configured_path_array(Some(value), "layer prefixes", 0, 128, report)?,
+            None => Vec::new(),
+        };
+        let fallback = if let Some(value) = layer.get("fallback") {
+            let Some(value) = value.as_bool() else {
+                report.issues.push(format!(
+                    "portal configuration layer {id:?} has invalid fallback"
+                ));
+                return None;
+            };
+            value
+        } else {
+            false
+        };
+        fallback_count += usize::from(fallback);
+        layers.push(PortalLayerContract {
+            id: id.to_string(),
+            paths,
+            prefixes,
+            fallback,
+        });
+    }
+    if fallback_count != 1 {
+        report
+            .issues
+            .push("portal configuration must define exactly one fallback layer".into());
+        return None;
+    }
+    Some(layers)
+}
+
+fn configured_path_array(
+    value: Option<&serde_json::Value>,
+    label: &str,
+    minimum: usize,
+    maximum: usize,
+    report: &mut PortalValidationReport,
+) -> Option<Vec<String>> {
+    let Some(values) = value.and_then(serde_json::Value::as_array) else {
+        report
+            .issues
+            .push(format!("portal configuration {label} is not an array"));
+        return None;
+    };
+    if values.len() < minimum || values.len() > maximum {
+        report.issues.push(format!(
+            "portal configuration {label} must contain {minimum} to {maximum} paths"
+        ));
+        return None;
+    }
+    let mut paths = Vec::with_capacity(values.len());
+    let mut portable = BTreeSet::new();
+    for value in values {
+        let Some(path) = value.as_str() else {
+            report.issues.push(format!(
+                "portal configuration {label} contains a non-string path"
+            ));
+            return None;
+        };
+        if !safe_path_text(path) || !portable.insert(portable_key(path)) {
+            report.issues.push(format!(
+                "portal configuration {label} contains an unsafe or duplicate path: {path:?}"
+            ));
+            return None;
+        }
+        paths.push(path.to_string());
+    }
+    Some(paths)
+}
+
+fn valid_layer_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn bounded_config_string(
+    value: Option<&serde_json::Value>,
+    minimum: usize,
+    maximum: usize,
+) -> bool {
+    value
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| {
+            let length = value.encode_utf16().count();
+            (minimum..=maximum).contains(&length)
+        })
+}
+
+fn valid_repository_url(value: &str) -> bool {
+    if value.encode_utf16().count() > 2_048
+        || value.chars().any(char::is_whitespace)
+        || value.contains(['?', '#'])
+    {
+        return false;
+    }
+    let Some(remainder) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = remainder.split('/').next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = if authority.starts_with('[') {
+        let Some(end) = authority.find(']') else {
+            return false;
+        };
+        if end == 1
+            || !authority[1..end]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.'))
+        {
+            return false;
+        }
+        &authority[..=end]
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+}
+
+fn valid_portal_base(value: &str) -> bool {
+    value.starts_with('/')
+        && value.ends_with('/')
+        && !value.contains(['\\', '?', '#'])
+        && !value
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .any(|part| matches!(part, "." | ".."))
+}
+
+fn expected_portal_pages(
+    repository: &Path,
+    commit: &str,
+    contract: &PortalSourceContract,
+    report: &mut PortalValidationReport,
+) -> Option<BTreeMap<String, String>> {
+    let records = match git_tree_records(repository, commit) {
+        Ok(records) => records,
+        Err(error) => {
+            report.issues.push(format!(
+                "authoritative Git tree cannot be inventoried: {error}"
+            ));
+            return None;
+        }
+    };
+    let selected = select_publishable_sources(&records, contract, report)?;
+    Some(derive_expected_routes(&selected, contract, report))
+}
+
+#[allow(clippy::case_sensitive_file_extension_comparisons)] // Mirrors the adapter's intentional lowercase `.md` contract exactly.
+fn select_publishable_sources(
+    records: &[GitTreeRecord],
+    contract: &PortalSourceContract,
+    report: &mut PortalValidationReport,
+) -> Option<BTreeSet<String>> {
+    let mut selected = BTreeSet::new();
+    let mut portable_sources = BTreeSet::new();
+    for root in &contract.source_roots {
+        if records.iter().any(|record| record.path == *root) {
+            report.issues.push(format!(
+                "configured source root must be a committed directory, not a file: {root}"
+            ));
+            continue;
+        }
+        let beneath: Vec<&GitTreeRecord> = records
+            .iter()
+            .filter(|record| record.path.starts_with(&format!("{root}/")))
+            .collect();
+        if beneath.is_empty() {
+            report.issues.push(format!(
+                "configured source root is not a non-empty committed directory: {root}"
+            ));
+            continue;
+        }
+        for record in beneath {
+            let basename = record.path.rsplit('/').next().unwrap_or_default();
+            if !record.path.ends_with(".md")
+                || basename == ".env"
+                || basename.starts_with(".env.")
+                || contract.excludes.iter().any(|excluded| {
+                    record.path == *excluded || record.path.starts_with(&format!("{excluded}/"))
+                })
+            {
+                continue;
+            }
+            if record.kind != "blob" || !matches!(record.mode.as_str(), "100644" | "100755") {
+                report.issues.push(format!(
+                    "committed portal source is not a regular file: {}",
+                    record.path
+                ));
+                continue;
+            }
+            let key = portable_key(&record.path);
+            if !portable_sources.insert(key) && !selected.contains(&record.path) {
+                report.issues.push(format!(
+                    "committed portal source path collides portably: {}",
+                    record.path
+                ));
+                continue;
+            }
+            selected.insert(record.path.clone());
+            if selected.len() > MAX_PAGES {
+                report
+                    .issues
+                    .push(format!("publishable source count exceeds {MAX_PAGES}"));
+                return None;
+            }
+        }
+    }
+    if selected.is_empty() {
+        report
+            .issues
+            .push("configured source roots contain no publishable Markdown files".into());
+        return Some(BTreeSet::new());
+    }
+    Some(selected)
+}
+
+fn derive_expected_routes(
+    selected: &BTreeSet<String>,
+    contract: &PortalSourceContract,
+    report: &mut PortalValidationReport,
+) -> BTreeMap<String, String> {
+    let mut expected = BTreeMap::new();
+    let mut route_owners = BTreeMap::<String, String>::new();
+    for source_path in selected {
+        let Some(layer) = contract
+            .layers
+            .iter()
+            .find(|layer| {
+                layer.paths.iter().any(|candidate| candidate == source_path)
+                    || layer.prefixes.iter().any(|prefix| {
+                        source_path == prefix || source_path.starts_with(&format!("{prefix}/"))
+                    })
+            })
+            .or_else(|| contract.layers.iter().find(|layer| layer.fallback))
+        else {
+            report.issues.push(format!(
+                "no configured portal layer owns source: {source_path}"
+            ));
+            continue;
+        };
+        let local = match local_route_for(source_path, &contract.source_roots) {
+            Ok(route) => route,
+            Err(error) => {
+                report.issues.push(error);
+                continue;
+            }
+        };
+        let route = format!("{}/{local}", layer.id);
+        let key = portable_key(&route);
+        if let Some(prior) = route_owners.insert(key, source_path.clone()) {
+            report.issues.push(format!(
+                "configured sources claim one portal route {route:?}: {prior} and {source_path}"
+            ));
+            continue;
+        }
+        expected.insert(source_path.clone(), route);
+    }
+    expected
+}
+
+fn verify_page_inventory(
+    pages: &[Page],
+    expected: &BTreeMap<String, String>,
+    report: &mut PortalValidationReport,
+) {
+    let mut actual = BTreeMap::<String, &Page>::new();
+    for page in pages {
+        let key = portable_key(&page.source_path);
+        if actual.insert(key, page).is_some() {
+            report.issues.push(format!(
+                "portal evidence claims a source more than once: {}",
+                page.source_path
+            ));
+        }
+    }
+    let expected_keys: BTreeMap<String, (&String, &String)> = expected
+        .iter()
+        .map(|(source, route)| (portable_key(source), (source, route)))
+        .collect();
+    for (key, (source, route)) in &expected_keys {
+        match actual.get(key) {
+            None => report.issues.push(format!(
+                "publishable committed source has no evidenced page or error stub: {source}"
+            )),
+            Some(page) if page.source_path != **source => report.issues.push(format!(
+                "evidenced source spelling differs from the authoritative tree: {:?} != {:?}",
+                page.source_path, source
+            )),
+            Some(page) if page.route != **route => report.issues.push(format!(
+                "{} route does not match configured layer/source-root semantics: {:?} != {:?}",
+                source, page.route, route
+            )),
+            Some(_) => {}
+        }
+    }
+    for (key, page) in actual {
+        if !expected_keys.contains_key(&key) {
+            report.issues.push(format!(
+                "evidenced page is outside the configured publishable source inventory: {}",
+                page.source_path
+            ));
+        }
+    }
+}
+
+fn local_route_for(source_path: &str, source_roots: &[String]) -> Result<String, String> {
+    let root = source_roots
+        .iter()
+        .filter(|root| source_path.starts_with(&format!("{root}/")))
+        .max_by(|left, right| left.len().cmp(&right.len()).then_with(|| right.cmp(left)))
+        .ok_or_else(|| format!("source does not belong to a configured root: {source_path}"))?;
+    let relative = source_path
+        .strip_prefix(&format!("{root}/"))
+        .and_then(|value| value.strip_suffix(".md"))
+        .ok_or_else(|| format!("source has no canonical Markdown route: {source_path}"))?;
+    let mut parts: Vec<&str> = relative.split('/').collect();
+    if parts.last() == Some(&"index") {
+        parts.pop();
+    }
+    if parts.is_empty() || parts.last() == Some(&"404") {
+        return Err(format!(
+            "source claims a reserved generated route: {source_path}"
+        ));
+    }
+    Ok(parts
+        .into_iter()
+        .map(percent_encode_segment)
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+fn percent_encode_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(encoded, "%{byte:02X}").expect("writing to a string cannot fail");
+        }
+    }
+    encoded
+}
+
+fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRecord>> {
+    if !valid_commit(commit) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid Git commit identity",
+        ));
+    }
+    let output = git_output_bounded(
+        root,
+        &["ls-tree", "-r", "-z", "--full-tree", commit],
+        None,
+        MAX_GIT_TREE_BYTES,
+    )?;
+    let mut records = Vec::new();
+    let mut portable = BTreeSet::new();
+    for raw in output
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let separator = raw.iter().position(|byte| *byte == b'\t').ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Git tree record has no path",
+            )
+        })?;
+        let metadata = std::str::from_utf8(&raw[..separator]).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+        })?;
+        let path = std::str::from_utf8(&raw[separator + 1..]).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+        })?;
+        let mut fields = metadata.split_ascii_whitespace();
+        let mode = fields.next().unwrap_or_default();
+        let kind = fields.next().unwrap_or_default();
+        let object = fields.next().unwrap_or_default();
+        if fields.next().is_some()
+            || !safe_path_text(path)
+            || !matches!(kind, "blob" | "commit")
+            || object.len() < 40
+            || !object.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !portable.insert(portable_key(path))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Git tree record is invalid or collides portably: {path:?}"),
+            ));
+        }
+        records.push(GitTreeRecord {
+            path: path.to_string(),
+            mode: mode.to_string(),
+            kind: kind.to_string(),
+        });
+        if records.len() > MAX_REPOSITORY_FILES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Git tree file count exceeds {MAX_REPOSITORY_FILES}"),
+            ));
+        }
+    }
+    Ok(records)
 }
 
 fn verify_primitive_tokens(
@@ -1009,6 +1633,132 @@ fn verify_media(
         report
             .issues
             .push("referenced media corpus exceeds 67108864 bytes".into());
+    }
+}
+
+fn verify_reserved_public_inventory(
+    portal: &Path,
+    evidence: &Evidence,
+    report: &mut PortalValidationReport,
+) {
+    let expected: BTreeSet<String> = evidence
+        .pages
+        .iter()
+        .map(|page| portable_key(&page.markdown_twin))
+        .chain(
+            evidence
+                .media
+                .iter()
+                .map(|media| portable_key(&media.output_path)),
+        )
+        .collect();
+    let mut actual = BTreeSet::new();
+    let mut count = 0;
+    let mut bytes = 0;
+    for namespace in ["public/markdown", "public/media"] {
+        collect_reserved_public_files(
+            portal,
+            Path::new(namespace),
+            0,
+            &mut count,
+            &mut bytes,
+            &mut actual,
+            report,
+        );
+    }
+    for path in actual.difference(&expected) {
+        report.issues.push(format!(
+            "reserved generated public output is unclaimed: {path}"
+        ));
+    }
+    for path in expected.difference(&actual) {
+        report
+            .issues
+            .push(format!("claimed generated public output is absent: {path}"));
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Recursive bounded walker carries one shared budget and report.
+fn collect_reserved_public_files(
+    portal: &Path,
+    relative: &Path,
+    depth: usize,
+    count: &mut usize,
+    bytes: &mut u64,
+    paths: &mut BTreeSet<String>,
+    report: &mut PortalValidationReport,
+) {
+    if depth > 32 {
+        report
+            .issues
+            .push("reserved public output exceeds 32 directory levels".into());
+        return;
+    }
+    let directory = portal.join(relative);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            report.issues.push(format!(
+                "reserved public output is unreadable {}: {error}",
+                directory.display()
+            ));
+            return;
+        }
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            report
+                .issues
+                .push("reserved public output contains an unreadable entry".into());
+            continue;
+        };
+        let child = relative.join(entry.file_name());
+        let kind = match entry.file_type() {
+            Ok(kind) => kind,
+            Err(error) => {
+                report.issues.push(format!(
+                    "reserved public output metadata is unreadable {}: {error}",
+                    child.display()
+                ));
+                continue;
+            }
+        };
+        if kind.is_symlink() {
+            report.issues.push(format!(
+                "reserved public output symlink is refused: {}",
+                child.display()
+            ));
+        } else if kind.is_dir() {
+            collect_reserved_public_files(portal, &child, depth + 1, count, bytes, paths, report);
+        } else if kind.is_file() {
+            *count += 1;
+            *bytes = bytes.saturating_add(entry.metadata().map_or(u64::MAX, |item| item.len()));
+            let Some(text) = child.to_str().filter(|path| safe_path_text(path)) else {
+                report.issues.push(format!(
+                    "reserved public output path is unsafe: {}",
+                    child.display()
+                ));
+                continue;
+            };
+            if *count > MAX_PAGES + 1_000 || *bytes > MAX_TOTAL_ARTIFACT_BYTES {
+                report
+                    .issues
+                    .push("reserved public output exceeds its corpus limit".into());
+                return;
+            }
+            if !paths.insert(portable_key(text)) {
+                report.issues.push(format!(
+                    "reserved public output collides portably: {}",
+                    child.display()
+                ));
+            }
+        } else {
+            report.issues.push(format!(
+                "reserved public output is not a regular file: {}",
+                child.display()
+            ));
+        }
     }
 }
 
@@ -2213,6 +2963,362 @@ mod tests {
             escape_markdown_inline("docs/a.b_[c]:d&<e>\t\nnext"),
             r"docs/a\.b\_\[c\]&#58;d&amp;&lt;e&gt; next"
         );
+    }
+
+    #[test]
+    fn configured_tree_inventory_requires_every_source_and_derives_semantic_routes() {
+        let temp = tempfile::tempdir().unwrap();
+        for directory in ["docs", "apps/web/docs"] {
+            std::fs::create_dir_all(temp.path().join(directory)).unwrap();
+        }
+        std::fs::write(temp.path().join("docs/product.md"), "# Product\n").unwrap();
+        std::fs::write(temp.path().join("apps/web/docs/journey.md"), "# Journey\n").unwrap();
+        std::fs::write(temp.path().join("docs/excluded.md"), "# Excluded\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "."][..],
+            &["commit", "-q", "-m", "fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(temp.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let commit = git_text_bounded(temp.path(), &["rev-parse", "HEAD"], 1024)
+            .unwrap()
+            .trim()
+            .to_string();
+        let contract = PortalSourceContract {
+            source_roots: vec!["docs".into(), "apps".into(), "apps/web/docs".into()],
+            excludes: vec!["docs/excluded.md".into()],
+            layers: vec![
+                PortalLayerContract {
+                    id: "orient".into(),
+                    paths: vec!["docs/product.md".into()],
+                    prefixes: Vec::new(),
+                    fallback: false,
+                },
+                PortalLayerContract {
+                    id: "web".into(),
+                    paths: Vec::new(),
+                    prefixes: vec!["apps/web/docs".into()],
+                    fallback: false,
+                },
+                PortalLayerContract {
+                    id: "reference".into(),
+                    paths: Vec::new(),
+                    prefixes: Vec::new(),
+                    fallback: true,
+                },
+            ],
+        };
+        let mut report = PortalValidationReport::default();
+        let expected = expected_portal_pages(temp.path(), &commit, &contract, &mut report).unwrap();
+        assert!(report.is_clean(), "{:?}", report.issues);
+        assert_eq!(
+            expected,
+            BTreeMap::from([
+                ("apps/web/docs/journey.md".into(), "web/journey".into()),
+                ("docs/product.md".into(), "orient/product".into()),
+            ])
+        );
+
+        let mut omitted_report = PortalValidationReport::default();
+        verify_page_inventory(&[page("docs/product.md")], &expected, &mut omitted_report);
+        assert!(omitted_report.issues.iter().any(|issue| {
+            issue.contains("apps/web/docs/journey.md") && issue.contains("no evidenced page")
+        }));
+    }
+
+    #[test]
+    fn semantic_route_fixtures_stay_in_parity_with_the_javascript_adapter() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/docs-portal/starter/tests/fixtures/route-contract.json"
+        )))
+        .unwrap();
+        for item in fixture["accepted"].as_array().unwrap() {
+            let source = item["source_path"].as_str().unwrap();
+            let roots = item["source_roots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|root| root.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                local_route_for(source, &roots).unwrap(),
+                item["local_route"].as_str().unwrap(),
+                "{source}"
+            );
+        }
+        for item in fixture["rejected"].as_array().unwrap() {
+            let source = item["source_path"].as_str().unwrap();
+            let roots = item["source_roots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|root| root.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert!(
+                local_route_for(source, &roots)
+                    .unwrap_err()
+                    .contains(item["error"].as_str().unwrap()),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One public-boundary fixture exercises four adversarial manifest variants.
+    fn public_validator_rejects_incomplete_or_forged_source_inventory() {
+        let temp = tempfile::tempdir().unwrap();
+        for directory in [
+            ".codeflow",
+            "docs",
+            "portal/.portal/generated",
+            "portal/public",
+        ] {
+            std::fs::create_dir_all(temp.path().join(directory)).unwrap();
+        }
+        let config = br#"{
+          "schema_version": 1,
+          "title": "Fixture guide",
+          "description": "Portal omission regression",
+          "theme": "signal",
+          "repository_url": null,
+          "repository_root": "..",
+          "release_version": null,
+          "primitive_tokens": null,
+          "source_roots": ["docs"],
+          "exclude": [],
+          "layers": [
+            {"id":"orient","label":"Orient","description":"Start","paths":["docs/guide.md"]},
+            {"id":"system","label":"System","description":"System","prefixes":["docs/decisions"]},
+            {"id":"reference","label":"Reference","description":"Other","fallback":true}
+          ],
+          "base": "/"
+        }"#;
+        std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
+        std::fs::write(temp.path().join("docs/guide.md"), "# Guide\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "docs", "portal/portal.config.json"][..],
+            &["commit", "-q", "-m", "fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(temp.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let commit = git_text_bounded(temp.path(), &["rev-parse", "HEAD"], 1024)
+            .unwrap()
+            .trim()
+            .to_string();
+        let llms = "# Fixture guide\n\nPortal omission regression\n";
+        std::fs::write(temp.path().join("portal/public/llms.txt"), llms).unwrap();
+        let adoption = serde_json::json!({
+            "schema_version": 1,
+            "root": "portal",
+            "starter_version": "1.0.0",
+            "files": {
+                "portal.config.json": {
+                    "ownership": "user-owned",
+                    "pristine_sha256": "a".repeat(64)
+                }
+            }
+        });
+        std::fs::write(
+            temp.path().join(".codeflow/docs-portal.json"),
+            serde_json::to_vec(&adoption).unwrap(),
+        )
+        .unwrap();
+        let page_claim = |source_path: &str, route: &str| {
+            serde_json::json!({
+                "source_path": source_path,
+                "source_sha256": sha256_hex(b"# Guide\n"),
+                "built_from_commit": commit,
+                "route": route,
+                "title": "Guide",
+                "status": null,
+                "output_markdown": format!("src/content/docs/{route}.md"),
+                "output_markdown_sha256": "0".repeat(64),
+                "markdown_twin": format!("public/markdown/{route}.md"),
+                "markdown_twin_sha256": "0".repeat(64),
+                "stale": false,
+                "searchable": true,
+                "ids": [],
+                "relationships": [],
+                "backlinks": [],
+                "snippets": [],
+                "stale_reason": null
+            })
+        };
+        let cases = [
+            ("omitted", Vec::new(), "no evidenced page"),
+            (
+                "extra",
+                vec![page_claim("docs/extra.md", "orient/extra")],
+                "outside the configured publishable source inventory",
+            ),
+            (
+                "case-respelled",
+                vec![page_claim("Docs/guide.md", "orient/guide")],
+                "spelling differs from the authoritative tree",
+            ),
+            (
+                "wrong-route",
+                vec![page_claim("docs/guide.md", "system/guide")],
+                "does not match configured layer/source-root semantics",
+            ),
+        ];
+        for (name, pages, expected_issue) in cases {
+            let evidence = serde_json::json!({
+                "schema_version": 1,
+                "generator": {"name": "@codeflow/docs-portal", "version": "1.0.0"},
+                "repository": {"root": "..", "commit": commit, "release_version": null},
+                "config_sha256": sha256_hex(config),
+                "primitive_tokens": null,
+                "media": [],
+                "pages": pages,
+                "llms": {"path": "public/llms.txt", "sha256": sha256_hex(llms.as_bytes())},
+                "artifacts": []
+            });
+            std::fs::write(
+                temp.path().join("portal/.portal/generated/evidence.json"),
+                serde_json::to_vec(&evidence).unwrap(),
+            )
+            .unwrap();
+            let report = validate_portal(temp.path(), Path::new("portal"));
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.contains(expected_issue)),
+                "case {name}: {:?}",
+                report.issues
+            );
+        }
+
+        std::fs::create_dir_all(temp.path().join("portal/public/markdown")).unwrap();
+        std::fs::write(
+            temp.path().join("portal/public/markdown/deleted.md"),
+            "# Deleted source\n",
+        )
+        .unwrap();
+        let evidence = serde_json::json!({
+            "schema_version": 1,
+            "generator": {"name": "@codeflow/docs-portal", "version": "1.0.0"},
+            "repository": {"root": "..", "commit": commit, "release_version": null},
+            "config_sha256": sha256_hex(config),
+            "primitive_tokens": null,
+            "media": [],
+            "pages": [],
+            "llms": {"path": "public/llms.txt", "sha256": sha256_hex(llms.as_bytes())},
+            "artifacts": []
+        });
+        std::fs::write(
+            temp.path().join("portal/.portal/generated/evidence.json"),
+            serde_json::to_vec(&evidence).unwrap(),
+        )
+        .unwrap();
+        let report = validate_portal(temp.path(), Path::new("portal"));
+        assert!(report.issues.iter().any(|issue| {
+            issue.contains("reserved generated public output is unclaimed")
+                && issue.contains("public/markdown/deleted.md")
+        }));
+    }
+
+    #[test]
+    fn rust_configuration_contract_is_closed_and_covers_route_affecting_fields() {
+        let valid = serde_json::json!({
+            "schema_version": 1,
+            "title": "Guide",
+            "description": "Repository guide",
+            "theme": "signal",
+            "repository_url": "https://github.com/example/repository",
+            "repository_root": "..",
+            "release_version": null,
+            "primitive_tokens": null,
+            "source_roots": ["docs", "apps/web/docs"],
+            "exclude": ["docs/private"],
+            "layers": [
+                {"id":"orient","label":"Orient","description":"Start","paths":["docs/product.md"]},
+                {"id":"web","label":"Web","description":"Surface","prefixes":["apps/web/docs"]},
+                {"id":"reference","label":"Reference","description":"Other","fallback":true}
+            ],
+            "base": "/guide/"
+        });
+        let evidence = Evidence {
+            schema_version: 1,
+            generator: Generator {
+                name: "@codeflow/docs-portal".into(),
+                version: "1.0.0".into(),
+            },
+            repository: Repository {
+                root: "..".into(),
+                commit: "0".repeat(40),
+                release_version: None,
+            },
+            config_sha256: "0".repeat(64),
+            primitive_tokens: None,
+            media: Vec::new(),
+            pages: Vec::new(),
+            llms: Artifact {
+                path: "public/llms.txt".into(),
+                sha256: "0".repeat(64),
+            },
+            artifacts: Vec::new(),
+        };
+        let mut report = PortalValidationReport::default();
+        let contract =
+            verify_config_contract(&serde_json::to_vec(&valid).unwrap(), &evidence, &mut report)
+                .unwrap();
+        assert!(report.is_clean(), "{:?}", report.issues);
+        assert_eq!(contract.source_roots, ["docs", "apps/web/docs"]);
+        assert_eq!(contract.excludes, ["docs/private"]);
+        assert_eq!(contract.layers[1].id, "web");
+
+        for mutation in [
+            "unknown-top",
+            "unknown-layer",
+            "duplicate-fallback",
+            "unsafe-root",
+        ] {
+            let mut invalid = valid.clone();
+            match mutation {
+                "unknown-top" => {
+                    invalid["allow_html"] = true.into();
+                }
+                "unknown-layer" => {
+                    invalid["layers"][0]["template"] = "custom".into();
+                }
+                "duplicate-fallback" => {
+                    invalid["layers"][0]["fallback"] = true.into();
+                }
+                "unsafe-root" => {
+                    invalid["source_roots"] = serde_json::json!(["../docs"]);
+                }
+                _ => unreachable!(),
+            }
+            let mut report = PortalValidationReport::default();
+            assert!(verify_config_contract(
+                &serde_json::to_vec(&invalid).unwrap(),
+                &evidence,
+                &mut report
+            )
+            .is_none());
+            assert!(!report.is_clean(), "mutation {mutation} was accepted");
+        }
     }
 
     #[test]

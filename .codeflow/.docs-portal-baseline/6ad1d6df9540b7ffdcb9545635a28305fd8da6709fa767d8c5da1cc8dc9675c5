@@ -1,0 +1,46 @@
+{
+  "accepted": [
+    {
+      "source_path": "docs/getting started.md",
+      "source_roots": ["docs"],
+      "local_route": "getting%20started"
+    },
+    {
+      "source_path": "docs/café.md",
+      "source_roots": ["docs"],
+      "local_route": "caf%C3%A9"
+    },
+    {
+      "source_path": "docs/a(b)!*.md",
+      "source_roots": ["docs"],
+      "local_route": "a%28b%29%21%2A"
+    },
+    {
+      "source_path": "docs/guides/index.md",
+      "source_roots": ["docs"],
+      "local_route": "guides"
+    },
+    {
+      "source_path": "apps/web/docs/setup.md",
+      "source_roots": ["apps", "apps/web/docs"],
+      "local_route": "setup"
+    }
+  ],
+  "rejected": [
+    {
+      "source_path": "docs/index.md",
+      "source_roots": ["docs"],
+      "error": "reserved generated route"
+    },
+    {
+      "source_path": "docs/404.md",
+      "source_roots": ["docs"],
+      "error": "reserved generated route"
+    },
+    {
+      "source_path": "outside/guide.md",
+      "source_roots": ["docs"],
+      "error": "does not belong"
+    }
+  ]
+}

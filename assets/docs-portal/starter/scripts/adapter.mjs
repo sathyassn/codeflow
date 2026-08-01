@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
   amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
-  findRepositoryRoot, parseMarkdown,
+  findRepositoryRoot, localRouteFor, parseMarkdown,
   referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
-  validatePortalConfig, validatePrimitiveTokens, withBase,
+  strictUrlSegment, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
@@ -51,9 +51,14 @@ const runtimeRecords = git.recordsForInputs([portalConfigRelative, ...runtimeInp
 await assertRuntimeMatchesCommit(runtimeRecords);
 let primitiveTokens = null;
 let primitiveTokenEvidence = null;
+let primitiveTokenRecord = null;
+let primitiveTokenBlob = null;
 if (config.primitive_tokens !== null) {
   const tokenRecord = git.requireRegular(config.primitive_tokens, ["100644"], "primitive token import");
   const bytes = git.readBlobs([tokenRecord], { perObjectBytes: MAX_PRIMITIVE_TOKEN_BYTES, totalBytes: MAX_PRIMITIVE_TOKEN_BYTES, label: "primitive token import" }).get(config.primitive_tokens);
+  primitiveTokenRecord = tokenRecord;
+  primitiveTokenBlob = bytes;
+  await assertWorktreeMatchesCommit([tokenRecord], new Map([[tokenRecord.path, bytes]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
   primitiveTokens = validatePrimitiveTokens(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), config.theme);
   primitiveTokenEvidence = { source_path: config.primitive_tokens, source_sha256: sha256(bytes) };
 }
@@ -64,11 +69,12 @@ const excludes = (config.exclude ?? []).map((item) => safeRelative(item, "exclud
 const sourceRecords = committedMarkdownSources(config.source_roots, excludes);
 const sources = sourceRecords.map((record) => record.path);
 const sourceBlobs = git.readBlobs(sourceRecords, { perObjectBytes: MAX_SOURCE_BYTES, totalBytes: MAX_TOTAL_SOURCE_BYTES, label: "portal source" });
+await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "portal source");
 const routeOwners = new Map();
 const sourceRoutes = new Map();
 for (const sourcePath of sources) {
   const layer = chooseLayer(sourcePath, layers);
-  const route = `${layer.id}/${localRouteFor(sourcePath)}`;
+  const route = `${layer.id}/${localRouteFor(sourcePath, config.source_roots)}`;
   claimRoute(route, sourcePath);
   sourceRoutes.set(sourcePath, route);
 }
@@ -92,6 +98,8 @@ for (const sourcePath of sources) {
   }
 }
 git.assertClean(snapshotPaths);
+await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "portal source");
+if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
 await assertRuntimeMatchesCommit(runtimeRecords);
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while the portal snapshot was being read");
 
@@ -143,6 +151,7 @@ let totalMediaBytes = 0;
 const mediaEntries = [...mediaReferences].sort(([left], [right]) => compareDeterministicText(left, right));
 const mediaRecords = mediaEntries.map(([sourcePath]) => git.requireRegular(sourcePath, ["100644"], "referenced media"));
 const mediaBlobs = git.readBlobs(mediaRecords, { perObjectBytes: MAX_MEDIA_BYTES, totalBytes: MAX_TOTAL_MEDIA_BYTES, label: "referenced media" });
+await assertWorktreeMatchesCommit(mediaRecords, mediaBlobs, MAX_MEDIA_BYTES, MAX_TOTAL_MEDIA_BYTES, "referenced media");
 for (const [sourcePath, outputPath] of mediaEntries) {
   const bytes = mediaBlobs.get(sourcePath);
   assertRaster(sourcePath, bytes);
@@ -152,6 +161,9 @@ for (const [sourcePath, outputPath] of mediaEntries) {
   mediaEvidence.push({ source_path: sourcePath, source_sha256: sha256(bytes), output_path: `public/${outputPath}`, output_sha256: sha256(bytes) });
 }
 git.assertClean([...snapshotPaths, ...mediaReferences.keys()]);
+await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "portal source");
+if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
+await assertWorktreeMatchesCommit(mediaRecords, mediaBlobs, MAX_MEDIA_BYTES, MAX_TOTAL_MEDIA_BYTES, "referenced media");
 await assertRuntimeMatchesCommit(runtimeRecords);
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while referenced media was being read");
 
@@ -187,14 +199,6 @@ function claimRoute(route, sourcePath) {
   const key = route.normalize("NFC").toLowerCase();
   if (routeOwners.has(key)) throw new Error(`route collision: ${sourcePath} and ${routeOwners.get(key)} -> ${route}`);
   routeOwners.set(key, sourcePath);
-}
-
-function localRouteFor(sourcePath) {
-  const route = sourcePath.replace(/^docs\//, "").replace(/^project-management\//, "").replace(/\.md$/, "");
-  const parts = route.split("/");
-  if (parts.at(-1) === "index") parts.pop();
-  if (!parts.length || parts.at(-1) === "404") throw new Error(`source claims a reserved generated route: ${sourcePath}`);
-  return parts.map(strictUrlSegment).join("/");
 }
 
 function sourceLink(sourcePath) {
@@ -303,10 +307,6 @@ function escapeMarkdownInline(value) {
     .replaceAll(":", "&#58;");
 }
 
-function strictUrlSegment(value) {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
 function renderIndex(definitions, allPages) {
   const steps = definitions.map((layer, index) => `<li><a href="${withBase(base, layer.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(layer.label)}</strong><small>${escapeHtml(layer.description)}</small><em>${allPages.filter((page) => page.route.startsWith(`${layer.id}/`) && !page.stale).length} sources</em></a></li>`).join("\n");
   return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
@@ -369,13 +369,17 @@ function committedMarkdownSources(configuredRoots, excluded) {
 
 async function assertRuntimeMatchesCommit(records) {
   const committedBlobs = git.readBlobs(records, { perObjectBytes: MAX_RUNTIME_FILE_BYTES, totalBytes: MAX_TOTAL_RUNTIME_BYTES, label: "portal runtime input" });
+  await assertWorktreeMatchesCommit(records, committedBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
+}
+
+async function assertWorktreeMatchesCommit(records, committedBlobs, perFileBytes, totalLimit, label) {
   let totalBytes = 0;
   for (const record of records) {
     const committed = committedBlobs.get(record.path);
-    const worktree = await readBoundedRegularFile(path.join(repositoryRoot, record.path), MAX_RUNTIME_FILE_BYTES, `portal runtime input ${record.path}`);
+    const worktree = await readBoundedRegularFile(path.join(repositoryRoot, record.path), perFileBytes, `${label} ${record.path}`);
     totalBytes += committed.length;
-    if (totalBytes > MAX_TOTAL_RUNTIME_BYTES) throw new Error(`portal runtime inputs exceed ${MAX_TOTAL_RUNTIME_BYTES} bytes`);
-    if (!committed.equals(worktree)) throw new Error(`portal runtime input does not match ${commit}: ${record.path}`);
+    if (totalBytes > totalLimit) throw new Error(`${label} inputs exceed ${totalLimit} bytes`);
+    if (!committed.equals(worktree)) throw new Error(`${label} does not match ${commit}: ${record.path}`);
   }
 }
 

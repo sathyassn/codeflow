@@ -1,16 +1,26 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePortalConfig, validatePrimitiveTokens, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePortalConfig, validatePrimitiveTokens, withBase } from "../scripts/lib.mjs";
 import { collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
-import { GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
+import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
+
+test("semantic route fixtures stay in parity with the Rust validator", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/route-contract.json", import.meta.url), "utf8"));
+  for (const item of fixture.accepted) {
+    assert.equal(localRouteFor(item.source_path, item.source_roots), item.local_route, item.source_path);
+  }
+  for (const item of fixture.rejected) {
+    assert.throws(() => localRouteFor(item.source_path, item.source_roots), new RegExp(item.error), item.source_path);
+  }
+});
 
 test("safe paths reject traversal and platform separators", () => {
   for (const value of ["../x", "/x", "a/../x", "a\\x", "", ".", "docs/CON.md", "docs/nul.txt", "docs/name. ", "docs/a:b.md", "docs/control\u0001.md", "docs/cafe\u0301.md"]) assert.throws(() => safeRelative(value));
@@ -162,8 +172,14 @@ test("corpus publication preserves unknown files and rolls every directory back 
     assert.equal(await readFile(path.join(root, "src/content/docs/index.md"), "utf8"), "content-one");
     assert.equal(await readFile(path.join(root, "public/llms.txt"), "utf8"), "public-one");
     assert.equal(await readFile(path.join(root, "public/notes.txt"), "utf8"), "keep me");
+    await mkdir(path.join(root, "public/markdown"), { recursive: true });
+    await mkdir(path.join(root, "public/media"), { recursive: true });
+    await writeFile(path.join(root, "public/markdown/deleted.md"), "must be pruned");
+    await writeFile(path.join(root, "public/media/deleted.png"), "must be pruned");
     await publishOwnedCorpus(root, corpus("two"));
     assert.equal(await readFile(path.join(root, "public/notes.txt"), "utf8"), "keep me");
+    await assert.rejects(readFile(path.join(root, "public/markdown/deleted.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(root, "public/media/deleted.png")), /ENOENT/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -492,7 +508,7 @@ test("the adapter refuses dirty snapshot states and dangerous source links", asy
   } finally { await rm(unsafe, { recursive: true, force: true }); }
 });
 
-test("committed blobs defeat assume-unchanged and skip-worktree source masking", async () => {
+test("masked source, token, and media edits block publication", async () => {
   for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
     const root = await portalFixture();
     try {
@@ -501,10 +517,7 @@ test("committed blobs defeat assume-unchanged and skip-worktree source masking",
       commitFixture(root, "add committed guide");
       git(root, ["update-index", flag, "docs/guide.md"]);
       await writeFile(source, "# Hidden worktree edit\n\nMust not be published.\n");
-      runAdapter(root);
-      const output = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
-      assert.match(output, /Committed truth/);
-      assert.doesNotMatch(output, /Hidden worktree edit/);
+      assert.match(runAdapter(root, false).stderr, /portal source does not match/);
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 
@@ -518,6 +531,42 @@ test("committed blobs defeat assume-unchanged and skip-worktree source masking",
     await writeFile(path.join(runtime, "portal.config.json"), `${JSON.stringify(config)}\n`);
     assert.match(runAdapter(runtime, false).stderr, /runtime input does not match/);
   } finally { await rm(runtime, { recursive: true, force: true }); }
+
+  for (const input of ["primitive token import", "referenced media"]) {
+    const root = await portalFixture();
+    try {
+      const configPath = path.join(root, "portal.config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      await writeFile(path.join(root, "docs/guide.md"), input === "referenced media" ? "# Guide\n\n![Diagram](../assets/diagram.png)\n" : "# Guide\n");
+      let inputPath;
+      if (input === "primitive token import") {
+        inputPath = "tokens.json";
+        config.primitive_tokens = inputPath;
+        await writeFile(path.join(root, inputPath), JSON.stringify({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }));
+      } else {
+        inputPath = "assets/diagram.png";
+        await mkdir(path.join(root, "assets"));
+        await writeFile(path.join(root, inputPath), pngHeader(1, 1));
+      }
+      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      commitFixture(root, `add ${input}`);
+      git(root, ["update-index", "--assume-unchanged", inputPath]);
+      if (input === "primitive token import") await writeFile(path.join(root, inputPath), JSON.stringify({ schema_version: 1, light: { accent: "#006f66" }, dark: { accent: "#82f2df" } }));
+      else await writeFile(path.join(root, inputPath), pngHeader(2, 1));
+      assert.match(runAdapter(root, false).stderr, new RegExp(`${input} does not match`));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("Git status pathspecs are split below Windows process limits", () => {
+  const pathspecs = Array.from({ length: 1_000 }, (_, index) => `:(top,literal)assets/media/${String(index).padStart(4, "0")}/${"x".repeat(80)}.png`);
+  const batches = boundedPathspecBatches(pathspecs);
+  assert.ok(batches.length > 1);
+  assert.equal(batches.flat().length, pathspecs.length);
+  for (const batch of batches) {
+    assert.ok(batch.length <= 64);
+    assert.ok(batch.reduce((units, item) => units + item.length + 1, 0) <= 8 * 1024);
+  }
 });
 
 test("a source-root pathspec does not capture a similarly prefixed ignored directory", async () => {
@@ -563,7 +612,7 @@ test("monorepo source roots produce one deterministic global-to-area route graph
     await writeFile(path.join(root, "services/api/docs/contract.md"), "# API contract\n");
     const configPath = path.join(root, "portal.config.json");
     const config = JSON.parse(await readFile(configPath, "utf8"));
-    config.source_roots = ["docs", "apps/web/docs", "services/api/docs"];
+    config.source_roots = ["docs", "apps", "apps/web/docs", "services/api/docs"];
     config.layers = [
       { id: "orient", label: "Orient", description: "Global", paths: ["docs/product.md"] },
       { id: "web", label: "Web", description: "Web surface", prefixes: ["apps/web/docs"] },
@@ -575,10 +624,35 @@ test("monorepo source roots produce one deterministic global-to-area route graph
     runAdapter(root);
     const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
     assert.deepEqual(evidence.pages.map(({ source_path, route }) => [source_path, route]), [
-      ["apps/web/docs/journey.md", "web/apps/web/docs/journey"],
+      ["apps/web/docs/journey.md", "web/journey"],
       ["docs/product.md", "orient/product"],
-      ["services/api/docs/contract.md", "api/services/api/docs/contract"],
+      ["services/api/docs/contract.md", "api/contract"],
     ]);
+
+    await mkdir(path.join(root, "packages/web"), { recursive: true });
+    await rename(path.join(root, "apps/web/docs"), path.join(root, "packages/web/handbook"));
+    config.source_roots = ["docs", "packages/web/handbook", "services/api/docs"];
+    config.layers[1].prefixes = ["packages/web/handbook"];
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    commitFixture(root, "move web documentation root");
+    runAdapter(root);
+    const moved = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.equal(moved.pages.find((page) => page.source_path.endsWith("journey.md")).route, "web/journey");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("different source roots cannot claim the same semantic route", async () => {
+  const root = await portalFixture();
+  try {
+    await mkdir(path.join(root, "archive"));
+    await writeFile(path.join(root, "docs/guide.md"), "# Current guide\n");
+    await writeFile(path.join(root, "archive/guide.md"), "# Archived guide\n");
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.source_roots = ["docs", "archive"];
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    commitFixture(root, "route collision fixture");
+    assert.match(runAdapter(root, false).stderr, /route collision/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

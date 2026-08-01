@@ -35,7 +35,11 @@ drill-down by meaningful surface or owned area—for example web, iOS, Android,
 backend, data, or infrastructure—before module and file references.
 
 Configure multiple `source_roots` and explicit layer paths/prefixes to assemble
-that view. Preserve one stable identity and relationship graph across areas.
+that view. Reader-facing routes use the semantic layer plus the path relative
+to the most-specific configured source root, not the full repository folder
+chain. Preserve one stable identity and relationship graph across areas.
+A source-root-level `index.md` would collapse to the reserved layer-root route;
+place it below a named directory or give it a descriptive filename instead.
 Cross-area links remain normal graph edges with pinned source context. Do not
 create a folder-per-package navigation dump, mirror package READMEs into new
 prose, or hide shared behavior inside one team's section.

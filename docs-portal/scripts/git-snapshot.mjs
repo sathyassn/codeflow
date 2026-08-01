@@ -5,6 +5,8 @@ import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.m
 const MAX_GIT_TREE_BYTES = 64 * 1024 * 1024;
 const MAX_GIT_STATUS_BYTES = 8 * 1024 * 1024;
 const MAX_REPOSITORY_FILES = 100_000;
+const MAX_PATHS_PER_STATUS = 64;
+const MAX_STATUS_PATHSPEC_UTF16_UNITS = 8 * 1024;
 const GIT_TIMEOUT_MS = 30_000;
 const REGULAR_MODES = new Set(["100644", "100755"]);
 
@@ -111,10 +113,16 @@ export class GitSnapshot {
   assertClean(paths) {
     const watched = minimalRoots(paths.map((item) => safeRelative(item, "snapshot path")));
     const pathspecs = watched.map((item) => `:(top,literal)${item}`);
-    const status = this.text(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...pathspecs], MAX_GIT_STATUS_BYTES, "repository status");
-    for (const dirty of parsePorcelainPaths(status)) {
-      if (watched.some((item) => dirty === item || dirty.startsWith(`${item}/`))) {
-        throw new Error(`configured portal input must match HEAD exactly: ${dirty}`);
+    let remainingBytes = MAX_GIT_STATUS_BYTES;
+    // Git status is not atomic across batches. The adapter therefore repeats
+    // byte-for-byte input checks and the HEAD check around publication.
+    for (const batch of boundedPathspecBatches(pathspecs)) {
+      const status = this.text(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...batch], remainingBytes, "repository status");
+      remainingBytes -= Buffer.byteLength(status);
+      for (const dirty of parsePorcelainPaths(status)) {
+        if (watched.some((item) => dirty === item || dirty.startsWith(`${item}/`))) {
+          throw new Error(`configured portal input must match HEAD exactly: ${dirty}`);
+        }
       }
     }
   }
@@ -155,6 +163,25 @@ export class GitSnapshot {
 function minimalRoots(paths) {
   const roots = [...new Set(paths)].sort((left, right) => left.length - right.length || compareDeterministicText(left, right));
   return roots.filter((candidate, index) => !roots.slice(0, index).some((root) => candidate === root || candidate.startsWith(`${root}/`)));
+}
+
+export function boundedPathspecBatches(pathspecs) {
+  const batches = [];
+  let batch = [];
+  let units = 0;
+  for (const pathspec of pathspecs) {
+    const nextUnits = pathspec.length + 1;
+    if (nextUnits > MAX_STATUS_PATHSPEC_UTF16_UNITS) throw new Error("snapshot path is too long for a bounded Git status command");
+    if (batch.length && (batch.length >= MAX_PATHS_PER_STATUS || units + nextUnits > MAX_STATUS_PATHSPEC_UTF16_UNITS)) {
+      batches.push(batch);
+      batch = [];
+      units = 0;
+    }
+    batch.push(pathspec);
+    units += nextUnits;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 function parsePorcelainPaths(status) {
