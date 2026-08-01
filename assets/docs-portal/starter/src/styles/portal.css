@@ -89,6 +89,16 @@ body { text-wrap: pretty; }
 .portal-id-preview.portal-preview-open > span { visibility: visible; }
 .portal-id-preview > span > span { color: var(--sl-color-gray-2); }
 .portal-id-preview > span > a { justify-self: start; min-height: 1.5rem; }
+@media (max-width: 40rem) {
+  .portal-id-preview > span {
+    inset-block: auto 1rem;
+    inset-inline: 1rem;
+    max-height: min(24rem, calc(100vh - 2rem));
+    min-width: 0;
+    overflow: auto;
+    position: fixed;
+  }
+}
 .portal-journey {
   counter-reset: portal-step;
   display: grid;
