@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-07-29-durable-work-lifecycle-v3",
+  "fixtures_version": "2026-08-01-integration-branch-default-v1",
   "fixtures": [
     {
       "id": "clean-standard",
@@ -621,6 +621,18 @@
       }
     },
     {
+      "id": "multi-task-direct-main-plan",
+      "tier": "full",
+      "state": {"branch": "fixture/plan-epc-021", "peer": "available", "protected_target": "main", "implementation_started": false},
+      "files": {
+        "PLAN.md": "# Plan v1\n\nDeliver one reporting outcome through two independent producers and one dependent integration task. The proposed landing shape sends each task through a separate PR to `main` because all three changes are small. No integration branch rationale or exception approval is recorded.\n\nTASK_GRAPH v1\nSTART -> TSK-081\nSTART -> TSK-082\nTSK-081 -> TSK-083\nTSK-082 -> TSK-083\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
+        "project-management/epics/EPC-021.md": "---\nid: EPC-021\ntitle: Reporting outcome\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-08-01\n---\n\n## Summary\n\nDeliver the reporting outcome as one reviewed body.\n",
+        "project-management/tasks/TSK-081.md": "---\nid: TSK-081\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Reporting API\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n",
+        "project-management/tasks/TSK-082.md": "---\nid: TSK-082\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Reporting interface\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n",
+        "project-management/tasks/TSK-083.md": "---\nid: TSK-083\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Integrate reporting flow\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [TSK-081, TSK-082]\nintegration_target: main\ncreated: 2026-08-01\n---\n"
+      }
+    },
+    {
       "id": "valid-unmerged-planning",
       "tier": "full",
       "state": {"branch": "fixture/valid-unmerged-planning", "peer": "available", "target": "integration/EPC-014-account-recovery", "target_precedes_fixture": true},
@@ -630,6 +642,15 @@
         "project-management/epics/EPC-014.md": "---\nid: EPC-014\ntitle: Account recovery\nstatus: planning\nwork_type: feat\ncapabilities: []\nadrs: []\nspecs: [SPC-009]\ncreated: 2026-07-29\n---\n\n## Summary\n\nDeliver the settled account-recovery outcome.\n\n## Acceptance Criteria\n\n- [ ] The approved recovery contract is implemented and verified.\n",
         "project-management/specs/SPC-009.md": "---\nid: SPC-009\ntitle: Recovery contract\nstatus: approved\ncreated: 2026-07-29\n---\n\n## Summary\n\nPin the recovery-link behavior consumed by EPC-014.\n\n## Behavior\n\nRecovery links are single-use and expire according to the settled policy.\n\n## Open questions\n\n",
         "project-management/tasks/TSK-061.md": "---\nid: TSK-061\nepic_id: EPC-014\nstandalone_reason: null\ntitle: Recovery API\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: integration/EPC-014-account-recovery\ncreated: 2026-07-29\n---\n\n## Description\n\nImplement the bounded recovery API contract.\n\n## Acceptance Criteria\n\n- [ ] The API satisfies SPC-009 with automated evidence.\n"
+      }
+    },
+    {
+      "id": "single-task-direct-target",
+      "tier": "full",
+      "state": {"branch": "fixture/plan-task-084", "peer": "available", "protected_target": "main", "implementation_started": false},
+      "files": {
+        "BRIEF.md": "# Parser diagnostic label\n\nAdd one internal diagnostic label to the existing parser error. The change is independently reviewable, has no shared interface or follow-on work, and is expected to finish in one task.\n",
+        "project-management/tasks/TSK-084.md": "---\nid: TSK-084\nepic_id: null\nstandalone_reason: One independently reviewable parser diagnostic with no broader durable outcome.\ntitle: Add parser diagnostic label\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n"
       }
     }
   ]

@@ -50,9 +50,19 @@ You are clarifying and materializing planned work, not building it.
    a Tier-3 decision is involved (new dependency, schema change, boundary
    change). Allocate with `codeflow epic new`, `codeflow spec new --for
    EPC-NNN|TSK-NNN`, and `codeflow task new --epic EPC-NNN` or
-   `--standalone-reason "..."`; after the stable body-of-work integration
-   branch exists, pass `--into integration/<epic-id>-<slug>`. A task branch is
-   never an integration target; it cannot authorize its own planning record.
+   `--standalone-reason "..."`. For a multi-task epic, first create one shared
+   `integration/<epic-id>-<slug>` branch from the intended protected target,
+   then pass it with `--into` for every task in that body. This is the default,
+   not an optional optimization: task branches land there in graph order and
+   only the integrated body reaches the protected target through one final
+   human-reviewed PR. Select this shape autonomously when the clarity gate,
+   acceptance boundaries, and settled graph show one coherent multi-task
+   outcome; do not ask the operator merely to choose the routine landing
+   mechanism. Honor an explicit operator request when it fits that evidence,
+   but never let it bypass planning, safety, or protected-branch boundaries. A
+   different landing shape needs an explicit Plan vN rationale and approval
+   from both primary seats before task allocation. A task branch is never an
+   integration target; it cannot authorize its own planning record.
    The target must be a real local or remote-tracking branch, not `HEAD`, a
    tag, an object ID, or another Git revision expression.
    Do not hand-invent IDs. If another method already owns equivalent specs or

@@ -119,9 +119,20 @@ When an epic is a multi-task body — serial chains and/or parallel tasks — do
 so agents proceed autonomously and the human reviews **one** final PR. Every
 other gate (commit standards, secret scan, destructive-op rules, the test gate)
 still applies on every branch; only the merge-into-`main` step is deferred.
+This is the default landing shape for a multi-task epic, not a convenience to
+drop during planning. An exception requires a recorded Plan vN rationale and
+approval from both primary seats before tasks are allocated; convenience,
+short task size, or avoiding the integration step is not sufficient evidence.
+The branch contains one coherent epic outcome; it is never a holding branch for
+unrelated standalone tasks or a reason to invent an epic merely for batching.
+The orchestrating agent chooses this routine mechanism without an operator
+question once the outcome, acceptance boundaries, and dependency graph are
+clear. An explicit operator request is valid input, but cannot waive those
+clarity, safety, review, or protected-branch conditions.
 
 1. **Integration branch.** Cut `integration/<epic-id>-<slug>` off the current
-   target and push it. It is **non-protected** — agents merge into it freely.
+   protected target and push it. It is **non-protected** — agents merge into it
+   freely.
    Establish this stable target before task allocation; an implementation task
    cannot target a missing branch.
 2. **Plan and anchor.** One epic with per-task acceptance criteria. Materialize the
@@ -158,7 +169,8 @@ still applies on every branch; only the merge-into-`main` step is deferred.
    rebase only task branches.
 6. **Finish.** After the last task lands, run the ship flow *on the integration
    branch* (full suite, `validate --docs`, capability/doc/epic-record updates as
-   the final commits), then raise **one** PR `integration → main` with the epic
+   the final commits) and have both primary seats review the exact combined
+   integration diff. Then raise **one** PR `integration → main` with the epic
    summary. The human reviews and merges; delete the integration branch only
    after the merge is proven. Apply cf-ship's same post-landing proof: inspect
    dirty or untracked state first; require ancestry for a normal merge; for a

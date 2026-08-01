@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-07-29-durable-work-lifecycle-v3",
+  "requirements_version": "2026-08-01-integration-branch-default-v1",
   "requirements": [
     {
       "id": "CF-MM-001",
@@ -509,6 +509,16 @@
         {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["From discussion to delivered work", "implement -> verify -> cross-lineage review -> integrated judgment -> ship", "Material discovery"]},
         {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["A substantive amendment creates", "Failure paths are explicit", "record a proved unavailable seat as reduced assurance"]},
         {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Bounded, evidence-moving loops", "A deterministic failure or unverified criterion blocks"]}
+      ]
+    },
+    {
+      "id": "CF-PM-007",
+      "level": "hard",
+      "statement": "Once the outcome, acceptance boundaries, and dependency graph establish one coherent multi-task epic, the orchestrating agent selects one shared non-protected integration branch from the intended protected target before allocation without asking the operator to choose a routine landing mechanism; an explicit operator request is respected only within the same clarity, safety, review, and protected-branch boundaries, never as a holding branch for unrelated work; every task declares that target, independent tasks branch from its current tip while a dependent task branches from the updated tip only after its predecessors land, work-start preflight follows branching, landings are serialized in graph order, aggregate gates and cross-lineage review run on the combined diff, and only one final human-reviewed PR reaches the protected target; a different landing shape requires a recorded Plan vN rationale and approval from both primary seats, never mere convenience.",
+      "sources": [
+        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["For a multi-task epic, first create one shared", "Select this shape autonomously", "do not ask the operator merely to choose the routine landing mechanism", "Honor an explicit operator request", "A different landing shape needs an explicit Plan vN rationale"]},
+        {"path": ".agents/skills/cf-method/SKILL.md", "markers": ["default landing shape for a multi-task epic", "never a holding branch for unrelated standalone tasks", "chooses this routine mechanism without an operator question", "explicit operator request is valid input", "approval from both primary seats before tasks are allocated", "serial tasks branch from the updated integration", "parallel tasks branch concurrently", "both primary seats review the exact combined integration diff"]},
+        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["for every task in a multi-task epic", "Create that one shared branch from the intended protected target"]}
       ]
     }
   ]

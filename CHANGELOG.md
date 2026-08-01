@@ -61,6 +61,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Multi-task epics now default to one topology-aware integration branch.**
+  Planning creates the shared non-protected target from the intended protected
+  branch before task allocation; independent nodes may branch concurrently
+  within the host resource budget, dependent nodes branch from the updated
+  integration tip only after predecessors land, and landings remain serialized.
+  Aggregate verification and both-primary review run on the combined diff
+  before one final human-reviewed PR. A different landing shape requires a
+  recorded Plan vN rationale and dual approval rather than convenience.
 - **Product language and appearance are now explicit, contextual design
   dimensions.** `cf-design` records language/voice and applicable appearance
   modes inside the proportionate `DESIGN_INTENT`, while `cf-editorial-review`

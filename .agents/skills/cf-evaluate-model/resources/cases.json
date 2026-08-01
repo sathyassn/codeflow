@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-07-29-durable-work-lifecycle-v3",
+  "cases_version": "2026-08-01-integration-branch-default-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -908,6 +908,26 @@
       "requirements": ["CF-PM-004"],
       "prompt": "The records validate locally on this plan branch, but the planning PR has not reached the declared target. Explain whether implementation may start and exactly what codeflow work start is allowed to do.",
       "expected": {"routes": ["cf-model-orchestrator", "cf-plan"], "signals": ["local_validity_not_stable_anchor", "planning_pr_must_merge_to_declared_target", "task_branch_rejected_as_integration_target", "target_must_be_real_branch_not_revspec", "anchored_target_declaration_must_match", "merge_base_evidence_required", "work_start_is_read_only", "cli_hook_and_ci_share_rule", "no_branch_worktree_status_or_record_mutation"], "references": ["project-management/tasks/TSK-061.md"], "must_not": ["implementation_allowed_from_plan_branch", "task_branch_self_authorizes_planning", "work_start_creates_branch", "work_start_changes_status", "ledger_called_planning_authority", "local_sqlite_called_seal"]}
+    },
+    {
+      "id": "multi-task-epic-defaults-to-one-integration-branch",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "multi-task-direct-main-plan",
+      "requirements": ["CF-MM-014", "CF-PM-004", "CF-PM-007"],
+      "prompt": "Review this proposed multi-task epic landing plan before implementation. Decide whether every task should target main, give the corrected branch and review flow, and state the threshold for any exception. Do not create branches or implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-plan", "cf-method"], "signals": ["coherent_clear_multi_task_body_confirmed", "routine_integration_shape_selected_without_operator_prompt", "plan_v_next_required_before_target_rewrite", "shared_branch_created_before_allocation_and_declared_by_all_tasks", "resource_safe_parallelism_only_for_independent_nodes", "topology_drives_task_branch_tips_and_work_start", "graph_order_landings_are_serialized", "aggregate_gates_and_cross_lineage_review_on_combined_diff", "one_final_human_reviewed_pr_to_protected_target", "different_landing_shape_requires_plan_rationale_and_dual_approval"], "references": ["PLAN.md", "project-management/epics/EPC-021.md", "project-management/tasks/TSK-081.md", "project-management/tasks/TSK-082.md", "project-management/tasks/TSK-083.md"], "must_not": ["ask_operator_to_choose_routine_landing_mechanism", "unclear_acceptance_bypassed", "unrelated_tasks_batched_on_integration_branch", "task_by_task_main_pr_default", "silent_target_rewrite_under_plan_v1", "integration_branch_called_optional_optimization", "dependent_task_cut_from_stale_integration", "parallelize_dependency", "concurrent_integration_writers", "exception_approved_for_convenience", "implementation_started", "branches_created_during_review"]}
+    },
+    {
+      "id": "single-task-does-not-invent-integration-branch",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "single-task-direct-target",
+      "requirements": ["CF-PM-003", "CF-PM-004", "CF-PM-007"],
+      "prompt": "Review this one-task planning record before implementation. Decide whether it needs an epic or integration branch, and give the correct landing route. Do not create branches or implement.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-plan", "cf-method"], "signals": ["single_independently_reviewable_outcome_detected", "standalone_reason_is_credible", "direct_task_to_protected_target_pr_is_valid", "planning_anchor_and_work_start_still_required", "human_reviews_protected_target_pr"], "references": ["BRIEF.md", "project-management/tasks/TSK-084.md"], "must_not": ["integration_branch_required_for_single_task", "dummy_epic_invented", "standalone_reason_ignored", "implementation_started", "branch_created_during_review"]}
     },
     {
       "id": "planning-lifecycle-routes-happy-and-exception-paths",

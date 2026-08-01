@@ -318,10 +318,12 @@ not introduce a competing `project.md` or `projects.md`.
 
 ### A body of work — the integration branch
 
-The loop above lands one branch per PR onto `main`. When the work is an epic —
-several tasks, some serial, some parallel — landing each on `main` floods the
-human with reviews and makes agents wait on one another. Instead, cut a shared
-**integration branch** and land the tasks there:
+The loop above lands one standalone task per PR onto `main`. When the work is a
+multi-task epic — several tasks, some serial, some parallel — its default
+landing shape is one shared **integration branch**. Do not casually turn the
+epic into a series of task-to-`main` PRs: a different shape needs a recorded
+Plan vN rationale and approval from both primary model seats before allocation.
+The normal path is:
 
 - `integration/<epic>` is branched off `main` and is **non-protected**, so
   agents merge tasks into it — by `codeflow integrate <task> --into
