@@ -86,6 +86,8 @@ enum Command {
     Task(cmd::new::TaskArgs),
     /// Durable-work lifecycle checks.
     Work(cmd::work::WorkArgs),
+    /// Create and manage bounded local interactive presentation sessions.
+    Present(cmd::present::PresentArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -164,6 +166,7 @@ fn main() -> anyhow::Result<()> {
         Command::Spec(args) => std::process::exit(cmd::new::run_spec(&args)),
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
+        Command::Present(args) => std::process::exit(cmd::present::run(&args)),
     }
     Ok(())
 }

@@ -1,0 +1,38 @@
+//! Central resource limits mirrored by the public schemas and adversarial tests.
+
+pub const SCHEMA_VERSION: u32 = 1;
+pub const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_BLOCKS: usize = 512;
+pub const MAX_NESTING: usize = 12;
+pub const MAX_TITLE_BYTES: usize = 512;
+pub const MAX_PROSE_BYTES: usize = 512 * 1024;
+pub const MAX_CODE_BYTES: usize = 1024 * 1024;
+pub const MAX_DIAGRAM_BYTES: usize = 256 * 1024;
+pub const MAX_HTML_BYTES: usize = 512 * 1024;
+pub const MAX_MEDIA_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_TABLE_ROWS: usize = 2_000;
+pub const MAX_TABLE_COLUMNS: usize = 64;
+pub const MAX_FEEDBACK_BYTES: usize = 64 * 1024;
+pub const MAX_EVENTS_PER_RESPONSE: usize = 100;
+pub const MAX_EVENT_RESPONSE_BYTES: usize = 1024 * 1024;
+pub const MAX_EVENT_RECORD_BYTES: u64 = 128 * 1024;
+pub const MAX_EVENT_LOG_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_FEEDBACK_EVENTS: usize = 100_000;
+pub const MAX_REVISIONS: u64 = 10_000;
+pub const MAX_STATE_ENTRIES: usize = 200_000;
+pub const MAX_STATE_DEPTH: usize = 24;
+pub const EVENT_POLL_SECONDS: u64 = 25;
+pub const BOOTSTRAP_TTL_SECONDS: u64 = 120;
+pub const SESSION_IDLE_SECONDS: u64 = 4 * 60 * 60;
+pub const CLOSED_RETENTION_DAYS: u64 = 30;
+pub const MAX_CLOSED_SESSIONS: usize = 100;
+pub const MAX_PROJECT_STATE_BYTES: u64 = 500 * 1024 * 1024;
+
+pub const MAX_RAW_ASSET_BYTES: u64 = 5_000_000;
+pub const MAX_RAW_CHUNK_BYTES: u64 = 850_000;
+pub const MAX_BROTLI_ASSET_BYTES: u64 = 1_150_000;
+pub const MAX_BROTLI_CHUNK_BYTES: u64 = 150_000;
+pub const MAX_SERVICE_BINARY_DELTA_BYTES: u64 = 1_250_000;
+pub const MAX_EXPORT_PAYLOAD_BYTES: u64 = 1_300_000;
+pub const MAX_EXPORT_SHELL_BYTES: u64 = 1_750_000;
+pub const MAX_COMBINED_BINARY_DELTA_BYTES: u64 = 2_600_000;

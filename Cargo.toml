@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/codeflow-core", "crates/codeflow-cli"]
+members = ["crates/codeflow-core", "crates/codeflow-cli", "crates/codeflow-present"]
 
 [workspace.package]
 version = "2.1.0"
@@ -38,6 +38,11 @@ tempfile = "3"
 portable-pty = "0.9"
 libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+axum = { version = "=0.8.9", default-features = false, features = ["form", "http1", "json", "tokio"] }
+base64 = "=0.23.0"
+getrandom = { version = "=0.4.3", features = ["std"] }
+pulldown-cmark = { version = "=0.13.4", default-features = false, features = ["html"] }
+uuid = { version = "=1.24.0", features = ["serde", "v4"] }
 
 [workspace.lints.clippy]
 all = "deny"
