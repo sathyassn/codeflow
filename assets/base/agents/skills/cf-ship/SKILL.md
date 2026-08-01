@@ -16,6 +16,11 @@ description: Land finished work — docs and capability updates, then a PR throu
      updated when the ADR declares architecture impact;
    - a spec frozen (`status: implemented`); epic and task statuses updated.
 3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
+   If `.codeflow/docs-portal.json` exists and this change materially affects
+   authoritative docs, relationships, version context, portal configuration,
+   or starter behavior, also run the adopted portal's locked check/build and
+   `codeflow validate --portal <adopted-root>`; add rendered/browser checks
+   matched to UX impact. Non-adopters receive no portal gate.
 4. Sweep the change for touched contract surfaces — API, CLI flags, config
    schema, file formats, defaults, managed-file semantics. Each one is either
    marked breaking (`type!:` on the commit + a `BREAKING CHANGE:` footer with the

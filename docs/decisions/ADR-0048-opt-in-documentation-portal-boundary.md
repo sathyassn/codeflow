@@ -36,17 +36,23 @@ and report every outcome. Paths outside the repository, symlink escapes,
 reserved CodeFlow/Git state, and a different root after adoption fail closed.
 Non-adopters receive no portal workspace or lockfile on disk.
 
-The Node adapter remains the single author of the derived portal graph. It
-emits a versioned evidence manifest beside disposable build data. The new
+The exact-pinned Node adapter remains the single author of the derived portal
+graph. It reads one clean committed snapshot through bounded, no-follow file
+handles, parses GFM structurally, refuses active or remote source content, and
+publishes generated directories through a recoverable single-writer
+transaction. A workflow lease spans adapter, renderer, and final evidence
+collection so a concurrent build cannot bind output to a different snapshot.
+Ordering is defined by one locale-independent comparator. The adapter emits a
+versioned evidence manifest beside disposable build data. The new
 `codeflow validate --portal <portal-root>` path performs no writes and executes
 no project code. Rust validates only claims that can be checked independently
 against repository and output bytes: schema and size limits, safe relative
 paths, source and line-range snippet hashes, existing strict IDs, unique
 routes, declared and derived relationship consistency, stale-page search
-exclusion, pinned commit/version/source metadata, covered output pages, per-page
-Markdown twins, and `llms.txt`. Rendering and graph-generation semantics remain
-in the exact-pinned Node build and test lanes; Rust does not implement a second
-content graph.
+exclusion, pinned commit/version/source metadata, signature-checked raster
+media, covered output pages, per-page Markdown twins, and `llms.txt`. Rendering
+and graph-generation semantics remain in the exact-pinned Node build and test
+lanes; Rust does not implement a second content graph.
 
 The starter source is capped at 2 MiB unpacked, its archive-equivalent content
 at 1 MiB, and its measured release-binary increase at 1 MiB. `SKILL.md` remains

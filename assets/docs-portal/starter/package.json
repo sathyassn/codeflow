@@ -7,8 +7,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "node scripts/adapter.mjs && astro build && node scripts/evidence.mjs",
-    "check": "node --test tests/*.test.mjs && node scripts/adapter.mjs && astro check",
+    "build": "node scripts/workflow.mjs build",
+    "check": "node scripts/workflow.mjs check",
     "dev": "node scripts/adapter.mjs && astro dev",
     "preview": "astro preview",
     "update": "node scripts/adapter.mjs"
@@ -17,6 +17,10 @@
     "@astrojs/starlight": "0.41.6",
     "astro": "7.1.6",
     "pagefind": "1.5.2",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-stringify": "11.0.0",
+    "unified": "11.0.5",
     "yaml": "2.9.0"
   },
   "devDependencies": {

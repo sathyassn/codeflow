@@ -113,6 +113,24 @@ fn diagnostic_packs_only_compose_existing_cases() {
         !release["includes"].as_array().expect("includes").is_empty(),
         "release-smoke should prove composition rather than duplicate cases"
     );
+    assert!(release["includes"]
+        .as_array()
+        .expect("includes")
+        .iter()
+        .any(|included| included == "documentation-portal"));
+    let portal = pack_entries
+        .iter()
+        .find(|pack| pack["id"] == "documentation-portal")
+        .expect("documentation-portal pack");
+    assert_eq!(
+        portal["cases"],
+        serde_json::json!([
+            "docs-portal-declines-tiny-repository",
+            "docs-portal-adopts-layered-source-authority",
+            "docs-portal-dirty-snapshot-fails-closed",
+            "docs-portal-boundary-and-ship-routing"
+        ])
+    );
 }
 
 fn json(relative: &str) -> Value {

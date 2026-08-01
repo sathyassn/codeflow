@@ -1,6 +1,6 @@
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
-import { assertNoSymlink, collectBuiltArtifacts, withPublicationLease, writeText } from "./lib.mjs";
+import { assertNoSymlink, collectBuiltArtifacts, withPublicationLease, writeText } from "./publication.mjs";
 
 const root = process.cwd();
 await withPublicationLease(root, async ({ refresh }) => {

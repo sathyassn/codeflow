@@ -10,11 +10,14 @@ export default defineConfig({
     starlight({
       title: config.title,
       description: config.description,
-      customCss: ["./src/styles/portal.css"],
-      head: [{
-        tag: "script",
-        content: `document.documentElement.dataset.portalTheme=${JSON.stringify(config.theme)};`,
-      }],
+      customCss: ["./src/styles/portal.css", "./.portal/generated/project-tokens.css"],
+      head: [
+        {
+          tag: "script",
+          content: `document.documentElement.dataset.portalTheme=${JSON.stringify(config.theme)};`,
+        },
+        { tag: "script", attrs: { src: `${config.base}portal-preview.js`, defer: true } },
+      ],
       sidebar: config.layers.map((layer) => ({ label: layer.label, items: [{ autogenerate: { directory: layer.id } }] })),
       favicon: `${config.base === "/" ? "/" : config.base}favicon.svg`,
       social: [],

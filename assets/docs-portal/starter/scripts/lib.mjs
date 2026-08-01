@@ -1,33 +1,39 @@
-import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkStringify from "remark-stringify";
+import { unified } from "unified";
 import YAML from "yaml";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
+// JavaScript's relational string comparison is specified over UTF-16 code
+// units. Keep evidence ordering independent of the host locale and ICU build.
+export function compareDeterministicText(left, right) {
+  left = String(left);
+  right = String(right);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function safeRelative(value, label = "path") {
   if (typeof value !== "string" || !value || value.includes("\\")) throw new Error(`${label}: expected a non-empty POSIX path`);
   const normalized = path.posix.normalize(value);
-  if (normalized !== value || normalized.startsWith("/") || normalized === ".." || normalized.startsWith("../")) {
+  if (normalized !== value || normalized === "." || normalized.startsWith("/") || normalized === ".." || normalized.startsWith("../")) {
     throw new Error(`${label}: path must stay beneath its root: ${value}`);
+  }
+  for (const segment of value.split("/")) {
+    const stem = segment.split(".", 1)[0].toUpperCase();
+    if (segment !== segment.normalize("NFC") || segment.length > 255 || Buffer.byteLength(segment, "utf8") > 255 || /[\u0000-\u001f\u007f<>:"|?*]/.test(segment) || /[ .]$/.test(segment) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) {
+      throw new Error(`${label}: path is not portable across macOS, Linux, Windows, and WSL: ${value}`);
+    }
   }
   return value;
 }
 
-export async function walkMarkdown(root, relative = "") {
-  const dir = path.join(root, relative);
-  const entries = await readdir(dir, { withFileTypes: true });
-  const found = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const rel = path.posix.join(relative, entry.name);
-    if (entry.isSymbolicLink()) throw new Error(`source symlink refused: ${rel}`);
-    if (entry.isDirectory()) {
-      if ([".git", ".codeflow", "node_modules", "dist", ".portal", ".astro"].includes(entry.name)) continue;
-      found.push(...await walkMarkdown(root, rel));
-    } else if (entry.isFile() && entry.name.endsWith(".md") && !/^\.env(?:\.|$)/.test(entry.name)) found.push(rel);
-  }
-  return found;
+export function portablePathKey(value, label = "path") {
+  return safeRelative(value, label).normalize("NFC").toLowerCase();
 }
 
 export async function findRepositoryRoot(start) {
@@ -59,496 +65,147 @@ export function normalizeMarkdown(text) {
 
 export function titleFor(frontmatter, body, sourcePath) {
   if (typeof frontmatter.title === "string" && frontmatter.title.trim()) return frontmatter.title.trim();
-  const heading = body.match(/^#\s+(.+)$/m)?.[1]?.trim();
-  return heading || path.posix.basename(sourcePath, ".md").replaceAll("-", " ");
+  const heading = markdownNodes(markdownTree(body), "heading")
+    .find((node) => node.depth === 1 && visibleNodeText(node).trim())?.children;
+  const headingText = heading ? visibleNodeText({ children: heading }).trim() : "";
+  return headingText || path.posix.basename(sourcePath, ".md").replaceAll("-", " ");
 }
 
-export function renderSafeMarkdown(body) {
-  let fence = null;
-  let comment = false;
-  return body.split("\n").map((line) => {
-    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-    if (marker) { fence = fence === null ? marker[1][0] : fence === marker[1][0] ? null : fence; return line; }
-    if (fence !== null) return line;
-    let visible = "";
-    for (let cursor = 0; cursor < line.length;) {
-      if (comment) {
-        const end = line.indexOf("-->", cursor);
-        if (end < 0) return visible;
-        comment = false; cursor = end + 3; continue;
-      }
-      const start = line.indexOf("<!--", cursor);
-      if (start < 0) { visible += line.slice(cursor); break; }
-      visible += line.slice(cursor, start); comment = true; cursor = start + 4;
+export function rewriteRepositoryMarkdown(body, { sourcePath, sourceRoutes, base, strictTargets, mediaReferences }) {
+  const tree = markdownTree(body);
+  const referenceKinds = new Map();
+  visitMarkdown(tree, (node) => {
+    if (!["linkReference", "imageReference"].includes(node.type)) return;
+    const kind = node.type === "imageReference" ? "image" : "link";
+    const prior = referenceKinds.get(node.identifier);
+    if (prior && prior !== kind) throw new Error(`${sourcePath}: reference ${node.identifier} is used as both a link and an image`);
+    referenceKinds.set(node.identifier, kind);
+  });
+  let previewSequence = 0;
+  visitMarkdown(tree, (node, parent, index, ancestors) => {
+    if (node.type === "html") {
+      parent.children[index] = /^<!--[\s\S]*-->$/.test(node.value.trim())
+        ? { type: "text", value: "" }
+        : { type: "html", value: escapeGeneratedHtml(node.value) };
+      return;
     }
-    const spans = visible.split(/(`+[^`]*`+)/g);
-    return spans.map((span, index) => index % 2 ? span : span.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")).join("");
-  }).join("\n");
+    if (["link", "image", "definition"].includes(node.type)) {
+      const kind = node.type === "definition" ? referenceKinds.get(node.identifier) : node.type;
+      if (!kind) {
+        if (unsafeUrl(node.url)) throw new Error(`${sourcePath}: unsafe Markdown URL scheme`);
+        return;
+      }
+      node.url = resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, base, mediaReferences, kind });
+      return;
+    }
+    if (node.type !== "text" || ancestors.some((ancestor) => ["link", "linkReference", "definition", "code", "inlineCode", "html"].includes(ancestor.type))) return;
+    const children = [];
+    let cursor = 0;
+    for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
+      if (match.index > cursor) children.push({ type: "text", value: node.value.slice(cursor, match.index) });
+      const target = strictTargets.get(match[0]);
+      if (!target) children.push({ type: "text", value: match[0] });
+      else children.push({ type: "html", value: strictIdPreview(match[0], target, `${sha256(sourcePath).slice(0, 10)}-${previewSequence++}`) });
+      cursor = match.index + match[0].length;
+    }
+    if (!children.length) return;
+    if (cursor < node.value.length) children.push({ type: "text", value: node.value.slice(cursor) });
+    parent.children.splice(index, 1, ...children);
+  });
+  return stringifyMarkdown(tree);
 }
 
-export function linkStrictIds(markdown, routesById) {
-  let fence = null;
-  return markdown.split("\n").map((line) => {
-    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-    if (marker) { fence = fence === null ? marker[1][0] : fence === marker[1][0] ? null : fence; return line; }
-    if (fence !== null) return line;
-    return line.split(/(`+[^`]*`+)/g).map((span, index) => {
-      if (index % 2) return span;
-      return span.replace(/(?<![\w/\[])\b((?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?)\b(?![\]])/g, (match, id) => routesById.has(id) ? `[${id}](${routesById.get(id)})` : match);
-    }).join("");
-  }).join("\n");
+function escapeGeneratedHtml(value) {
+  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 export function referencedIds(markdown) {
   const found = new Set();
-  let fence = null;
-  let comment = false;
-  for (const line of markdown.split("\n")) {
-    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-    if (marker) { fence = fence === null ? marker[1][0] : fence === marker[1][0] ? null : fence; continue; }
-    if (fence !== null) continue;
-    let visible = "";
-    for (let cursor = 0; cursor < line.length;) {
-      if (comment) {
-        const end = line.indexOf("-->", cursor);
-        if (end < 0) break;
-        comment = false; cursor = end + 3; continue;
-      }
-      const start = line.indexOf("<!--", cursor);
-      if (start < 0) { visible += line.slice(cursor); break; }
-      visible += line.slice(cursor, start); comment = true; cursor = start + 4;
-    }
-    visible.split(/(`+[^`]*`+)/g).forEach((span, index) => {
-      if (index % 2) return;
-      for (const match of span.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) found.add(match[0]);
-    });
+  for (const node of markdownNodes(markdownTree(markdown), "text")) {
+    for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) found.add(match[0]);
   }
   return [...found];
 }
 
-const PUBLICATION_LIVE_PATHS = new Set([".portal/generated", "src/content/docs", "public"]);
-const MAX_PRESERVED_UNKNOWN_BYTES = 64 * 1024 * 1024;
-const MAX_PRESERVED_UNKNOWN_FILES = 10_000;
-const MAX_PRESERVED_UNKNOWN_DEPTH = 32;
-const PUBLICATION_LEASE_MAX_AGE_MS = 30 * 60 * 1000;
+function markdownTree(markdown) {
+  return unified().use(remarkParse).use(remarkGfm).parse(normalizeMarkdown(markdown));
+}
 
-async function acquirePublicationLease(portalRoot) {
-  await assertNoSymlink(portalRoot, ".portal");
-  const portalDirectory = path.join(portalRoot, ".portal");
-  const lockDirectory = path.join(portalDirectory, "publish.lock");
-  await mkdir(portalDirectory, { recursive: true });
-  await assertNoSymlink(portalRoot, ".portal");
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const now = Date.now();
-    const lease = {
-      schema_version: 1,
-      token: randomBytes(24).toString("hex"),
-      created_at_ms: now,
-      heartbeat_at_ms: now,
-    };
-    try {
-      await mkdir(lockDirectory, { mode: 0o700 });
-      try {
-        await writeDurableJson(path.join(lockDirectory, "owner.json"), lease, { exclusive: true });
-        await syncDirectory(portalDirectory);
-        return lease;
-      } catch (error) {
-        await rm(lockDirectory, { recursive: true, force: true });
-        throw error;
-      }
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      const existing = await readPublicationLease(lockDirectory);
-      const heartbeat = existing?.heartbeat_at_ms ?? (await lstat(lockDirectory)).mtimeMs;
-      if (Date.now() - heartbeat <= PUBLICATION_LEASE_MAX_AGE_MS) {
-        throw new Error("portal publication already in progress");
-      }
-      const staleDirectory = path.join(portalDirectory, `.stale-publish-lock-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`);
-      try { await rename(lockDirectory, staleDirectory); }
-      catch (renameError) {
-        if (["ENOENT", "EEXIST", "ENOTEMPTY"].includes(renameError?.code)) continue;
-        throw renameError;
-      }
-      await rm(staleDirectory, { recursive: true, force: true });
-      await syncDirectory(portalDirectory);
-    }
+function stringifyMarkdown(tree) {
+  return unified().use(remarkStringify, { bullet: "-", fences: true, listItemIndent: "one" }).use(remarkGfm).stringify(tree).trimEnd();
+}
+
+function visitMarkdown(node, callback, parent = null, index = -1, ancestors = []) {
+  if (parent) callback(node, parent, index, ancestors);
+  if (!Array.isArray(node.children)) return;
+  for (let cursor = node.children.length - 1; cursor >= 0; cursor -= 1) visitMarkdown(node.children[cursor], callback, node, cursor, [...ancestors, node]);
+}
+
+function markdownNodes(root, type) {
+  const found = [];
+  function visit(node) {
+    if (node.type === type) found.push(node);
+    if (Array.isArray(node.children)) node.children.forEach(visit);
   }
-  throw new Error("could not acquire portal publication lease");
+  visit(root);
+  return found;
 }
 
-async function readPublicationLease(lockDirectory) {
-  const metadata = await lstat(lockDirectory);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error(`unsafe portal publication lock: ${lockDirectory}`);
-  const owner = path.join(lockDirectory, "owner.json");
-  try {
-    const ownerMetadata = await lstat(owner);
-    if (ownerMetadata.isSymbolicLink() || !ownerMetadata.isFile() || ownerMetadata.size > 4096) throw new Error(`unsafe portal publication lease: ${owner}`);
-    const lease = JSON.parse(await readFile(owner, "utf8"));
-    validatePublicationLease(lease);
-    return lease;
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
+function visibleNodeText(node) {
+  if (node.type === "text" || node.type === "inlineCode") return node.value;
+  if (node.type === "image") return node.alt ?? "";
+  if (!Array.isArray(node.children)) return "";
+  return node.children.map(visibleNodeText).join("");
+}
+
+function unsafeUrl(value) {
+  const normalized = String(value).replace(/&#(?:x0*3a|0*58);|&colon;/gi, ":").replace(/[\u0000-\u0020\u007f]+/g, "").toLowerCase();
+  return /^(?:javascript|data|file|vbscript):/.test(normalized);
+}
+
+function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, base, mediaReferences, kind }) {
+  if (unsafeUrl(value)) throw new Error(`${sourcePath}: unsafe Markdown URL scheme`);
+  if (/^(?:https?:|mailto:)/i.test(value)) {
+    if (kind === "image") throw new Error(`${sourcePath}: remote images are not imported: ${value}`);
+    return value;
   }
-}
-
-function validatePublicationLease(lease) {
-  if (!lease || typeof lease !== "object" || Array.isArray(lease) || Object.keys(lease).sort().join(",") !== "created_at_ms,heartbeat_at_ms,schema_version,token" || lease.schema_version !== 1 || typeof lease.token !== "string" || !/^[a-f0-9]{48}$/.test(lease.token) || !Number.isSafeInteger(lease.created_at_ms) || !Number.isSafeInteger(lease.heartbeat_at_ms) || lease.created_at_ms < 0 || lease.heartbeat_at_ms < lease.created_at_ms) {
-    throw new Error("invalid portal publication lease");
+  if (value.startsWith("#")) return value;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//") || value.startsWith("/")) throw new Error(`${sourcePath}: unsupported Markdown URL: ${value}`);
+  const match = String(value).match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
+  if (!match || !match[1]) throw new Error(`${sourcePath}: invalid repository-relative Markdown URL: ${value}`);
+  let decoded;
+  try { decoded = decodeURIComponent(match[1]); } catch { throw new Error(`${sourcePath}: malformed percent-encoding in Markdown URL: ${value}`); }
+  if (decoded.includes("\\") || /[\u0000-\u001f\u007f]/.test(decoded)) throw new Error(`${sourcePath}: invalid repository-relative Markdown URL: ${value}`);
+  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(sourcePath), decoded));
+  const safe = safeRelative(resolved, `${sourcePath} Markdown target`);
+  const suffix = `${match[2] ?? ""}${match[3] ?? ""}`;
+  if (sourceRoutes.has(safe)) return `${withBase(base, sourceRoutes.get(safe))}${suffix}`;
+  if (/\.(?:md|mdx)$/i.test(safe) || kind === "link" && !path.posix.extname(safe)) throw new Error(`${sourcePath}: repository document target does not exist: ${safe}`);
+  const extension = path.posix.extname(safe).toLowerCase();
+  const mediaExtensions = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
+  if (!mediaExtensions.has(extension)) {
+    throw new Error(`${sourcePath}: unsupported local media type: ${safe}`);
   }
+  const mediaRoute = `media/${sha256(safe).slice(0, 16)}-${path.posix.basename(safe)}`;
+  mediaReferences.set(safe, mediaRoute);
+  return `${base === "/" ? `/${mediaRoute}` : `${base}${mediaRoute}`}${suffix}`;
 }
 
-async function assertPublicationLease(portalRoot, lease) {
-  validatePublicationLease(lease);
-  const current = await readPublicationLease(path.join(portalRoot, ".portal/publish.lock"));
-  if (!current || current.token !== lease.token) throw new Error("portal publication lease was lost");
-  if (Date.now() - current.heartbeat_at_ms > PUBLICATION_LEASE_MAX_AGE_MS) throw new Error("portal publication lease expired");
+function strictIdPreview(id, target, suffix) {
+  const statusText = target.stale ? "stale — excluded from the current graph" : target.status;
+  const status = typeof statusText === "string" && statusText ? `<span>Status: ${escapeGeneratedHtml(statusText)}</span>` : "";
+  const previewId = `portal-preview-${suffix}`;
+  return `<span class="portal-id-preview"><a href="${escapeGeneratedHtml(target.route)}" aria-describedby="${previewId}">${id}</a><span id="${previewId}" role="tooltip"><strong>${escapeGeneratedHtml(target.title)}</strong>${status}<span>Source: <code>${escapeGeneratedHtml(target.source_path)}</code></span></span></span>`;
 }
 
-async function refreshPublicationLease(portalRoot, lease) {
-  await assertPublicationLease(portalRoot, lease);
-  lease.heartbeat_at_ms = Date.now();
-  await writeDurableJson(path.join(portalRoot, ".portal/publish.lock/owner.json"), lease);
-}
-
-async function releasePublicationLease(portalRoot, lease) {
-  const lockDirectory = path.join(portalRoot, ".portal/publish.lock");
-  let current;
-  try { current = await readPublicationLease(lockDirectory); }
-  catch (error) { if (error?.code === "ENOENT") return; throw error; }
-  if (!current || current.token !== lease.token) return;
-  await rm(lockDirectory, { recursive: true, force: true });
-  await syncDirectory(path.dirname(lockDirectory));
-}
-
-export async function recoverOwnedCorpus(portalRoot) {
-  await withPublicationLeaseLocked(portalRoot, async () => {});
-}
-
-export async function withPublicationLease(portalRoot, action) {
-  if (typeof action !== "function") throw new Error("publication lease action must be a function");
-  return withPublicationLeaseLocked(portalRoot, (_lease, refresh) => action({ refresh }));
-}
-
-async function withPublicationLeaseLocked(portalRoot, action) {
-  const lease = await acquirePublicationLease(portalRoot);
-  try {
-    await recoverOwnedCorpusLocked(portalRoot, lease);
-    return await action(lease, () => refreshPublicationLease(portalRoot, lease));
-  } finally { await releasePublicationLease(portalRoot, lease); }
-}
-
-async function recoverOwnedCorpusLocked(portalRoot, lease) {
-  await assertPublicationLease(portalRoot, lease);
-  const journalRelative = ".portal/publish-transaction.json";
-  const journal = path.join(portalRoot, journalRelative);
-  await assertNoSymlink(portalRoot, ".portal");
-  try {
-    const metadata = await lstat(journal);
-    if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > 64 * 1024) throw new Error(`unsafe portal publication journal: ${journal}`);
-  } catch (error) {
-    if (error?.code === "ENOENT") return;
-    throw error;
+export function amendmentHeadings(markdown) {
+  const headings = [];
+  for (const node of markdownNodes(markdownTree(markdown), "heading")) {
+    if (node.depth !== 2) continue;
+    const match = visibleNodeText(node).trim().match(/^((?:Note|Update|Correction)\b.*\b\d{4}-\d{2}-\d{2}\b.*)$/i);
+    if (match) headings.push(match[1].trim());
   }
-  const transaction = JSON.parse(await readFile(journal, "utf8"));
-  validateTransaction(transaction);
-  if (transaction.phase === "committed") {
-    await rm(path.join(portalRoot, transaction.stage_root), { recursive: true, force: true });
-    await rm(path.join(portalRoot, transaction.backup_root), { recursive: true, force: true });
-    await rm(journal, { force: true });
-    return;
-  }
-  for (const group of [...transaction.groups].reverse()) {
-    const live = path.join(portalRoot, group.live);
-    const stage = path.join(portalRoot, group.stage);
-    const backup = path.join(portalRoot, group.backup);
-    if (await exists(backup)) {
-      await rm(live, { recursive: true, force: true });
-      await mkdir(path.dirname(live), { recursive: true });
-      await rename(backup, live);
-    } else if (!group.had_live) await rm(live, { recursive: true, force: true });
-    await rm(stage, { recursive: true, force: true });
-  }
-  await rm(path.join(portalRoot, transaction.stage_root), { recursive: true, force: true });
-  await rm(path.join(portalRoot, transaction.backup_root), { recursive: true, force: true });
-  await rm(journal, { force: true });
-}
-
-export async function publishOwnedCorpus(portalRoot, groups, options = {}) {
-  return withPublicationLeaseLocked(portalRoot, (lease) => publishOwnedCorpusLocked(portalRoot, groups, options, lease));
-}
-
-async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, simulateCrash = false } = {}, lease) {
-  await assertPublicationLease(portalRoot, lease);
-  if (!Array.isArray(groups) || groups.length < 1 || groups.length > 3 || new Set(groups.map((group) => group.live)).size !== groups.length) {
-    throw new Error("generated corpus must contain 1 to 3 unique live groups");
-  }
-  const nonce = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const stageRoot = `.portal/.publish-stage-${nonce}`;
-  const backupRoot = `.portal/.publish-backup-${nonce}`;
-  const transactionGroups = [];
-  const preparedGroups = [];
-  try {
-    for (const [index, group] of groups.entries()) {
-      if (!PUBLICATION_LIVE_PATHS.has(group.live)) throw new Error(`unsupported generated corpus path: ${group.live}`);
-      const planned = new Map();
-      for (const [relative, content] of group.files) {
-        const safe = safeRelative(relative, "generated file");
-        if (planned.has(safe)) throw new Error(`duplicate generated file: ${safe}`);
-        planned.set(safe, content);
-      }
-      const live = path.join(portalRoot, group.live);
-      const stageRelative = `${stageRoot}/${index}`;
-      const backupRelative = `${backupRoot}/${index}`;
-      transactionGroups.push({ live: group.live, stage: stageRelative, backup: backupRelative, had_live: await exists(live) });
-      preparedGroups.push({ live, stage: path.join(portalRoot, stageRelative), planned, preserveUnknown: group.preserveUnknown === true });
-    }
-    const transaction = { schema_version: 1, phase: "preparing", stage_root: stageRoot, backup_root: backupRoot, groups: transactionGroups };
-    validateTransaction(transaction);
-    const journal = path.join(portalRoot, ".portal/publish-transaction.json");
-    await mkdir(path.dirname(journal), { recursive: true });
-    await writeDurableJson(journal, transaction, { exclusive: true });
-    maybeFault("after-journal", faultAt);
-    for (const [index, group] of preparedGroups.entries()) {
-      await refreshPublicationLease(portalRoot, lease);
-      await prepareOwnedStage(group.live, group.stage, group.planned, group.preserveUnknown);
-      maybeFault(`after-prepare-${index}`, faultAt);
-    }
-    transaction.phase = "prepared";
-    await writeDurableJson(journal, transaction);
-    maybeFault("after-prepared", faultAt);
-    for (const [index, group] of transactionGroups.entries()) {
-      await refreshPublicationLease(portalRoot, lease);
-      const live = path.join(portalRoot, group.live);
-      const stage = path.join(portalRoot, group.stage);
-      const backup = path.join(portalRoot, group.backup);
-      await assertNoSymlink(portalRoot, path.posix.dirname(group.live));
-      await assertNoSymlink(portalRoot, path.posix.dirname(group.stage));
-      await assertNoSymlink(portalRoot, path.posix.dirname(group.backup));
-      await mkdir(path.dirname(backup), { recursive: true });
-      if (group.had_live) await rename(live, backup);
-      maybeFault(`after-backup-${index}`, faultAt);
-      await mkdir(path.dirname(live), { recursive: true });
-      await rename(stage, live);
-      maybeFault(`after-publish-${index}`, faultAt);
-    }
-    transaction.phase = "committed";
-    await writeDurableJson(journal, transaction);
-    maybeFault("after-commit", faultAt);
-    await rm(path.join(portalRoot, backupRoot), { recursive: true, force: true });
-    await rm(path.join(portalRoot, stageRoot), { recursive: true, force: true });
-    await rm(journal, { force: true });
-  } catch (error) {
-    if (!(simulateCrash && error?.code === "CODEFLOW_SIMULATED_CRASH")) {
-      await recoverOwnedCorpusLocked(portalRoot, lease);
-      await rm(path.join(portalRoot, stageRoot), { recursive: true, force: true });
-      await rm(path.join(portalRoot, backupRoot), { recursive: true, force: true });
-    }
-    throw error;
-  }
-}
-
-async function prepareOwnedStage(live, stage, planned, preserveUnknown) {
-  const { inventory } = await inspectOwnedDirectory(live, preserveUnknown);
-  const owned = new Set(inventory ?? []);
-  await rm(stage, { recursive: true, force: true });
-  await mkdir(stage, { recursive: true });
-  let preservedBytes = 0;
-  for (const relative of await walkFiles(live)) {
-    if (relative === ".codeflow-generated.json" || owned.has(relative)) continue;
-    if (planned.has(relative)) throw new Error(`refusing to overwrite unowned generated path: ${path.join(live, relative)}`);
-    const source = path.join(live, relative);
-    const metadata = await lstat(source);
-    if (!metadata.isFile()) throw new Error(`non-regular file refused in generated corpus: ${source}`);
-    preservedBytes += metadata.size;
-    if (preservedBytes > MAX_PRESERVED_UNKNOWN_BYTES) throw new Error(`preserved unknown corpus exceeds ${MAX_PRESERVED_UNKNOWN_BYTES} bytes: ${live}`);
-    const destination = path.join(stage, relative);
-    await assertNoSymlink(live, path.posix.dirname(relative));
-    await assertNoSymlink(stage, path.posix.dirname(relative));
-    await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(source, destination);
-  }
-  for (const [relative, content] of planned) await writeText(path.join(stage, relative), content);
-  await writeText(path.join(stage, ".codeflow-generated.json"), `${JSON.stringify({ schema_version: 1, files: [...planned.keys()].sort() }, null, 2)}\n`);
-}
-
-async function inspectOwnedDirectory(dir, preserveUnknown) {
-  const marker = path.join(dir, ".codeflow-generated.json");
-  let inventory = null;
-  try {
-    const entries = await readdir(dir);
-    if (!preserveUnknown && entries.length && !entries.includes(".codeflow-generated.json")) throw new Error(`refusing to manage unowned generated directory: ${dir}`);
-    if (entries.includes(".codeflow-generated.json")) {
-      const parsed = JSON.parse(await readFile(marker, "utf8"));
-      if (parsed.schema_version !== 1 || !Array.isArray(parsed.files)) throw new Error(`invalid generated ownership inventory: ${marker}`);
-      inventory = parsed.files.map((file) => safeRelative(file, "generated file"));
-      if (new Set(inventory).size !== inventory.length) throw new Error(`duplicate generated ownership entry: ${marker}`);
-    }
-  } catch (error) { if (error?.code !== "ENOENT") throw error; }
-  return { inventory };
-}
-
-async function walkFiles(root, relative = "", state = { count: 0 }) {
-  const depth = relative ? relative.split("/").length : 0;
-  if (depth > MAX_PRESERVED_UNKNOWN_DEPTH) throw new Error(`generated corpus depth exceeds ${MAX_PRESERVED_UNKNOWN_DEPTH}: ${root}`);
-  let entries;
-  try { entries = await readdir(path.join(root, relative), { withFileTypes: true }); }
-  catch (error) { if (error?.code === "ENOENT") return []; throw error; }
-  const files = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const next = path.posix.join(relative, entry.name);
-    if (entry.isSymbolicLink()) throw new Error(`symlink refused in generated corpus: ${path.join(root, next)}`);
-    if (entry.isDirectory()) files.push(...await walkFiles(root, next, state));
-    else if (entry.isFile()) {
-      state.count += 1;
-      if (state.count > MAX_PRESERVED_UNKNOWN_FILES) throw new Error(`generated corpus file count exceeds ${MAX_PRESERVED_UNKNOWN_FILES}: ${root}`);
-      files.push(next);
-    } else throw new Error(`non-regular entry refused in generated corpus: ${path.join(root, next)}`);
-  }
-  return files;
-}
-
-async function exists(target) {
-  try { await lstat(target); return true; }
-  catch (error) { if (error?.code === "ENOENT") return false; throw error; }
-}
-
-function validateTransaction(transaction) {
-  const keys = Object.keys(transaction).sort().join(",");
-  if (keys !== "backup_root,groups,phase,schema_version,stage_root" || transaction.schema_version !== 1 || !["preparing", "prepared", "committed"].includes(transaction.phase) || !Array.isArray(transaction.groups) || transaction.groups.length < 1 || transaction.groups.length > 3) {
-    throw new Error("invalid portal publication journal");
-  }
-  const rootPattern = /^\.portal\/\.publish-(stage|backup)-[a-zA-Z0-9-]+$/;
-  for (const [label, value, expected] of [["stage_root", transaction.stage_root, "stage"], ["backup_root", transaction.backup_root, "backup"]]) {
-    safeRelative(value, label);
-    const match = value.match(rootPattern);
-    if (!match || match[1] !== expected) throw new Error(`invalid portal publication ${label}`);
-  }
-  const lives = new Set();
-  transaction.groups.forEach((group, index) => {
-    if (!group || typeof group !== "object" || Object.keys(group).sort().join(",") !== "backup,had_live,live,stage" || !PUBLICATION_LIVE_PATHS.has(group.live) || typeof group.had_live !== "boolean" || lives.has(group.live)) throw new Error("invalid portal publication group");
-    lives.add(group.live);
-    if (group.stage !== `${transaction.stage_root}/${index}` || group.backup !== `${transaction.backup_root}/${index}`) throw new Error("portal publication group is not bound to its transaction root");
-    safeRelative(group.stage, "stage"); safeRelative(group.backup, "backup");
-  });
-}
-
-function maybeFault(boundary, requested) {
-  if (boundary !== requested) return;
-  const error = new Error(`injected publication failure at ${boundary}`);
-  error.code = "CODEFLOW_SIMULATED_CRASH";
-  throw error;
-}
-
-async function writeDurableJson(file, value, { exclusive = false } = {}) {
-  const encoded = `${JSON.stringify(value, null, 2)}\n`;
-  if (exclusive) {
-    const handle = await open(file, "wx", 0o600);
-    try { await handle.writeFile(encoded, "utf8"); await handle.sync(); }
-    finally { await handle.close(); }
-    await syncDirectory(path.dirname(file));
-    return;
-  }
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    const handle = await open(temporary, "wx", 0o600);
-    try {
-      await handle.writeFile(encoded, "utf8");
-      await handle.sync();
-    } finally { await handle.close(); }
-    await rename(temporary, file);
-    await syncDirectory(path.dirname(file));
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
-}
-
-async function syncDirectory(directory) {
-  if (process.platform === "win32") return;
-  try { const handle = await open(directory, "r"); try { await handle.sync(); } finally { await handle.close(); } }
-  catch (error) { if (!["EINVAL", "ENOTSUP", "EISDIR"].includes(error?.code)) throw error; }
-}
-
-export async function writeText(file, text) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    const handle = await open(temporary, "wx", 0o600);
-    try { await handle.writeFile(text, "utf8"); await handle.sync(); }
-    finally { await handle.close(); }
-    await rename(temporary, file);
-    await syncDirectory(path.dirname(file));
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
-}
-
-export async function assertNoSymlink(root, relative) {
-  let current = root;
-  try {
-    if ((await lstat(current)).isSymbolicLink()) throw new Error(`symlink refused: ${current}`);
-  } catch (error) { if (error?.code !== "ENOENT") throw error; }
-  for (const part of safeRelative(relative).split("/")) {
-    if (part === ".") continue;
-    current = path.join(current, part);
-    try {
-      if ((await lstat(current)).isSymbolicLink()) throw new Error(`symlink refused: ${relative}`);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-}
-
-export async function collectBuiltArtifacts(root, limits = {}) {
-  const maximumFiles = limits.maximumFiles ?? 50_000;
-  const maximumDepth = limits.maximumDepth ?? 32;
-  const maximumFileBytes = limits.maximumFileBytes ?? 64 * 1024 * 1024;
-  const maximumTotalBytes = limits.maximumTotalBytes ?? 512 * 1024 * 1024;
-  const onProgress = limits.onProgress;
-  for (const [label, value] of Object.entries({ maximumFiles, maximumDepth, maximumFileBytes, maximumTotalBytes })) {
-    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label}: expected a positive safe integer`);
-  }
-  if (onProgress !== undefined && typeof onProgress !== "function") throw new Error("onProgress: expected a function");
-  const rootMetadata = await lstat(root);
-  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw new Error(`built artifact root is not a regular directory: ${root}`);
-  const state = { count: 0, bytes: 0 };
-  const files = [];
-  async function visit(relative = "") {
-    const depth = relative ? relative.split("/").length : 0;
-    if (depth > maximumDepth) throw new Error(`built artifact depth exceeds ${maximumDepth}: ${root}`);
-    const entries = await readdir(path.join(root, relative), { withFileTypes: true });
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      const next = path.posix.join(relative, entry.name);
-      if (entry.isSymbolicLink()) throw new Error(`built artifact symlink refused: ${next}`);
-      if (entry.isDirectory()) { if (onProgress) await onProgress(); await visit(next); }
-      else if (entry.isFile()) {
-        state.count += 1;
-        if (state.count > maximumFiles) throw new Error(`built artifact count exceeds ${maximumFiles}: ${root}`);
-        const file = path.join(root, next);
-        const result = await hashRegularFile(file, maximumFileBytes);
-        state.bytes += result.bytes;
-        if (state.bytes > maximumTotalBytes) throw new Error(`built artifact corpus exceeds ${maximumTotalBytes} bytes: ${root}`);
-        files.push({ path: `dist/${next}`, sha256: result.sha256 });
-        if (onProgress && state.count % 128 === 0) await onProgress();
-      } else throw new Error(`non-regular built artifact refused: ${next}`);
-    }
-  }
-  await visit();
-  return files;
-}
-
-async function hashRegularFile(file, maximumBytes) {
-  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
-  const handle = await open(file, flags);
-  try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size > maximumBytes) throw new Error(`built artifact exceeds ${maximumBytes} bytes or is not a regular file: ${file}`);
-    const hash = createHash("sha256");
-    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk);
-    return { bytes: metadata.size, sha256: hash.digest("hex") };
-  } finally { await handle.close(); }
+  return headings;
 }
 
 export function strictId(value) {
@@ -556,7 +213,6 @@ export function strictId(value) {
 }
 
 export function collectPageIds(frontmatter, text, sourcePath) {
-  text = normalizeMarkdown(text);
   const declared = [];
   if (typeof frontmatter.id === "string" && strictId(frontmatter.id)) declared.push(frontmatter.id);
   if (sourcePath !== "docs/capabilities.md") {
@@ -564,20 +220,9 @@ export function collectPageIds(frontmatter, text, sourcePath) {
     const filenameId = path.posix.basename(sourcePath, ".md").toUpperCase();
     return strictId(filenameId) ? [filenameId] : [];
   }
-  let fence = null;
-  let yamlFence = false;
-  for (const line of text.split("\n")) {
-    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})([^`]*)$/);
-    if (marker) {
-      const token = marker[1][0];
-      if (fence === null) { fence = token; yamlFence = /^ya?ml\s*$/i.test(marker[2].trim()); }
-      else if (fence === token) { fence = null; yamlFence = false; }
-      continue;
-    }
-    if (fence !== null && !yamlFence) continue;
-    if (fence === null) continue;
-    const match = line.match(/^\s*-?\s*id:\s*((?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?)\s*$/);
-    if (match) declared.push(match[1]);
+  for (const block of yamlFences(text)) {
+    const record = YAML.parse(block);
+    if (record && typeof record === "object" && !Array.isArray(record) && strictId(record.id ?? "")) declared.push(record.id);
   }
   const duplicates = declared.filter((id, index) => declared.indexOf(id) !== index);
   if (duplicates.length) throw new Error(`${sourcePath}: duplicate identity declaration ${[...new Set(duplicates)].join(", ")}`);
@@ -612,58 +257,20 @@ export function extractPageRelationships(frontmatter, text, sourcePath) {
 }
 
 function yamlFences(text) {
-  text = normalizeMarkdown(text);
-  const blocks = [];
-  let fence = null;
-  let yaml = false;
-  let lines = [];
-  for (const line of text.split("\n")) {
-    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})([^`]*)$/);
-    if (marker) {
-      const token = marker[1][0];
-      if (fence === null) { fence = token; yaml = /^ya?ml\s*$/i.test(marker[2].trim()); lines = []; }
-      else if (fence === token) { if (yaml) blocks.push(lines.join("\n")); fence = null; yaml = false; lines = []; }
-      continue;
-    }
-    if (fence !== null && yaml) lines.push(line);
-  }
-  return blocks;
+  return markdownNodes(markdownTree(text), "code")
+    .filter((node) => /^ya?ml$/i.test(node.lang ?? ""))
+    .map((node) => node.value);
 }
 
 export function excerptFor(text) {
   text = normalizeMarkdown(text);
-  const lines = text.split("\n");
-  let inFrontmatter = text.startsWith("---\n");
-  let inComment = false;
-  let fence = null;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (index === 0 && inFrontmatter) continue;
-    if (inFrontmatter) { if (line === "---") inFrontmatter = false; continue; }
-    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-    if (fenceMatch) { fence = fence === null ? fenceMatch[1][0] : fence === fenceMatch[1][0] ? null : fence; continue; }
-    if (fence !== null) continue;
-    let visible = line;
-    if (inComment) {
-      const end = visible.indexOf("-->");
-      if (end < 0) continue;
-      inComment = false; visible = visible.slice(end + 3);
-    }
-    while (visible.includes("<!--")) {
-      const start = visible.indexOf("<!--"); const end = visible.indexOf("-->", start + 4);
-      if (end < 0) { visible = visible.slice(0, start); inComment = true; break; }
-      visible = visible.slice(0, start) + visible.slice(end + 3);
-    }
-    const trimmed = visible.trim();
-    if (!trimmed || /^#{1,6}\s/.test(trimmed)) continue;
-    const selected = [line];
-    for (let cursor = index + 1; cursor < lines.length && selected.length < 3; cursor += 1) {
-      if (!lines[cursor].trim()) break;
-      selected.push(lines[cursor]);
-    }
-    return { start: index + 1, end: index + selected.length, text: selected.join("\n") };
-  }
-  return null;
+  const { body } = parseMarkdown(text, "excerpt source");
+  const bodyStart = text.slice(0, text.length - body.length).split("\n").length - 1;
+  const paragraph = markdownNodes(markdownTree(body), "paragraph").find((node) => visibleNodeText(node).trim());
+  if (!paragraph?.position) return null;
+  const start = bodyStart + paragraph.position.start.line;
+  const end = Math.min(bodyStart + paragraph.position.end.line, start + 2);
+  return { start, end, text: text.split("\n").slice(start - 1, end).join("\n") };
 }
 
 export function validateBase(value) {
@@ -682,7 +289,7 @@ export function withBase(base, route) {
 
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
-  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "source_roots", "exclude", "layers", "base"]);
+  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "base"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown key ${key}`);
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
@@ -693,6 +300,8 @@ export function validatePortalConfig(value) {
     const url = new URL(value.repository_url);
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("repository_url: expected an HTTPS repository URL without credentials, query, or fragment");
   }
+  if (value.release_version !== null && (typeof value.release_version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(value.release_version))) throw new Error("release_version: expected a bounded printable version identifier or null");
+  if (value.primitive_tokens !== null) safeRelative(value.primitive_tokens, "primitive_tokens");
   boundedString(value.repository_root, "repository_root", 1, 256);
   validateBase(value.base);
   validatePathArray(value.source_roots, "source_roots", 1, 32);
@@ -717,6 +326,35 @@ export function validatePortalConfig(value) {
   return value;
 }
 
+export function validatePrimitiveTokens(value, theme) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== "dark,light,schema_version" || value.schema_version !== 1) {
+    throw new Error("primitive token import must contain exactly schema_version, light, and dark");
+  }
+  const surfaces = theme === "folio" ? { light: "#fbfcfb", dark: "#17120e" } : { light: "#fbfcfb", dark: "#0c1110" };
+  for (const mode of ["light", "dark"]) {
+    const record = value[mode];
+    if (!record || typeof record !== "object" || Array.isArray(record) || Object.keys(record).sort().join(",") !== "accent" || !/^#[a-fA-F0-9]{6}$/.test(record.accent ?? "")) {
+      throw new Error(`primitive token ${mode} mode must contain exactly one six-digit accent color`);
+    }
+    if (contrastRatio(record.accent, surfaces[mode]) < 4.5) throw new Error(`primitive token ${mode} accent does not meet 4.5:1 contrast against the portal surface`);
+  }
+  return value;
+}
+
+export function renderPrimitiveTokenCss(tokens) {
+  if (tokens === null) return "/* No project primitive-token influence configured. */\n";
+  return `:root { --sl-color-accent: ${tokens.light.accent}; }\n:root[data-theme="dark"] { --sl-color-accent: ${tokens.dark.accent}; }\n`;
+}
+
+function contrastRatio(left, right) {
+  const luminance = (hex) => {
+    const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const [bright, dark] = [luminance(left), luminance(right)].sort((a, b) => b - a);
+  return (bright + 0.05) / (dark + 0.05);
+}
+
 function boundedString(value, label, min, max) {
   if (typeof value !== "string" || value.length < min || value.length > max) throw new Error(`${label}: expected ${min} to ${max} characters`);
 }
@@ -724,5 +362,5 @@ function boundedString(value, label, min, max) {
 function validatePathArray(value, label, min, max) {
   if (!Array.isArray(value) || value.length < min || value.length > max) throw new Error(`${label}: expected ${min} to ${max} paths`);
   const paths = value.map((item) => safeRelative(item, label));
-  if (new Set(paths).size !== paths.length) throw new Error(`${label}: duplicate path`);
+  if (new Set(paths.map((item) => portablePathKey(item, label))).size !== paths.length) throw new Error(`${label}: duplicate or case-colliding path`);
 }

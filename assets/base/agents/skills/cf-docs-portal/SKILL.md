@@ -100,7 +100,8 @@ material portal change, verify:
 
 - locked build, deterministic adapter tests, and the Rust evidence verifier;
 - navigation, search, source links, Markdown twins, `llms.txt`, error handling,
-  and empty/tiny/monorepo fixtures as applicable;
+  strict-ID previews (hover, focus, touch, keyboard, Escape, and ordinary link
+  navigation), and empty/tiny/monorepo fixtures as applicable;
 - keyboard order, focus visibility, semantics, contrast, target size, zoom,
   reduced motion, and responsive behavior against WCAG 2.2 AA;
 - both fallback themes in light and dark mode, including persisted preference

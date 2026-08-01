@@ -747,10 +747,14 @@ starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 ordinary never-clobber updates through opaque content-addressed pristine
 baselines. The source-in-place adapter generates disposable pages, Markdown
-twins, `llms.txt`, search output, and a versioned evidence manifest. `codeflow
-validate --portal <directory>` executes no project code and writes nothing; it
-independently checks bounded path, hash, identity, relationship, staleness,
-provenance, version, output-coverage, twin, and `llms.txt` claims.
+twins, `llms.txt`, search output, and a versioned evidence manifest from one
+clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
+locale-independent ordering, workflow lease, and recoverable publication
+transaction fail closed before mixed or active content can be claimed.
+`codeflow validate --portal <directory>` executes no project code and writes
+nothing; it independently checks bounded path, hash, identity, relationship,
+staleness, provenance, version, raster-media, output-coverage, twin, and
+`llms.txt` claims.
 
 The mirrored `cf-docs-portal` skill owns proportional adoption, layered
 information design, safe source interpretation, exact dependency operations,

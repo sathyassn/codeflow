@@ -426,9 +426,13 @@ reconciles it by the same never-clobber semantics. A non-adopter receives no
 portal directory, Node workspace, lockfile, or baseline. The project-owned
 configuration points at source Markdown in place; the exact-pinned Node adapter
 is the sole author of disposable Starlight content, Pagefind output, Markdown
-twins, `llms.txt`, and a bounded evidence manifest. `codeflow validate
---portal <dir>` is a read-only Rust verifier over those byte claims and never
-executes or rewrites installed project code (ADR-0048).
+twins, `llms.txt`, and a bounded evidence manifest. It accepts only one clean
+committed configuration/runtime/source/media snapshot, parses GFM through a
+syntax tree, and publishes all generated roots transactionally under one
+workflow lease with locale-independent ordering. `codeflow validate --portal
+<dir>` is a read-only Rust verifier over those byte claims—including portable
+paths and raster-media signatures—and never executes or rewrites installed
+project code (ADR-0048).
 
 ### docs — `docs/`
 

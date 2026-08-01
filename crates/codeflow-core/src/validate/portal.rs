@@ -1,10 +1,12 @@
 //! Read-only verification of documentation-portal evidence claims.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::capability::parse_capabilities;
 use crate::scaffold::sha256_hex;
@@ -36,6 +38,8 @@ struct Evidence {
     generator: Generator,
     repository: Repository,
     config_sha256: String,
+    primitive_tokens: Option<PrimitiveTokens>,
+    media: Vec<Media>,
     pages: Vec<Page>,
     llms: Artifact,
     artifacts: Vec<Artifact>,
@@ -46,6 +50,7 @@ struct AdoptionState {
     schema_version: u32,
     root: String,
     starter_version: String,
+    #[serde(deserialize_with = "deserialize_adoption_files")]
     files: BTreeMap<String, AdoptionFile>,
 }
 #[derive(Deserialize)]
@@ -65,6 +70,23 @@ struct Generator {
 struct Repository {
     root: String,
     commit: String,
+    release_version: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrimitiveTokens {
+    source_path: String,
+    source_sha256: String,
+    output_path: String,
+    output_sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Media {
+    source_path: String,
+    source_sha256: String,
+    output_path: String,
+    output_sha256: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,7 +125,10 @@ struct Backlink {
 struct Page {
     source_path: String,
     source_sha256: String,
+    built_from_commit: String,
     route: String,
+    title: String,
+    status: Option<String>,
     output_markdown: String,
     output_markdown_sha256: String,
     markdown_twin: String,
@@ -115,6 +140,41 @@ struct Page {
     #[serde(default)]
     backlinks: Vec<Backlink>,
     snippets: Vec<Snippet>,
+    #[serde(default)]
+    last_good_commit: Option<String>,
+}
+
+fn deserialize_adoption_files<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, AdoptionFile>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct FilesVisitor;
+    impl<'de> Visitor<'de> for FilesVisitor {
+        type Value = BTreeMap<String, AdoptionFile>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a bounded portal adoption file map")
+        }
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut files = BTreeMap::new();
+            while let Some((path, state)) = map.next_entry()? {
+                if files.len() >= 256 {
+                    return Err(serde::de::Error::custom(
+                        "portal adoption state contains too many files",
+                    ));
+                }
+                if files.insert(path, state).is_some() {
+                    return Err(serde::de::Error::custom("duplicate portal adoption file"));
+                }
+            }
+            Ok(files)
+        }
+    }
+    deserializer.deserialize_map(FilesVisitor)
 }
 
 /// Verify evidence without executing project code or writing output.
@@ -128,14 +188,9 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         ));
         return report;
     };
-    let adoption_bytes = match std::fs::read(repo_root.join(".codeflow/docs-portal.json")) {
-        Ok(bytes) if bytes.len() <= 64 * 1024 => bytes,
-        Ok(_) => {
-            report
-                .issues
-                .push("portal adoption state exceeds 65536 bytes".into());
-            return report;
-        }
+    let adoption_path = repo_root.join(".codeflow/docs-portal.json");
+    let adoption_bytes = match read_bounded_regular(&adoption_path, 64 * 1024) {
+        Ok(bytes) => bytes,
         Err(error) => {
             report
                 .issues
@@ -190,7 +245,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         return report;
     };
     let evidence_path = portal.join(".portal/generated/evidence.json");
-    let bytes = match std::fs::read(&evidence_path) {
+    let bytes = match read_bounded_regular(&evidence_path, MAX_MANIFEST_BYTES) {
         Ok(bytes) => bytes,
         Err(error) => {
             report
@@ -199,12 +254,6 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             return report;
         }
     };
-    if bytes.len() as u64 > MAX_MANIFEST_BYTES {
-        report.issues.push(format!(
-            "evidence manifest exceeds {MAX_MANIFEST_BYTES} bytes"
-        ));
-        return report;
-    }
     let evidence: Evidence = match parse_strict_json(&bytes) {
         Ok(value) => value,
         Err(error) => {
@@ -233,17 +282,26 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             evidence.generator.version, adoption.starter_version
         ));
     }
-    if evidence.repository.commit != "unavailable"
-        && (evidence.repository.commit.len() != 40
-            || !evidence
-                .repository
-                .commit
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit()))
-    {
+    if !valid_commit(&evidence.repository.commit) {
         report
             .issues
             .push("repository commit is not a full Git object ID".into());
+    }
+    if evidence
+        .repository
+        .release_version
+        .as_ref()
+        .is_some_and(|version| {
+            version.is_empty()
+                || version.len() > 128
+                || !version.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-')
+                })
+        })
+    {
+        report
+            .issues
+            .push("repository release version is invalid".into());
     }
     if evidence.pages.len() > MAX_PAGES {
         report
@@ -264,6 +322,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         "configuration",
         &mut report,
     );
+    verify_config_contract(&portal, &evidence, &mut report);
     let portal_depth = normalized_portal_root
         .components()
         .filter(|component| matches!(component, Component::Normal(_)))
@@ -284,20 +343,72 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
     let mut id_owner = BTreeMap::new();
     for page in &evidence.pages {
         report.checked_pages += 1;
-        if !safe_path_text(&page.route) || !routes.insert(page.route.to_ascii_lowercase()) {
+        if !safe_path_text(&page.route) || !routes.insert(portable_key(&page.route)) {
             report
                 .issues
                 .push(format!("duplicate or unsafe route {:?}", page.route));
+        }
+        if page.built_from_commit != evidence.repository.commit {
+            report.issues.push(format!(
+                "{} was not built from the evidenced repository commit",
+                page.route
+            ));
+        }
+        if page.title.trim().is_empty() || page.title.len() > 256 {
+            report
+                .issues
+                .push(format!("{} has an invalid title", page.route));
+        }
+        if page
+            .status
+            .as_ref()
+            .is_some_and(|status| status.is_empty() || status.len() > 128)
+        {
+            report
+                .issues
+                .push(format!("{} has an invalid status", page.route));
+        }
+        if page.output_markdown != format!("src/content/docs/{}.md", page.route)
+            || page.markdown_twin != format!("public/markdown/{}.md", page.route)
+        {
+            report.issues.push(format!(
+                "{} output and Markdown twin do not match their canonical route",
+                page.route
+            ));
+        }
+        if page.stale {
+            if !page.last_good_commit.as_deref().is_some_and(valid_commit) {
+                report.issues.push(format!(
+                    "{} stale page lacks a valid last-good commit",
+                    page.route
+                ));
+            }
+        } else if page.last_good_commit.is_some() {
+            report.issues.push(format!(
+                "{} active page unexpectedly claims a last-good commit",
+                page.route
+            ));
         }
         for claimed in [
             &page.source_path,
             &page.output_markdown,
             &page.markdown_twin,
         ] {
-            if !claimed_paths.insert(claimed.to_ascii_lowercase()) {
+            if !claimed_paths.insert(portable_key(claimed)) {
                 report
                     .issues
                     .push(format!("path is claimed more than once: {claimed}"));
+            }
+        }
+        for (label, hash) in [
+            ("source", &page.source_sha256),
+            ("output Markdown", &page.output_markdown_sha256),
+            ("Markdown twin", &page.markdown_twin_sha256),
+        ] {
+            if !valid_sha256(hash) {
+                report
+                    .issues
+                    .push(format!("{} has an invalid {label} hash", page.route));
             }
         }
         verify_file(
@@ -349,8 +460,37 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
         verify_snippets(&repository, &portal, page, &mut report);
         verify_rendered_claims(&portal, &evidence, page, &mut report);
+        let mut relationship_claims = BTreeSet::new();
+        for relationship in &page.relationships {
+            if !relationship_kind(&relationship.kind)
+                || !relationship_claims.insert(relationship.clone())
+            {
+                report.issues.push(format!(
+                    "{} has an invalid or duplicate relationship",
+                    page.route
+                ));
+            }
+        }
+        let mut backlink_claims = BTreeSet::new();
+        for backlink in &page.backlinks {
+            if !relationship_kind(&backlink.kind)
+                || !safe_path_text(&backlink.source_route)
+                || !backlink_claims.insert(backlink.clone())
+            {
+                report.issues.push(format!(
+                    "{} has an invalid or duplicate backlink",
+                    page.route
+                ));
+            }
+        }
     }
     let mut expected = BTreeMap::<String, Vec<Backlink>>::new();
+    let active_routes: BTreeSet<&str> = evidence
+        .pages
+        .iter()
+        .filter(|page| !page.stale)
+        .map(|page| page.route.as_str())
+        .collect();
     for page in &evidence.pages {
         for relationship in &page.relationships {
             if relationship
@@ -369,16 +509,20 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                     page.route, relationship.target
                 ));
             }
-            if let Some(target_route) = id_owner.get(&relationship.target) {
-                expected
-                    .entry(target_route.clone())
-                    .or_default()
-                    .push(Backlink {
-                        kind: relationship.kind.clone(),
-                        source_route: page.route.clone(),
-                        target: relationship.target.clone(),
-                        source_id: relationship.source_id.clone(),
-                    });
+            if !page.stale {
+                if let Some(target_route) = id_owner.get(&relationship.target) {
+                    if active_routes.contains(target_route.as_str()) {
+                        expected
+                            .entry(target_route.clone())
+                            .or_default()
+                            .push(Backlink {
+                                kind: relationship.kind.clone(),
+                                source_route: page.route.clone(),
+                                target: relationship.target.clone(),
+                                source_id: relationship.source_id.clone(),
+                            });
+                    }
+                }
             }
         }
     }
@@ -406,26 +550,30 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             .issues
             .push("llms.txt claim must target public/llms.txt".into());
     }
-    if let Ok(llms) = std::fs::read_to_string(portal.join("public/llms.txt")) {
-        for page in evidence.pages.iter().filter(|page| !page.stale) {
-            let expected = format!("./markdown/{}.md", page.route);
-            if !llms.contains(&expected) {
-                report.issues.push(format!(
-                    "llms.txt does not link the served Markdown twin for {}",
-                    page.route
-                ));
-            }
-        }
-        for page in evidence.pages.iter().filter(|page| page.stale) {
-            let forbidden = format!("./markdown/{}.md", page.route);
-            if llms.contains(&forbidden) {
-                report.issues.push(format!(
-                    "llms.txt exposes stale Markdown twin for {}",
-                    page.route
-                ));
-            }
+    if let Ok(llms) = read_bounded_text(&portal.join("public/llms.txt"), MAX_CLAIMED_FILE_BYTES) {
+        let actual: Vec<&str> = llms
+            .lines()
+            .filter(|line| line.starts_with("- ["))
+            .collect();
+        let expected: Vec<String> = evidence
+            .pages
+            .iter()
+            .filter(|page| !page.stale)
+            .map(|page| {
+                format!(
+                    "- [{}](./markdown/{}.md) — {}",
+                    page.route, page.route, page.source_path
+                )
+            })
+            .collect();
+        if actual != expected.iter().map(String::as_str).collect::<Vec<_>>() {
+            report
+                .issues
+                .push("llms.txt entries do not exactly match active evidenced pages".into());
         }
     }
+    verify_primitive_tokens(&repository, &portal, &evidence, &mut report);
+    verify_media(&repository, &portal, &evidence.media, &mut report);
     let mut artifact_paths = BTreeSet::new();
     for artifact in &evidence.artifacts {
         if !artifact.path.starts_with("dist/") || !safe_path_text(&artifact.path) {
@@ -435,7 +583,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             ));
             continue;
         }
-        if !artifact_paths.insert(artifact.path.to_ascii_lowercase()) {
+        if !artifact_paths.insert(portable_key(&artifact.path)) {
             report
                 .issues
                 .push(format!("duplicate built artifact path: {}", artifact.path));
@@ -465,19 +613,23 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         } else {
             format!("dist/{}/index.html", page.route)
         };
-        if !artifact_paths.contains(&built.to_ascii_lowercase()) {
+        if !artifact_paths.contains(&portable_key(&built)) {
             report
                 .issues
                 .push(format!("page is missing its built output: {}", page.route));
         }
-        if let Ok(html) = std::fs::read_to_string(portal.join(&built)) {
-            if page.searchable && !html.contains("data-pagefind-body") {
+        if let Ok(html) = read_bounded_text(&portal.join(&built), MAX_CLAIMED_FILE_BYTES) {
+            let search_marker = format!(
+                "data-pagefind-body data-codeflow-search-root=\"{}\"",
+                page.route
+            );
+            if page.searchable && !html.contains(&search_marker) {
                 report.issues.push(format!(
                     "searchable page lacks built Pagefind body evidence: {}",
                     page.route
                 ));
             }
-            if page.stale && html.contains("data-pagefind-body") {
+            if page.stale && html.contains("data-codeflow-search-root=") {
                 report.issues.push(format!(
                     "stale page remains included in built Pagefind content: {}",
                     page.route
@@ -485,7 +637,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             }
         }
         if page.stale {
-            match std::fs::read_to_string(portal.join(&page.output_markdown)) {
+            match read_bounded_text(&portal.join(&page.output_markdown), MAX_CLAIMED_FILE_BYTES) {
                 Ok(markdown)
                     if markdown.contains("data-pagefind-ignore=\"all\"")
                         && markdown.contains("Stale rendering") => {}
@@ -497,6 +649,208 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
     }
     report
+}
+
+fn verify_config_contract(portal: &Path, evidence: &Evidence, report: &mut PortalValidationReport) {
+    let path = portal.join("portal.config.json");
+    let config: serde_json::Value = match read_bounded_regular(&path, 64 * 1024)
+        .ok()
+        .and_then(|bytes| parse_strict_json(&bytes).ok())
+    {
+        Some(config) => config,
+        None => {
+            report
+                .issues
+                .push("portal configuration contract is unreadable or invalid".into());
+            return;
+        }
+    };
+    let configured_release = config
+        .get("release_version")
+        .and_then(serde_json::Value::as_str);
+    if configured_release != evidence.repository.release_version.as_deref()
+        || (!config
+            .get("release_version")
+            .is_some_and(|value| value.is_null())
+            && configured_release.is_none())
+    {
+        report
+            .issues
+            .push("repository release version does not match portal configuration".into());
+    }
+    let configured_tokens = config
+        .get("primitive_tokens")
+        .and_then(serde_json::Value::as_str);
+    if configured_tokens
+        != evidence
+            .primitive_tokens
+            .as_ref()
+            .map(|value| value.source_path.as_str())
+        || (!config
+            .get("primitive_tokens")
+            .is_some_and(|value| value.is_null())
+            && configured_tokens.is_none())
+    {
+        report
+            .issues
+            .push("primitive-token evidence does not match portal configuration".into());
+    }
+}
+
+fn verify_primitive_tokens(
+    repository: &Path,
+    portal: &Path,
+    evidence: &Evidence,
+    report: &mut PortalValidationReport,
+) {
+    let Some(tokens) = &evidence.primitive_tokens else {
+        return;
+    };
+    if tokens.output_path != ".portal/generated/project-tokens.css" {
+        report
+            .issues
+            .push("primitive-token output path is not canonical".into());
+    }
+    for (label, hash) in [
+        ("primitive-token source", &tokens.source_sha256),
+        ("primitive-token output", &tokens.output_sha256),
+    ] {
+        if !valid_sha256(hash) {
+            report.issues.push(format!("{label} hash is invalid"));
+        }
+    }
+    verify_file(
+        repository,
+        &tokens.source_path,
+        &tokens.source_sha256,
+        "primitive-token source",
+        report,
+    );
+    verify_file(
+        portal,
+        &tokens.output_path,
+        &tokens.output_sha256,
+        "primitive-token output",
+        report,
+    );
+}
+
+fn verify_media(
+    repository: &Path,
+    portal: &Path,
+    media: &[Media],
+    report: &mut PortalValidationReport,
+) {
+    if media.len() > 1_000 {
+        report
+            .issues
+            .push("referenced media count exceeds 1000".into());
+        return;
+    }
+    let mut sources = BTreeSet::new();
+    let mut outputs = BTreeSet::new();
+    let mut total_bytes = 0_u64;
+    for item in media {
+        let extension = Path::new(&item.source_path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "avif" | "gif" | "jpeg" | "jpg" | "png" | "webp"
+        ) {
+            report.issues.push(format!(
+                "referenced media has an unsupported type: {}",
+                item.source_path
+            ));
+        }
+        let name = Path::new(&item.source_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let expected = format!(
+            "public/media/{}-{name}",
+            &sha256_hex(item.source_path.as_bytes())[..16]
+        );
+        if item.output_path != expected {
+            report.issues.push(format!(
+                "referenced media output is not canonical: {}",
+                item.output_path
+            ));
+        }
+        if !sources.insert(portable_key(&item.source_path))
+            || !outputs.insert(portable_key(&item.output_path))
+        {
+            report
+                .issues
+                .push("referenced media contains duplicate portable paths".into());
+        }
+        if !valid_sha256(&item.source_sha256)
+            || !valid_sha256(&item.output_sha256)
+            || item.source_sha256 != item.output_sha256
+        {
+            report.issues.push(format!(
+                "referenced media hashes are invalid or differ: {}",
+                item.source_path
+            ));
+        }
+        verify_file(
+            repository,
+            &item.source_path,
+            &item.source_sha256,
+            "referenced media source",
+            report,
+        );
+        verify_file(
+            portal,
+            &item.output_path,
+            &item.output_sha256,
+            "referenced media output",
+            report,
+        );
+        if let Some(path) = safe_join(
+            repository,
+            Path::new(&item.source_path),
+            "referenced media source",
+            report,
+        ) {
+            match read_bounded_regular(&path, 8 * 1024 * 1024) {
+                Ok(bytes) => {
+                    total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+                    if !raster_signature_matches(&extension, &bytes) {
+                        report.issues.push(format!(
+                            "referenced media bytes do not match the claimed type: {}",
+                            item.source_path
+                        ));
+                    }
+                }
+                Err(error) => report.issues.push(format!(
+                    "referenced media source is unreadable or exceeds 8388608 bytes: {}: {error}",
+                    item.source_path
+                )),
+            }
+        }
+    }
+    if total_bytes > 64 * 1024 * 1024 {
+        report
+            .issues
+            .push("referenced media corpus exceeds 67108864 bytes".into());
+    }
+}
+
+fn raster_signature_matches(extension: &str, bytes: &[u8]) -> bool {
+    match extension {
+        "png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "jpg" | "jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "webp" => bytes.get(0..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+        "avif" => {
+            bytes.get(4..8) == Some(b"ftyp")
+                && matches!(bytes.get(8..12), Some(b"avif") | Some(b"avis"))
+        }
+        _ => false,
+    }
 }
 
 fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) -> BTreeSet<String> {
@@ -577,8 +931,10 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
                         .push(format!("artifact count exceeds {MAX_ARTIFACTS}"));
                     return;
                 }
-                let artifact = format!("dist/{}", child.to_string_lossy().replace('\\', "/"))
-                    .to_ascii_lowercase();
+                let artifact = portable_key(&format!(
+                    "dist/{}",
+                    child.to_string_lossy().replace('\\', "/")
+                ));
                 if !paths.insert(artifact.clone()) {
                     report.issues.push(format!(
                         "built artifact path collides case-insensitively: {artifact}"
@@ -637,7 +993,7 @@ fn verify_snippets(
     ) else {
         return;
     };
-    let text = match std::fs::read_to_string(path) {
+    let text = match read_bounded_text(&path, MAX_SOURCE_BYTES) {
         Ok(text) => text,
         Err(error) => {
             report.issues.push(format!(
@@ -667,11 +1023,11 @@ fn verify_snippets(
             ));
         }
         let marker = format!(
-            "codeflow-source-snippet sha256={} lines={}-{}",
+            "<!-- codeflow-source-snippet sha256={} lines={}-{} -->",
             snippet.sha256, snippet.start_line, snippet.end_line
         );
-        match std::fs::read_to_string(portal.join(&page.output_markdown)) {
-            Ok(output) if output.contains(&marker) => {}
+        match read_bounded_text(&portal.join(&page.output_markdown), MAX_CLAIMED_FILE_BYTES) {
+            Ok(output) if output.lines().take(24).any(|line| line == marker) => {}
             _ => report.issues.push(format!(
                 "{} snippet claim is not anchored in rendered Markdown",
                 page.route
@@ -686,23 +1042,40 @@ fn verify_rendered_claims(
     page: &Page,
     report: &mut PortalValidationReport,
 ) {
-    let Ok(output) = std::fs::read_to_string(portal.join(&page.output_markdown)) else {
+    let Ok(output) = read_bounded_text(&portal.join(&page.output_markdown), MAX_CLAIMED_FILE_BYTES)
+    else {
         return;
     };
-    if !output.contains(&page.source_path) || !output.contains(&evidence.generator.version) {
+    let release = evidence
+        .repository
+        .release_version
+        .as_deref()
+        .unwrap_or("none");
+    let marker = format!(
+        "<!-- codeflow-page-provenance source_sha256={} built_from_commit={} portal_version={} release_version={} -->",
+        page.source_sha256,
+        evidence.repository.commit,
+        evidence.generator.version,
+        release
+    );
+    if !output.lines().take(20).any(|line| line == marker) {
         report.issues.push(format!(
-            "{} lacks rendered source/version provenance",
+            "{} lacks its exact rendered provenance marker",
             page.route
         ));
     }
-    if evidence.repository.commit != "unavailable" {
-        match evidence.repository.commit.get(..12) {
-            Some(prefix) if output.contains(prefix) => {}
-            _ => report.issues.push(format!(
-                "{} lacks rendered pinned repository provenance",
-                page.route
-            )),
-        }
+    if !output.contains(&format!("<code>{}</code>", page.source_path))
+        || !output.contains(&format!("<code>{}</code>", evidence.repository.commit))
+        || evidence
+            .repository
+            .release_version
+            .as_ref()
+            .is_some_and(|version| !output.contains(&format!("<code>{version}</code>")))
+    {
+        report.issues.push(format!(
+            "{} lacks visible source, commit, or release provenance",
+            page.route
+        ));
     }
     for relationship in &page.relationships {
         if !output.contains(&format!("[{}](", relationship.target)) {
@@ -733,25 +1106,16 @@ fn verify_file(
     label: &str,
     report: &mut PortalValidationReport,
 ) {
+    if !valid_sha256(expected) {
+        report
+            .issues
+            .push(format!("{label} has an invalid SHA-256 claim: {relative}"));
+        return;
+    }
     let Some(path) = safe_join(root, Path::new(relative), label, report) else {
         return;
     };
-    match std::fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > MAX_CLAIMED_FILE_BYTES => {
-            report.issues.push(format!(
-                "{label} exceeds {MAX_CLAIMED_FILE_BYTES} bytes: {relative}"
-            ));
-            return;
-        }
-        Err(error) => {
-            report
-                .issues
-                .push(format!("{label} unreadable {relative}: {error}"));
-            return;
-        }
-        _ => {}
-    }
-    match std::fs::read(&path) {
+    match read_bounded_regular(&path, MAX_CLAIMED_FILE_BYTES) {
         Ok(bytes) if sha256_hex(&bytes) == expected => {}
         Ok(_) => report
             .issues
@@ -776,6 +1140,7 @@ fn safe_join(
             .split('/')
             .next()
             .is_some_and(|part| part.ends_with(':'))
+        || !text.split('/').all(portable_segment)
         || relative
             .components()
             .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
@@ -816,6 +1181,28 @@ fn safe_path_text(value: &str) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
+        && value.split('/').all(portable_segment)
+}
+
+fn portable_segment(segment: &str) -> bool {
+    let normalized: String = segment.nfc().collect();
+    let stem = segment.split('.').next().unwrap_or_default().to_uppercase();
+    normalized == segment
+        && segment.len() <= 255
+        && segment.encode_utf16().count() <= 255
+        && !segment
+            .chars()
+            .any(|character| character.is_control() || "<>:\"|?*".contains(character))
+        && !segment.ends_with([' ', '.'])
+        && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        && !(stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0')
+}
+
+fn portable_key(value: &str) -> String {
+    value.nfc().collect::<String>().to_lowercase()
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -823,6 +1210,63 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_commit(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn relationship_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "epic" | "spec" | "depends_on" | "capability" | "decision" | "related" | "superseded_by"
+    )
+}
+
+fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file is not regular or exceeds its byte limit",
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file changed type while opening",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(maximum_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file grew beyond its byte limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_bounded_text(path: &Path, maximum_bytes: u64) -> std::io::Result<String> {
+    String::from_utf8(read_bounded_regular(path, maximum_bytes)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
 }
 
 fn normalized_relative(path: &Path) -> Option<PathBuf> {
@@ -837,7 +1281,9 @@ fn normalized_relative(path: &Path) -> Option<PathBuf> {
             _ => return None,
         }
     }
-    (!normalized.as_os_str().is_empty()).then_some(normalized)
+    let text = normalized.to_string_lossy().replace('\\', "/");
+    (!normalized.as_os_str().is_empty() && text.split('/').all(portable_segment))
+        .then_some(normalized)
 }
 
 fn paths_equal(left: &str, right: &str) -> bool {
@@ -1010,7 +1456,7 @@ fn collect_ids(root: &Path, pages: &[Page]) -> AuthorityIds {
             ));
             break;
         }
-        let text = match std::fs::read_to_string(&path) {
+        let text = match read_bounded_text(&path, MAX_SOURCE_BYTES) {
             Ok(text) => text
                 .strip_prefix('\u{feff}')
                 .unwrap_or(&text)
@@ -1079,7 +1525,10 @@ mod tests {
         Page {
             source_path: source_path.into(),
             source_sha256: "0".repeat(64),
+            built_from_commit: "0".repeat(40),
             route: "reference/page".into(),
+            title: "Page".into(),
+            status: None,
             output_markdown: "src/content/docs/reference/page.md".into(),
             output_markdown_sha256: "0".repeat(64),
             markdown_twin: "public/markdown/reference/page.md".into(),
@@ -1090,6 +1539,7 @@ mod tests {
             relationships: Vec::new(),
             backlinks: Vec::new(),
             snippets: Vec::new(),
+            last_good_commit: None,
         }
     }
 
@@ -1104,6 +1554,8 @@ mod tests {
         for path in [r"C:\portal", r"\\server\share", "a/../b", "/portal"] {
             assert!(!safe_path_text(path), "accepted {path}");
         }
+        assert!(!safe_path_text(&format!("docs/{}", "é".repeat(128))));
+        assert!(safe_path_text(&format!("docs/{}", "é".repeat(127))));
     }
 
     #[test]
@@ -1128,6 +1580,18 @@ mod tests {
             "unexpected": true
         }"#;
         assert!(parse_strict_json::<AdoptionState>(value).is_err());
+    }
+
+    #[test]
+    fn raster_media_requires_bytes_matching_the_claimed_type() {
+        assert!(raster_signature_matches(
+            "png",
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        ));
+        assert!(raster_signature_matches("jpg", &[0xff, 0xd8, 0xff]));
+        assert!(raster_signature_matches("webp", b"RIFFxxxxWEBP"));
+        assert!(!raster_signature_matches("png", b"<svg></svg>"));
+        assert!(!raster_signature_matches("gif", b"not-a-gif"));
     }
 
     #[test]

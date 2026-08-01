@@ -1,14 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { TextDecoder } from "node:util";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  assertNoSymlink, collectPageIds, excerptFor, extractPageRelationships,
-  findRepositoryRoot, linkStrictIds, parseMarkdown, publishOwnedCorpus,
-  recoverOwnedCorpus,
-  referencedIds, renderSafeMarkdown, safeRelative, sha256, strictId, titleFor,
-  validatePortalConfig, walkMarkdown, withBase,
+  amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
+  findRepositoryRoot, parseMarkdown,
+  referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, strictId, titleFor,
+  validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
+import { assertNoSymlink, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
 
 const MAX_CONFIG_BYTES = 64 * 1024;
 const MAX_EVIDENCE_BYTES = 8 * 1024 * 1024;
@@ -16,10 +17,15 @@ const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_SOURCE_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCES = 10_000;
 const MAX_LAST_GOOD_BYTES = 8 * 1024 * 1024;
+const MAX_GIT_LIST_BYTES = 8 * 1024 * 1024;
+const MAX_PRIMITIVE_TOKEN_BYTES = 16 * 1024;
+const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MAX_TOTAL_MEDIA_BYTES = 64 * 1024 * 1024;
+const MAX_MEDIA_FILES = 1_000;
 const portalRoot = process.cwd();
 await recoverOwnedCorpus(portalRoot);
 await assertNoSymlink(portalRoot, "portal.config.json");
-const configBytes = await readBounded(path.join(portalRoot, "portal.config.json"), MAX_CONFIG_BYTES, "portal configuration");
+const configBytes = await readBoundedRegularFile(path.join(portalRoot, "portal.config.json"), MAX_CONFIG_BYTES, "portal configuration");
 const config = validatePortalConfig(JSON.parse(configBytes));
 const base = config.base;
 const layers = config.layers;
@@ -29,12 +35,31 @@ const configuredRepositoryRoot = path.resolve(portalRoot, repoRelative);
 const discoveredRepositoryRoot = await findRepositoryRoot(portalRoot);
 const [repositoryRoot, canonicalDiscoveredRoot] = await Promise.all([realpath(configuredRepositoryRoot), realpath(discoveredRepositoryRoot)]);
 if (!filesystemPathsEqual(repositoryRoot, canonicalDiscoveredRoot)) throw new Error("repository_root must resolve to the owning CodeFlow repository");
-let commit = "unavailable";
-try { commit = execFileSync("git", ["-C", repositoryRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); } catch {}
+const commit = gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim();
+if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("repository HEAD must resolve to a full Git commit");
+
+const portalConfigRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "portal.config.json")).split(path.sep).join("/"), "portal configuration path");
+const adapterRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const runtimeInputs = filesystemPathsEqual(path.resolve(adapterRoot), path.resolve(portalRoot))
+  ? ["astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/content.config.ts", "src/styles", "public/portal-preview.js"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
+  : [];
+const snapshotPaths = [portalConfigRelative, ...runtimeInputs, ...config.source_roots, ...(config.primitive_tokens === null ? [] : [config.primitive_tokens])].map((item) => safeRelative(item, "snapshot path"));
+assertCleanSnapshot(snapshotPaths);
+let primitiveTokens = null;
+let primitiveTokenEvidence = null;
+if (config.primitive_tokens !== null) {
+  assertCommittedPrimitiveToken(config.primitive_tokens);
+  await assertNoSymlink(repositoryRoot, config.primitive_tokens);
+  const bytes = await readBoundedRegularFile(path.join(repositoryRoot, config.primitive_tokens), MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
+  primitiveTokens = validatePrimitiveTokens(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), config.theme);
+  primitiveTokenEvidence = { source_path: config.primitive_tokens, source_sha256: sha256(bytes) };
+}
+const primitiveTokenCss = renderPrimitiveTokenCss(primitiveTokens);
+if (primitiveTokenEvidence !== null) Object.assign(primitiveTokenEvidence, { output_path: ".portal/generated/project-tokens.css", output_sha256: sha256(primitiveTokenCss) });
 
 const evidencePath = path.join(portalRoot, ".portal/generated/evidence.json");
 let previous = { pages: [] };
-try { previous = JSON.parse(await readBounded(evidencePath, MAX_EVIDENCE_BYTES, "prior evidence")); } catch {}
+try { previous = JSON.parse(await readBoundedRegularFile(evidencePath, MAX_EVIDENCE_BYTES, "prior evidence")); } catch {}
 const previousBySource = new Map();
 const ambiguousPriorSources = new Set();
 for (const page of Array.isArray(previous.pages) ? previous.pages : []) {
@@ -48,36 +73,29 @@ const previousRendered = new Map();
 for (const page of previousBySource.values()) {
   try {
     await assertNoSymlink(portalRoot, page.output_markdown);
-    const rendered = await readBounded(path.join(portalRoot, page.output_markdown), MAX_LAST_GOOD_BYTES, "prior rendered page");
+    const rendered = await readBoundedRegularFile(path.join(portalRoot, page.output_markdown), MAX_LAST_GOOD_BYTES, "prior rendered page");
     if (sha256(rendered) === page.output_markdown_sha256) previousRendered.set(page.source_path, rendered.toString("utf8"));
   } catch {}
 }
 
 const excludes = (config.exclude ?? []).map((item) => safeRelative(item, "exclude"));
-const sources = [];
-for (const configuredRoot of config.source_roots ?? []) {
-  const sourceRoot = safeRelative(configuredRoot, "source_root");
-  await assertNoSymlink(repositoryRoot, sourceRoot);
-  for (const relative of await walkMarkdown(path.join(repositoryRoot, sourceRoot))) {
-    const sourcePath = path.posix.join(sourceRoot, relative);
-    if (excludes.some((prefix) => sourcePath === prefix || sourcePath.startsWith(`${prefix}/`))) continue;
-    sources.push(sourcePath);
-    if (sources.length > MAX_SOURCES) throw new Error(`source count exceeds ${MAX_SOURCES}`);
-  }
-}
-sources.sort();
-
+const sources = committedMarkdownSources(config.source_roots, excludes);
 const routeOwners = new Map();
+const sourceRoutes = new Map();
+for (const sourcePath of sources) {
+  const layer = chooseLayer(sourcePath, layers);
+  const route = `${layer.id}/${localRouteFor(sourcePath)}`;
+  claimRoute(route, sourcePath);
+  sourceRoutes.set(sourcePath, route);
+}
+
 const pages = [];
 let totalSourceBytes = 0;
 for (const sourcePath of sources) {
   await assertNoSymlink(repositoryRoot, sourcePath);
-  const sourceFile = path.join(repositoryRoot, sourcePath);
-  const metadata = await stat(sourceFile);
-  if (metadata.size > MAX_SOURCE_BYTES) throw new Error(`${sourcePath}: source exceeds ${MAX_SOURCE_BYTES} bytes`);
-  totalSourceBytes += metadata.size;
+  const bytes = await readBoundedRegularFile(path.join(repositoryRoot, sourcePath), MAX_SOURCE_BYTES, sourcePath);
+  totalSourceBytes += bytes.length;
   if (totalSourceBytes > MAX_TOTAL_SOURCE_BYTES) throw new Error(`source corpus exceeds ${MAX_TOTAL_SOURCE_BYTES} bytes`);
-  const bytes = await readFile(sourceFile);
   const sourceHash = sha256(bytes);
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
@@ -85,22 +103,22 @@ for (const sourcePath of sources) {
   try {
     const { frontmatter, body } = parseMarkdown(text, sourcePath);
     const layer = chooseLayer(sourcePath, layers);
-    const localRoute = localRouteFor(sourcePath);
-    const route = `${layer.id}/${localRoute}`;
-    claimRoute(route, sourcePath);
+    const route = sourceRoutes.get(sourcePath);
     const title = titleFor(frontmatter, body, sourcePath);
     const ids = collectPageIds(frontmatter, text, sourcePath);
     const relationships = extractPageRelationships(frontmatter, text, sourcePath);
     const excerpt = excerptFor(text);
-    pages.push({ source_path: sourcePath, source_sha256: sourceHash, route, layer: layer.id, title, frontmatter, body, ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
+    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
   } catch (error) {
     const prior = previousBySource.get(sourcePath);
     const rendered = previousRendered.get(sourcePath);
     if (!prior || !rendered) throw error;
-    claimRoute(prior.route, sourcePath);
-    pages.push({ ...prior, source_sha256: sourceHash, stale: true, searchable: false, rendered, rendered_is_stale: prior.stale === true, snippets: [], backlinks: prior.backlinks ?? [], stale_reason: String(error.message ?? error) });
+    if (prior.route !== sourceRoutes.get(sourcePath)) throw new Error(`${sourcePath}: last-good route no longer matches current routing`);
+    pages.push({ ...prior, source_sha256: sourceHash, built_from_commit: commit, stale: true, searchable: false, rendered, rendered_is_stale: prior.stale === true, snippets: [], backlinks: prior.backlinks ?? [], stale_reason: String(error.message ?? error), last_good_commit: prior.built_from_commit });
   }
 }
+assertCleanSnapshot(snapshotPaths);
+if (gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim() !== commit) throw new Error("repository HEAD changed while the portal snapshot was being read");
 
 const ownerById = new Map();
 for (const page of pages) {
@@ -113,16 +131,17 @@ for (const page of pages) {
   for (const relationship of page.relationships) {
     const target = ownerById.get(relationship.target);
     if (!target) throw new Error(`${page.source_path}: relationship target does not exist: ${relationship.target}`);
-    if (!target.stale) target.backlinks.push({ type: relationship.type, source_route: page.route, source_id: relationship.source_id, target: relationship.target });
+    if (!page.stale && !target.stale) target.backlinks.push({ type: relationship.type, source_route: page.route, source_id: relationship.source_id, target: relationship.target });
   }
 }
-for (const page of pages) page.backlinks.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+for (const page of pages) page.backlinks.sort((a, b) => compareDeterministicText(JSON.stringify(a), JSON.stringify(b)));
 
 const renderedPages = [];
+const mediaReferences = new Map();
 for (const page of pages) {
   let rendered = page.rendered;
-  if (!page.stale) rendered = renderPage(page, ownerById);
-  else if (!page.rendered_is_stale) rendered = rendered.replace(/^---\n/, `---\npagefind: false\n`).replace(/\n---\n/, `\n---\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Stale rendering:** ${escapeText(page.stale_reason)}. This page is excluded from search until its source is valid again.\n\n`).concat("\n</div>\n");
+  if (!page.stale) rendered = renderPage(page, ownerById, mediaReferences);
+  else rendered = renderStalePage(page, rendered);
   const outputMarkdown = `src/content/docs/${page.route}.md`;
   const twin = `public/markdown/${page.route}.md`;
   renderedPages.push({ route: page.route, rendered });
@@ -131,31 +150,52 @@ for (const page of pages) {
   page.markdown_twin = twin;
   page.markdown_twin_sha256 = sha256(rendered);
   page.snippets = page.stale || !page.excerpt ? [] : [{ start_line: page.excerpt.start, end_line: page.excerpt.end, sha256: sha256(page.excerpt.text) }];
-  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.rendered; delete page.rendered_is_stale; delete page.layer; delete page.title; delete page.stale_reason;
+  page.status = typeof page.frontmatter?.status === "string" ? page.frontmatter.status : null;
+  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.rendered; delete page.rendered_is_stale; delete page.layer; delete page.stale_reason;
 }
 
 const renderedLandings = [];
 for (const layer of layers) {
   const layerPages = pages.filter((page) => page.route.startsWith(`${layer.id}/`) && !page.stale);
-  const landing = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\n---\n\n# ${layer.label}\n\n${layer.description}\n\n${layerPages.map((page) => `- [${page.route.split("/").pop().replaceAll("-", " ")}](${withBase(base, page.route)})`).join("\n")}\n`;
+  const landing = renderLayerLanding(layer, layerPages);
   renderedLandings.push({ path: `${layer.id}/index.md`, rendered: landing });
 }
 const renderedIndex = renderIndex(layers, pages);
 
-const llms = [`# ${config.title}`, "", config.description, "", `Repository commit: ${commit}`, "", ...pages.filter((page) => !page.stale).map((page) => `- [${page.route}](./markdown/${page.route}.md) — ${page.source_path}`), ""].join("\n");
+if (mediaReferences.size > MAX_MEDIA_FILES) throw new Error(`referenced media count exceeds ${MAX_MEDIA_FILES}`);
+assertCleanSnapshot([...snapshotPaths, ...mediaReferences.keys()]);
+const mediaFiles = new Map();
+const mediaEvidence = [];
+let totalMediaBytes = 0;
+for (const [sourcePath, outputPath] of [...mediaReferences].sort(([left], [right]) => compareDeterministicText(left, right))) {
+  assertCommittedFile(sourcePath, ["100644"], "referenced media");
+  await assertNoSymlink(repositoryRoot, sourcePath);
+  const bytes = await readBoundedRegularFile(path.join(repositoryRoot, sourcePath), MAX_MEDIA_BYTES, `referenced media ${sourcePath}`);
+  assertRasterSignature(sourcePath, bytes);
+  totalMediaBytes += bytes.length;
+  if (totalMediaBytes > MAX_TOTAL_MEDIA_BYTES) throw new Error(`referenced media corpus exceeds ${MAX_TOTAL_MEDIA_BYTES} bytes`);
+  mediaFiles.set(outputPath, bytes);
+  mediaEvidence.push({ source_path: sourcePath, source_sha256: sha256(bytes), output_path: `public/${outputPath}`, output_sha256: sha256(bytes) });
+}
+assertCleanSnapshot([...snapshotPaths, ...mediaReferences.keys()]);
+if (gitText(["rev-parse", "--verify", "HEAD^{commit}"], 1024).trim() !== commit) throw new Error("repository HEAD changed while referenced media was being read");
+
+const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
 const evidence = {
   schema_version: 1,
   generator: { name: "@codeflow/docs-portal", version: "1.0.0" },
-  repository: { root: repoRelative, commit },
+  repository: { root: repoRelative, commit, release_version: config.release_version },
   config_sha256: sha256(configBytes),
+  primitive_tokens: primitiveTokenEvidence,
+  media: mediaEvidence,
   pages,
   llms: { path: "public/llms.txt", sha256: sha256(llms) },
   artifacts: [],
 };
 const contentFiles = new Map([...renderedPages.map((page) => [`${page.route}.md`, page.rendered]), ...renderedLandings.map((landing) => [landing.path, landing.rendered]), ["index.md", renderedIndex]]);
-const publicFiles = new Map([...renderedPages.map((page) => [`markdown/${page.route}.md`, page.rendered]), ["llms.txt", llms]]);
+const publicFiles = new Map([...renderedPages.map((page) => [`markdown/${page.route}.md`, page.rendered]), ...mediaFiles, ["llms.txt", llms]]);
 await publishOwnedCorpus(portalRoot, [
-  { live: ".portal/generated", files: new Map([["evidence.json", `${JSON.stringify(evidence, null, 2)}\n`]]) },
+  { live: ".portal/generated", files: new Map([["evidence.json", `${JSON.stringify(evidence, null, 2)}\n`], ["project-tokens.css", primitiveTokenCss]]) },
   { live: "src/content/docs", files: contentFiles },
   { live: "public", files: publicFiles, preserveUnknown: true },
 ]);
@@ -169,7 +209,7 @@ function claimRoute(route, sourcePath) {
   const output = `${route}.md`;
   const reserved = new Set(["index.md", "404.md", ...layers.map((layer) => `${layer.id}/index.md`)]);
   if (reserved.has(output)) throw new Error(`reserved generated route: ${sourcePath} -> ${route}`);
-  const key = route.toLocaleLowerCase("en-US");
+  const key = route.normalize("NFC").toLowerCase();
   if (routeOwners.has(key)) throw new Error(`route collision: ${sourcePath} and ${routeOwners.get(key)} -> ${route}`);
   routeOwners.set(key, sourcePath);
 }
@@ -179,37 +219,113 @@ function localRouteFor(sourcePath) {
   const parts = route.split("/");
   if (parts.at(-1) === "index") parts.pop();
   if (!parts.length || parts.at(-1) === "404") throw new Error(`source claims a reserved generated route: ${sourcePath}`);
-  return parts.join("/");
+  return parts.map(strictUrlSegment).join("/");
 }
 
 function sourceLink(sourcePath) {
   const label = `<code>${escapeHtml(sourcePath)}</code> at <code>${escapeHtml(commit.slice(0, 12))}</code>`;
-  if (typeof config.repository_url !== "string" || !/^https:\/\//.test(config.repository_url) || commit === "unavailable") return label;
+  if (typeof config.repository_url !== "string" || !/^https:\/\//.test(config.repository_url)) return label;
   const encodedPath = sourcePath.split("/").map(encodeURIComponent).join("/");
   const href = `${config.repository_url.replace(/\/$/, "")}/blob/${commit}/${encodedPath}`;
   return `<a href="${escapeHtml(href)}">${label}</a>`;
 }
 
-function renderPage(page, routesById) {
+function renderPage(page, routesById, referencedMedia) {
   const status = typeof page.frontmatter.status === "string" ? page.frontmatter.status : null;
-  const amendments = [...page.body.matchAll(/^##\s+(Note|Update|Correction)\b[^\n]*/gmi)].map((match) => match[0].replace(/^##\s+/, ""));
-  const relationships = page.relationships.map((relation) => `- ${relation.source_id ? `\`${relation.source_id}\` · ` : ""}**${relation.type.replaceAll("_", " ")}** → [${relation.target}](${withBase(base, routesById.get(relation.target).route)})`).join("\n") || "- None declared.";
-  const backlinks = page.backlinks.map((backlink) => `- **${backlink.type.replaceAll("_", " ")}** ← [${backlink.source_id ?? backlink.source_route}](${withBase(base, backlink.source_route)})`).join("\n") || "- None.";
+  const amendments = page.source_path.startsWith("docs/decisions/") ? amendmentHeadings(page.body) : [];
+  const relationships = page.relationships.map((relation) => {
+    const target = routesById.get(relation.target);
+    const label = `${relation.target}${target.stale ? " — stale" : ""}`;
+    return `- ${relation.source_id ? `\`${relation.source_id}\` · ` : ""}**${relation.type.replaceAll("_", " ")}** → [${label}](${withBase(base, target.route)})`;
+  }).join("\n");
+  const backlinks = page.backlinks.map((backlink) => `- **${backlink.type.replaceAll("_", " ")}** ← [${backlink.source_id ?? backlink.source_route}](${withBase(base, backlink.source_route)})`).join("\n");
   const referenced = referencedIds(page.body).filter((id) => routesById.has(id) && !page.ids.includes(id));
-  const safeBody = linkStrictIds(renderSafeMarkdown(page.body), new Map([...routesById].map(([id, owner]) => [id, withBase(base, owner.route)])));
-  const excerptBody = page.excerpt ? renderSafeMarkdown(page.excerpt.text).split("\n").map((line) => `> ${line}`).join("\n") : "";
-  const excerpt = page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->\n> **Source excerpt, lines ${page.excerpt.start}–${page.excerpt.end}:**\n>\n${excerptBody}\n` : "";
-  const referencedLinks = referenced.length ? referenced.map((id) => `- [${id}](${withBase(base, routesById.get(id).route)})`).join("\n") : "- None.";
-  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\n---\n\n<div class="portal-provenance">Source ${sourceLink(page.source_path)} · portal 1.0.0</div>\n${excerpt}\n${safeBody}\n\n---\n\n## Record context\n\n${status ? `- **Status:** ${status}\n` : ""}- **Identity:** ${page.ids.length ? page.ids.map((id) => `\`${id}\``).join(", ") : "No stable record ID"}\n- **Currentness:** ${amendments.length ? `Original record plus ${amendments.map((item) => `**${item}**`).join(", ")}` : "No amendment heading declared"}\n\n### Declared relationships\n\n${relationships}\n\n### Referenced records\n\n${referencedLinks}\n\n### Inverse links\n\n${backlinks}\n`;
+  const previews = new Map([...routesById].map(([id, owner]) => [id, {
+    route: withBase(base, owner.route), title: owner.title,
+    status: typeof owner.frontmatter?.status === "string" ? owner.frontmatter.status : owner.status,
+    source_path: owner.source_path, stale: owner.stale,
+  }]));
+  const safeBody = rewriteRepositoryMarkdown(page.body, { sourcePath: page.source_path, sourceRoutes, base, strictTargets: previews, mediaReferences: referencedMedia });
+  const snippetMarker = page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->` : "";
+  const context = [];
+  const facts = [];
+  if (status) facts.push(`- **Status:** ${escapeMarkdownInline(status)}`);
+  if (typeof page.frontmatter.date === "string") facts.push(`- **Decision date:** ${escapeMarkdownInline(page.frontmatter.date)}`);
+  if (page.ids.length) facts.push(`- **Identity:** ${page.ids.map((id) => `\`${id}\``).join(", ")}`);
+  if (amendments.length) facts.push(`- **Amendments:** ${amendments.map((item) => `**${escapeMarkdownInline(item)}**`).join(", ")}`);
+  if (facts.length) context.push(`## Record context\n\n${facts.join("\n")}`);
+  if (relationships) context.push(`### Declared relationships\n\n${relationships}`);
+  if (referenced.length) context.push(`### Referenced records\n\n${referenced.map((id) => {
+    const owner = routesById.get(id);
+    return `- [${id}${owner.stale ? " — stale" : ""}](${withBase(base, owner.route)})`;
+  }).join("\n")}`);
+  if (backlinks) context.push(`### Inverse links\n\n${backlinks}`);
+  const recordContext = context.length ? `\n\n---\n\n${context.join("\n\n")}` : "";
+  const release = config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`;
+  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)} · built from <code>${commit}</code>${release} · portal <code>1.0.0</code></div>${snippetMarker}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContext}\n\n</div>\n`;
+}
+
+function renderStalePage(page, priorRendered) {
+  let body = priorRendered
+    .replace(/\n<!-- codeflow-page-provenance[^\n]* -->\n/g, "\n")
+    .replace(/\n<div class="portal-provenance">[^\n]*<\/div>\n/g, "\n")
+    .replace(/\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> \*\*Stale rendering:\*\*[^\n]*\n\n([\s\S]*)\n<\/div>\n$/, "\n$1\n")
+    .replace(/<div data-pagefind-body data-codeflow-search-root="[^"]+">/, "<div>")
+    .replace(/^---\n(?:pagefind: false\n)?/, "---\npagefind: false\n");
+  const opening = `\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Current source ${sourceLink(page.source_path)} · snapshot <code>${commit}</code> · last good rendering <code>${escapeHtml(page.last_good_commit ?? "unknown")}</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Stale rendering:** ${escapeMarkdownInline(page.stale_reason)}. This page is excluded from search until its source is valid again.\n\n`;
+  body = body.replace(/\n---\n/, opening);
+  return `${body.trimEnd()}\n\n</div>\n`;
+}
+
+function provenanceMarker(page) {
+  return `<!-- codeflow-page-provenance source_sha256=${page.source_sha256} built_from_commit=${commit} portal_version=1.0.0 release_version=${config.release_version ?? "none"} -->`;
+}
+
+function renderLayerLanding(layer, layerPages) {
+  const preface = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\n---\n\n# ${escapeMarkdownInline(layer.label)}\n\n${escapeMarkdownInline(layer.description)}\n`;
+  if (layer.id === "records") {
+    const groups = [["Epics", "EPC-"], ["Specifications", "SPC-"], ["Tasks", "TSK-"]];
+    const sections = groups.map(([label, prefix]) => {
+      const records = layerPages.filter((page) => page.ids.some((id) => id.startsWith(prefix)));
+      if (!records.length) return "";
+      return `## ${label}\n\n| Record | Status | Dependencies |\n|---|---|---|\n${records.map((page) => `| [${escapeMarkdownCell(page.title)}](${withBase(base, page.route)}) | ${escapeMarkdownCell(page.status ?? "Not declared")} | ${page.relationships.filter((item) => item.type === "depends_on").map((item) => `\`${item.target}\``).join(", ") || "—"} |`).join("\n")}`;
+    }).filter(Boolean);
+    return `${preface}\n${sections.join("\n\n")}\n`;
+  }
+  if (layer.id === "system") {
+    const decisions = layerPages.filter((page) => page.ids.some((id) => id.startsWith("ADR-")));
+    const foundations = layerPages.filter((page) => !page.ids.some((id) => id.startsWith("ADR-")));
+    const lineage = decisions.flatMap((page) => page.relationships.filter((item) => item.type === "superseded_by").map((item) => `- [${escapeMarkdownInline(page.title)}](${withBase(base, page.route)}) → [${item.target}](${withBase(base, ownerById.get(item.target).route)})`));
+    return `${preface}\n${foundations.length ? `## Foundations\n\n${pageList(foundations)}\n\n` : ""}## Decisions\n\n${pageList(decisions)}${lineage.length ? `\n\n## Decision lineage\n\n${lineage.join("\n")}` : ""}\n`;
+  }
+  return `${preface}\n${pageList(layerPages)}\n`;
+}
+
+function pageList(items) {
+  return items.map((page) => `- [${escapeMarkdownInline(page.title)}](${withBase(base, page.route)})`).join("\n") || "No current sources in this layer.";
+}
+
+function escapeMarkdownCell(value) {
+  return escapeMarkdownInline(value).replaceAll("|", "\\|");
+}
+
+function escapeMarkdownInline(value) {
+  return escapeHtml(String(value).replace(/[\r\n\t]+/g, " "))
+    .replace(/([\\`*_[\]{}()#+.!])/g, "\\$1")
+    .replaceAll(":", "&#58;");
+}
+
+function strictUrlSegment(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function renderIndex(definitions, allPages) {
   const steps = definitions.map((layer, index) => `<li><a href="${withBase(base, layer.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(layer.label)}</strong><small>${escapeHtml(layer.description)}</small><em>${allPages.filter((page) => page.route.startsWith(`${layer.id}/`) && !page.stale).length} sources</em></a></li>`).join("\n");
-  return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit.slice(0, 12)}</code> · portal <code>1.0.0</code></p>\n`;
+  return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
 }
 
 function isSafePriorPage(page) {
-  if (!page || typeof page !== "object" || typeof page.source_path !== "string" || typeof page.route !== "string" || typeof page.output_markdown !== "string" || typeof page.output_markdown_sha256 !== "string") return false;
+  if (!page || typeof page !== "object" || typeof page.source_path !== "string" || typeof page.built_from_commit !== "string" || !/^[a-f0-9]{40}$/.test(page.built_from_commit) || typeof page.route !== "string" || typeof page.output_markdown !== "string" || typeof page.output_markdown_sha256 !== "string") return false;
   try {
     safeRelative(page.source_path, "prior source");
     safeRelative(page.route, "prior route");
@@ -220,20 +336,75 @@ function isSafePriorPage(page) {
   } catch { return false; }
 }
 
-async function readBounded(file, limit, label) {
-  const metadata = await stat(file);
-  if (!metadata.isFile() || metadata.size > limit) throw new Error(`${label} exceeds ${limit} bytes or is not a file`);
-  return readFile(file);
-}
-
 function escapeHtml(value) {
   return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-function escapeText(value) {
-  return String(value).replace(/[\r\n]+/g, " ").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+function filesystemPathsEqual(left, right) {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
-function filesystemPathsEqual(left, right) {
-  return process.platform === "win32" ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US") : left === right;
+function committedMarkdownSources(configuredRoots, excluded) {
+  const roots = configuredRoots.map((item) => safeRelative(item, "source_root"));
+  const listing = gitText(["ls-tree", "-r", "-z", commit, "--", ...roots], MAX_GIT_LIST_BYTES);
+  const sources = [];
+  const keys = new Set();
+  for (const record of listing.split("\0")) {
+    if (!record) continue;
+    const separator = record.indexOf("\t");
+    if (separator < 0) throw new Error("git ls-tree returned an invalid source record");
+    const [mode, type] = record.slice(0, separator).split(" ");
+    const sourcePath = safeRelative(record.slice(separator + 1), "committed source");
+    if (type !== "blob" || !["100644", "100755"].includes(mode)) throw new Error(`committed source is not a regular file: ${sourcePath}`);
+    if (!sourcePath.endsWith(".md") || /^\.env(?:\.|$)/.test(path.posix.basename(sourcePath)) || excluded.some((prefix) => sourcePath === prefix || sourcePath.startsWith(`${prefix}/`))) continue;
+    const key = sourcePath.normalize("NFC").toLowerCase();
+    if (keys.has(key)) throw new Error(`committed source path collides case-insensitively: ${sourcePath}`);
+    keys.add(key);
+    sources.push(sourcePath);
+    if (sources.length > MAX_SOURCES) throw new Error(`source count exceeds ${MAX_SOURCES}`);
+  }
+  return sources.sort(compareDeterministicText);
+}
+
+function assertCommittedPrimitiveToken(sourcePath) {
+  assertCommittedFile(sourcePath, ["100644"], "primitive token import");
+}
+
+function assertCommittedFile(sourcePath, allowedModes, label) {
+  const listing = gitText(["ls-tree", "-z", commit, "--", sourcePath], 4096);
+  const records = listing.split("\0").filter(Boolean);
+  if (records.length !== 1) throw new Error(`${label} must be one committed regular file: ${sourcePath}`);
+  const separator = records[0].indexOf("\t");
+  if (separator < 0) throw new Error(`${label} has an invalid Git tree record: ${sourcePath}`);
+  const [mode, type] = records[0].slice(0, separator).split(" ");
+  const actual = safeRelative(records[0].slice(separator + 1), label);
+  if (actual !== sourcePath || type !== "blob" || !allowedModes.includes(mode)) {
+    throw new Error(`${label} must be a committed regular file with an allowed mode: ${sourcePath}`);
+  }
+}
+
+function assertRasterSignature(sourcePath, bytes) {
+  const extension = path.posix.extname(sourcePath).toLowerCase();
+  const ascii = (start, end) => bytes.subarray(start, end).toString("ascii");
+  const valid = extension === ".png" ? bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    : [".jpg", ".jpeg"].includes(extension) ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+      : extension === ".gif" ? ["GIF87a", "GIF89a"].includes(ascii(0, 6))
+        : extension === ".webp" ? ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP"
+          : extension === ".avif" ? ascii(4, 8) === "ftyp" && ["avif", "avis"].includes(ascii(8, 12))
+            : false;
+  if (!valid) throw new Error(`referenced media bytes do not match the approved raster type: ${sourcePath}`);
+}
+
+function assertCleanSnapshot(paths) {
+  const status = gitText(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...paths], MAX_GIT_LIST_BYTES);
+  if (status.length) throw new Error("configured portal sources must match HEAD exactly; commit or remove staged, modified, deleted, untracked, and ignored source-root changes");
+}
+
+function gitText(args, maximumBytes) {
+  try {
+    const output = execFileSync("git", ["-C", repositoryRoot, ...args], { encoding: "buffer", maxBuffer: maximumBytes });
+    return new TextDecoder("utf-8", { fatal: true }).decode(output);
+  } catch (error) {
+    throw new Error(`Git snapshot command failed (${args[0]}): ${String(error.stderr ?? error.message ?? error).trim()}`);
+  }
 }

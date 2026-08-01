@@ -1,395 +1,27 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-01-integration-branch-default-v1",
+  "requirements_version": "2026-08-02-presentation-docs-portal-v1",
   "requirements": [
-    {
-      "id": "CF-MM-001",
-      "level": "hard",
-      "statement": "Every non-trivial repository task starts with the Claude+Codex orchestrator when both seats are available.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Every non-trivial repository task **must begin with**", "supporting flows, not"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Use the duo for every non-trivial repository task."]}
-      ]
-    },
-    {
-      "id": "CF-MM-002",
-      "level": "hard",
-      "statement": "Claude and Codex independently research, analyze risks, and draft complete plans from the same immutable brief before either sees the other conclusion.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["draft a plan in parallel before seeing the other's conclusions", "an implementation plan and test strategy", "reconciles the two drafts"]}
-      ]
-    },
-    {
-      "id": "CF-MM-003",
-      "level": "hard",
-      "statement": "Claude compares two or three designs unless the brief fixes one direction; Codex challenges feasibility, failure modes, security, testing, and maintainability.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["brief already fixes a clear direction", "2–3 viable options", "failure modes, security, testing, and maintainability"]}
-      ]
-    },
-    {
-      "id": "CF-MM-004",
-      "level": "hard",
-      "statement": "Both seats approve the exact plan and task assignments; a changed plan or named producer/reviewer seat or lineage invalidates both approvals, while a same-seat trigger-based effort escalation is evidence rather than reassignment.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["A changed plan invalidates both approvals", "TASK_ASSIGNMENTS:", "CLAUDE_APPROVAL:", "CODEX_APPROVAL:"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["is reassignment: create Plan vN+1", "same-seat high→xhigh escalation"]}
-      ]
-    },
-    {
-      "id": "CF-MM-005",
-      "level": "hard",
-      "statement": "The host assigns every task a producer and cross-lineage reviewer by task fit, tools/context, independence, verified availability/routing, resources, and observed native usage signals only.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Host routes execution.**", "task fit", "observed native usage signals only"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["TASK_ID | PRODUCER seat@effort", "verified native availability and routing"]}
-      ]
-    },
-    {
-      "id": "CF-MM-006",
-      "level": "hard",
-      "statement": "Each producer first-verifies its unit, the named other-lineage seat reviews it independently, and the directly invoked Claude judgment primary owns the integrated design/code judgment without claiming independent review of its own authored unit; a fallback is recorded without claiming the selected primary reviewed.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Review is producer-relative.**", "**The Claude judgment primary owns integrated Claude judgment.**", "Codex supplies independent review", "never report that the selected Claude judgment primary reviewed the work"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["A model cannot independently review its own authored unit", "do not label the primary's integrated judgment"]}
-      ]
-    },
-    {
-      "id": "CF-MM-007",
-      "level": "hard",
-      "statement": "The directly invoked qualified Claude judgment primary owns Claude judgment; only the owning primary may use qualified internal routes from the current ensemble, and workers never settle the judgment.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["The Claude judgment primary owns integrated Claude judgment", "let the owning primary control its internal routing", "never let a worker replace a primary"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["\"role\": \"claude-judgment-primary\"", "\"model_class\": \"latest-fable\"", "\"model_class\": \"latest-opus\"", "\"effort\": \"medium\"", "\"effort\": \"high\"", "without transferring judgment"]}
-      ]
-    },
-    {
-      "id": "CF-MM-008",
-      "level": "hard",
-      "statement": "Peer work uses native interactive vendor sessions with configured tools and MCPs, never headless model execution.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Native interactive sessions only", "Never use `codex exec`", "`claude -p`"]}
-      ]
-    },
-    {
-      "id": "CF-MM-009",
-      "level": "hard",
-      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly and blocks rather than silently continuing.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["degrades legibly", "mid-run failure", "never a silent downgrade"]}
-      ]
-    },
-    {
-      "id": "CF-MM-010",
-      "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort, escalate only on its defined triggers, preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Use the concrete selectors", "invoke each primary directly", "retain primary planning/approval duties", "never let a worker replace a primary"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["\"default_effort\": \"high\"", "\"escalation_effort\": \"xhigh\"", "\"model_class\": \"qualified-terra-worker\"", "Claude-side internal routing belongs to the Claude primary", "Unobserved model, effort, worker routing, availability, and usage remain unknown"]}
-      ]
-    },
-    {
-      "id": "CF-MM-011",
-      "level": "hard",
-      "statement": "Exactly one host owns top-level orchestration; every cross-harness task starts with an explicit peer or worker role, stays bounded, forbids delegating back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**One orchestration owner.**", "Only the host runs this top-level flow", "the first line of every cross-harness task declares", "generic same-lineage subagent never satisfies"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Every native session declares one role", "The first line of every cross-harness task declares", "delegating back to the host lineage", "generic same-lineage subagent cannot satisfy"]}
-      ]
-    },
-    {
-      "id": "CF-MM-012",
-      "level": "hard",
-      "statement": "Routing may use only observed native usage/route evidence; unknown state remains unknown and quota, availability, or worker routing is never inferred.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["observed native usage signal", "unknown remains unknown", "Never infer quota or availability"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["Admissible usage evidence", "never infer quota, availability, or a worker route", "missing signal blocks assignment", "Do not silently substitute another criterion"]}
-      ]
-    },
-    {
-      "id": "CF-QA-001",
-      "level": "hard",
-      "statement": "Where line coverage is supported, aggregate production coverage has a hard 80 percent floor and a normal 90 percent target; a weaker repository setting cannot undercut it.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["hard floor of **80%**", "normal target is **90% or higher**", "may enforce a stronger floor"]}
-      ]
-    },
-    {
-      "id": "CF-QA-002",
-      "level": "hard",
-      "statement": "Verification covers relevant unit, integration, end-to-end, security, and rendered UI behavior; routine deterministic web E2E may use a headless browser without changing interactive peer-model transport, and behavior, visual, runtime, trace, and accessibility evidence is matched to the claim; unavailable or not applicable are never reported as passes.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["end-to-end tests", "Browser headless mode is valid", "prohibited headless peer-model transport", "Match evidence to the claim", "A screenshot alone does not prove interaction or accessibility", "Tool unavailability is a blocker or declared limitation, not a pass"]}
-      ]
-    },
-    {
-      "id": "CF-QA-003",
-      "level": "hard",
-      "statement": "Design and implementation use the smallest coherent durable solution for the accepted lifecycle, scale, change rate, contributor and integration breadth, operational risk, and reversibility; reject both speculative complexity and brittle under-design; preserve justified modularity and reuse; handle accepted edge and failure cases; clarify materially missing context; and treat project size or raw line count only as inputs, never automatic architecture rules.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Write only what earns its keep", "DRY with judgment", "brittle under-design, not simplicity"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["smallest coherent solution", "brittle under-design", "not the fewest lines", "accepted operating context", "size alone", "clarify it before approval"]}
-      ]
-    },
-    {
-      "id": "CF-QA-004",
-      "level": "hard",
-      "statement": "UI work reuses an existing design system when present and composes recurring tokens, accessible primitives, application components, and explicit state into views without duplicated one-off implementations or speculative framework layers.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["existing design system", "accessible primitives", "composition into views or pages", "no new design system or higher-order abstraction for a one-off surface"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["For UI changes", "tokens, accessible primitives, and components"]}
-      ]
-    },
-    {
-      "id": "CF-SEC-001",
-      "level": "hard",
-      "statement": "Security review unions a Claude defender and Codex attacker lens, preserves divergence, and blocks loss of a required second vendor.",
-      "sources": [
-        {"path": ".claude/agents/cf-security-reviewer.md", "markers": ["Defender lens — Claude", "Attacker lens — a second vendor", "Cross-vendor divergence escalates", "severity high / confidence confirmed"]}
-      ]
-    },
-    {
-      "id": "CF-SEC-002",
-      "level": "hard",
-      "statement": "Recoverable task-scoped project edits and deletions remain autonomous, while catastrophic system-level actions require authenticated human control; model consensus or automatic review is never authorization, a peer cannot bypass the host boundary, and CodeFlow's non-relaxable class remains operator-only even after approval.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Recoverable, task-scoped project", "Model agreement or", "peer cannot be used", "remains agent-blocked even after approval"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Ordinary task-scoped project", "Model consensus, Claude auto mode", "human operator performs it through a separate"]}
-      ]
-    },
-    {
-      "id": "CF-SEC-003",
-      "level": "hard",
-      "statement": "Before a host-permitted high-blast-radius action, the host requires exact bounded scope, preview or dry-run evidence where supported, a current verified checkpoint or backup, a tested restore path, and explicit authenticated human approval; missing evidence fails closed, and approved execution advances one verified bounded step at a time.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Present the exact bounded action", "current verified checkpoint or backup", "missing evidence, an untested restore path", "execute one bounded step at a time"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["exact scope and command/tool input", "current checkpoint/backup and tested restore path", "postcondition verification"]}
-      ]
-    },
-    {
-      "id": "CF-PLAT-001",
-      "level": "hard",
-      "statement": "Platform handling distinguishes native Windows from WSL2, selects the compatible native shell and installer, records the effective sandbox boundary, and never treats native-Windows Claude hooks or prompts as OS isolation.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["prefer WSL2 for Linux-equivalent tooling", "Native Windows Codex must use its elevated sandbox", "Claude Code has no native-Windows OS sandbox", "Record the actual platform and effective boundary"]},
-        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["keep native Windows and WSL2/Linux evidence separate", "native Windows installer must select its Windows binary", "WSL2 uses the Linux installer and binary"]}
-      ]
-    },
-    {
-      "id": "CF-SHIP-002",
-      "level": "hard",
-      "statement": "Cross-compilation is compile/link evidence only; release readiness requires native platform tests and installer canaries, and missing native evidence remains an explicit blocker rather than an inferred pass.",
-      "sources": [
-        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["Cross-build success proves compilation and linking only", "never replaces native macOS/Linux/Windows tests or installer canaries", "Missing platform evidence blocks publication"]}
-      ]
-    },
-    {
-      "id": "CF-GOV-001",
-      "level": "hard",
-      "statement": "Evidence outranks agreement and fabricated or unverifiable claims are defects.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Unverifiable or fabricated claims are defects", "Every claim needs evidence"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Evidence outranks agreement"]}
-      ]
-    },
-    {
-      "id": "CF-GOV-002",
-      "level": "hard",
-      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or red gates alone do not transfer an implementation tactic to the operator.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Missing intent, public behavior, security boundaries, authority", "Treat an unclear requirement, API, or fact as a stop-and-verify", "Navigate blockers; do not orbit them", "One bounded confirmation of a prior failure", "never retry it again unchanged", "redness alone does not make it an operator decision"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Do not confuse missing evidence with missing operator intent", "bounded probe tied to a new hypothesis", "One bounded confirmation of a prior failure", "never retry it again unchanged", "reroute only if accepted outcome", "not automatic evidence that the operator must decide"]},
-        {"path": ".agents/skills/cf-develop/SKILL.md", "markers": ["Maximum 3 evidence-moving cycles", "operator-owned decision"]}
-      ]
-    },
-    {
-      "id": "CF-GOV-003",
-      "level": "hard",
-      "statement": "Destructive protected-branch actions, guard bypasses, and raw secret handling remain prohibited while public research and brokered tools stay available.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Never set override envs", "never stage credentials", "fix the cause — never bypass"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["public network and live search are enabled", "raw tokens never enter prompts"]}
-      ]
-    },
-    {
-      "id": "CF-PAR-001",
-      "level": "hard",
-      "statement": "Parallel work is bounded by host resources, has one owner/branch/worktree per task, serializes shared contracts and integration, and verifies the combined diff.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["bounded concurrency cap", "one owner, branch, and worktree", "serialize each landing"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["HOST_RESOURCE_BUDGET:", "one writer, branch, and worktree"]}
-      ]
-    },
-    {
-      "id": "CF-REF-001",
-      "level": "hard",
-      "statement": "Work consults product scope and capabilities before building and uses architecture, ADRs, and recall for rationale rather than inventing it.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["check `docs/capabilities.md`", "skim the most recent ADRs", "codeflow recall"]}
-      ]
-    },
-    {
-      "id": "CF-OUT-001",
-      "level": "hard",
-      "statement": "Outputs are audience-shaped, evidence-backed, explicit about limitations and N/A, and preserve material disagreement.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Shape the deliverable", "never cut key information to condense"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["records both outputs without collapsing disagreements", "any explicit N/A with reason"]}
-      ]
-    },
-    {
-      "id": "CF-OUT-002",
-      "level": "hard",
-      "statement": "Substantial prose is reviewed in its full project, audience, medium, and task context; preserves technical meaning and credible documented voice; removes unsupported certainty, sycophancy, inflation, and obstructive formatting without fabricating personality or applying lexical, punctuation, list, or emoji blacklists.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["verified truth and policy outrank", "documented voice/examples", "never fabricate personality"]},
-        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Resolve conflicts in this order", "Never trade precision for fluency", "There is no universal word, punctuation, formatting, or emoji blacklist", "Do not use an AI detector"]}
-      ]
-    },
-    {
-      "id": "CF-QA-005",
-      "level": "hard",
-      "statement": "Discovery is broad but action is materiality-led: distinguish consequence from the current dependency or blocker controlling the accepted outcome; protect quality, testing, security, review, documentation, and recovery while prioritizing that path; fix clear safe in-scope improvements when focused validation is bounded; consolidate only genuinely uncertain secondary observations for one natural cross-lineage checkpoint; and track a retained item once with evidence, value, and a deterministic revisit event rather than age or vague later wording. Keep severity and confidence distinct, preserve CVSS-aligned security labels, approve when only non-blocking nits remain, and route evidenced out-of-scope material risk without silent scope expansion, external mutation, or issue farming.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Find broadly; act by materiality", "current dependency or blocker controlling the accepted outcome explicit", "Fix a clear, safe, local, in-scope improvement", "event-based revisit trigger", "Remediation effort informs sequencing, never severity", "Nothing material found"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Discovery is broad; action is selective", "current dependency or blocker controlling the accepted outcome", "verify it while context is warm", "deterministic event trigger", "Dispatch is not disposition", "Keep evidence confidence separate from consequence", "do not prevent approval when they are the only findings", "issue farming and fabricated proactive signals are failures"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["Order the report by materiality", "fix now, track once", "deterministic revisit event", "if they are the only findings, return `approved`"]},
-        {"path": ".claude/agents/cf-security-reviewer.md", "markers": ["Preserve the CVSS-aligned", "remediation effort never changes"]}
-      ]
-    },
-    {
-      "id": "CF-SHIP-001",
-      "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Protected branches", "merged by a human"]}
-      ]
-    },
-    {
-      "id": "CF-GIT-001",
-      "level": "hard",
-      "statement": "Before a task's first branch, worktree, commit, merge, rebase, push, or delete mutation the agent asserts IDENTITY, INTENT-MATCH, and CURRENCY in order; an existing assignment mismatch stops and surfaces rather than silently adapting, while a protected root may create the exact assigned worktree after currency only when the assignment explicitly calls for creating it, then must rerun the assertions there.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["**IDENTITY** — establish where you actually are", "**INTENT-MATCH** — confirm this is the worktree and branch *this task* was assigned", "stop and surface it — never silently adapt", "never accept name resemblance as a match", "**CURRENCY** — fetch, then check the base against the repository's configured target branch", "assignment explicitly calls for creating a worktree", "Absence alone never authorizes repair", "rerun all three assertions inside the new worktree"]}
-      ]
-    },
-    {
-      "id": "CF-GIT-002",
-      "level": "hard",
-      "statement": "A landed task's worktree and branch are removed only after dirty-state inspection and proof of merge; a squash merge requires MERGED PR state with a matching head SHA or no unapplied git-cherry entry before branch force-delete, and worktree force-removal is prohibited.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Ancestry never proves a squash merge", "require PR state `MERGED`", "no unapplied `+` entry", "Never force-remove a dirty worktree", "Unproven work is retained"]},
-        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["Clean up after the human merge, with proof", "never use `git worktree remove --force`", "to report `MERGED` and the branch-tip SHA", "no unapplied `+` entry", "Retain anything unproven"]},
-        {"path": ".agents/skills/cf-method/SKILL.md", "markers": ["delete the integration branch only after the merge is proven", "require a `MERGED` PR with matching head SHA"]}
-      ]
-    },
-    {
-      "id": "CF-MM-013",
-      "level": "hard",
-      "statement": "Cross-lineage evidence requires native runtime provenance; unproven attribution is reclassified as the author seat's lineage and the cross half redone; relays are transports while genuine workers remain authors in their own lineage; vendor self-simulation is prohibited; delegated work is verified on launch and its provenance, scoped diff, and cited evidence are verified on return; idle or completion signals are never evidence.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["**Cross-lineage evidence carries native provenance.**", "A relay is transport, not author", "same-lineage worker output remains same-lineage", "vendor self-simulation is fabrication", "scoped diff and cited evidence", "idle or completion signal is evidence of neither"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["## Admissible cross-lineage evidence", "only with native runtime provenance", "reclassified as the author seat's own lineage", "same-lineage worker that produces work remains same-lineage", "verify the delegated task started", "scoped worktree diff, and cited evidence"]}
-      ]
-    },
-    {
-      "id": "CF-MM-014",
-      "level": "hard",
-      "statement": "A multi-task Plan vN settles an explicit acyclic task graph covering every assignment, uses evidence guards only for genuine pre-approved decisions beyond ordinary completion, materializes every direct structural candidate predecessor durably without making metadata executable, resolves mutually exclusive alternatives with selected/not-selected evidence, and requires fresh approval from both primary seats for a material node, edge, guard, ownership, acceptance/interface, or safety mutation while ordinary in-node execution evidence and safe topological reordering do not trigger ceremony.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/task-graph.md", "markers": ["Every task assignment appears exactly once as a node", "A guard that merely restates a standard quality", "An observed outcome that matches no approved guard is a graph mutation", "Every unselected alternative records", "non-executable structural topology", "It never interprets guards", "Create Plan vN+1 and obtain fresh approval from both primary seats", "These remain execution evidence inside the approved graph", "different valid topological order", "Classify **and persist** each such occurrence in the execution ledger"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["both approvals cover the same canonical task graph", "Ordinary steps and bounded implementation choices inside an approved node remain ledger evidence"]}
-      ]
-    },
-    {
-      "id": "CF-OUT-003",
-      "level": "hard",
-      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects.",
-      "sources": [
-        {"path": "AGENTS.md", "markers": ["Presentation is contextual and proportionate", "scope and detail fit the explanation", "least complicated form that remains complete, not the physically smallest", "Never add decorative or forced diagrams, headings, tables, or recaps"]},
-        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["Keep formatting proportionate", "scope and detail fit the explanation", "complex subjects may need a larger, layered, or multi-view diagram", "decorative or forced diagram, heading, table, or recap is a defect"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["proportionality in both directions", "scope and detail fit the explanation", "brief caption or legend when it aids orientation"]}
-      ]
-    },
-    {
-      "id": "CF-EVAL-001",
-      "level": "hard",
-      "statement": "Token efficiency is evaluated as reliable contract adherence per loaded token and never authorizes removal or weakening of a semantic duty.",
-      "sources": [
-        {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["Token consciousness means reliable adherence per loaded token", "never authorizes deleting a duty"]}
-      ]
-    },
-    {
-      "id": "CF-EVAL-002",
-      "level": "hard",
-      "statement": "A concrete model binding is promoted only through a capability-supported native harness and an approved full-suite result whose requested and observed model/effort match; catalog support, diagnostic packs, unobserved aliases, protocol presence, and automatic routing never substitute for binding qualification.",
-      "sources": [
-        {"path": ".agents/skills/cf-evaluate-model/SKILL.md", "markers": ["minimum native harness capability contract", "even `release-smoke` is not a promotion suite", "After a full result passes promotion validation", "live model/effort remains a native-session observation"]},
-        {"path": ".agents/skills/cf-evaluate-model/resources/protocol.md", "markers": ["Adding a harness requires evidence for every capability plus the full model suite", "Promotion additionally requires `system.observed`", "requested and observed model/effort match", "runtime routing config, or permission to auto-promote"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json", "markers": ["A changed concrete binding requires native-interactive qualification before promotion"]}
-      ]
-    },
-    {
-      "id": "CF-EVAL-003",
-      "level": "hard",
-      "statement": "Project model selection is a reference-only, atomic override of stable roles to locally qualified binding IDs; absent or empty selection preserves the managed default, while malformed, missing, ineligible, drifted, unsupported, or lineage-collapsing selection fails closed without partial fallback.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": [".codeflow/model-selection.json", "An absent or empty file keeps the managed defaults", "invalid or drifted active selection blocks preflight without partial application or silent fallback"]},
-        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["every override references only a local binding ID qualified for that exact stable role", "A failure blocks the selection", "never write a raw selector, partially apply entries, or silently fall back"]},
-        {"path": ".codeflow/model-selection.json", "markers": ["\"schema_version\": 1", "\"bindings\": []"]}
-      ]
-    },
-    {
-      "id": "CF-QA-007",
-      "level": "hard",
-      "statement": "Verification combines applicable deterministic structural/security checks with independent contextual judgment; model consensus cannot override a deterministic red result or claim an unavailable analyzer ran, and missing relevant SAST/taint evidence remains explicit residual risk.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Record deterministic and contextual evidence as complementary layers", "A deterministic red result cannot be overridden by model agreement", "record the residual risk and disposition"]},
-        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["deterministic security lane", "model review and SCA do not impersonate it"]}
-      ]
-    },
-    {
-      "id": "CF-QA-008",
-      "level": "hard",
-      "statement": "Quality review uses a bounded, evidenced history slice when relevant to detect structural erosion that a point-in-time passing diff can hide, without inferring trends from one point or turning review into unbounded archaeology.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Quality review is also longitudinal", "smallest useful history slice", "Do not infer a trend from one point", "unbounded archaeology exercise"]}
-      ]
-    },
-    {
-      "id": "CF-QA-006",
-      "level": "hard",
-      "statement": "Property/generative tests, targeted mutation testing, and project-owned architecture fitness checks strengthen normal verification only when named repository evidence satisfies their technique-specific triggers; explicit examples and normal scenario gates remain, none-selected is valid, concrete tools and thresholds stay project-owned, and over-triggering heavyweight or duplicative checks is a quality defect.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/verification-selection.md", "markers": ["`none selected` is a valid and common result", "Select them when all of these hold", "Keep explicit examples for known singular boundaries", "Use a targeted, time-bounded mutation run", "First require a deterministic base suite", "Add a project-owned deterministic fitness check", "Do not duplicate a compiler", "Concrete tools, thresholds, commands, and CI cadence belong to the consuming project"]},
-        {"path": "AGENTS.md", "markers": ["Select property/generative tests, targeted mutation testing, or project-owned architecture fitness checks only from the orchestrator's evidence triggers", "`none selected` is valid", "normal scenario coverage remains mandatory"]}
-      ]
-    },
-    {
-      "id": "CF-QA-009",
-      "level": "hard",
-      "statement": "Tests protect observable contracts and must be capable of failing for material regressions; coverage cannot be manufactured with tautologies, implementation-copied expectations, duplicate production algorithms as oracles, mock-only wiring assertions, weakened assertions, test-only production branches, or unreachable code.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["Tests must be capable of failing for a material regression", "Reject tautological assertions", "Coverage measures exercised lines; it never proves test integrity"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["inspect whether changed tests would fail for a material regression", "test-only production paths added to manufacture coverage"]}
-      ]
-    },
-    {
-      "id": "CF-QA-010",
-      "level": "hard",
-      "statement": "Performance-, scale-, and concurrency-sensitive paths are reviewed against their actual operating shape, including complexity and N+1 access, bounded work and memory, backpressure/cancellation, blocking async work, state ownership/synchronization, races/lost updates, deadlocks, idempotency/retry amplification, and resource cleanup, with measured or stress/race evidence when material risk earns it.",
-      "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["For performance-, scale-, or concurrency-sensitive paths", "N+1 access", "Require a benchmark, profiler, load/stress test, race/concurrency test, or direct operational measurement"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["performance-, scale-, or concurrency-sensitive", "require measured or stress/race evidence only when the claim or risk is material"]}
-      ]
-    },
     {
       "id": "CF-DES-001",
       "level": "hard",
       "statement": "Material product, UX, interaction, and visual-design work settles proportionate evidence-grounded design intent before implementation; cosmetic and established-system changes collapse explicitly, operator direction is a binding constraint owed honest counsel, and audience or research evidence is never fabricated.",
       "sources": [
-        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["Choose the lightest path that still resolves material design uncertainty", "binding constraint owed honest counsel", "Never fabricate research, users, personas"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["`DESIGN_INTENT` is proportional", "Collapse irrelevant dimensions instead of filling a template"]}
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Choose the lightest path that still resolves material design uncertainty",
+            "binding constraint owed honest counsel",
+            "Never fabricate research, users, personas"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "`DESIGN_INTENT` is proportional",
+            "Collapse irrelevant dimensions instead of filling a template"
+          ]
+        }
       ]
     },
     {
@@ -397,8 +29,20 @@
       "level": "hard",
       "statement": "Novel materially open surfaces use proportionate subject-grounded research and two or three meaningfully distinct directions, while familiar design choices are retained or revised from product evidence rather than accepted or rejected by category or converted into a CodeFlow house style.",
       "sources": [
-        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["two or three directions that differ in meaningful structure or experience", "never supplies formats, bans, or a replacement house style"]},
-        {"path": ".agents/skills/cf-design/references/design-choice-audit.md", "markers": ["not a checklist, theme catalog, scoring system, or set of prohibited styles", "Absence from this reference is not evidence"]}
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "two or three directions that differ in meaningful structure or experience",
+            "never supplies formats, bans, or a replacement house style"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/design-choice-audit.md",
+          "markers": [
+            "not a checklist, theme catalog, scoring system, or set of prohibited styles",
+            "Absence from this reference is not evidence"
+          ]
+        }
       ]
     },
     {
@@ -406,8 +50,20 @@
       "level": "hard",
       "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment, Codex challenges the direction, and bounded tool or rendered-evidence collection never transfers judgment to a worker.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["applies `cf-design` and settles", "Codex challenges feasibility"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md", "markers": ["owns intent and fidelity judgment under `cf-design`", "never settles the direction or interprets it in place of the primary"]}
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "applies `cf-design` and settles",
+            "Codex challenges feasibility"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "owns intent and fidelity judgment under `cf-design`",
+            "never settles the direction or interprets it in place of the primary"
+          ]
+        }
       ]
     },
     {
@@ -415,8 +71,21 @@
       "level": "hard",
       "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, and never treats automated accessibility evidence as complete conformance.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["default to WCAG 2.2 AA", "Compare the rendered result with the settled intent", "reviewer's unsupported taste does not"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["fidelity to the settled `DESIGN_INTENT`", "unanchored aesthetic preference remains non-blocking"]}
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "default to WCAG 2.2 AA",
+            "Compare the rendered result with the settled intent",
+            "reviewer's unsupported taste does not"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "fidelity to the settled `DESIGN_INTENT`",
+            "unanchored aesthetic preference remains non-blocking"
+          ]
+        }
       ]
     },
     {
@@ -424,27 +93,160 @@
       "level": "hard",
       "statement": "Design intent treats product language, voice, and appearance modes as contextual, collapsible dimensions: project evidence and operator authority govern voice; localization is claimed only from localized evidence; applicable system/user mode, override, persistence, and accessibility behavior is verified; and CodeFlow utility defaults never become consuming-product design authority.",
       "sources": [
-        {"path": ".agents/skills/cf-design/SKILL.md", "markers": ["Language and voice", "Appearance modes", "CodeFlow supplies no product palette or preset", "utility defaults never flow back as product authority"]},
-        {"path": ".agents/skills/cf-editorial-review/SKILL.md", "markers": ["canonical CodeFlow home for shared language guidance", "Utility copy does not become product voice", "English-only review is not localization verification"]},
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["applicable appearance modes", "localized variants and relevant language review", "without an incorrect-mode flash"]}
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Language and voice",
+            "Appearance modes",
+            "CodeFlow supplies no product palette or preset",
+            "utility defaults never flow back as product authority"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/SKILL.md",
+          "markers": [
+            "canonical CodeFlow home for shared language guidance",
+            "Utility copy does not become product voice",
+            "English-only review is not localization verification"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "applicable appearance modes",
+            "localized variants and relevant language review",
+            "without an incorrect-mode flash"
+          ]
+        }
       ]
     },
     {
-      "id": "CF-QA-011",
+      "id": "CF-EVAL-001",
       "level": "hard",
-      "statement": "Every material changed journey maps its affected topology and has faithful end-to-end evidence through each applicable changed in-project and runtime boundary; unit/integration tests remain complementary, controlled external doubles are disclosed and contract-checked where feasible, and an unexercised seam is never reported as whole-flow proof.",
+      "statement": "Token efficiency is evaluated as reliable contract adherence per loaded token and never authorizes removal or weakening of a semantic duty.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["For each material changed journey, map the exercised path", "At least one test at the highest faithful surface", "does not prove that whole journey", "record it as controlled and unexercised", "never claim that dependency was live or exercised"]},
-        {"path": ".claude/agents/cf-reviewer.md", "markers": ["compare the declared topology with the executed E2E evidence", "not counted as whole-flow proof"]}
+        {
+          "path": ".agents/skills/cf-evaluate-model/SKILL.md",
+          "markers": [
+            "Token consciousness means reliable adherence per loaded token",
+            "never authorizes deleting a duty"
+          ]
+        }
       ]
     },
     {
-      "id": "CF-QA-012",
+      "id": "CF-EVAL-002",
       "level": "hard",
-      "statement": "Concurrent UI verification allocates task-owned isolated browser state, non-overlapping listening and application endpoints where applicable, namespaced test data, and run-scoped artifacts, then verifies bounded teardown; headed or Computer Use work never attaches to or takes over the operator's browser, profile, tabs, or active desktop.",
+      "statement": "A concrete model binding is promoted only through a capability-supported native harness and an approved full-suite result whose requested and observed model/effort match; catalog support, diagnostic packs, unobserved aliases, protocol presence, and automatic routing never substitute for binding qualification.",
       "sources": [
-        {"path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md", "markers": ["before any concurrent browser work", "never attach to the operator's existing browser", "verify ports and task-owned resources were released", "CodeFlow supplies this resource contract, not universal port numbers"]},
-        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["settle and canary its browser-resource contract", "must not attach to or manipulate the operator's existing tabs"]}
+        {
+          "path": ".agents/skills/cf-evaluate-model/SKILL.md",
+          "markers": [
+            "minimum native harness capability contract",
+            "even `release-smoke` is not a promotion suite",
+            "After a full result passes promotion validation",
+            "live model/effort remains a native-session observation"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-evaluate-model/resources/protocol.md",
+          "markers": [
+            "Adding a harness requires evidence for every capability plus the full model suite",
+            "Promotion additionally requires `system.observed`",
+            "requested and observed model/effort match",
+            "runtime routing config, or permission to auto-promote"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+          "markers": [
+            "A changed concrete binding requires native-interactive qualification before promotion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-EVAL-003",
+      "level": "hard",
+      "statement": "Project model selection is a reference-only, atomic override of stable roles to locally qualified binding IDs; absent or empty selection preserves the managed default, while malformed, missing, ineligible, drifted, unsupported, or lineage-collapsing selection fails closed without partial fallback.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            ".codeflow/model-selection.json",
+            "An absent or empty file keeps the managed defaults",
+            "invalid or drifted active selection blocks preflight without partial application or silent fallback"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-customize/SKILL.md",
+          "markers": [
+            "every override references only a local binding ID qualified for that exact stable role",
+            "A failure blocks the selection",
+            "never write a raw selector, partially apply entries, or silently fall back"
+          ]
+        },
+        {
+          "path": ".codeflow/model-selection.json",
+          "markers": [
+            "\"schema_version\": 1",
+            "\"bindings\": []"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-GIT-001",
+      "level": "hard",
+      "statement": "Before a task's first branch, worktree, commit, merge, rebase, push, or delete mutation the agent asserts IDENTITY, INTENT-MATCH, and CURRENCY in order; an existing assignment mismatch stops and surfaces rather than silently adapting, while a protected root may create the exact assigned worktree after currency only when the assignment explicitly calls for creating it, then must rerun the assertions there.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "**IDENTITY** — establish where you actually are",
+            "**INTENT-MATCH** — confirm this is the worktree and branch *this task* was assigned",
+            "stop and surface it — never silently adapt",
+            "never accept name resemblance as a match",
+            "**CURRENCY** — fetch, then check the base against the repository's configured target branch",
+            "assignment explicitly calls for creating a worktree",
+            "Absence alone never authorizes repair",
+            "rerun all three assertions inside the new worktree"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-GIT-002",
+      "level": "hard",
+      "statement": "A landed task's worktree and branch are removed only after dirty-state inspection and proof of merge; a squash merge requires MERGED PR state with a matching head SHA or no unapplied git-cherry entry before branch force-delete, and worktree force-removal is prohibited.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Ancestry never proves a squash merge",
+            "require PR state `MERGED`",
+            "no unapplied `+` entry",
+            "Never force-remove a dirty worktree",
+            "Unproven work is retained"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "Clean up after the human merge, with proof",
+            "never use `git worktree remove --force`",
+            "to report `MERGED` and the branch-tip SHA",
+            "no unapplied `+` entry",
+            "Retain anything unproven"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/SKILL.md",
+          "markers": [
+            "delete the integration branch only after the merge is proven",
+            "require a `MERGED` PR with matching head SHA"
+          ]
+        }
       ]
     },
     {
@@ -452,8 +254,531 @@
       "level": "hard",
       "statement": "Orientation and post-landing closeout use the read-only CodeFlow status inventory for linked worktrees and unattached branches, promptly remove only clean entries proven landed after owner clearance, preserve active, dirty, or unproven work with an owner and recheck event, and never treat age, names, or worktree-prune metadata as merge proof.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["At orientation and after a landing, use `codeflow status`", "not ownership authorization", "never use age, name resemblance, or `git worktree prune` as merge proof"]},
-        {"path": ".agents/skills/cf-ship/SKILL.md", "markers": ["use `codeflow status` as the local worktree/branch inventory", "Confirm the task owner is inactive", "only removes stale administrative records"]}
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "At orientation and after a landing, use `codeflow status`",
+            "not ownership authorization",
+            "never use age, name resemblance, or `git worktree prune` as merge proof"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "use `codeflow status` as the local worktree/branch inventory",
+            "Confirm the task owner is inactive",
+            "only removes stale administrative records"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-GOV-001",
+      "level": "hard",
+      "statement": "Evidence outranks agreement and fabricated or unverifiable claims are defects.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Unverifiable or fabricated claims are defects",
+            "Every claim needs evidence"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Evidence outranks agreement"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-GOV-002",
+      "level": "hard",
+      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or red gates alone do not transfer an implementation tactic to the operator.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Missing intent, public behavior, security boundaries, authority",
+            "Treat an unclear requirement, API, or fact as a stop-and-verify",
+            "Navigate blockers; do not orbit them",
+            "One bounded confirmation of a prior failure",
+            "never retry it again unchanged",
+            "redness alone does not make it an operator decision"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "Do not confuse missing evidence with missing operator intent",
+            "bounded probe tied to a new hypothesis",
+            "One bounded confirmation of a prior failure",
+            "never retry it again unchanged",
+            "reroute only if accepted outcome",
+            "not automatic evidence that the operator must decide"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-develop/SKILL.md",
+          "markers": [
+            "Maximum 3 evidence-moving cycles",
+            "operator-owned decision"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-GOV-003",
+      "level": "hard",
+      "statement": "Destructive protected-branch actions, guard bypasses, and raw secret handling remain prohibited while public research and brokered tools stay available.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Never set override envs",
+            "never stage credentials",
+            "fix the cause — never bypass"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "public network and live search are enabled",
+            "raw tokens never enter prompts"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-001",
+      "level": "hard",
+      "statement": "Every non-trivial repository task starts with the Claude+Codex orchestrator when both seats are available.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Every non-trivial repository task **must begin with**",
+            "supporting flows, not"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Use the duo for every non-trivial repository task."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-002",
+      "level": "hard",
+      "statement": "Claude and Codex independently research, analyze risks, and draft complete plans from the same immutable brief before either sees the other conclusion.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "draft a plan in parallel before seeing the other's conclusions",
+            "an implementation plan and test strategy",
+            "reconciles the two drafts"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-003",
+      "level": "hard",
+      "statement": "Claude compares two or three designs unless the brief fixes one direction; Codex challenges feasibility, failure modes, security, testing, and maintainability.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "brief already fixes a clear direction",
+            "2–3 viable options",
+            "failure modes, security, testing, and maintainability"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-004",
+      "level": "hard",
+      "statement": "Both seats approve the exact plan and task assignments; a changed plan or named producer/reviewer seat or lineage invalidates both approvals, while a same-seat trigger-based effort escalation is evidence rather than reassignment.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "A changed plan invalidates both approvals",
+            "TASK_ASSIGNMENTS:",
+            "CLAUDE_APPROVAL:",
+            "CODEX_APPROVAL:"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "is reassignment: create Plan vN+1",
+            "same-seat high→xhigh escalation"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-005",
+      "level": "hard",
+      "statement": "The host assigns every task a producer and cross-lineage reviewer by task fit, tools/context, independence, verified availability/routing, resources, and observed native usage signals only.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "**Host routes execution.**",
+            "task fit",
+            "observed native usage signals only"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "TASK_ID | PRODUCER seat@effort",
+            "verified native availability and routing"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-006",
+      "level": "hard",
+      "statement": "Each producer first-verifies its unit, the named other-lineage seat reviews it independently, and the directly invoked Claude judgment primary owns the integrated design/code judgment without claiming independent review of its own authored unit; a fallback is recorded without claiming the selected primary reviewed.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "**Review is producer-relative.**",
+            "**The Claude judgment primary owns integrated Claude judgment.**",
+            "Codex supplies independent review",
+            "never report that the selected Claude judgment primary reviewed the work"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "A model cannot independently review its own authored unit",
+            "do not label the primary's integrated judgment"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-007",
+      "level": "hard",
+      "statement": "The directly invoked qualified Claude judgment primary owns Claude judgment; only the owning primary may use qualified internal routes from the current ensemble, and workers never settle the judgment.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "The Claude judgment primary owns integrated Claude judgment",
+            "let the owning primary control its internal routing",
+            "never let a worker replace a primary"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+          "markers": [
+            "\"role\": \"claude-judgment-primary\"",
+            "\"model_class\": \"latest-fable\"",
+            "\"model_class\": \"latest-opus\"",
+            "\"effort\": \"medium\"",
+            "\"effort\": \"high\"",
+            "without transferring judgment"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-008",
+      "level": "hard",
+      "statement": "Peer work uses native interactive vendor sessions with configured tools and MCPs, never headless model execution.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Native interactive sessions only",
+            "Never use `codex exec`",
+            "`claude -p`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-009",
+      "level": "hard",
+      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly and blocks rather than silently continuing.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "degrades legibly",
+            "mid-run failure",
+            "never a silent downgrade"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-010",
+      "level": "hard",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort, escalate only on its defined triggers, preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Use the concrete selectors",
+            "invoke each primary directly",
+            "retain primary planning/approval duties",
+            "never let a worker replace a primary"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+          "markers": [
+            "\"default_effort\": \"high\"",
+            "\"escalation_effort\": \"xhigh\"",
+            "\"model_class\": \"qualified-terra-worker\"",
+            "Claude-side internal routing belongs to the Claude primary",
+            "Unobserved model, effort, worker routing, availability, and usage remain unknown"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-011",
+      "level": "hard",
+      "statement": "Exactly one host owns top-level orchestration; every cross-harness task starts with an explicit peer or worker role, stays bounded, forbids delegating back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "**One orchestration owner.**",
+            "Only the host runs this top-level flow",
+            "the first line of every cross-harness task declares",
+            "generic same-lineage subagent never satisfies"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "Every native session declares one role",
+            "The first line of every cross-harness task declares",
+            "delegating back to the host lineage",
+            "generic same-lineage subagent cannot satisfy"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-012",
+      "level": "hard",
+      "statement": "Routing may use only observed native usage/route evidence; unknown state remains unknown and quota, availability, or worker routing is never inferred.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "observed native usage signal",
+            "unknown remains unknown",
+            "Never infer quota or availability"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "Admissible usage evidence",
+            "never infer quota, availability, or a worker route",
+            "missing signal blocks assignment",
+            "Do not silently substitute another criterion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-013",
+      "level": "hard",
+      "statement": "Cross-lineage evidence requires native runtime provenance; unproven attribution is reclassified as the author seat's lineage and the cross half redone; relays are transports while genuine workers remain authors in their own lineage; vendor self-simulation is prohibited; delegated work is verified on launch and its provenance, scoped diff, and cited evidence are verified on return; idle or completion signals are never evidence.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "**Cross-lineage evidence carries native provenance.**",
+            "A relay is transport, not author",
+            "same-lineage worker output remains same-lineage",
+            "vendor self-simulation is fabrication",
+            "scoped diff and cited evidence",
+            "idle or completion signal is evidence of neither"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "## Admissible cross-lineage evidence",
+            "only with native runtime provenance",
+            "reclassified as the author seat's own lineage",
+            "same-lineage worker that produces work remains same-lineage",
+            "verify the delegated task started",
+            "scoped worktree diff, and cited evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-014",
+      "level": "hard",
+      "statement": "A multi-task Plan vN settles an explicit acyclic task graph covering every assignment, uses evidence guards only for genuine pre-approved decisions beyond ordinary completion, materializes every direct structural candidate predecessor durably without making metadata executable, resolves mutually exclusive alternatives with selected/not-selected evidence, and requires fresh approval from both primary seats for a material node, edge, guard, ownership, acceptance/interface, or safety mutation while ordinary in-node execution evidence and safe topological reordering do not trigger ceremony.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/task-graph.md",
+          "markers": [
+            "Every task assignment appears exactly once as a node",
+            "A guard that merely restates a standard quality",
+            "An observed outcome that matches no approved guard is a graph mutation",
+            "Every unselected alternative records",
+            "non-executable structural topology",
+            "It never interprets guards",
+            "Create Plan vN+1 and obtain fresh approval from both primary seats",
+            "These remain execution evidence inside the approved graph",
+            "different valid topological order",
+            "Classify **and persist** each such occurrence in the execution ledger"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "both approvals cover the same canonical task graph",
+            "Ordinary steps and bounded implementation choices inside an approved node remain ledger evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-OUT-001",
+      "level": "hard",
+      "statement": "Outputs are audience-shaped, evidence-backed, explicit about limitations and N/A, and preserve material disagreement.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Shape the deliverable",
+            "never cut key information to condense"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "records both outputs without collapsing disagreements",
+            "any explicit N/A with reason"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-OUT-002",
+      "level": "hard",
+      "statement": "Substantial prose is reviewed in its full project, audience, medium, and task context; preserves technical meaning and credible documented voice; removes unsupported certainty, sycophancy, inflation, and obstructive formatting without fabricating personality or applying lexical, punctuation, list, or emoji blacklists.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "verified truth and policy outrank",
+            "documented voice/examples",
+            "never fabricate personality"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/SKILL.md",
+          "markers": [
+            "Resolve conflicts in this order",
+            "Never trade precision for fluency",
+            "There is no universal word, punctuation, formatting, or emoji blacklist",
+            "Do not use an AI detector"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-OUT-003",
+      "level": "hard",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Presentation is contextual and proportionate",
+            "scope and detail fit the explanation",
+            "least complicated form that remains complete, not the physically smallest",
+            "Never add decorative or forced diagrams, headings, tables, or recaps"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/SKILL.md",
+          "markers": [
+            "Keep formatting proportionate",
+            "scope and detail fit the explanation",
+            "complex subjects may need a larger, layered, or multi-view diagram",
+            "decorative or forced diagram, heading, table, or recap is a defect"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "proportionality in both directions",
+            "scope and detail fit the explanation",
+            "brief caption or legend when it aids orientation"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PAR-001",
+      "level": "hard",
+      "statement": "Parallel work is bounded by host resources, has one owner/branch/worktree per task, serializes shared contracts and integration, and verifies the combined diff.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "bounded concurrency cap",
+            "one owner, branch, and worktree",
+            "serialize each landing"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "HOST_RESOURCE_BUDGET:",
+            "one writer, branch, and worktree"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PLAT-001",
+      "level": "hard",
+      "statement": "Platform handling distinguishes native Windows from WSL2, selects the compatible native shell and installer, records the effective sandbox boundary, and never treats native-Windows Claude hooks or prompts as OS isolation.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "prefer WSL2 for Linux-equivalent tooling",
+            "Native Windows Codex must use its elevated sandbox",
+            "Claude Code has no native-Windows OS sandbox",
+            "Record the actual platform and effective boundary"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "keep native Windows and WSL2/Linux evidence separate",
+            "native Windows installer must select its Windows binary",
+            "WSL2 uses the Linux installer and binary"
+          ]
+        }
       ]
     },
     {
@@ -461,8 +786,21 @@
       "level": "hard",
       "statement": "Durable work has one authoritative home: CodeFlow uses flat stable-ID Git records for repo-local gated work, links rather than mirrors external trackers or planning methods, and never promotes a host-local database from rebuildable cache or single-host runtime state into shared team truth.",
       "sources": [
-        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["The authority owns status, acceptance, and lifecycle", "`external_refs` contains opaque links or IDs, never mirrored status", "must remain rebuildable from Git Markdown"]},
-        {"path": ".agents/skills/cf-customize/SKILL.md", "markers": ["Project shape and work authority", "never status mirroring or a host-local database as shared team truth"]}
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "The authority owns status, acceptance, and lifecycle",
+            "`external_refs` contains opaque links or IDs, never mirrored status",
+            "must remain rebuildable from Git Markdown"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-customize/SKILL.md",
+          "markers": [
+            "Project shape and work authority",
+            "never status mirroring or a host-local database as shared team truth"
+          ]
+        }
       ]
     },
     {
@@ -470,8 +808,21 @@
       "level": "hard",
       "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives dual-approved Plan vN+1 before work continues, never retrospective approval in closeout.",
       "sources": [
-        {"path": "project-management/templates/task.md", "markers": ["Bounded discoveries/deviations", "never legalized here after implementation", "settle Plan vN+1 with both primary seats, then continue"]},
-        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["bounded in-node discoveries are captured only when review-relevant", "Closeout cannot approve a deviation after the fact"]}
+        {
+          "path": "project-management/templates/task.md",
+          "markers": [
+            "Bounded discoveries/deviations",
+            "never legalized here after implementation",
+            "settle Plan vN+1 with both primary seats, then continue"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-plan/SKILL.md",
+          "markers": [
+            "bounded in-node discoveries are captured only when review-relevant",
+            "Closeout cannot approve a deviation after the fact"
+          ]
+        }
       ]
     },
     {
@@ -479,8 +830,21 @@
       "level": "hard",
       "statement": "New durable records use independent EPC-NNN, SPC-NNN, and TSK-NNN IDs with explicit relationships; a task has an epic or justified standalone rationale, and historical nested, dual-identity, and TSK-NNN-NNN records remain readable without becoming the new write shape.",
       "sources": [
-        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["independent, repo-wide sequences", "`standalone_reason`", "reads historical dual-identity and `TSK-NNN-NNN` records"]},
-        {"path": "AGENTS.md", "markers": ["independent sequences and", "justified `standalone_reason`"]}
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "independent, repo-wide sequences",
+            "`standalone_reason`",
+            "reads historical dual-identity and `TSK-NNN-NNN` records"
+          ]
+        },
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "independent sequences and",
+            "justified `standalone_reason`"
+          ]
+        }
       ]
     },
     {
@@ -488,8 +852,23 @@
       "level": "hard",
       "statement": "Durable implementation starts only after a validated planning PR reaches a declared real local or remote-tracking non-task branch; codeflow work start, pre-commit, and CI reject revision-expression aliases and share a read-only merge-base check for the task, matching target declaration, parent or standalone rationale, ready specs, and completed predecessors.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["validated planning PR must reach", "`codeflow work start TSK-NNN`", "CLI, pre-commit, and CI share this read-only rule"]},
-        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["Merge the planning PR into every task's", "A task branch is never an integration target", "real local or remote-tracking branch", "preflight is read-only"]}
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "validated planning PR must reach",
+            "`codeflow work start TSK-NNN`",
+            "CLI, pre-commit, and CI share this read-only rule"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-plan/SKILL.md",
+          "markers": [
+            "Merge the planning PR into every task's",
+            "A task branch is never an integration target",
+            "real local or remote-tracking branch",
+            "preflight is read-only"
+          ]
+        }
       ]
     },
     {
@@ -497,8 +876,21 @@
       "level": "hard",
       "statement": "Planning resolves discoverable facts autonomously and asks only the smallest consequential operator-owned question when the answer changes outcome, public behavior, authority, material security, or irreversible action; cf-model-orchestrator owns independent duo settlement and cf-plan owns clarification discipline and durable materialization.",
       "sources": [
-        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["Resolve discoverable facts", "Ask the operator only", "do not ask them to perform repository discovery"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["orchestrator owns independent discovery and settlement", "`cf-plan` owns clarification discipline"]}
+        {
+          "path": ".agents/skills/cf-plan/SKILL.md",
+          "markers": [
+            "Resolve discoverable facts",
+            "Ask the operator only",
+            "do not ask them to perform repository discovery"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "orchestrator owns independent discovery and settlement",
+            "`cf-plan` owns clarification discipline"
+          ]
+        }
       ]
     },
     {
@@ -506,9 +898,29 @@
       "level": "hard",
       "statement": "The repository workflow has one legible path from brief and evidence-led clarification through dual-approved Plan vN, planning-branch materialization and stable anchoring, work-start proof, implementation, cross-lineage review, integrated judgment, shipping, and proven cleanup; material amendments return to Plan vN+1, blocked work changes strategy before escalation, cancellation records closeout, and unavailable model seats degrade explicitly rather than fabricating approval.",
       "sources": [
-        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["From discussion to delivered work", "implement -> verify -> cross-lineage review -> integrated judgment -> ship", "Material discovery"]},
-        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["A substantive amendment creates", "Failure paths are explicit", "record a proved unavailable seat as reduced assurance"]},
-        {"path": ".agents/skills/cf-model-orchestrator/SKILL.md", "markers": ["Bounded, evidence-moving loops", "A deterministic failure or unverified criterion blocks"]}
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "From discussion to delivered work",
+            "implement -> verify -> cross-lineage review -> integrated judgment -> ship",
+            "Material discovery"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-plan/SKILL.md",
+          "markers": [
+            "A substantive amendment creates",
+            "Failure paths are explicit",
+            "record a proved unavailable seat as reduced assurance"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Bounded, evidence-moving loops",
+            "A deterministic failure or unverified criterion blocks"
+          ]
+        }
       ]
     },
     {
@@ -516,9 +928,118 @@
       "level": "hard",
       "statement": "A supplied task set is first partitioned by coherent durable outcome and direct dependencies rather than treated as one automatic epic boundary. Once outcome, acceptance boundaries, and the dependency graph establish one coherent multi-task epic, the orchestrating agent selects one shared non-protected integration branch from the intended protected target before allocation without asking the operator to choose a routine landing mechanism; an explicit operator request is respected only within the same clarity, safety, review, and protected-branch boundaries, never as a holding branch for unrelated work; every epic task declares that target, independent tasks branch from its current tip while a dependent task branches from the updated tip only after its predecessors land, work-start preflight follows branching, and each task completes producer verification and cross-lineage review before serialized graph-order landing; aggregate gates and both-family review then run on the exact combined diff as an additional integration layer, and only one final human-reviewed PR reaches the protected target; a different landing shape requires a recorded Plan vN rationale and approval from both primary seats, never mere convenience.",
       "sources": [
-        {"path": ".agents/skills/cf-plan/SKILL.md", "markers": ["partition it by coherent durable", "Do not treat the batch itself as an epic boundary", "For each multi-task epic, first create one shared", "Select this shape autonomously", "do not ask the operator merely to choose the routine landing mechanism", "per-task review occurs before integration", "Honor an explicit operator request", "A different landing shape needs an explicit Plan vN rationale"]},
-        {"path": ".agents/skills/cf-method/SKILL.md", "markers": ["first partition it by coherent", "not itself a reason to share a branch", "default landing shape for a multi-task epic", "never a holding branch for unrelated standalone tasks", "does not defer or replace task-level orchestration", "before landing", "additional integration layer", "chooses this routine mechanism without an operator question", "explicit operator request is valid input", "approval from both primary seats before tasks are allocated", "serial tasks branch from the updated integration", "parallel tasks branch concurrently", "both primary seats review the exact combined integration diff"]},
-        {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["the request boundary is not automatically an epic", "for every task in a multi-task epic", "Create that one shared branch from the intended protected target"]}
+        {
+          "path": ".agents/skills/cf-plan/SKILL.md",
+          "markers": [
+            "partition it by coherent durable",
+            "Do not treat the batch itself as an epic boundary",
+            "For each multi-task epic, first create one shared",
+            "Select this shape autonomously",
+            "do not ask the operator merely to choose the routine landing mechanism",
+            "per-task review occurs before integration",
+            "Honor an explicit operator request",
+            "A different landing shape needs an explicit Plan vN rationale"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/SKILL.md",
+          "markers": [
+            "first partition it by coherent",
+            "not itself a reason to share a branch",
+            "default landing shape for a multi-task epic",
+            "never a holding branch for unrelated standalone tasks",
+            "does not defer or replace task-level orchestration",
+            "before landing",
+            "additional integration layer",
+            "chooses this routine mechanism without an operator question",
+            "explicit operator request is valid input",
+            "approval from both primary seats before tasks are allocated",
+            "serial tasks branch from the updated integration",
+            "parallel tasks branch concurrently",
+            "both primary seats review the exact combined integration diff"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "the request boundary is not automatically an epic",
+            "for every task in a multi-task epic",
+            "Create that one shared branch from the intended protected target"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-001",
+      "level": "hard",
+      "statement": "Documentation-portal adoption is explicit and proportional: durable layered source needs justify it, while empty, tiny, short-lived, or otherwise immaterial repositories remain Markdown-only without a portal workspace, lockfile, dependency, or decorative empty pages.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/SKILL.md",
+          "markers": [
+            "Decide whether to adopt",
+            "Record an honest refusal",
+            "Non-adopters receive no Node workspace or lockfile"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-002",
+      "level": "hard",
+      "statement": "An adopted portal is a layered source-in-place derivative with pinned commit/release provenance, exact relationships and inverse links, direct strict-ID links with contextual previews, and contextual routing through the orchestrator, cf-docs-portal, cf-design, and cf-editorial-review without creating a second content authority.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/SKILL.md",
+          "markers": [
+            "derived utility, never a second source of truth",
+            "Apply `cf-design`",
+            "Apply `cf-editorial-review`",
+            "strict-ID previews"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/content-contract.md",
+          "markers": [
+            "source-to-route graph",
+            "normal links with source-grounded contextual previews"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-003",
+      "level": "hard",
+      "statement": "Only one clean committed snapshot may be called current; dirty, staged, deleted, untracked, ignored, inaccessible, changing, or unverifiable configuration/runtime/source/token/media input blocks publication, while retained last-good pages and graph edges are visibly stale and excluded from current search, indexes, inverse links, and agent-readable listings.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/references/content-contract.md",
+          "markers": [
+            "Build only from one clean, full Git commit",
+            "Never label worktree bytes with `HEAD`",
+            "exclude it from search"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-004",
+      "level": "hard",
+      "statement": "The portal remains isolated from product and cf-present design/runtime authority; an adopter rebuilds, validates, and proportionately reviews rendered impact when authoritative docs, relationships, version, configuration, or starter behavior materially changes, while non-adopters receive no portal ship gate.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/references/operations.md",
+          "markers": [
+            "When `.codeflow/docs-portal.json` exists",
+            "This lifecycle gate applies only to adopters"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "Non-adopters receive no portal gate"
+          ]
+        }
       ]
     },
     {
@@ -526,8 +1047,22 @@
       "level": "hard",
       "statement": "Interactive presentation is proportional and user-invokable: use cf-present when a complex explanation or review materially benefits from one coherent visual surface or anchored feedback, keep short linear answers in the native conversation, and never confuse the utility with consuming-product UI or a durable documentation portal.",
       "sources": [
-        {"path": "AGENTS.md", "markers": ["Present a complex result for interactive review", "keep simple answers in chat", "never treat the utility as product UI or durable documentation"]},
-        {"path": ".agents/skills/cf-present/SKILL.md", "markers": ["Decide whether the surface earns its cost", "Stay in chat for a short answer", "Do not turn formatting preference into a runtime session"]}
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Present a complex result for interactive review",
+            "keep simple answers in chat",
+            "never treat the utility as product UI or durable documentation"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/SKILL.md",
+          "markers": [
+            "Decide whether the surface earns its cost",
+            "Stay in chat for a short answer",
+            "Do not turn formatting preference into a runtime session"
+          ]
+        }
       ]
     },
     {
@@ -535,8 +1070,22 @@
       "level": "hard",
       "statement": "A cf-present document uses the closed validated declarative envelope and reusable accessible blocks selected by information shape; visuals carry information rather than decorate prose, substantial language remains evidence-bound and audience-fit, stable block IDs preserve revision meaning, and accepted durable outcomes are promoted to their one canonical authority rather than left in presentation history.",
       "sources": [
-        {"path": ".agents/skills/cf-present/SKILL.md", "markers": ["Choose blocks by information shape", "A visual must communicate", "Promote an accepted durable decision"]},
-        {"path": ".agents/skills/cf-present/references/document-authoring.md", "markers": ["Every block ID is unique", "Keep the first reading path complete", "Accepted decisions are summarized to their canonical durable home"]}
+        {
+          "path": ".agents/skills/cf-present/SKILL.md",
+          "markers": [
+            "Choose blocks by information shape",
+            "A visual must communicate",
+            "Promote an accepted durable decision"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/references/document-authoring.md",
+          "markers": [
+            "Every block ID is unique",
+            "Keep the first reading path complete",
+            "Accepted decisions are summarized to their canonical durable home"
+          ]
+        }
       ]
     },
     {
@@ -544,8 +1093,421 @@
       "level": "hard",
       "statement": "cf-present lifecycle preserves the runtime trust boundary: validate with the public schema and authoritative runtime, open only a CodeFlow-owned isolated profile, never replay history without explicit look-back, deduplicate at-least-once feedback by event ID, resolve delivered feedback only after evidence with its current lifecycle version, export only on demand without treating utility themes as product authority, and close and clean only verified task-owned state; an unproven orphan identity is retained for bounded native recovery rather than broadly killed or deleted.",
       "sources": [
-        {"path": ".agents/skills/cf-present/SKILL.md", "markers": ["let `codeflow present open", "Deduplicate by stable `event_id`", "use `codeflow present resolve", "a stale or cross-session transition fails closed", "Never inject old presentation history", "Verify the isolated browser/process", "do not use broad name matching", "retry `codeflow present close`"]},
-        {"path": ".agents/skills/cf-present/references/document-authoring.md", "markers": ["without scripts, same-origin access, forms, navigation, or network", "orphaned annotations as visible unresolved context", "utility defaults never influence the product"]}
+        {
+          "path": ".agents/skills/cf-present/SKILL.md",
+          "markers": [
+            "let `codeflow present open",
+            "Deduplicate by stable `event_id`",
+            "use `codeflow present resolve",
+            "a stale or cross-session transition fails closed",
+            "Never inject old presentation history",
+            "Verify the isolated browser/process",
+            "do not use broad name matching",
+            "retry `codeflow present close`"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/references/document-authoring.md",
+          "markers": [
+            "without scripts, same-origin access, forms, navigation, or network",
+            "orphaned annotations as visible unresolved context",
+            "utility defaults never influence the product"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-001",
+      "level": "hard",
+      "statement": "Where line coverage is supported, aggregate production coverage has a hard 80 percent floor and a normal 90 percent target; a weaker repository setting cannot undercut it.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "hard floor of **80%**",
+            "normal target is **90% or higher**",
+            "may enforce a stronger floor"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-002",
+      "level": "hard",
+      "statement": "Verification covers relevant unit, integration, end-to-end, security, and rendered UI behavior; routine deterministic web E2E may use a headless browser without changing interactive peer-model transport, and behavior, visual, runtime, trace, and accessibility evidence is matched to the claim; unavailable or not applicable are never reported as passes.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "end-to-end tests",
+            "Browser headless mode is valid",
+            "prohibited headless peer-model transport",
+            "Match evidence to the claim",
+            "A screenshot alone does not prove interaction or accessibility",
+            "Tool unavailability is a blocker or declared limitation, not a pass"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-003",
+      "level": "hard",
+      "statement": "Design and implementation use the smallest coherent durable solution for the accepted lifecycle, scale, change rate, contributor and integration breadth, operational risk, and reversibility; reject both speculative complexity and brittle under-design; preserve justified modularity and reuse; handle accepted edge and failure cases; clarify materially missing context; and treat project size or raw line count only as inputs, never automatic architecture rules.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Write only what earns its keep",
+            "DRY with judgment",
+            "brittle under-design, not simplicity"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "smallest coherent solution",
+            "brittle under-design",
+            "not the fewest lines",
+            "accepted operating context",
+            "size alone",
+            "clarify it before approval"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-004",
+      "level": "hard",
+      "statement": "UI work reuses an existing design system when present and composes recurring tokens, accessible primitives, application components, and explicit state into views without duplicated one-off implementations or speculative framework layers.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "existing design system",
+            "accessible primitives",
+            "composition into views or pages",
+            "no new design system or higher-order abstraction for a one-off surface"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "For UI changes",
+            "tokens, accessible primitives, and components"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-005",
+      "level": "hard",
+      "statement": "Discovery is broad but action is materiality-led: distinguish consequence from the current dependency or blocker controlling the accepted outcome; protect quality, testing, security, review, documentation, and recovery while prioritizing that path; fix clear safe in-scope improvements when focused validation is bounded; consolidate only genuinely uncertain secondary observations for one natural cross-lineage checkpoint; and track a retained item once with evidence, value, and a deterministic revisit event rather than age or vague later wording. Keep severity and confidence distinct, preserve CVSS-aligned security labels, approve when only non-blocking nits remain, and route evidenced out-of-scope material risk without silent scope expansion, external mutation, or issue farming.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Find broadly; act by materiality",
+            "current dependency or blocker controlling the accepted outcome explicit",
+            "Fix a clear, safe, local, in-scope improvement",
+            "event-based revisit trigger",
+            "Remediation effort informs sequencing, never severity",
+            "Nothing material found"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "Discovery is broad; action is selective",
+            "current dependency or blocker controlling the accepted outcome",
+            "verify it while context is warm",
+            "deterministic event trigger",
+            "Dispatch is not disposition",
+            "Keep evidence confidence separate from consequence",
+            "do not prevent approval when they are the only findings",
+            "issue farming and fabricated proactive signals are failures"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "Order the report by materiality",
+            "fix now, track once",
+            "deterministic revisit event",
+            "if they are the only findings, return `approved`"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-security-reviewer.md",
+          "markers": [
+            "Preserve the CVSS-aligned",
+            "remediation effort never changes"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-006",
+      "level": "hard",
+      "statement": "Property/generative tests, targeted mutation testing, and project-owned architecture fitness checks strengthen normal verification only when named repository evidence satisfies their technique-specific triggers; explicit examples and normal scenario gates remain, none-selected is valid, concrete tools and thresholds stay project-owned, and over-triggering heavyweight or duplicative checks is a quality defect.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/verification-selection.md",
+          "markers": [
+            "`none selected` is a valid and common result",
+            "Select them when all of these hold",
+            "Keep explicit examples for known singular boundaries",
+            "Use a targeted, time-bounded mutation run",
+            "First require a deterministic base suite",
+            "Add a project-owned deterministic fitness check",
+            "Do not duplicate a compiler",
+            "Concrete tools, thresholds, commands, and CI cadence belong to the consuming project"
+          ]
+        },
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Select property/generative tests, targeted mutation testing, or project-owned architecture fitness checks only from the orchestrator's evidence triggers",
+            "`none selected` is valid",
+            "normal scenario coverage remains mandatory"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-007",
+      "level": "hard",
+      "statement": "Verification combines applicable deterministic structural/security checks with independent contextual judgment; model consensus cannot override a deterministic red result or claim an unavailable analyzer ran, and missing relevant SAST/taint evidence remains explicit residual risk.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "Record deterministic and contextual evidence as complementary layers",
+            "A deterministic red result cannot be overridden by model agreement",
+            "record the residual risk and disposition"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-customize/SKILL.md",
+          "markers": [
+            "deterministic security lane",
+            "model review and SCA do not impersonate it"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-008",
+      "level": "hard",
+      "statement": "Quality review uses a bounded, evidenced history slice when relevant to detect structural erosion that a point-in-time passing diff can hide, without inferring trends from one point or turning review into unbounded archaeology.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "Quality review is also longitudinal",
+            "smallest useful history slice",
+            "Do not infer a trend from one point",
+            "unbounded archaeology exercise"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-009",
+      "level": "hard",
+      "statement": "Tests protect observable contracts and must be capable of failing for material regressions; coverage cannot be manufactured with tautologies, implementation-copied expectations, duplicate production algorithms as oracles, mock-only wiring assertions, weakened assertions, test-only production branches, or unreachable code.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "Tests must be capable of failing for a material regression",
+            "Reject tautological assertions",
+            "Coverage measures exercised lines; it never proves test integrity"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "inspect whether changed tests would fail for a material regression",
+            "test-only production paths added to manufacture coverage"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-010",
+      "level": "hard",
+      "statement": "Performance-, scale-, and concurrency-sensitive paths are reviewed against their actual operating shape, including complexity and N+1 access, bounded work and memory, backpressure/cancellation, blocking async work, state ownership/synchronization, races/lost updates, deadlocks, idempotency/retry amplification, and resource cleanup, with measured or stress/race evidence when material risk earns it.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "For performance-, scale-, or concurrency-sensitive paths",
+            "N+1 access",
+            "Require a benchmark, profiler, load/stress test, race/concurrency test, or direct operational measurement"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "performance-, scale-, or concurrency-sensitive",
+            "require measured or stress/race evidence only when the claim or risk is material"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-011",
+      "level": "hard",
+      "statement": "Every material changed journey maps its affected topology and has faithful end-to-end evidence through each applicable changed in-project and runtime boundary; unit/integration tests remain complementary, controlled external doubles are disclosed and contract-checked where feasible, and an unexercised seam is never reported as whole-flow proof.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "For each material changed journey, map the exercised path",
+            "At least one test at the highest faithful surface",
+            "does not prove that whole journey",
+            "record it as controlled and unexercised",
+            "never claim that dependency was live or exercised"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "compare the declared topology with the executed E2E evidence",
+            "not counted as whole-flow proof"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-QA-012",
+      "level": "hard",
+      "statement": "Concurrent UI verification allocates task-owned isolated browser state, non-overlapping listening and application endpoints where applicable, namespaced test data, and run-scoped artifacts, then verifies bounded teardown; headed or Computer Use work never attaches to or takes over the operator's browser, profile, tabs, or active desktop.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "before any concurrent browser work",
+            "never attach to the operator's existing browser",
+            "verify ports and task-owned resources were released",
+            "CodeFlow supplies this resource contract, not universal port numbers"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-customize/SKILL.md",
+          "markers": [
+            "settle and canary its browser-resource contract",
+            "must not attach to or manipulate the operator's existing tabs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-REF-001",
+      "level": "hard",
+      "statement": "Work consults product scope and capabilities before building and uses architecture, ADRs, and recall for rationale rather than inventing it.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "check `docs/capabilities.md`",
+            "skim the most recent ADRs",
+            "codeflow recall"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-SEC-001",
+      "level": "hard",
+      "statement": "Security review unions a Claude defender and Codex attacker lens, preserves divergence, and blocks loss of a required second vendor.",
+      "sources": [
+        {
+          "path": ".claude/agents/cf-security-reviewer.md",
+          "markers": [
+            "Defender lens — Claude",
+            "Attacker lens — a second vendor",
+            "Cross-vendor divergence escalates",
+            "severity high / confidence confirmed"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-SEC-002",
+      "level": "hard",
+      "statement": "Recoverable task-scoped project edits and deletions remain autonomous, while catastrophic system-level actions require authenticated human control; model consensus or automatic review is never authorization, a peer cannot bypass the host boundary, and CodeFlow's non-relaxable class remains operator-only even after approval.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Recoverable, task-scoped project",
+            "Model agreement or",
+            "peer cannot be used",
+            "remains agent-blocked even after approval"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Ordinary task-scoped project",
+            "Model consensus, Claude auto mode",
+            "human operator performs it through a separate"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-SEC-003",
+      "level": "hard",
+      "statement": "Before a host-permitted high-blast-radius action, the host requires exact bounded scope, preview or dry-run evidence where supported, a current verified checkpoint or backup, a tested restore path, and explicit authenticated human approval; missing evidence fails closed, and approved execution advances one verified bounded step at a time.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Present the exact bounded action",
+            "current verified checkpoint or backup",
+            "missing evidence, an untested restore path",
+            "execute one bounded step at a time"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "exact scope and command/tool input",
+            "current checkpoint/backup and tested restore path",
+            "postcondition verification"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-SHIP-001",
+      "level": "hard",
+      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Protected branches",
+            "merged by a human"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-SHIP-002",
+      "level": "hard",
+      "statement": "Cross-compilation is compile/link evidence only; release readiness requires native platform tests and installer canaries, and missing native evidence remains an explicit blocker rather than an inferred pass.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "Cross-build success proves compilation and linking only",
+            "never replaces native macOS/Linux/Windows tests or installer canaries",
+            "Missing platform evidence blocks publication"
+          ]
+        }
       ]
     }
   ]

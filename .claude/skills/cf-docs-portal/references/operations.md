@@ -6,7 +6,9 @@
 lockfile, tests, and styles are managed with Git-tracked, opaque,
 content-addressed pristine baselines. On an
 upstream change, an untouched file is replaced; an edited file receives a
-three-way merge; a conflict keeps the original and writes `<path>.new`.
+three-way merge; a conflict keeps the original and writes a collision-safe,
+content-addressed `<path>.codeflow-<hash>.new` sidecar without overwriting an
+existing path.
 Commit `.codeflow/docs-portal.json` and its opaque
 `.codeflow/.docs-portal-baseline/` blobs with the adopted starter. They are
 team-portable reconciliation state, not a private runtime cache; their
@@ -40,6 +42,13 @@ Do not publish generated output when source validation or evidence verification
 fails. Do not treat an automated accessibility score as proof of complete
 conformance or an agent review as a deterministic gate.
 
+When `.codeflow/docs-portal.json` exists, a material change to authoritative
+docs, relationships, repository/release version, portal configuration, or
+starter behavior requires the locked check and build plus `codeflow validate
+--portal <adopted-root>` before ship. Add rendered/browser review in proportion
+to navigation, preview, search, theme, responsive, or accessibility impact.
+This lifecycle gate applies only to adopters.
+
 The adapter serializes generated-corpus and evidence writes with an expiring
 single-writer lease, publishes complete staged directory sets, and recovers its
 write-ahead journal before another writer proceeds. Same-filesystem file and
@@ -47,3 +56,9 @@ directory replacement failures retain or restore the prior corpus. POSIX builds
 also sync changed directories; native Windows cannot portably make that
 directory-sync guarantee, so power-loss durability there remains a release
 canary claim rather than an inference from Unix tests.
+
+The locked `check` and `build` scripts also hold one top-level workflow lease
+across adapter, Astro, and final evidence steps, so another process cannot bind
+its `dist` tree to the wrong snapshot. `dev` is intentionally a separately
+owned, long-running session: run only one task-owned dev server per portal,
+stop it before a locked check/build, and verify process and port teardown.

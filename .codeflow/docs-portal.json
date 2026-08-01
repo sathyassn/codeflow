@@ -9,15 +9,15 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2e73f6e1a19169ebb83a55e6e8371e8bc8f59a41ed66562a5cd938e56ad80808"
+      "pristine_sha256": "d5e9717743e53da5307cb4c79dafd7ed05941cf478152976665573ee25e83722"
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "f5bcda69594f3aca735992f5120c887df48f3c226708181988adb9782f45ec4c"
+      "pristine_sha256": "d2f1053734486ae805475302d1b75aa26f732e4958d2879013a3302a23d860af"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "bafe161167fd9fe8a084c58bdec39ebd5a675389923721a7478a007b04ffe426"
+      "pristine_sha256": "e842fdcc98d2524e61a482f575fc743606e80c0db4d539ea84a09e7affc9510f"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -27,17 +27,29 @@
       "ownership": "managed",
       "pristine_sha256": "b4023a362ccb997311a10ebe6c9f684888db90b82450a6da5909b094eb75f139"
     },
+    "public/portal-preview.js": {
+      "ownership": "managed",
+      "pristine_sha256": "a1e629486eac4753651c182d1a75a1e6cfcfdd9269708572bbe3291d641cf57f"
+    },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "c451b04108ecd724b0f6d579b574f4ce100f36797d30d51ffdef397bf47f188a"
+      "pristine_sha256": "3920bfd5c350409b210af70572b13e8bcd06f77204fda0734c0e665823c421e1"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ee985911fb56618fecf73ffc3df6d5650bd46fa81d8854e70bab5d97ad646f3d"
+      "pristine_sha256": "96c95d4da2fdd838fa8ea06fa8e11047635bb5fea49374c8169d3c7b094ad9ee"
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "43f56d775fa348dc94e1985cf4c0ec5684231327b70abce8dd6c8d9de3787e8e"
+      "pristine_sha256": "07318e246fd3dc8543fb1b6c06550f5432f8710c548c7475587cf6c838e0e054"
+    },
+    "scripts/publication.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "d3a21d6cdd4d2f441b95fec9953d777852afbe00dc769ef6d32a7ffd9d1a2a3c"
+    },
+    "scripts/workflow.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "402e0f74deeda80681348cd71eb28361b0d2edb8fd424b4e0101168a20e1d9cf"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -45,11 +57,11 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "9ca9b5d5da71935c0a3d824d15d5003b442a442b64e0802eee637459fad1d3d8"
+      "pristine_sha256": "fae7ca5c8239928bf4f2dbd74b967dc343e1abe33bee2e7aa82c68470318b183"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "e20efea923bfd88a339c8818c4ec38a40b00adc5bbb1ac0b0a7ad4c33c94e113"
+      "pristine_sha256": "9a7a1ea028025536bba6937311ca1d368a969c251a3fe949b37d67624cb3a5a8"
     },
     "tsconfig.json": {
       "ownership": "managed",
