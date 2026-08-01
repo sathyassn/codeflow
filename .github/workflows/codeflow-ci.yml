@@ -40,8 +40,8 @@ jobs:
           cargo build --release -p codeflow-cli
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
-      - name: codeflow test --mode full
-        run: codeflow test --mode full
+      - name: codeflow test --mode full --strict
+        run: codeflow test --mode full --strict
 
       - name: codeflow validate --docs
         run: codeflow validate --docs

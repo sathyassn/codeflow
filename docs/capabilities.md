@@ -735,8 +735,8 @@ support.
 id: CAP-015
 name: opt-in-documentation-portal
 area: scaffold
-status: building
-verified_by: ["cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "npm run check --prefix docs-portal", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/"]
+status: shipped
+verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/"]
 epics: [EPC-005]
 adrs: [ADR-0048]
 ```
@@ -764,6 +764,15 @@ nothing; it independently checks bounded path, hash, complete configured-source
 coverage, exact source-derived identity/relationship, error-page, provenance, version, raster-dimension,
 output-coverage, twin, and
 `llms.txt` claims.
+
+The repository-owned full gate runs the complete locked JavaScript authority
+suite, a real Starlight build, and the Rust verifier locally and on Ubuntu; the
+Windows lane runs the same JavaScript authority/path suite. Shared fixtures pin
+configuration, strict-frontmatter, 40/64-character Git object ID, exact
+case-sensitive route, and URL-boundary behavior across the producer and
+verifier. These dogfood gates do not leak a Node requirement into the generic
+consumer CI scaffold: adopted consumer portals opt into their project test
+configuration.
 
 The mirrored `cf-docs-portal` skill owns proportional adoption, layered
 information design, safe source interpretation, exact dependency operations,

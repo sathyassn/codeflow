@@ -83,7 +83,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stable no-follow publication copies, raster-dimension limits, and
   locale-independent ordering, neutralizes derived metadata, and
   publishes under recoverable corpus and whole-workflow leases (ADR-0048,
-  CAP-015).
+  CAP-015). Canonical routes retain exact NFC case and punctuation while URL
+  boundaries encode segments; shared JavaScript/Rust authority fixtures cover
+  strict frontmatter, repository URLs, and SHA-1/SHA-256 object IDs. Committed
+  non-reserved public files are also snapshot-authoritative. CodeFlow's full
+  strict gate now blocks on locked portal tests/build/Rust validation on Ubuntu,
+  with the authority/path suite repeated on Windows; generic consumer CI stays
+  opt-in. Compressed release embedding keeps the offline starter within the
+  ADR-0048 binary budget.
 
 - **Multi-task epics now default to one topology-aware integration branch.**
   Planning creates the shared non-protected target from the intended protected

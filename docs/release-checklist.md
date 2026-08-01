@@ -104,7 +104,10 @@ named human release decision.
       lockfile, or baseline; an adopter passes setup/update/conflict/idempotence,
       locked install/build/audit/upgrade, `validate --portal`, source/manifest
       negative fixtures, and Chromium/Firefox/WebKit accessibility journeys.
-      Generated output is not published by these checks.
+      CodeFlow itself runs the `docs-portal` target through
+      `codeflow test --mode full --strict` locally and on Ubuntu, plus the
+      authority/path suite on Windows. Generic consumer CI remains portal-free
+      until adoption. Generated output is not published by these checks.
 
 ## 4. Harness and model qualification
 

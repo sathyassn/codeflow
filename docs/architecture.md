@@ -433,7 +433,14 @@ committed bytes even when index flags hide worktree changes. The Rust verifier
 independently derives complete source coverage and semantic routes from the
 committed configuration and tree. Generated Markdown, media, and `llms.txt`
 namespaces are replaced in full while bounded project-owned public files
-outside them remain preserved. It parses GFM
+outside them are read from committed blobs, checked against the worktree, and
+then preserved; active untracked or index-masked public content fails closed.
+Route identity retains exact NFC source-path case and punctuation, while URL
+boundaries encode each path segment and portable case folding is used only to
+reject collisions. Both JavaScript production and Rust verification consume a
+shared authority fixture for bounded configuration/frontmatter semantics, and
+the route contract is qualified through a real Starlight build rather than a
+string-only unit test. It parses GFM
 through a syntax tree and publishes all generated roots transactionally under
 one workflow lease with locale-independent ordering. Commit inventory and blob
 reads are batched and bounded; Git receives only a small non-secret environment

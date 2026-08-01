@@ -2,7 +2,7 @@
 id: ADR-0048
 title: isolate portal adoption and verify derived evidence
 date: 2026-08-01
-status: proposed
+status: accepted
 superseded_by: null
 architecture_impact: docs/architecture.md — an opt-in managed portal starter is embedded once outside the mirrored skills, while validate gains a read-only verifier for its derived evidence manifest
 ---
@@ -85,7 +85,12 @@ The starter source is capped at 2 MiB unpacked, its archive-equivalent content
 at 1 MiB, and its measured release-binary increase at 1 MiB. `SKILL.md` remains
 within the existing 300-line skill limit. The macOS arm64 release baseline at
 commit `88215cc977039ed405b8875a38ae00cd61f614c5` is 10,473,952 bytes; the final
-implementation appends the exact post-change size and delta to this decision.
+task implementation is 11,161,104 bytes, a 687,152-byte increase. The starter
+is 459,410 tracked bytes and 103,155 archive-equivalent bytes. Release builds
+use `rust-embed`'s upstream compression support so the offline starter does not
+consume its unpacked size in every binary; debug builds retain the existing
+disk-backed development behavior. The compression dependency set remains
+subject to the normal locked supply-chain audit.
 
 ## Consequences
 
@@ -97,7 +102,10 @@ or second documentation authority. The evidence manifest is a public derived
 format and therefore needs schema tests, path and byte caps, and compatible
 version handling. An adopted starter can carry project edits, so upstream
 changes may require a reported three-way merge or conflict instead of silent
-replacement.
+replacement. Compressed embedding adds bounded decompression work when an
+embedded asset is read. This is paid during explicit scaffold/portal
+materialization rather than normal repository operations and preserves the
+single-binary, offline contract within the measured size budget.
 
 The Rust verifier is intentionally narrower than the Node adapter. A green
 manifest check proves that emitted claims match bytes and repository IDs; it
