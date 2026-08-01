@@ -270,6 +270,14 @@ confirms the final content.
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;
   keep fast-aging version pins out of shared doctrine.
+- **Presentation utility** — leave `.codeflow/present/config.toml` and primitive
+  tokens absent unless the project explicitly wants different closed-session
+  retention or a one-way adaptation of project primitives into `cf-present`.
+  When warranted, use the managed schemas and the examples in the `cf-present`
+  skill, confirm the exact project-owned token authority, create both files as
+  project-owned content, and run one light/dark accessibility canary. Never
+  import product CSS, components, classes, frameworks, font files, paths, or
+  runtime dependencies; never make the utility's defaults product authority.
 - **Product and design direction** — for projects with user-facing surfaces,
   locate the product brief, audience/user research, operator-approved
   references, brand guidance, design-system source, platform conventions, and

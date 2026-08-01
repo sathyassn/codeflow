@@ -60,13 +60,14 @@ it as non-trivial.
 | Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
 | Clarify and materialize an agreed plan | `/cf-plan` — gathers project evidence, asks only consequential operator-owned questions, and creates the warranted epic/spec/task/ADR records inside the duo or after a recorded solo degradation |
 | Settle product/UX/UI/visual direction | `/cf-design` inside the orchestrated flow — establish proportionate, evidence-grounded `DESIGN_INTENT`; bounded conformance and unchanged-direction work use its compact collapse paths |
+| Present a complex result for interactive review | `/cf-present` — when one coherent visual surface and anchored feedback materially improve a substantial explanation, comparison, plan, decision, evidence set, diff, or review; keep simple answers in chat and never treat the utility as product UI or durable documentation |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |
 | Get an outside opinion | `/cf-consult` — an independent, read-only second opinion from another vendor's CLI (a full edit handoff is the `cf-delegate` skill) |
-| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>` |
+| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs]`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>`, `present open|list|show|update|feedback|history|export|close|clear` |
 
 ## Planning and tracking
 
@@ -437,7 +438,8 @@ to reason from, not a rote checklist.
   and resync the managed baseline. The `manifest_consistency` test
   (`crates/codeflow-core/tests/`) enforces the first two — an asset missing from
   the manifest or a drifted mirror fails the build.
-- **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli`;
+- **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli` +
+  `crates/codeflow-present`;
   `scaffold` = `assets/` (base scaffold + stack profiles); `docs` = `docs/`.
 - **v1 is a quarry, not a source tree** (charter D22). It lives on the
   `archive/v1` branch — no archive folder in the working tree; retrieve files

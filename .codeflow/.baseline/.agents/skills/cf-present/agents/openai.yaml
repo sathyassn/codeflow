@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeFlow Present"
+  short_description: "Build interactive review documents"
+  default_prompt: "Use $cf-present to turn this complex explanation or review into a structured interactive document."

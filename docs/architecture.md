@@ -8,12 +8,13 @@
 
 ## Overview
 
-A two-crate Cargo workspace that builds one binary with the scaffold embedded.
-`codeflow-core` is the engine library — all mechanics live here. `codeflow-cli`
-is a thin dispatcher: `main.rs` is a clap command surface over 17 subcommands
+A three-crate Cargo workspace that builds one binary with the scaffold and
+presentation renderer embedded. `codeflow-core` owns the discipline engine,
+`codeflow-present` owns bounded local review sessions, and `codeflow-cli`
+is a thin dispatcher: `main.rs` is a clap command surface over 20 subcommands
 (`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
 `status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`,
-`delegate`) — most a small handler in `cmd/` that
+`spec`, `work`, `delegate`, `present`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
 read `assets/` from disk for instant scaffold iteration). The consuming repo is
@@ -21,7 +22,7 @@ its own first consumer, so `assets/` is as much the product as the code.
 
 ## Areas
 
-### engine — `crates/codeflow-core` + `crates/codeflow-cli`
+### engine — `crates/codeflow-core` + `crates/codeflow-cli` + `crates/codeflow-present`
 
 Core modules grouped by responsibility:
 
@@ -143,6 +144,46 @@ check drives the installed binary through the full synthetic lifecycle at
 Fail severity.
 Rationale, the full invariant set, and the canonical prompt-boundary amendment:
 ADR-0036 and ADR-0037.
+
+Interactive presentation is a separate bounded engine surface
+(`codeflow-present`, ADR-0049 and ADR-0050). Its closed versioned document,
+primitive-token, and public-history contracts are represented by matching Rust
+types and managed JSON Schemas installed under `.codeflow/schemas/present/`.
+Rust owns validation, immutable revisions, append-only feedback, retention,
+export, and the per-session loopback service. The service embeds one
+content-addressed Preact/Shiki/Mermaid distribution built reproducibly from its
+exact lockfile, SBOM, license inventory, integrity manifest, audit, and size
+budgets; consumer builds and runtime use require no Node toolchain.
+
+Each active review has one project-keyed owner-private state authority, one
+loopback service, one single-use file bootstrap, and one CodeFlow-owned isolated
+browser profile. Host/Origin/cookie/CSP checks protect the review chrome;
+untrusted static HTML is served from a revision-qualified sandbox without
+scripts, same-origin, forms, navigation, or network. Full-fidelity export is a
+self-contained read-only HTML artifact with no credentials, review controls,
+profile paths, feedback history, or service state. Platform adapters fail
+closed rather than falling back to the operator's browser. The `present` CLI
+adapter exposes open/update/list/show/history/feedback/export/close/clear but
+does not become a resident service, product UI framework, or documentation
+portal.
+
+Every state read and recovery path is self-bounded. Event tails are read from
+the same opened handle used for size and repair decisions; aggregate history,
+records, revisions, media, and state entries have explicit limits. A document
+may contain at most 24 Mermaid diagrams of at most 64 KiB each. The browser pins
+Mermaid's text and edge limits, enhances diagrams serially, yields between
+items, and gives the eager fallback a cumulative time budget. One accepted
+residual remains explicit: Mermaid rendering is synchronous within one bounded
+diagram, so TSK-007 must qualify a dense adversarial corpus in real browsers.
+
+Platform boundaries are native and fail closed: Windows discovers trusted
+system and known-folder paths without `PATH` lookup, rejects reparse traversal,
+parses process identity with Windows command-line rules, emits UTF-8 from
+Windows PowerShell, and applies private ACLs when state is created. Linux/WSL2
+reads bounded, no-follow `/proc` identity and terminates only the proven process
+group; macOS uses delimiter-aware identity and the same ownership rule.
+Cross-target compilation checks adapter shape only. Native runtime, Unicode
+path, ACL, process-tree, browser, and cleanup evidence remains a release gate.
 
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite

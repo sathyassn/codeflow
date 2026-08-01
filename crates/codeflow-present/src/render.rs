@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 
@@ -6,11 +8,20 @@ use crate::document::{Block, EvidenceState, PresentationDocument, TreeNode};
 pub struct RenderOptions<'a> {
     pub session_id: &'a str,
     pub revision: u64,
+    pub event_sequence: u64,
     pub script_path: Option<&'a str>,
     pub style_path: Option<&'a str>,
     pub prepaint_source: Option<&'a str>,
+    pub utility_style: Option<&'a str>,
+    pub identity: Option<RenderIdentity<'a>>,
     pub read_only_warning: Option<&'a str>,
     pub interactive: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct RenderIdentity<'a> {
+    pub src: &'a str,
+    pub alt: &'a str,
 }
 
 #[must_use]
@@ -40,6 +51,12 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
         escape_attr_to(path, &mut html);
         html.push_str("\">");
     }
+    if let Some(style) = options.utility_style {
+        html.push_str("<style data-cf-project-utility-tokens");
+        html.push('>');
+        html.push_str(style);
+        html.push_str("</style>");
+    }
     html.push_str("</head><body>");
     if let Some(warning) = options.read_only_warning {
         html.push_str("<aside class=\"version-warning\" role=\"status\">");
@@ -59,20 +76,28 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
     html.push_str(&body);
     html.push_str("</main>");
     if options.interactive {
-        html.push_str("<script id=\"cf-present-config\" type=\"application/json\">");
+        html.push_str("<template id=\"cf-present-config\">");
+        let identity = options.identity.map(|identity| {
+            serde_json::json!({
+                "src": identity.src,
+                "alt": identity.alt
+            })
+        });
         let config = serde_json::json!({
             "schema_version": 1,
             "session_id": options.session_id,
             "revision": options.revision,
+            "event_sequence": options.event_sequence,
             "title": document.title,
-            "shortcuts_enabled": true
+            "shortcuts_enabled": true,
+            "identity": identity
         })
         .to_string()
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026");
         html.push_str(&config);
-        html.push_str("</script>");
+        html.push_str("</template>");
     }
     if let Some(path) = options.script_path {
         html.push_str("<script type=\"module\" src=\"");
@@ -109,6 +134,40 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
         output.push_str("<button class=\"anchor-button\" type=\"button\" data-anchor-block=\"");
         escape_attr_to(block.id(), output);
         output.push_str("\" aria-label=\"Add feedback for this block\">+</button>");
+    }
+    if let Block::Disclosure {
+        summary, blocks, ..
+    } = block
+    {
+        output.push_str("<details><summary><span data-cf-review-text-root>");
+        escape_html_to(summary, output);
+        output.push_str("</span></summary>");
+        for child in blocks {
+            render_block(child, options, output);
+        }
+        output.push_str("</details></section>");
+        return;
+    }
+    if let Block::Tabs { tabs, .. } = block {
+        output
+            .push_str("<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root>");
+        for tab in tabs {
+            output.push_str("<span>");
+            escape_html_to(&tab.label, output);
+            output.push_str("</span>");
+        }
+        output.push_str("</div>");
+        for tab in tabs {
+            output.push_str("<details><summary>");
+            escape_html_to(&tab.label, output);
+            output.push_str("</summary>");
+            for child in &tab.blocks {
+                render_block(child, options, output);
+            }
+            output.push_str("</details>");
+        }
+        output.push_str("</div></section>");
+        return;
     }
     output.push_str("<div data-cf-review-text-root>");
 
@@ -171,7 +230,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("</article>");
         }
         Block::Table { columns, rows, .. } => {
-            output.push_str("<div class=\"local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable table\"><table><thead><tr>");
+            output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable table\"><table><thead><tr>");
             for column in columns {
                 output.push_str("<th scope=\"col\">");
                 escape_html_to(column, output);
@@ -193,7 +252,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("<ul class=\"evidence-list\">");
             for item in items {
                 output.push_str("<li data-state=\"");
-                output.push_str(evidence_state(item.state.clone()));
+                output.push_str(evidence_state(&item.state));
                 output
                     .push_str("\"><span class=\"state-mark\" aria-hidden=\"true\"></span><strong>");
                 escape_html_to(&item.label, output);
@@ -218,7 +277,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 escape_html_to(caption, output);
                 output.push_str("</p>");
             }
-            output.push_str("<div class=\"local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable code\"><pre><code data-cf-language=\"");
+            output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable code\"><pre><code data-cf-language=\"");
             escape_attr_to(language, output);
             output.push_str("\">");
             escape_html_to(code, output);
@@ -230,7 +289,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 escape_html_to(caption, output);
                 output.push_str("</p>");
             }
-            output.push_str("<div class=\"local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diff\"><pre class=\"diff\"><code>");
+            output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diff\"><pre class=\"diff\"><code>");
             for line in diff.lines() {
                 let (tag, label) = if line.starts_with('+') && !line.starts_with("+++") {
                     ("ins", "Added: ")
@@ -268,7 +327,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             acc_description,
             ..
         } => {
-            output.push_str("<figure class=\"diagram local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diagram\"><div data-cf-diagram=\"pending\" data-cf-diagram-kind=\"");
+            output.push_str("<figure class=\"diagram cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diagram\"><div data-cf-diagram=\"pending\" data-cf-diagram-kind=\"");
             escape_attr_to(&format!("{kind:?}").to_lowercase(), output);
             output.push_str("\" data-cf-diagram-title=\"");
             escape_attr_to(acc_title, output);
@@ -325,29 +384,8 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             }
             output.push_str("</figure>");
         }
-        Block::Disclosure {
-            summary, blocks, ..
-        } => {
-            output.push_str("<details><summary>");
-            escape_html_to(summary, output);
-            output.push_str("</summary>");
-            for child in blocks {
-                render_block(child, options, output);
-            }
-            output.push_str("</details>");
-        }
-        Block::Tabs { tabs, .. } => {
-            output.push_str("<div class=\"tabs\">");
-            for tab in tabs {
-                output.push_str("<details><summary>");
-                escape_html_to(&tab.label, output);
-                output.push_str("</summary>");
-                for child in &tab.blocks {
-                    render_block(child, options, output);
-                }
-                output.push_str("</details>");
-            }
-            output.push_str("</div>");
+        Block::Disclosure { .. } | Block::Tabs { .. } => {
+            unreachable!("nested containers return before opening the common review root")
         }
         Block::FeedbackPrompt { prompt, .. } => {
             output.push_str("<p class=\"feedback-prompt\">");
@@ -359,6 +397,8 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             escape_attr_to(title.as_deref().unwrap_or("Sandboxed content"), output);
             if options.interactive {
                 output.push_str("\" src=\"/sandbox/");
+                output.push_str(&options.revision.to_string());
+                output.push('/');
                 output.push_str(&sandbox_id(options.session_id, id));
                 output.push_str("\"></iframe>");
             } else {
@@ -402,8 +442,10 @@ fn render_markdown(markdown: &str, output: &mut String) {
     let mut link_stack = Vec::new();
     let parser =
         Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH).filter_map(|event| match event {
-            Event::Html(_) | Event::InlineHtml(_) => None,
-            Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => None,
+            Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::Start(Tag::Image { .. })
+            | Event::End(TagEnd::Image) => None,
             Event::Start(Tag::Link { dest_url, .. }) => {
                 let destination = dest_url.as_ref();
                 let safe = safe_markdown_destination(destination);
@@ -422,7 +464,7 @@ fn render_markdown(markdown: &str, output: &mut String) {
             Event::End(TagEnd::Link) => link_stack
                 .pop()
                 .unwrap_or(false)
-                .then(|| Event::Html(CowStr::Borrowed("</a>"))),
+                .then_some(Event::Html(CowStr::Borrowed("</a>"))),
             event => Some(event),
         });
     html::push_html(output, parser);
@@ -450,7 +492,7 @@ fn render_tree(nodes: &[TreeNode], output: &mut String) {
     }
 }
 
-fn evidence_state(state: EvidenceState) -> &'static str {
+fn evidence_state(state: &EvidenceState) -> &'static str {
     match state {
         EvidenceState::Pass => "pass",
         EvidenceState::Fail => "fail",
@@ -462,10 +504,11 @@ fn evidence_state(state: EvidenceState) -> &'static str {
 #[must_use]
 pub fn sandbox_id(session_id: &str, block_id: &str) -> String {
     let digest = Sha256::digest(format!("cf-present-sandbox\0{session_id}\0{block_id}"));
-    digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    let mut output = String::with_capacity(32);
+    for byte in &digest[..16] {
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 pub fn escape_html_to(value: &str, output: &mut String) {
@@ -487,7 +530,8 @@ fn escape_attr_to(value: &str, output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use crate::document::{Block, PresentationDocument, Provenance};
+    use crate::document::{Block, PresentationDocument, Provenance, Tab};
+    use scraper::{ElementRef, Html};
 
     use super::*;
 
@@ -508,9 +552,12 @@ mod tests {
             &RenderOptions {
                 session_id: "00000000-0000-0000-0000-000000000000",
                 revision: 1,
+                event_sequence: 0,
                 script_path: None,
                 style_path: None,
                 prepaint_source: None,
+                utility_style: None,
+                identity: None,
                 read_only_warning: None,
                 interactive: true,
             },
@@ -541,5 +588,86 @@ mod tests {
         let mut output = String::new();
         escape_attr_to("\"<&", &mut output);
         assert_eq!(output, "&quot;&lt;&amp;");
+    }
+
+    #[test]
+    fn nested_review_roots_are_valid_and_match_their_own_unicode_canonical_text() {
+        let blocks = vec![
+            Block::Disclosure {
+                id: "details".to_string(),
+                summary: "Résumé 🧭".to_string(),
+                blocks: vec![Block::Narrative {
+                    id: "detail-body".to_string(),
+                    markdown: "Nested body".to_string(),
+                }],
+            },
+            Block::Tabs {
+                id: "tabs".to_string(),
+                tabs: vec![
+                    Tab {
+                        label: "Café".to_string(),
+                        blocks: vec![Block::Narrative {
+                            id: "cafe-body".to_string(),
+                            markdown: "One".to_string(),
+                        }],
+                    },
+                    Tab {
+                        label: "東京".to_string(),
+                        blocks: vec![Block::Narrative {
+                            id: "tokyo-body".to_string(),
+                            markdown: "Two".to_string(),
+                        }],
+                    },
+                ],
+            },
+        ];
+        let document = PresentationDocument {
+            schema_version: 1,
+            title: "Nested".to_string(),
+            language: Some("en-CA".to_string()),
+            provenance: Provenance::default(),
+            blocks: blocks.clone(),
+        };
+        let rendered = render_document(
+            &document,
+            &RenderOptions {
+                session_id: "00000000-0000-0000-0000-000000000000",
+                revision: 1,
+                event_sequence: 0,
+                script_path: None,
+                style_path: None,
+                prepaint_source: None,
+                utility_style: None,
+                identity: None,
+                read_only_warning: None,
+                interactive: true,
+            },
+        );
+        let parsed = Html::parse_document(&rendered);
+        for block in blocks {
+            let section = parsed
+                .tree
+                .nodes()
+                .filter_map(ElementRef::wrap)
+                .find(|element| element.value().attr("data-cf-block-id") == Some(block.id()))
+                .unwrap();
+            let roots = section
+                .descendants()
+                .filter_map(ElementRef::wrap)
+                .filter(|element| {
+                    element.value().attr("data-cf-review-text-root").is_some()
+                        && element
+                            .ancestors()
+                            .filter_map(ElementRef::wrap)
+                            .find_map(|ancestor| ancestor.value().attr("data-cf-block-id"))
+                            == Some(block.id())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(roots.len(), 1);
+            assert_eq!(
+                roots[0].text().collect::<String>(),
+                block.canonical_review_text()
+            );
+        }
     }
 }

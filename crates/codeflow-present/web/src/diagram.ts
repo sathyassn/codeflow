@@ -1,4 +1,5 @@
-const MAX_DIAGRAM_SOURCE_UNITS = 100_000;
+const MAX_DIAGRAM_SOURCE_UNITS = 65_536;
+const MAX_DIAGRAM_EDGES = 500;
 let sequence = 0;
 
 export async function renderDiagram(element: HTMLElement): Promise<void> {
@@ -19,6 +20,8 @@ export async function renderDiagram(element: HTMLElement): Promise<void> {
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
+      maxTextSize: MAX_DIAGRAM_SOURCE_UNITS,
+      maxEdges: MAX_DIAGRAM_EDGES,
       theme: "base",
       suppressErrorRendering: true,
       flowchart: { htmlLabels: false, useMaxWidth: true },
@@ -74,9 +77,11 @@ function hardenSvg(svg: Element): void {
     else node.remove();
   });
   for (const node of [svg, ...svg.querySelectorAll("*")]) {
-    if (node.tagName.toLowerCase() === "style" && /(?:https?:|data:|file:|@import)/iu.test(node.textContent ?? "")) {
-      node.remove();
-      continue;
+    if (node.tagName.toLowerCase() === "style") {
+      if (!safeCss(node.textContent ?? "")) {
+        node.remove();
+        continue;
+      }
     }
     for (const attribute of [...node.attributes]) {
       const name = attribute.name.toLowerCase();
@@ -91,7 +96,14 @@ function hardenSvg(svg: Element): void {
         node.removeAttribute(attribute.name);
       }
     }
+    if (node.hasAttribute("style") && !safeCss(node.getAttribute("style") ?? "")) {
+      node.removeAttribute("style");
+    }
   }
+}
+
+function safeCss(value: string): boolean {
+  return !/(?:@import|https?:|data:|file:|javascript:|expression\s*\(|behavior\s*:|-moz-binding|url\(\s*["']?(?!#))/iu.test(value);
 }
 
 function markFailure(element: HTMLElement, message: string): void {

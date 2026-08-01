@@ -169,6 +169,13 @@ a:hover { text-decoration-thickness: 0.13em; }
   backdrop-filter: blur(12px);
 }
 
+.cf-project-identity {
+  flex: 0 0 auto;
+  inline-size: 2rem;
+  block-size: 2rem;
+  object-fit: contain;
+}
+
 .cf-title-group { display: flex; align-items: baseline; gap: var(--cf-space-3); min-inline-size: 0; }
 .cf-title-group strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cf-kicker {
@@ -213,11 +220,17 @@ a:hover { text-decoration-thickness: 0.13em; }
 #cf-present-document h2 { margin-block: 3.5rem 1rem; font-size: clamp(1.45rem, 2.2vw, 2rem); line-height: 1.16; }
 #cf-present-document h3 { margin-block: 2.2rem 0.75rem; font-size: 1.12rem; line-height: 1.3; }
 #cf-present-document p, #cf-present-document li { max-inline-size: var(--cf-reading-measure); }
+#cf-present-document figure { margin-inline: 0; max-inline-size: 100%; }
+#cf-present-document iframe, #cf-present-document img, #cf-present-document video { max-inline-size: 100%; }
 #cf-present-document [data-cf-block-id] { position: relative; scroll-margin-block-start: 6rem; }
 
 .cf-local-scroll {
   overflow: auto;
+  inline-size: 100%;
+  min-inline-size: 0;
   max-inline-size: 100%;
+  box-sizing: border-box;
+  margin-inline: 0;
   border-block: var(--cf-line) solid var(--cf-border);
   scrollbar-color: var(--cf-border-strong) transparent;
 }

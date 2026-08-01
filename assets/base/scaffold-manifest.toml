@@ -234,7 +234,7 @@ dest = ".codex/config.toml"
 ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
-# --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 11 skills, 1 workflow;
+# --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 13 skills, 1 workflow;
 #     cf-stack is the agent-led stack setup (CodeFlow ADR-0003); cf-delegate +
 #     cf-consult are the cross-vendor delegation capability (CodeFlow ADR-0005),
 #     added when the
@@ -367,6 +367,44 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-design/agents/openai.yaml"
 dest = ".claude/skills/cf-design/agents/openai.yaml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+# Interactive review documents stay on demand. The skill authors a closed
+# declarative document; the runtime and canonical schemas own mechanics.
+[[entry]]
+src = "agents/skills/cf-present/SKILL.md"
+dest = ".claude/skills/cf-present/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/references/document-authoring.md"
+dest = ".claude/skills/cf-present/references/document-authoring.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/assets/review-document.example.json"
+dest = ".claude/skills/cf-present/assets/review-document.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/assets/config.example.toml"
+dest = ".claude/skills/cf-present/assets/config.example.toml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/assets/primitive-tokens.example.json"
+dest = ".claude/skills/cf-present/assets/primitive-tokens.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/agents/openai.yaml"
+dest = ".claude/skills/cf-present/agents/openai.yaml"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -569,6 +607,42 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/SKILL.md"
+dest = ".agents/skills/cf-present/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/references/document-authoring.md"
+dest = ".agents/skills/cf-present/references/document-authoring.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/assets/review-document.example.json"
+dest = ".agents/skills/cf-present/assets/review-document.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/assets/config.example.toml"
+dest = ".agents/skills/cf-present/assets/config.example.toml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/assets/primitive-tokens.example.json"
+dest = ".agents/skills/cf-present/assets/primitive-tokens.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/agents/openai.yaml"
+dest = ".agents/skills/cf-present/agents/openai.yaml"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-editorial-review/SKILL.md"
 dest = ".agents/skills/cf-editorial-review/SKILL.md"
 ownership = "managed"
@@ -688,6 +762,26 @@ template = true
 src = "docs/decisions/template.md"
 dest = "docs/decisions/template.md"
 ownership = "user-owned"
+tiers = ["standard", "full"]
+
+# --- presentation public contracts (managed, runtime-matched) --------------
+
+[[entry]]
+src = "present/schemas/document-v1.schema.json"
+dest = ".codeflow/schemas/present/document-v1.schema.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "present/schemas/utility-tokens-v1.schema.json"
+dest = ".codeflow/schemas/present/utility-tokens-v1.schema.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "present/schemas/session-history-v1.schema.json"
+dest = ".codeflow/schemas/present/session-history-v1.schema.json"
+ownership = "managed"
 tiers = ["standard", "full"]
 
 # --- CI (fully-managed — charter §4.3: unmodified → replaced on update; ------

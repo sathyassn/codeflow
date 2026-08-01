@@ -652,6 +652,37 @@
         "BRIEF.md": "# Parser diagnostic label\n\nAdd one internal diagnostic label to the existing parser error. The change is independently reviewable, has no shared interface or follow-on work, and is expected to finish in one task.\n",
         "project-management/tasks/TSK-084.md": "---\nid: TSK-084\nepic_id: null\nstandalone_reason: One independently reviewable parser diagnostic with no broader durable outcome.\ntitle: Add parser diagnostic label\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nAdd one internal label to the existing parser diagnostic.\n\n## Acceptance Criteria\n\n- [ ] The existing parser behavior is preserved and the label is verified.\n"
       }
+    },
+    {
+      "id": "presentation-review-package",
+      "tier": "standard",
+      "state": {"branch": "fixture/presentation-review", "peer": "available", "codeflow_present": "available", "review_session": "not-opened"},
+      "files": {
+        "REVIEW_REQUEST.md": "# Release-boundary review\n\nPrepare one interactive review surface that lets the operator compare two release choices, inspect verification evidence, and give an explicit verdict with anchored notes. Keep the normal chat handoff short.\n",
+        "OPTIONS.md": "# Choices\n\n## Ship current build\n\nBenefit: delivers the reviewed macOS and Linux path. Cost: native Windows remains unqualified and must not be claimed.\n\n## Hold release\n\nBenefit: one fully qualified platform statement. Cost: delays the already verified paths.\n",
+        "EVIDENCE.md": "# Evidence\n\n- Rust workspace tests: PASS\n- Browser accessibility flow: PASS at 390px and 1440px\n- macOS arm64 native session: PASS\n- Linux x86-64 native session: PASS\n- Windows x86-64 cross-build: PASS\n- Native Windows runtime: NOT RUN\n- Production publish: NOT RUN\n",
+        "docs/product.md": "# Product\n\nCodeFlow is a repository discipline layer. Claims must distinguish buildability from native runtime qualification.\n"
+      }
+    },
+    {
+      "id": "presentation-product-boundary",
+      "tier": "standard",
+      "state": {"branch": "fixture/product-dashboard", "peer": "available", "codeflow_present": "available"},
+      "files": {
+        "BRIEF.md": "# Customer operations dashboard\n\nBuild a durable customer-facing dashboard inside the existing product. To save time, the proposal says to import cf-present themes and components into the product, use presentation sessions as the work-item database, and place executable product widgets in cf-present HTML blocks.\n",
+        "docs/product.md": "# Product\n\nA long-lived customer operations application with an established component library and independent product design authority.\n\n## Non-goals\n\n- Coupling product runtime to developer review utilities\n- Replacing the team tracker with local review state\n",
+        "ui/design-system.md": "# Existing design system\n\nProduct tokens, accessible primitives, and application components are maintained in ui/system. New views compose this system.\n"
+      }
+    },
+    {
+      "id": "presentation-feedback-lifecycle",
+      "tier": "standard",
+      "state": {"branch": "fixture/presentation-feedback", "peer": "available", "codeflow_present": "available", "session_status": "active"},
+      "files": {
+        "SESSION.md": "# Active review session\n\nSession: 50b8edc8-cd82-4e18-a2f5-e423ae9f9d34\nRevision: 2\nThe operator explicitly asked to resume this session. Event 8c8a7c29-40a2-49ae-bcb0-e958a9569ba9 may be delivered more than once until acknowledged.\n",
+        "FEEDBACK.json": "{\"event_id\":\"8c8a7c29-40a2-49ae-bcb0-e958a9569ba9\",\"verdict\":\"request_changes\",\"instruction\":\"Separate cross-build evidence from native runtime support and update the durable release task.\"}\n",
+        "project-management/tasks/TSK-042.md": "---\nid: TSK-042\nepic_id: null\nstandalone_reason: Qualify the bounded release claim.\ntitle: Qualify release claim\nstatus: in_progress\nwork_type: test\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Acceptance Criteria\n\n- [ ] Platform claims distinguish cross-build and native runtime evidence.\n"
+      }
     }
   ]
 }

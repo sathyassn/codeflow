@@ -16,8 +16,13 @@ export interface ChromeConfig {
   readonly schema_version: 1;
   readonly session_id: string;
   readonly revision: number;
+  readonly event_sequence: number;
   readonly title: string;
   readonly shortcuts_enabled: boolean;
+  readonly identity?: Readonly<{
+    readonly src: string;
+    readonly alt: string;
+  }>;
   readonly keymap?: Readonly<{
     next: string;
     previous: string;
@@ -65,11 +70,11 @@ export interface SessionEvent {
 
 export function readChromeConfig(root: HTMLElement): ChromeConfig {
   const node = document.getElementById(CONFIG_ID);
-  if (!(node instanceof HTMLScriptElement) || node.type !== "application/json") {
-    throw new Error(`Missing ${CONFIG_ID} application/json payload`);
+  if (!(node instanceof HTMLTemplateElement)) {
+    throw new Error(`Missing ${CONFIG_ID} inert configuration payload`);
   }
 
-  const value: unknown = JSON.parse(node.textContent ?? "null");
+  const value: unknown = JSON.parse(node.content.textContent ?? "null");
   if (!isRecord(value) || value.schema_version !== 1) {
     throw new Error("Unsupported cf-present chrome configuration");
   }
@@ -78,6 +83,9 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     typeof value.revision !== "number" ||
     !Number.isSafeInteger(value.revision) ||
     value.revision < 1 ||
+    typeof value.event_sequence !== "number" ||
+    !Number.isSafeInteger(value.event_sequence) ||
+    value.event_sequence < 0 ||
     typeof value.title !== "string" ||
     typeof value.shortcuts_enabled !== "boolean"
   ) {
@@ -90,15 +98,33 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
   if (root.dataset.sessionId !== value.session_id) {
     throw new Error("Chrome root and configuration session IDs differ");
   }
+  const identity = value.identity;
+  if (identity !== undefined && identity !== null && !isIdentity(identity)) {
+    throw new Error("Malformed cf-present identity configuration");
+  }
 
   return {
     schema_version: 1,
     session_id: value.session_id,
     revision: value.revision,
+    event_sequence: value.event_sequence,
     title: value.title,
     shortcuts_enabled: value.shortcuts_enabled,
+    ...(identity ? { identity } : {}),
     ...(keymap ? { keymap } : {}),
   };
+}
+
+function isIdentity(value: unknown): value is NonNullable<ChromeConfig["identity"]> {
+  if (!isRecord(value) || typeof value.src !== "string" || typeof value.alt !== "string") {
+    return false;
+  }
+  return (
+    value.alt.length > 0 &&
+    value.alt.length <= 512 &&
+    (value.src.startsWith("data:image/png;base64,") ||
+      value.src.startsWith("data:image/webp;base64,"))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -938,6 +938,47 @@
       "requirements": ["CF-PM-002", "CF-PM-004", "CF-PM-005", "CF-PM-006"],
       "prompt": "Describe the exact route for this repository outcome from the current brief through planning, implementation, review, shipping, and cleanup. Also decide what happens if implementation finds a material interface change, a technical approach fails twice without new evidence, the task is cancelled, or the Claude seat is genuinely unavailable. Do not implement.",
       "expected": {"routes": ["cf-model-orchestrator", "cf-plan", "cf-develop", "cf-ship"], "signals": ["repository_evidence_precedes_questions", "only_consequential_operator_choice_escalates", "independent_duo_settles_exact_plan_version", "existing_stable_target_precedes_task_allocation", "plan_branch_records_validate_dual_review_and_merge", "read_only_work_start_precedes_product_edits", "producer_cross_lineage_review_and_integrated_judgment", "ship_and_proven_cleanup_close_the_loop", "material_interface_change_returns_to_plan_v_next", "unchanged_failed_strategy_is_not_retried", "cancelled_task_records_closeout_without_fake_delivery", "missing_seat_is_reduced_assurance_not_dual_approval"], "references": ["BRIEF.md", "docs/product.md", "project-management/tasks/TSK-061.md"], "must_not": ["cf_plan_replaces_independent_duo", "ask_operator_for_discoverable_fact", "plan_on_task_branch", "start_before_anchor", "retrospective_closeout_approval", "unchanged_retry_loop", "cancelled_called_complete", "fabricated_model_review"]}
+    },
+    {
+      "id": "simple-answer-does-not-open-presentation",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": true,
+      "fixture": "clean-standard",
+      "requirements": ["CF-OUT-003", "CF-PRES-001"],
+      "prompt": "Which command validates the documentation graph? Answer directly.",
+      "expected": {"routes": ["direct"], "signals": ["direct_simple_answer", "formatting_proportionate", "presentation_cost_rejected"], "references": [], "must_not": ["cf_present_invoked", "document_json_created", "browser_session_opened", "decorative_formatting"]}
+    },
+    {
+      "id": "complex-review-uses-declarative-presentation",
+      "kind": "capability",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "presentation-review-package",
+      "roles": ["claude-judgment-primary", "codex-engineering-primary"],
+      "requirements": ["CF-OUT-001", "CF-PRES-001", "CF-PRES-002", "CF-PRES-003"],
+      "prompt": "Create and open the requested interactive review surface from the supplied options and evidence. Ask for the exact release decision and keep the chat handoff concise.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-present", "cf-editorial-review"], "signals": ["interactive_surface_is_warranted", "closed_v1_document_authored", "schema_and_runtime_validation_used", "blocks_selected_by_information_shape", "cross_build_and_native_evidence_separated", "information_bearing_comparison_and_status", "explicit_feedback_prompt", "isolated_codeflow_browser_session", "session_id_revision_and_unverified_claims_reported", "concise_chat_handoff"], "references": ["REVIEW_REQUEST.md", "OPTIONS.md", "EVIDENCE.md", "docs/product.md", ".codeflow/schemas/present/document-v1.schema.json"], "must_not": ["one_off_page_application", "arbitrary_scripted_html", "operator_browser_hijacked", "windows_native_claimed_pass", "presentation_history_called_work_authority", "visuals_as_decorative_text_cards"]}
+    },
+    {
+      "id": "presentation-utility-does-not-own-product",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "presentation-product-boundary",
+      "requirements": ["CF-DES-005", "CF-PM-001", "CF-PRES-001", "CF-PRES-002"],
+      "prompt": "Review the proposed implementation boundary and give the corrected route. Use cf-present only where it actually belongs.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-design"], "signals": ["product_uses_existing_design_system", "utility_components_and_themes_rejected_as_product_authority", "presentation_state_rejected_as_task_authority", "executable_html_escape_rejected", "cf_present_retained_only_as_optional_review_surface", "durable_product_and_work_boundaries_preserved"], "references": ["BRIEF.md", "docs/product.md", "ui/design-system.md"], "must_not": ["cf_present_as_product_framework", "utility_theme_imported_into_product", "presentation_history_as_team_database", "scripted_product_widget_in_sandbox", "utility_boundary_banned_entirely"]}
+    },
+    {
+      "id": "presentation-feedback-resume-preserves-authority",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "presentation-feedback-lifecycle",
+      "requirements": ["CF-GOV-001", "CF-PM-002", "CF-PRES-002", "CF-PRES-003"],
+      "prompt": "Resume the explicitly named review, process the supplied request-changes event safely, and state the revision, durable update, and cleanup sequence. Do not fabricate approval.",
+      "expected": {"routes": ["cf-model-orchestrator", "cf-present"], "signals": ["explicit_resume_authorizes_history_lookup", "stable_event_id_deduplicated", "request_changes_blocks_approval", "release_claim_corrected", "durable_task_is_canonical_update_home", "new_immutable_revision_after_correction", "feedback_addressed_only_after_evidence", "session_closed_and_owned_resources_cleaned_when_complete"], "references": ["SESSION.md", "FEEDBACK.json", "project-management/tasks/TSK-042.md"], "must_not": ["duplicate_feedback_as_new_decision", "presentation_history_promoted_to_task_authority", "approval_fabricated", "old_history_auto_injected", "active_session_cleared", "unverified_windows_claim"]}
     }
   ]
 }

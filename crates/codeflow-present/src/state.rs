@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -11,13 +12,22 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    config::{ProjectConfig, RetentionPolicy},
+    config::{ProjectConfig, RetentionPolicy, UtilityTokens},
     document::{ParsedDocument, PresentationDocument, Provenance},
     error::{PresentError, Result},
     limits,
+    platform::{harden_private_path, is_link_like},
 };
 
 const STATE_SCHEMA_VERSION: u32 = 1;
+const UPDATE_MARKER: &str = ".updating.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateMarker {
+    from_revision: u64,
+    to_revision: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +55,10 @@ pub struct SessionRecord {
     pub service_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_instance: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_instance: Option<Uuid>,
     #[serde(default)]
     pub provenance: Provenance,
 }
@@ -188,6 +202,8 @@ impl FeedbackEvent {
 pub struct SessionStore {
     root: PathBuf,
     project_key: String,
+    project_root: PathBuf,
+    config: ProjectConfig,
     retention: RetentionPolicy,
 }
 
@@ -206,30 +222,42 @@ impl SessionStore {
                 "cf-present requires a non-bare Git working tree".to_string(),
             )
         })?;
-        let config = ProjectConfig::load(worktree)?;
+        let project_root = worktree
+            .canonicalize()
+            .map_err(|error| PresentError::io(worktree, error))?;
+        let config = ProjectConfig::load(&project_root)?;
         let root = platform_state_root()?.join("projects").join(&project_key);
         create_private_dir_all(&root)?;
         ensure_safe_dir(&root)?;
         Ok(Self {
             root,
             project_key,
-            retention: config.retention,
+            project_root,
+            retention: config.retention.clone(),
+            config,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn at_root(root: PathBuf, project_key: String) -> Result<Self> {
         create_private_dir_all(&root)?;
+        let config = ProjectConfig::default();
         Ok(Self {
+            project_root: root.clone(),
             root,
             project_key,
-            retention: RetentionPolicy::default(),
+            retention: config.retention.clone(),
+            config,
         })
     }
 
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn utility_tokens(&self) -> Result<Option<UtilityTokens>> {
+        self.config.load_tokens(&self.project_root)
     }
 
     pub fn runtime_dir(&self, id: Uuid) -> Result<PathBuf> {
@@ -242,11 +270,16 @@ impl SessionStore {
     pub fn create(&self, parsed: ParsedDocument) -> Result<SessionRecord> {
         self.enforce_retention()?;
         let id = Uuid::new_v4();
-        create_private_dir_all(&self.root.join("sessions"))?;
-        let session_dir = self.session_dir(id);
-        create_private_dir_all(&session_dir)?;
-        create_private_dir_all(&session_dir.join("revisions"))?;
-        let _lock = self.lock_session(id)?;
+        let sessions_root = self.root.join("sessions");
+        create_private_dir_all(&sessions_root)?;
+        let create_lease = open_private_append(&sessions_root.join(".create.lock"))?;
+        create_lease
+            .lock_exclusive()
+            .map_err(|error| PresentError::io(sessions_root.join(".create.lock"), error))?;
+        let final_session = self.session_dir(id);
+        let staging = sessions_root.join(format!(".creating-{id}-{}", Uuid::new_v4().simple()));
+        create_private_dir_all(&staging)?;
+        create_private_dir_all(&staging.join("revisions"))?;
         let now = now_unix()?;
         let (title, provenance, content) = match parsed {
             ParsedDocument::Supported(document) => (
@@ -279,25 +312,40 @@ impl SessionStore {
             service_port: None,
             service_pid: None,
             service_instance: None,
+            browser_pid: None,
+            browser_instance: None,
             provenance,
         };
-        write_json_atomic(
-            &self.revision_path(id, 1),
-            &RevisionRecord {
-                state_schema_version: STATE_SCHEMA_VERSION,
-                revision: 1,
-                created_at_unix: now,
-                content,
-            },
-        )?;
-        write_json_atomic(&self.session_path(id), &session)?;
-        create_private_file(&self.events_path(id))?;
-        Ok(session)
+        let result = (|| {
+            write_json_atomic(
+                &staging.join("revisions/00000000000000000001.json"),
+                &RevisionRecord {
+                    state_schema_version: STATE_SCHEMA_VERSION,
+                    revision: 1,
+                    created_at_unix: now,
+                    content,
+                },
+            )?;
+            write_json_atomic(&staging.join("session.json"), &session)?;
+            create_private_file(&staging.join("events.jsonl"))?;
+            create_private_file(&staging.join(".lock"))?;
+            sync_directory(&staging.join("revisions"))?;
+            sync_directory(&staging)?;
+            fs::rename(&staging, &final_session)
+                .map_err(|error| PresentError::io(&final_session, error))?;
+            sync_directory(&sessions_root)?;
+            Ok(session)
+        })();
+        if result.is_err() && staging.exists() {
+            let _ = remove_dir_confined(&sessions_root, &staging);
+        }
+        result
     }
 
     pub fn load(&self, id: Uuid) -> Result<SessionRecord> {
+        self.ensure_session_layout(id)?;
         let path = self.session_path(id);
-        let session: SessionRecord = read_json(&path)?;
+        let session: SessionRecord = read_json(&path, limits::MAX_SESSION_STATE_BYTES)?;
         self.validate_session(&session)?;
         Ok(session)
     }
@@ -308,6 +356,7 @@ impl SessionStore {
             return Ok(Vec::new());
         }
         ensure_safe_dir(&sessions_dir)?;
+        Self::cleanup_staged_creates(&sessions_dir)?;
         let mut sessions = Vec::new();
         let mut entries = 0_usize;
         for entry in
@@ -322,10 +371,12 @@ impl SessionStore {
                     "presentation state exceeds the session entry bound".to_string(),
                 ));
             }
-            let file_type = entry
-                .file_type()
+            let metadata = fs::symlink_metadata(entry.path())
                 .map_err(|error| PresentError::io(entry.path(), error))?;
-            if !file_type.is_dir() || file_type.is_symlink() {
+            if is_link_like(&metadata) {
+                return Err(PresentError::UnsafePath(entry.path()));
+            }
+            if !metadata.is_dir() {
                 continue;
             }
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -340,8 +391,33 @@ impl SessionStore {
         Ok(sessions)
     }
 
+    fn cleanup_staged_creates(sessions_dir: &Path) -> Result<()> {
+        let lease = open_private_append(&sessions_dir.join(".create.lock"))?;
+        match lease.try_lock_exclusive() {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) => return Err(PresentError::io(sessions_dir.join(".create.lock"), error)),
+        }
+        for entry in
+            fs::read_dir(sessions_dir).map_err(|error| PresentError::io(sessions_dir, error))?
+        {
+            let entry = entry.map_err(|error| PresentError::io(sessions_dir, error))?;
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(".creating-") {
+                let metadata = fs::symlink_metadata(entry.path())
+                    .map_err(|error| PresentError::io(entry.path(), error))?;
+                if !metadata.is_dir() || is_link_like(&metadata) {
+                    return Err(PresentError::UnsafePath(entry.path()));
+                }
+                remove_dir_confined(sessions_dir, &entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn revision(&self, id: Uuid, revision: u64) -> Result<RevisionRecord> {
         let session = self.load(id)?;
+        ensure_safe_dir(&self.session_dir(id).join("revisions"))?;
         if revision == 0 || revision > session.current_revision || revision > limits::MAX_REVISIONS
         {
             return Err(PresentError::CorruptState(format!(
@@ -349,7 +425,10 @@ impl SessionStore {
                 session.id
             )));
         }
-        let record: RevisionRecord = read_json(&self.revision_path(id, revision))?;
+        let record: RevisionRecord = read_json(
+            &self.revision_path(id, revision),
+            limits::MAX_REVISION_STATE_BYTES,
+        )?;
         if record.state_schema_version != STATE_SCHEMA_VERSION || record.revision != revision {
             return Err(PresentError::CorruptState(format!(
                 "revision {revision} has an unsupported or mismatched state schema"
@@ -365,6 +444,7 @@ impl SessionStore {
 
     pub fn update_document(&self, id: Uuid, parsed: ParsedDocument) -> Result<u64> {
         let _lock = self.lock_session(id)?;
+        self.reconcile_update_unlocked(id)?;
         let mut session = self.load(id)?;
         if session.status != SessionStatus::Active {
             return Err(PresentError::SessionClosed(id.to_string()));
@@ -397,6 +477,14 @@ impl SessionStore {
                 },
             ),
         };
+        let marker_path = self.session_dir(id).join(UPDATE_MARKER);
+        write_json_atomic(
+            &marker_path,
+            &UpdateMarker {
+                from_revision: session.current_revision,
+                to_revision: revision,
+            },
+        )?;
         write_json_atomic(
             &self.revision_path(id, revision),
             &RevisionRecord {
@@ -411,18 +499,106 @@ impl SessionStore {
         session.current_revision = revision;
         session.updated_at_unix = now;
         write_json_atomic(&self.session_path(id), &session)?;
+        remove_file_if_regular(&marker_path)?;
+        sync_directory(&self.session_dir(id))?;
         Ok(revision)
+    }
+
+    fn reconcile_update_unlocked(&self, id: Uuid) -> Result<()> {
+        let marker_path = self.session_dir(id).join(UPDATE_MARKER);
+        if fs::symlink_metadata(&marker_path)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(());
+        }
+        let marker: UpdateMarker = read_json(&marker_path, limits::MAX_SESSION_STATE_BYTES)?;
+        if marker.to_revision != marker.from_revision.saturating_add(1)
+            || marker.to_revision > limits::MAX_REVISIONS
+        {
+            return Err(PresentError::CorruptState(format!(
+                "session {id} has an invalid update marker"
+            )));
+        }
+        let session = self.load(id)?;
+        let revision_path = self.revision_path(id, marker.to_revision);
+        match session.current_revision {
+            current if current == marker.from_revision => {
+                match fs::symlink_metadata(&revision_path) {
+                    Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => {
+                        let record: RevisionRecord =
+                            read_json(&revision_path, limits::MAX_REVISION_STATE_BYTES)?;
+                        if record.revision != marker.to_revision {
+                            return Err(PresentError::CorruptState(format!(
+                                "session {id} has a mismatched interrupted revision"
+                            )));
+                        }
+                        remove_file_if_regular(&revision_path)?;
+                    }
+                    Ok(_) => return Err(PresentError::UnsafePath(revision_path)),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(PresentError::io(&revision_path, error)),
+                }
+                remove_file_if_regular(&marker_path)?;
+            }
+            current if current == marker.to_revision => {
+                let record: RevisionRecord =
+                    read_json(&revision_path, limits::MAX_REVISION_STATE_BYTES)?;
+                if record.revision != marker.to_revision {
+                    return Err(PresentError::CorruptState(format!(
+                        "session {id} has a mismatched committed revision"
+                    )));
+                }
+                remove_file_if_regular(&marker_path)?;
+            }
+            _ => {
+                return Err(PresentError::CorruptState(format!(
+                    "session {id} update marker disagrees with current state"
+                )));
+            }
+        }
+        sync_directory(&self.session_dir(id))
     }
 
     pub fn history(&self, id: Uuid) -> Result<SessionHistory> {
         let _lock = self.lock_session(id)?;
         let session = self.load(id)?;
+        let mut aggregate_bytes = 0_u64;
+        for revision in 1..=session.current_revision {
+            let path = self.revision_path(id, revision);
+            let file = open_private_read(&path)?;
+            aggregate_bytes = aggregate_bytes
+                .checked_add(
+                    file.metadata()
+                        .map_err(|error| PresentError::io(&path, error))?
+                        .len(),
+                )
+                .ok_or_else(|| PresentError::CorruptState("history size overflow".to_string()))?;
+        }
+        let events_path = self.events_path(id);
+        let events = open_private_read(&events_path)?;
+        aggregate_bytes = aggregate_bytes
+            .checked_add(
+                events
+                    .metadata()
+                    .map_err(|error| PresentError::io(&events_path, error))?
+                    .len(),
+            )
+            .ok_or_else(|| PresentError::CorruptState("history size overflow".to_string()))?;
+        if aggregate_bytes > limits::MAX_HISTORY_READ_BYTES {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "presentation history is {aggregate_bytes} bytes; one-shot history output is limited to {} bytes",
+                limits::MAX_HISTORY_READ_BYTES
+            )));
+        }
         let capacity = usize::try_from(session.current_revision).map_err(|_| {
             PresentError::CorruptState("presentation revision count is not addressable".to_string())
         })?;
         let mut revisions = Vec::with_capacity(capacity);
         for revision in 1..=session.current_revision {
-            let record: RevisionRecord = read_json(&self.revision_path(id, revision))?;
+            let record: RevisionRecord = read_json(
+                &self.revision_path(id, revision),
+                limits::MAX_REVISION_STATE_BYTES,
+            )?;
             if record.state_schema_version != STATE_SCHEMA_VERSION || record.revision != revision {
                 return Err(PresentError::CorruptState(format!(
                     "revision {revision} has an unsupported or mismatched state schema"
@@ -461,11 +637,55 @@ impl SessionStore {
         write_json_atomic(&self.session_path(id), &session)
     }
 
-    pub fn close(&self, id: Uuid) -> Result<()> {
+    pub fn clear_service(&self, id: Uuid, instance: Uuid) -> Result<bool> {
+        let _lock = self.lock_session(id)?;
+        let mut session = self.load(id)?;
+        if session.service_instance != Some(instance) {
+            return Ok(false);
+        }
+        session.service_port = None;
+        session.service_pid = None;
+        session.service_instance = None;
+        session.updated_at_unix = now_unix()?;
+        write_json_atomic(&self.session_path(id), &session)?;
+        Ok(true)
+    }
+
+    pub fn set_browser(&self, id: Uuid, pid: u32, instance: Uuid) -> Result<()> {
+        let _lock = self.lock_session(id)?;
+        let mut session = self.load(id)?;
+        if session.status != SessionStatus::Active {
+            return Err(PresentError::SessionClosed(id.to_string()));
+        }
+        if session.browser_instance.is_some() {
+            return Err(PresentError::BrowserUnavailable(
+                "the presentation session already owns a browser process group".to_string(),
+            ));
+        }
+        session.browser_pid = Some(pid);
+        session.browser_instance = Some(instance);
+        session.updated_at_unix = now_unix()?;
+        write_json_atomic(&self.session_path(id), &session)
+    }
+
+    pub fn clear_browser(&self, id: Uuid, instance: Uuid) -> Result<bool> {
+        let _lock = self.lock_session(id)?;
+        let mut session = self.load(id)?;
+        if session.browser_instance != Some(instance) {
+            return Ok(false);
+        }
+        session.browser_pid = None;
+        session.browser_instance = None;
+        session.updated_at_unix = now_unix()?;
+        write_json_atomic(&self.session_path(id), &session)?;
+        Ok(true)
+    }
+
+    pub fn close(&self, id: Uuid) -> Result<SessionRecord> {
         let lock = self.lock_session(id)?;
         let mut session = self.load(id)?;
         if session.status == SessionStatus::Closed {
-            return Ok(());
+            return Ok(session);
         }
         let now = now_unix()?;
         session.status = SessionStatus::Closed;
@@ -473,8 +693,7 @@ impl SessionStore {
         session.updated_at_unix = now;
         write_json_atomic(&self.session_path(id), &session)?;
         drop(lock);
-        self.enforce_retention()?;
-        Ok(())
+        Ok(session)
     }
 
     pub fn enforce_retention(&self) -> Result<Vec<Uuid>> {
@@ -499,13 +718,17 @@ impl SessionStore {
             {
                 continue;
             }
-            let cleared = self.clear(Some(session.id), Duration::ZERO, false)?;
-            if cleared.contains(&session.id) {
+            let session_bytes = directory_size_bounded(
+                &self.session_dir(session.id),
+                self.retention.max_project_bytes,
+            )?;
+            if self.clear_one(&session, Duration::ZERO, false, true)? {
                 closed_count = closed_count.saturating_sub(1);
-                total_bytes = directory_size_bounded(&self.root, self.retention.max_project_bytes)?;
+                total_bytes = total_bytes.saturating_sub(session_bytes);
                 removed.push(session.id);
             }
         }
+        total_bytes = directory_size_bounded(&self.root, self.retention.max_project_bytes)?;
         if total_bytes > self.retention.max_project_bytes {
             return Err(PresentError::ServiceUnavailable(format!(
                 "presentation state uses {total_bytes} bytes and no unlocked closed state remains eligible for the {} byte project bound",
@@ -630,49 +853,63 @@ impl SessionStore {
         older_than: Duration,
         dry_run: bool,
     ) -> Result<Vec<Uuid>> {
-        let now = now_unix()?;
         let mut removed = Vec::new();
         for session in self.list()? {
             if selected.is_some_and(|selected| selected != session.id) {
                 continue;
             }
-            let Some(closed_at) = session.closed_at_unix else {
-                continue;
-            };
-            if now.saturating_sub(closed_at) < older_than.as_secs() && selected.is_none() {
-                continue;
+            if self.clear_one(&session, older_than, dry_run, selected.is_some())? {
+                removed.push(session.id);
             }
-            let lock = match self.lock_session_nonblocking_raw(session.id)? {
-                Some(lock) => lock,
-                None => continue,
-            };
-            let path = self.session_dir(session.id);
-            ensure_confined_child(&self.root.join("sessions"), &path)?;
-            if !dry_run {
-                let tombstone = path.join(".deleting");
-                create_private_file(&tombstone)?;
-                sync_directory(&path)?;
-                drop(lock);
-                let trash = self.root.join("sessions").join(format!(
-                    ".trash-{}-{}",
-                    session.id,
-                    Uuid::new_v4().simple()
-                ));
-                if let Err(error) = fs::rename(&path, &trash) {
-                    let rollback = self.lock_session_nonblocking_raw(session.id)?;
-                    if let Some(rollback) = rollback {
-                        remove_file_if_regular(&tombstone)?;
-                        sync_directory(&path)?;
-                        drop(rollback);
-                    }
-                    return Err(PresentError::io(&path, error));
-                }
-                sync_directory(&self.root.join("sessions"))?;
-                remove_dir_confined(&self.root.join("sessions"), &trash)?;
-            }
-            removed.push(session.id);
         }
         Ok(removed)
+    }
+
+    fn clear_one(
+        &self,
+        session: &SessionRecord,
+        older_than: Duration,
+        dry_run: bool,
+        explicitly_selected: bool,
+    ) -> Result<bool> {
+        let Some(closed_at) = session.closed_at_unix else {
+            return Ok(false);
+        };
+        if session.service_instance.is_some() || session.browser_instance.is_some() {
+            return Ok(false);
+        }
+        if now_unix()?.saturating_sub(closed_at) < older_than.as_secs() && !explicitly_selected {
+            return Ok(false);
+        }
+        let Some(lock) = self.lock_session_nonblocking_raw(session.id)? else {
+            return Ok(false);
+        };
+        let path = self.session_dir(session.id);
+        ensure_confined_child(&self.root.join("sessions"), &path)?;
+        if dry_run {
+            return Ok(true);
+        }
+        let tombstone = path.join(".deleting");
+        create_private_file(&tombstone)?;
+        sync_directory(&path)?;
+        drop(lock);
+        let trash = self.root.join("sessions").join(format!(
+            ".trash-{}-{}",
+            session.id,
+            Uuid::new_v4().simple()
+        ));
+        if let Err(error) = fs::rename(&path, &trash) {
+            let rollback = self.lock_session_nonblocking_raw(session.id)?;
+            if let Some(rollback) = rollback {
+                remove_file_if_regular(&tombstone)?;
+                sync_directory(&path)?;
+                drop(rollback);
+            }
+            return Err(PresentError::io(&path, error));
+        }
+        sync_directory(&self.root.join("sessions"))?;
+        remove_dir_confined(&self.root.join("sessions"), &trash)?;
+        Ok(true)
     }
 
     fn validate_session(&self, session: &SessionRecord) -> Result<()> {
@@ -728,6 +965,12 @@ impl SessionStore {
                 session.id
             )));
         }
+        if session.browser_pid.is_some() != session.browser_instance.is_some() {
+            return Err(PresentError::CorruptState(format!(
+                "session {} has a partial browser identity",
+                session.id
+            )));
+        }
         Ok(())
     }
 
@@ -772,7 +1015,24 @@ impl SessionStore {
         if !dir.exists() {
             return Err(PresentError::SessionNotFound(id.to_string()));
         }
+        self.ensure_session_layout(id)?;
         open_private_append(&dir.join(".lock"))
+    }
+
+    fn ensure_session_layout(&self, id: Uuid) -> Result<()> {
+        let sessions = self.root.join("sessions");
+        ensure_safe_dir(&sessions)?;
+        let session = self.session_dir(id);
+        ensure_confined_child(&sessions, &session)?;
+        match fs::symlink_metadata(&session) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(PresentError::SessionNotFound(id.to_string()));
+            }
+            Err(error) => return Err(PresentError::io(&session, error)),
+            Ok(_) => {}
+        }
+        ensure_safe_dir(&session)?;
+        ensure_safe_dir(&session.join("revisions"))
     }
 
     fn reject_tombstone(&self, id: Uuid) -> Result<()> {
@@ -783,14 +1043,22 @@ impl SessionStore {
     }
 
     pub fn acquire_service_lease(&self, id: Uuid) -> Result<File> {
+        self.acquire_runtime_lease(id, ".service.lock", "running service")
+    }
+
+    pub fn acquire_startup_lease(&self, id: Uuid) -> Result<File> {
+        self.acquire_runtime_lease(id, ".startup.lock", "service startup")
+    }
+
+    fn acquire_runtime_lease(&self, id: Uuid, file_name: &str, owner: &str) -> Result<File> {
         self.load(id)?;
-        let path = self.session_dir(id).join(".service.lock");
+        let path = self.session_dir(id).join(file_name);
         let lease = open_private_append(&path)?;
         match lease.try_lock_exclusive() {
             Ok(()) => Ok(lease),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 Err(PresentError::ServiceUnavailable(format!(
-                    "presentation session {id} already has a running service"
+                    "presentation session {id} already has a {owner}"
                 )))
             }
             Err(error) => Err(PresentError::io(path, error)),
@@ -799,7 +1067,11 @@ impl SessionStore {
 
     fn read_events_unlocked(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
         let path = self.events_path(id);
-        let metadata = fs::metadata(&path).map_err(|error| PresentError::io(&path, error))?;
+        self.ensure_session_layout(id)?;
+        let file = open_private_read(&path)?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| PresentError::io(&path, error))?;
         if metadata.len() > limits::MAX_EVENT_LOG_BYTES {
             return Err(PresentError::CorruptState(format!(
                 "{} exceeds the {} byte event-log bound",
@@ -807,57 +1079,24 @@ impl SessionStore {
                 limits::MAX_EVENT_LOG_BYTES
             )));
         }
-        let mut raw = String::new();
-        File::open(&path)
-            .map_err(|error| PresentError::io(&path, error))?
+        let capacity = usize::try_from(metadata.len())
+            .map_err(|_| PresentError::CorruptState("event log is not addressable".to_string()))?;
+        let mut raw = String::with_capacity(capacity);
+        file.take(limits::MAX_EVENT_LOG_BYTES.saturating_add(1))
             .read_to_string(&mut raw)
             .map_err(|error| PresentError::io(&path, error))?;
-        let mut events = Vec::new();
-        let lines = raw.split_inclusive('\n').collect::<Vec<_>>();
-        for (index, line) in lines.iter().enumerate() {
-            let value = line.strip_suffix('\n').unwrap_or(line);
-            if value.is_empty() {
-                continue;
-            }
-            if value.len() as u64 > limits::MAX_EVENT_RECORD_BYTES {
-                return Err(PresentError::CorruptState(format!(
-                    "{} line {} exceeds the event-record bound",
-                    path.display(),
-                    index + 1
-                )));
-            }
-            match serde_json::from_str::<FeedbackEvent>(value) {
-                Ok(event) => events.push(event),
-                Err(_) if index + 1 == lines.len() && !line.ends_with('\n') => break,
-                Err(error) => {
-                    return Err(PresentError::CorruptState(format!(
-                        "{} line {}: {error}",
-                        path.display(),
-                        index + 1
-                    )));
-                }
-            }
-        }
-        if events.len() > limits::MAX_FEEDBACK_EVENTS {
+        if raw.len() as u64 > limits::MAX_EVENT_LOG_BYTES {
             return Err(PresentError::CorruptState(format!(
-                "{} exceeds the {} event bound",
-                path.display(),
-                limits::MAX_FEEDBACK_EVENTS
+                "{} grew beyond its event-log bound while reading",
+                path.display()
             )));
         }
-        for pair in events.windows(2) {
-            if pair[1].sequence() != pair[0].sequence() + 1 {
-                return Err(PresentError::CorruptState(format!(
-                    "{} has a non-contiguous event sequence",
-                    path.display()
-                )));
-            }
-        }
-        Ok(events)
+        parse_event_log(&path, &raw, limits::MAX_FEEDBACK_EVENTS)
     }
 
     fn append_event_unlocked(&self, id: Uuid, event: &FeedbackEvent) -> Result<()> {
         let path = self.events_path(id);
+        self.ensure_session_layout(id)?;
         repair_partial_tail(&path)?;
         let encoded = serde_json::to_vec(event)?;
         if encoded.len() as u64 > limits::MAX_EVENT_RECORD_BYTES {
@@ -865,7 +1104,9 @@ impl SessionStore {
                 "feedback event exceeds the event-record bound".to_string(),
             ));
         }
-        let current = fs::metadata(&path)
+        let mut file = open_private_append(&path)?;
+        let current = file
+            .metadata()
             .map_err(|error| PresentError::io(&path, error))?
             .len();
         if current
@@ -876,7 +1117,6 @@ impl SessionStore {
                 "feedback history reached its bounded event-log capacity".to_string(),
             ));
         }
-        let mut file = open_private_append(&path)?;
         file.write_all(&encoded)
             .and_then(|()| file.write_all(b"\n"))
             .map_err(|error| PresentError::io(&path, error))?;
@@ -886,7 +1126,8 @@ impl SessionStore {
 
     fn read_last_event_unlocked(&self, id: Uuid) -> Result<Option<FeedbackEvent>> {
         let path = self.events_path(id);
-        let mut file = File::open(&path).map_err(|error| PresentError::io(&path, error))?;
+        self.ensure_session_layout(id)?;
+        let mut file = open_private_read(&path)?;
         let length = file
             .metadata()
             .map_err(|error| PresentError::io(&path, error))?
@@ -903,9 +1144,21 @@ impl SessionStore {
         let window = (limits::MAX_EVENT_RECORD_BYTES * 2).min(length);
         file.seek(SeekFrom::Start(length - window))
             .map_err(|error| PresentError::io(&path, error))?;
-        let mut bytes = Vec::with_capacity(window as usize);
-        file.read_to_end(&mut bytes)
+        let capacity = usize::try_from(window).map_err(|_| {
+            PresentError::CorruptState(
+                "event tail exceeds this platform's address space".to_string(),
+            )
+        })?;
+        let mut bytes = Vec::with_capacity(capacity);
+        let mut bounded = file.take(window + 1);
+        bounded
+            .read_to_end(&mut bytes)
             .map_err(|error| PresentError::io(&path, error))?;
+        if bytes.len() as u64 > window {
+            return Err(PresentError::CorruptState(
+                "event tail grew while it was being read".to_string(),
+            ));
+        }
         if window < length {
             let first_newline = bytes
                 .iter()
@@ -940,6 +1193,52 @@ impl SessionStore {
             .map(Some)
             .map_err(|error| PresentError::CorruptState(format!("invalid event tail: {error}")))
     }
+}
+
+fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<FeedbackEvent>> {
+    let mut events = Vec::new();
+    let mut previous_sequence = None;
+    for (index, line) in raw.split_inclusive('\n').enumerate() {
+        let value = line.strip_suffix('\n').unwrap_or(line);
+        if value.is_empty() {
+            continue;
+        }
+        if value.len() as u64 > limits::MAX_EVENT_RECORD_BYTES {
+            return Err(PresentError::CorruptState(format!(
+                "{} line {} exceeds the event-record bound",
+                path.display(),
+                index + 1
+            )));
+        }
+        match serde_json::from_str::<FeedbackEvent>(value) {
+            Ok(event) => {
+                if events.len() == max_events {
+                    return Err(PresentError::CorruptState(format!(
+                        "{} exceeds the {} event bound",
+                        path.display(),
+                        max_events
+                    )));
+                }
+                if previous_sequence.is_some_and(|sequence| event.sequence() != sequence + 1) {
+                    return Err(PresentError::CorruptState(format!(
+                        "{} has a non-contiguous event sequence",
+                        path.display()
+                    )));
+                }
+                previous_sequence = Some(event.sequence());
+                events.push(event);
+            }
+            Err(_) if !line.ends_with('\n') => break,
+            Err(error) => {
+                return Err(PresentError::CorruptState(format!(
+                    "{} line {}: {error}",
+                    path.display(),
+                    index + 1
+                )));
+            }
+        }
+    }
+    Ok(events)
 }
 
 fn validate_feedback(
@@ -1091,19 +1390,19 @@ fn next_sequence(events: &[FeedbackEvent]) -> Result<u64> {
 fn platform_state_root() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let root = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .ok_or_else(|| PresentError::UnsafePath(PathBuf::from("%LOCALAPPDATA%")))?;
+        use windows_sys::Win32::UI::Shell::FOLDERID_LocalAppData;
+
+        let root = crate::platform::known_folder(&FOLDERID_LocalAppData)?;
         return Ok(root.join("codeflow").join("present"));
     }
     #[cfg(target_os = "macos")]
     {
         let home = home_dir()?;
-        return Ok(home
+        Ok(home
             .join("Library")
             .join("Application Support")
             .join("codeflow")
-            .join("present"));
+            .join("present"))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -1131,14 +1430,51 @@ fn now_unix() -> Result<u64> {
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|error| PresentError::io(path, error))?;
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.is_dir() && !is_link_like(&metadata) => {}
+            #[cfg(unix)]
+            Ok(metadata) if trusted_system_symlink(&current, &metadata) => {
+                let target = fs::canonicalize(&current)
+                    .map_err(|error| PresentError::io(&current, error))?;
+                let target_metadata = fs::symlink_metadata(&target)
+                    .map_err(|error| PresentError::io(&target, error))?;
+                if !target_metadata.is_dir() || is_link_like(&target_metadata) {
+                    return Err(PresentError::UnsafePath(current));
+                }
+            }
+            Ok(_) => return Err(PresentError::UnsafePath(current)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let mut builder = fs::DirBuilder::new();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::DirBuilderExt;
+                    builder.mode(0o700);
+                }
+                builder
+                    .create(&current)
+                    .map_err(|error| PresentError::io(&current, error))?;
+                let metadata = fs::symlink_metadata(&current)
+                    .map_err(|error| PresentError::io(&current, error))?;
+                if !metadata.is_dir() || is_link_like(&metadata) {
+                    return Err(PresentError::UnsafePath(current));
+                }
+                harden_private_path(&current, true)?;
+            }
+            Err(error) => return Err(PresentError::io(&current, error)),
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1148,9 +1484,24 @@ pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn trusted_system_symlink(path: &Path, metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // macOS ships immutable compatibility links such as /var -> /private/var.
+    // User-owned or group/world-writable links remain a hard failure.
+    metadata.file_type().is_symlink()
+        && metadata.uid() == 0
+        && metadata.permissions().mode() & 0o022 == 0
+        && path.parent().is_some()
+}
+
 fn create_private_file(path: &Path) -> Result<()> {
-    if path.exists() {
-        return Ok(());
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => return Ok(()),
+        Ok(_) => return Err(PresentError::UnsafePath(path.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(PresentError::io(path, error)),
     }
     let file = open_private_create_new(path)?;
     file.sync_all()
@@ -1165,19 +1516,63 @@ fn open_private_create_new(path: &Path) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options
+    add_no_follow(&mut options);
+    let file = options
         .open(path)
-        .map_err(|error| PresentError::io(path, error))
+        .map_err(|error| PresentError::io(path, error))?;
+    harden_private_path(path, false)?;
+    Ok(file)
 }
 
+#[cfg(unix)]
+fn add_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+}
+
+#[cfg(windows)]
+fn add_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn add_no_follow(_options: &mut OpenOptions) {}
+
 fn open_private_append(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.create(true).append(true).read(true);
+    let mut create = OpenOptions::new();
+    create.create_new(true).append(true).read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        create.mode(0o600);
     }
+    add_no_follow(&mut create);
+    let file = match create.open(path) {
+        Ok(file) => {
+            harden_private_path(path, false)?;
+            file
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let mut existing = OpenOptions::new();
+            existing.append(true).read(true);
+            add_no_follow(&mut existing);
+            existing
+                .open(path)
+                .map_err(|error| PresentError::io(path, error))?
+        }
+        Err(error) => return Err(PresentError::io(path, error)),
+    };
+    #[cfg(unix)]
+    validate_private_file(path, &file)?;
+    Ok(file)
+}
+
+fn open_private_read(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    add_no_follow(&mut options);
     let file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
@@ -1189,6 +1584,7 @@ fn open_private_append(path: &Path) -> Result<File> {
 fn repair_partial_tail(path: &Path) -> Result<()> {
     let mut options = OpenOptions::new();
     options.read(true).write(true);
+    add_no_follow(&mut options);
     let mut file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
@@ -1201,6 +1597,13 @@ fn repair_partial_tail(path: &Path) -> Result<()> {
     if length == 0 {
         return Ok(());
     }
+    if length > limits::MAX_EVENT_LOG_BYTES {
+        return Err(PresentError::CorruptState(format!(
+            "{} exceeds the {} byte event-log bound",
+            path.display(),
+            limits::MAX_EVENT_LOG_BYTES
+        )));
+    }
     file.seek(SeekFrom::End(-1))
         .map_err(|error| PresentError::io(path, error))?;
     let mut final_byte = [0_u8; 1];
@@ -1210,16 +1613,45 @@ fn repair_partial_tail(path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    file.seek(SeekFrom::Start(0))
+    let window = (limits::MAX_EVENT_RECORD_BYTES * 2).min(length);
+    let start = length - window;
+    file.seek(SeekFrom::Start(start))
         .map_err(|error| PresentError::io(path, error))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    let capacity = usize::try_from(window).map_err(|_| {
+        PresentError::CorruptState("event repair tail is not addressable".to_string())
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    std::io::Read::by_ref(&mut file)
+        .take(window.saturating_add(1))
+        .read_to_end(&mut bytes)
         .map_err(|error| PresentError::io(path, error))?;
-    let repaired_length = bytes
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |index| index + 1);
-    file.set_len(repaired_length as u64)
+    if bytes.len() as u64 > window {
+        return Err(PresentError::CorruptState(
+            "event log grew while its partial tail was being repaired".to_string(),
+        ));
+    }
+    let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+        if start != 0 {
+            return Err(PresentError::CorruptState(
+                "event tail has an oversized record".to_string(),
+            ));
+        }
+        return file
+            .set_len(0)
+            .and_then(|()| file.sync_data())
+            .map_err(|error| PresentError::io(path, error));
+    };
+    let partial_bytes = bytes.len().saturating_sub(last_newline + 1) as u64;
+    if partial_bytes > limits::MAX_EVENT_RECORD_BYTES {
+        return Err(PresentError::CorruptState(
+            "event partial tail exceeds the event-record bound".to_string(),
+        ));
+    }
+    let repaired_length = start
+        + u64::try_from(last_newline + 1).map_err(|_| {
+            PresentError::CorruptState("event repair offset is not addressable".to_string())
+        })?;
+    file.set_len(repaired_length)
         .and_then(|()| file.sync_data())
         .map_err(|error| PresentError::io(path, error))
 }
@@ -1241,7 +1673,7 @@ fn validate_private_file(path: &Path, file: &File) -> Result<()> {
 
 fn ensure_safe_dir(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() || is_link_like(&metadata) {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
     #[cfg(unix)]
@@ -1256,18 +1688,46 @@ fn ensure_safe_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Result<T> {
     let metadata = fs::symlink_metadata(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => PresentError::SessionNotFound(path.display().to_string()),
         _ => PresentError::io(path, error),
     })?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
+    if !metadata.is_file() || is_link_like(&metadata) {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
-    let file = File::open(path).map_err(|error| PresentError::io(path, error))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    add_no_follow(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|error| PresentError::io(path, error))?;
     #[cfg(unix)]
     validate_private_file(path, &file)?;
-    serde_json::from_reader(file).map_err(PresentError::from)
+    let opened = file
+        .metadata()
+        .map_err(|error| PresentError::io(path, error))?;
+    if opened.len() > max_bytes {
+        return Err(PresentError::CorruptState(format!(
+            "{} exceeds its {} byte state bound",
+            path.display(),
+            max_bytes
+        )));
+    }
+    let capacity = usize::try_from(opened.len()).map_err(|_| {
+        PresentError::CorruptState(format!("{} is not addressable", path.display()))
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| PresentError::io(path, error))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(PresentError::CorruptState(format!(
+            "{} grew beyond its state bound while reading",
+            path.display()
+        )));
+    }
+    serde_json::from_slice(&bytes).map_err(PresentError::from)
 }
 
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -1313,7 +1773,7 @@ fn ensure_confined_child(root: &Path, child: &Path) -> Result<()> {
 fn remove_dir_confined(root: &Path, path: &Path) -> Result<()> {
     ensure_confined_child(root, path)?;
     let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() || is_link_like(&metadata) {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
     fs::remove_dir_all(path).map_err(|error| PresentError::io(path, error))
@@ -1321,7 +1781,7 @@ fn remove_dir_confined(root: &Path, path: &Path) -> Result<()> {
 
 fn remove_file_if_regular(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
+    if !metadata.is_file() || is_link_like(&metadata) {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
     fs::remove_file(path).map_err(|error| PresentError::io(path, error))
@@ -1356,7 +1816,7 @@ fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
             let path = entry.path();
             let metadata =
                 fs::symlink_metadata(&path).map_err(|error| PresentError::io(&path, error))?;
-            if metadata.file_type().is_symlink() {
+            if is_link_like(&metadata) {
                 return Err(PresentError::UnsafePath(path));
             }
             if metadata.is_dir() {
@@ -1427,6 +1887,45 @@ mod tests {
     }
 
     #[test]
+    fn close_returns_the_locked_final_identity_across_a_browser_registration_race() {
+        use std::sync::{Arc, Barrier};
+
+        for _ in 0..32 {
+            let (_temp, store) = store();
+            let session = store.create(parsed()).unwrap();
+            let instance = Uuid::new_v4();
+            let barrier = Arc::new(Barrier::new(3));
+
+            let set_store = store.clone();
+            let set_barrier = Arc::clone(&barrier);
+            let set = std::thread::spawn(move || {
+                set_barrier.wait();
+                set_store.set_browser(session.id, 42, instance)
+            });
+            let close_store = store.clone();
+            let close_barrier = Arc::clone(&barrier);
+            let close = std::thread::spawn(move || {
+                close_barrier.wait();
+                close_store.close(session.id)
+            });
+            barrier.wait();
+
+            let set_result = set.join().unwrap();
+            let closed = close.join().unwrap().unwrap();
+            let persisted = store.load(session.id).unwrap();
+            assert_eq!(closed, persisted);
+            assert_eq!(persisted.status, SessionStatus::Closed);
+            if set_result.is_ok() {
+                assert_eq!(persisted.browser_pid, Some(42));
+                assert_eq!(persisted.browser_instance, Some(instance));
+            } else {
+                assert_eq!(persisted.browser_pid, None);
+                assert_eq!(persisted.browser_instance, None);
+            }
+        }
+    }
+
+    #[test]
     fn update_appends_an_immutable_revision_and_history_excludes_runtime_identity() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
@@ -1441,9 +1940,128 @@ mod tests {
         let history = store.history(session.id).unwrap();
         assert_eq!(history.revisions.len(), 2);
         let serialized = serde_json::to_string(&history).unwrap();
-        for private_name in ["service_port", "service_pid", "service_instance"] {
+        for private_name in [
+            "service_port",
+            "service_pid",
+            "service_instance",
+            "browser_pid",
+            "browser_instance",
+        ] {
             assert!(!serialized.contains(private_name));
         }
+    }
+
+    #[test]
+    fn interrupted_update_markers_roll_back_or_finalize_deterministically() {
+        let (_temp, store) = store();
+
+        let marker_only = store.create(parsed()).unwrap();
+        write_json_atomic(
+            &store.session_dir(marker_only.id).join(UPDATE_MARKER),
+            &UpdateMarker {
+                from_revision: 1,
+                to_revision: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(store.update_document(marker_only.id, parsed()).unwrap(), 2);
+
+        let orphan = store.create(parsed()).unwrap();
+        write_json_atomic(
+            &store.session_dir(orphan.id).join(UPDATE_MARKER),
+            &UpdateMarker {
+                from_revision: 1,
+                to_revision: 2,
+            },
+        )
+        .unwrap();
+        write_json_atomic(
+            &store.revision_path(orphan.id, 2),
+            &RevisionRecord {
+                state_schema_version: STATE_SCHEMA_VERSION,
+                revision: 2,
+                created_at_unix: now_unix().unwrap(),
+                content: RevisionContent::Supported {
+                    document: match parsed() {
+                        ParsedDocument::Supported(document) => document,
+                        ParsedDocument::Unsupported { .. } => unreachable!(),
+                    },
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(store.update_document(orphan.id, parsed()).unwrap(), 2);
+
+        let committed = store.create(parsed()).unwrap();
+        let revision = RevisionRecord {
+            state_schema_version: STATE_SCHEMA_VERSION,
+            revision: 2,
+            created_at_unix: now_unix().unwrap(),
+            content: RevisionContent::Supported {
+                document: match parsed() {
+                    ParsedDocument::Supported(document) => document,
+                    ParsedDocument::Unsupported { .. } => unreachable!(),
+                },
+            },
+        };
+        write_json_atomic(&store.revision_path(committed.id, 2), &revision).unwrap();
+        let mut session = store.load(committed.id).unwrap();
+        session.current_revision = 2;
+        write_json_atomic(&store.session_path(committed.id), &session).unwrap();
+        write_json_atomic(
+            &store.session_dir(committed.id).join(UPDATE_MARKER),
+            &UpdateMarker {
+                from_revision: 1,
+                to_revision: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(store.update_document(committed.id, parsed()).unwrap(), 3);
+    }
+
+    #[test]
+    fn stale_unpublished_create_is_removed_without_affecting_sessions() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let staged = store.root.join("sessions/.creating-interrupted");
+        create_private_dir_all(&staged).unwrap();
+        fs::write(staged.join("partial"), b"partial").unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert!(!staged.exists());
+        assert!(store.load(session.id).is_ok());
+    }
+
+    #[test]
+    fn one_shot_history_refuses_an_unsafe_aggregate_envelope() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let events = open_private_append(&store.events_path(session.id)).unwrap();
+        events.set_len(limits::MAX_HISTORY_READ_BYTES + 1).unwrap();
+        assert!(matches!(
+            store.history(session.id),
+            Err(PresentError::ServiceUnavailable(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_directory_symlink_is_rejected_before_lock_or_read() {
+        use std::os::unix::fs::symlink;
+
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let path = store.session_dir(session.id);
+        let target = store.root.join("relocated-session");
+        fs::rename(&path, &target).unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(matches!(
+            store.load(session.id),
+            Err(PresentError::UnsafePath(_))
+        ));
+        assert!(matches!(
+            store.acquire_service_lease(session.id),
+            Err(PresentError::UnsafePath(_))
+        ));
     }
 
     #[test]
@@ -1496,6 +2114,54 @@ mod tests {
     }
 
     #[test]
+    fn newline_dense_event_log_is_parsed_without_an_intermediate_line_index() {
+        let path = Path::new("events.jsonl");
+        let event = FeedbackEvent::Delivered {
+            sequence: 1,
+            event_id: Uuid::new_v4(),
+            at_unix: 0,
+        };
+        let mut raw = "\n".repeat(2 * 1024 * 1024);
+        raw.push_str(&serde_json::to_string(&event).unwrap());
+        raw.push('\n');
+        raw.push_str("{\"event\":");
+
+        assert_eq!(parse_event_log(path, &raw, 2).unwrap(), vec![event]);
+    }
+
+    #[test]
+    fn event_log_fails_as_soon_as_count_or_sequence_exceeds_its_contract() {
+        let first = FeedbackEvent::Delivered {
+            sequence: 1,
+            event_id: Uuid::new_v4(),
+            at_unix: 0,
+        };
+        let second = FeedbackEvent::Addressed {
+            sequence: 2,
+            event_id: Uuid::new_v4(),
+            at_unix: 0,
+        };
+        let raw = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap()
+        );
+        assert!(parse_event_log(Path::new("events.jsonl"), &raw, 1).is_err());
+
+        let gap = FeedbackEvent::Addressed {
+            sequence: 3,
+            event_id: Uuid::new_v4(),
+            at_unix: 0,
+        };
+        let raw = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&gap).unwrap()
+        );
+        assert!(parse_event_log(Path::new("events.jsonl"), &raw, 2).is_err());
+    }
+
+    #[test]
     fn append_repairs_an_interrupted_tail_before_writing_the_next_event() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
@@ -1513,6 +2179,30 @@ mod tests {
         );
         assert_eq!(store.events(session.id).unwrap().len(), 1);
         assert!(fs::read_to_string(path).unwrap().ends_with('\n'));
+    }
+
+    #[test]
+    fn append_refuses_oversized_logs_and_unrecoverable_partial_records() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let path = store.events_path(session.id);
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(limits::MAX_EVENT_LOG_BYTES + 1).unwrap();
+        assert!(matches!(
+            store.append_feedback(feedback(session.id, Uuid::new_v4())),
+            Err(PresentError::CorruptState(_))
+        ));
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            limits::MAX_EVENT_LOG_BYTES + 1
+        );
+
+        file.set_len(limits::MAX_EVENT_RECORD_BYTES * 2 + 1)
+            .unwrap();
+        assert!(matches!(
+            store.append_feedback(feedback(session.id, Uuid::new_v4())),
+            Err(PresentError::CorruptState(_))
+        ));
     }
 
     #[test]
@@ -1572,6 +2262,14 @@ mod tests {
         ));
         drop(lease);
         assert!(store.acquire_service_lease(session.id).is_ok());
+
+        let startup = store.acquire_startup_lease(session.id).unwrap();
+        assert!(matches!(
+            store.acquire_startup_lease(session.id),
+            Err(PresentError::ServiceUnavailable(_))
+        ));
+        drop(startup);
+        assert!(store.acquire_startup_lease(session.id).is_ok());
     }
 
     #[test]
@@ -1593,6 +2291,32 @@ mod tests {
     }
 
     #[test]
+    fn clear_never_removes_closed_state_with_a_live_runtime_identity() {
+        let (_temp, store) = store();
+        let browser = store.create(parsed()).unwrap();
+        let service = store.create(parsed()).unwrap();
+        let browser_instance = Uuid::new_v4();
+        let service_instance = Uuid::new_v4();
+        store.set_browser(browser.id, 42, browser_instance).unwrap();
+        store
+            .set_service(service.id, 43123, 43, service_instance)
+            .unwrap();
+        store.close(browser.id).unwrap();
+        store.close(service.id).unwrap();
+
+        assert!(store
+            .clear(Some(browser.id), Duration::ZERO, false)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .clear(Some(service.id), Duration::ZERO, false)
+            .unwrap()
+            .is_empty());
+        assert!(store.load(browser.id).is_ok());
+        assert!(store.load(service.id).is_ok());
+    }
+
+    #[test]
     fn automatic_retention_evicts_oldest_closed_state_and_preserves_active_state() {
         let (_temp, mut store) = store();
         store.retention.max_closed_sessions = 1;
@@ -1601,6 +2325,7 @@ mod tests {
         let active = store.create(parsed()).unwrap();
         store.close(first.id).unwrap();
         store.close(second.id).unwrap();
+        store.enforce_retention().unwrap();
 
         let sessions = store.list().unwrap();
         assert_eq!(

@@ -128,7 +128,13 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<()> {
         }
         PresentCommand::Close { session_id } => {
             let id = parse_id(session_id)?;
-            store.close(id)?;
+            let session = store.close(id)?;
+            if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance)
+            {
+                let profile = store.runtime_dir(id)?.join("browser-profile");
+                browser::terminate_isolated(&store, id, pid, instance_id, &profile)?;
+            }
+            store.enforce_retention()?;
             println!("closed {id}");
             Ok(())
         }
@@ -190,7 +196,7 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
         return Ok(());
     }
     let profile = store.runtime_dir(session.id)?.join("browser-profile");
-    browser::launch_isolated(store, &ready.bootstrap_path, &profile)?;
+    browser::launch_isolated(store, session.id, &ready.bootstrap_path, &profile)?;
     println!("opened {}", session.id);
     Ok(())
 }
@@ -201,28 +207,102 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
         println!("{}", serde_json::to_string_pretty(&session)?);
         return Ok(());
     }
-    let port = session.service_port.ok_or_else(|| {
-        PresentError::ServiceUnavailable("the session has no recorded service endpoint".to_string())
-    })?;
-    let instance_id = session.service_instance.ok_or_else(|| {
-        PresentError::ServiceUnavailable("the session has no recorded service identity".to_string())
-    })?;
-    verify_service(id, port, instance_id)?;
-    let authority = format!("127.0.0.1:{port}");
-    let profile = store.runtime_dir(id)?.join("browser-profile");
-    if no_launch {
-        println!("http://{authority}/app/ profile={}", profile.display());
+    let healthy = match (session.service_port, session.service_instance) {
+        (Some(port), Some(instance_id)) => verify_service(id, port, instance_id).is_ok(),
+        (None, None) => false,
+        _ => unreachable!("validated sessions cannot contain partial service identity"),
+    };
+    if !healthy {
+        if let Some(instance_id) = session.service_instance {
+            let lease = store.acquire_service_lease(id)?;
+            drop(lease);
+            if !store.clear_service(id, instance_id)? {
+                return Err(PresentError::ServiceUnavailable(
+                    "the stale presentation service identity changed during recovery".to_string(),
+                ));
+            }
+        }
+        let ready = start_service(store, id)?;
+        let profile = store.runtime_dir(id)?.join("browser-profile");
+        if no_launch {
+            println!(
+                "session {id} recovered; open the owner-private bootstrap file {} in the isolated profile {}",
+                ready.bootstrap_path.display(),
+                profile.display()
+            );
+            return Ok(());
+        }
+        launch_or_focus_guard(store, id, &ready.bootstrap_path, None, &profile)?;
+        println!("recovered and opened {id}");
         return Ok(());
     }
-    browser::launch_application(store, &authority, &profile)?;
-    println!("opened {id}");
+    let port = session
+        .service_port
+        .expect("healthy service has a recorded port");
+    let authority = format!("127.0.0.1:{port}");
+    let profile = store.runtime_dir(id)?.join("browser-profile");
+    if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
+        if browser::is_isolated_running(pid, instance_id, &profile)? {
+            if no_launch {
+                println!("http://{authority}/app/ profile={}", profile.display());
+                return Ok(());
+            }
+            return Err(PresentError::BrowserUnavailable(
+                "this presentation already has an owned browser window".to_string(),
+            ));
+        }
+        let _ = store.clear_browser(id, instance_id)?;
+    }
+    let ready_path = store.runtime_dir(id)?.join("ready.json");
+    let ready = read_ready_record(&ready_path, id)?;
+    request_rebootstrap(&ready)?;
+    if no_launch {
+        println!(
+            "session {id} ready; open the owner-private bootstrap file {} in the isolated profile {}",
+            ready.bootstrap_path.display(),
+            profile.display()
+        );
+    } else {
+        browser::launch_isolated(store, id, &ready.bootstrap_path, &profile)?;
+        println!("opened {id}");
+    }
     Ok(())
 }
 
+fn launch_or_focus_guard(
+    store: &SessionStore,
+    id: Uuid,
+    bootstrap_path: &Path,
+    authority: Option<&str>,
+    profile: &Path,
+) -> codeflow_present::Result<()> {
+    let session = store.load(id)?;
+    if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
+        if browser::is_isolated_running(pid, instance_id, profile)? {
+            return Err(PresentError::BrowserUnavailable(
+                "this presentation already has an owned browser window".to_string(),
+            ));
+        }
+        let _ = store.clear_browser(id, instance_id)?;
+    }
+    match authority {
+        Some(authority) => browser::launch_application(store, id, authority, profile),
+        None => browser::launch_isolated(store, id, bootstrap_path, profile),
+    }
+}
+
 fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<ReadyRecord> {
+    let _startup = store.acquire_startup_lease(id)?;
     let executable = std::env::current_exe()
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
-    let child = Command::new(executable)
+    let runtime = store.runtime_dir(id)?;
+    let ready_path = runtime.join("ready.json");
+    let bootstrap_path = runtime.join("bootstrap.html");
+    remove_regular_if_present(&ready_path)?;
+    remove_regular_if_present(&bootstrap_path)?;
+    let mut command = Command::new(executable);
+    apply_minimal_service_environment(&mut command);
+    let child = command
         .arg("present")
         .arg("serve-internal")
         .arg(id.to_string())
@@ -232,18 +312,10 @@ fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<Rea
         .spawn()
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
     let mut child = ChildGuard::new(child);
-    let ready_path = store.runtime_dir(id)?.join("ready.json");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if ready_path.is_file() {
-            let bytes =
-                fs::read(&ready_path).map_err(|error| PresentError::io(&ready_path, error))?;
-            let ready: ReadyRecord = serde_json::from_slice(&bytes)?;
-            if ready.schema_version != 1 || ready.session_id != id {
-                return Err(PresentError::CorruptState(
-                    "presentation ready record is mismatched".to_string(),
-                ));
-            }
+            let ready = read_ready_record(&ready_path, id)?;
             let session = store.load(id)?;
             if session.service_port != Some(ready.port)
                 || session.service_instance != Some(ready.instance_id)
@@ -271,6 +343,87 @@ fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<Rea
             ));
         }
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn read_ready_record(path: &Path, id: Uuid) -> codeflow_present::Result<ReadyRecord> {
+    let bytes = read_bounded_regular(path, 16 * 1024)?;
+    let ready: ReadyRecord = serde_json::from_slice(&bytes)?;
+    if ready.schema_version != 1
+        || ready.session_id != id
+        || ready.recovery_capability.len() != 64
+        || !ready
+            .recovery_capability
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(PresentError::CorruptState(
+            "presentation ready record is mismatched".to_string(),
+        ));
+    }
+    Ok(ready)
+}
+
+fn request_rebootstrap(ready: &ReadyRecord) -> codeflow_present::Result<()> {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ready.port);
+    let timeout = Duration::from_secs(2);
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .and_then(|()| stream.set_write_timeout(Some(timeout)))
+        .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
+    let form = format!("recovery_capability={}", ready.recovery_capability);
+    let request = format!(
+        "POST /_cf-present/rebootstrap/{} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        ready.instance_id,
+        ready.port,
+        form.len(),
+        form
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
+    let mut response = Vec::new();
+    stream
+        .take(16 * 1024)
+        .read_to_end(&mut response)
+        .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
+    if !response.starts_with(b"HTTP/1.1 204 ") {
+        return Err(PresentError::ServiceUnavailable(
+            "presentation service refused bootstrap recovery".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn apply_minimal_service_environment(command: &mut Command) {
+    const ALLOWED: &[&str] = &[
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "SYSTEMROOT",
+        "WINDIR",
+    ];
+    command.env_clear();
+    for name in ALLOWED {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+}
+
+fn remove_regular_if_present(path: &Path) -> codeflow_present::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => {
+            fs::remove_file(path).map_err(|error| PresentError::io(path, error))
+        }
+        Ok(_) => Err(PresentError::UnsafePath(path.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(PresentError::io(path, error)),
     }
 }
 
@@ -362,7 +515,7 @@ fn deliver_feedback(store: &SessionStore, id: Uuid, follow: bool) -> codeflow_pr
 
 fn read_document(path: &Path) -> codeflow_present::Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
+    if !metadata.is_file() || is_link_like(&metadata) {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
     if metadata.len() > codeflow_present::limits::MAX_DOCUMENT_BYTES as u64 {
@@ -370,17 +523,71 @@ fn read_document(path: &Path) -> codeflow_present::Result<Vec<u8>> {
             limit: codeflow_present::limits::MAX_DOCUMENT_BYTES,
         });
     }
-    let file = fs::File::open(path).map_err(|error| PresentError::io(path, error))?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take((codeflow_present::limits::MAX_DOCUMENT_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| PresentError::io(path, error))?;
+    let bytes = read_bounded_regular(path, codeflow_present::limits::MAX_DOCUMENT_BYTES)?;
     if bytes.len() > codeflow_present::limits::MAX_DOCUMENT_BYTES {
         return Err(PresentError::DocumentTooLarge {
             limit: codeflow_present::limits::MAX_DOCUMENT_BYTES,
         });
     }
     Ok(bytes)
+}
+
+fn read_bounded_regular(path: &Path, max_bytes: usize) -> codeflow_present::Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| PresentError::io(path, error))?;
+    if !metadata.is_file() || is_link_like(&metadata) {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| PresentError::io(path, error))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| PresentError::io(path, error))?;
+    if !opened.is_file() || opened.len() > max_bytes as u64 {
+        return Err(PresentError::CorruptState(format!(
+            "{} exceeds its bounded input size",
+            path.display()
+        )));
+    }
+    let capacity = usize::try_from(opened.len()).map_err(|_| {
+        PresentError::CorruptState(format!("{} is not addressable", path.display()))
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| PresentError::io(path, error))?;
+    if bytes.len() > max_bytes {
+        return Err(PresentError::CorruptState(format!(
+            "{} grew beyond its bounded input size",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn is_link_like(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn is_link_like(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn parse_id(value: &str) -> codeflow_present::Result<Uuid> {
@@ -429,5 +636,19 @@ mod tests {
         );
         assert!(parse_duration("30").is_err());
         assert!(parse_duration("-1d").is_err());
+    }
+
+    #[test]
+    fn service_environment_excludes_provider_secrets() {
+        let mut command = Command::new("service");
+        command.env("AWS_SECRET_ACCESS_KEY", "sentinel");
+        command.env("ANTHROPIC_API_KEY", "sentinel");
+        apply_minimal_service_environment(&mut command);
+        let environment = command.get_envs().collect::<Vec<_>>();
+        for secret in ["AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY"] {
+            assert!(!environment.iter().any(|(name, value)| {
+                *name == secret && value.and_then(|value| value.to_str()) == Some("sentinel")
+            }));
+        }
     }
 }

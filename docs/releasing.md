@@ -7,8 +7,8 @@ approval record for every run of this procedure.
 
 ## codeflow's own releases
 
-Version source of truth: `Cargo.toml [workspace.package] version` (both crates
-inherit it via `version.workspace = true`). Releases are conventional-commit
+Version source of truth: `Cargo.toml [workspace.package] version` (all three
+crates inherit it via `version.workspace = true`). Releases are conventional-commit
 driven and human-gated. Two tools do the work:
 
 - **git-cliff** derives the next SemVer **and** the changelog from the
@@ -43,6 +43,42 @@ Apple SDK redistribution/licensing prevents a generic bundled cross toolchain.
 Cross-build success proves compilation and linking only; it never replaces a
 native Windows/Linux/macOS test and installer canary.
 
+### Presentation renderer assets
+
+The `cf-present` browser distribution is a release input, not an install-time
+build. Use the exact Node/npm versions declared in
+`crates/codeflow-present/web/package.json`; from that directory run:
+
+```sh
+npm ci
+npm run supply-chain
+npm run check
+npm run check:browser
+```
+
+`supply-chain` refreshes the committed audit, CycloneDX SBOM, and license
+inventory. `check` proves two clean builds are byte-identical and enforces the
+raw/Brotli/export budgets and integrity manifest. `check:browser` exercises the
+representative accessible renderer and mode/review behavior in a task-owned
+browser, including a dense bounded multi-diagram corpus and long-task envelope.
+Review the generated diff; do not hand-edit the distribution or its evidence
+files. Release builds consume only the committed assets, and consumer machines
+do not need Node.
+
+Repeat the runtime journey on every claimed native platform. Windows evidence
+must cover Unicode known-folder/profile paths, creation-time ACLs, trusted
+system tools, exact quoted command-line identity, file URLs, and process-tree
+cleanup. Linux/WSL2 evidence must cover bounded no-follow `/proc` identity and
+process-group cleanup; macOS must prove its equivalent ownership boundary.
+Cross-compilation is useful adapter-shape evidence, but it does not satisfy
+these native qualification cases.
+
+Measure the stripped release binary against the recorded pre-presentation
+reference build, and record the embedded service/export payload contribution
+using the procedure captured for the release. Enforce the per-payload and
+combined limits in `codeflow_present::limits`; a debug binary, cross-build, or
+compressed archive size is not equivalent evidence.
+
 ### The runbook
 
 Prerequisite: install git-cliff once (`cargo install git-cliff`, or a prebuilt
@@ -56,7 +92,7 @@ git switch -c chore/release main
 NEXT=$(git cliff --bumped-version)        # current history resolves to v3.0.0
 echo "$NEXT"
 
-# 3. Bump the single workspace version (both crates inherit it):
+# 3. Bump the single workspace version (all three crates inherit it):
 #    edit Cargo.toml -> [workspace.package] version = "<NEXT without the leading v>"
 #    then refresh the lockfile:
 cargo build

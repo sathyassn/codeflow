@@ -25,6 +25,14 @@ named human release decision.
 - [ ] Secret scanning, dependency audit, policy validation, and the repository
       integrity/managed-drift checks pass or have a documented, human-approved
       disposition that does not weaken a non-relaxable floor.
+- [ ] Presentation document/token/history schemas match the Rust contracts and
+      adversarial fixtures; service request/auth/bootstrap/sandbox/export
+      matrices, crash recovery, concurrent feedback, retention, and
+      identity-scoped cleanup pass without exposing secrets or private state.
+- [ ] The committed presentation web distribution rebuilds byte-identically
+      from its exact lockfile and toolchain; integrity hashes, Brotli/export
+      budgets, license inventory, CycloneDX SBOM, package audit, and release
+      binary-delta limits pass. Consumer builds still require no Node toolchain.
 - [ ] CodeFlow's repository-specific CodeQL state is honest. Before public
       launch it remains pending and no CodeQL workflow is shipped in the
       portable scaffold. After public launch, GitHub default setup for Rust uses
@@ -51,6 +59,20 @@ named human release decision.
 - [ ] Native macOS, Linux, and Windows build/test canaries pass. Record the OS,
       architecture, Rust version, and exact command. WSL2 is recorded as Linux,
       not as native Windows.
+- [ ] Each claimed presentation platform opens only a task-owned isolated
+      browser/profile, passes the qualified Brotli and full review journey,
+      preserves light/dark/system and accessibility behavior, exports offline,
+      and proves close/crash/retention teardown. An unqualified adapter fails
+      closed and `--no-launch` remains usable.
+- [ ] Presentation platform evidence covers Windows Unicode known-folder and
+      profile paths, creation-time ACLs, trusted system tools, exact quoted
+      process identity, file URLs, and process-tree cleanup; Linux/WSL2 bounded
+      no-follow `/proc` identity and process-group cleanup; and the equivalent
+      macOS ownership checks. Cross-target compilation does not replace these
+      native cases.
+- [ ] Browser evidence includes the bounded dense multi-diagram corpus, records
+      long-task behavior, and proves that budget exhaustion leaves escaped
+      source without blocking feedback, export, close, or cleanup.
 - [ ] The shell installer selects the correct macOS/Linux artifact, the
       PowerShell installer selects `codeflow.exe` on native Windows, and WSL2
       selects the Linux artifact. Each installed binary reports the release

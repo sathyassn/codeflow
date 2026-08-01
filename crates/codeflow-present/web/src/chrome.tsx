@@ -64,8 +64,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
   useEffect(
-    () => followSessionEvents(handleEvent, setEventMessage),
-    [config.session_id],
+    () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
+    [config.session_id, config.revision, config.event_sequence],
   );
   useEffect(() => {
     const handleAnchor = (event: Event): void => {
@@ -195,6 +195,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     <div class="cf-chrome-frame">
       <a class="cf-skip-link" href="#cf-present-document">Skip to document</a>
       <header class="cf-topbar">
+        {config.identity ? (
+          <img class="cf-project-identity" src={config.identity.src} alt={config.identity.alt} />
+        ) : null}
         <div class="cf-title-group">
           <span class="cf-kicker">Review document</span>
           <strong>{config.title}</strong>

@@ -4,20 +4,22 @@ import { postJson, PresentRequestError } from "./http";
 const RETRY_DELAY_MS = 1_000;
 
 export function followSessionEvents(
+  initialCursor: string,
   onEvent: (event: SessionEvent) => void,
   onError: (message: string) => void,
 ): () => void {
   const controller = new AbortController();
-  void poll(controller.signal, onEvent, onError);
+  void poll(initialCursor, controller.signal, onEvent, onError);
   return () => controller.abort();
 }
 
 async function poll(
+  initialCursor: string,
   signal: AbortSignal,
   onEvent: (event: SessionEvent) => void,
   onError: (message: string) => void,
 ): Promise<void> {
-  let cursor: string | null = null;
+  let cursor: string | null = initialCursor;
   while (!signal.aborted) {
     try {
       const nextEvent: SessionEvent = await postJson<SessionEvent>(

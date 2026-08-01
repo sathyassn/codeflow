@@ -381,3 +381,75 @@ fn editorial_source_live_and_baseline_copies_are_byte_identical() {
 fn design_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-design");
 }
+
+/// Interactive presentation authoring is also a managed cross-harness skill.
+/// Its examples and conditional reference are part of the contract, so pin the
+/// complete directory rather than only SKILL.md.
+#[test]
+fn present_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-present");
+}
+
+/// Presentation JSON contracts are public consumer inputs and exported state.
+/// Pin the authored copies to the deployed and three-way-merge baseline files,
+/// and reject an accidentally open or malformed root contract.
+#[test]
+fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
+    let root = repo_root();
+    let source = root.join("assets/base/present/schemas");
+    let live = root.join(".codeflow/schemas/present");
+    let baseline = root.join(".codeflow/.baseline/.codeflow/schemas/present");
+    let expected: BTreeSet<String> = walk_files(&source)
+        .iter()
+        .map(|path| rel(&source, path))
+        .collect();
+    assert!(!expected.is_empty(), "presentation schema source is empty");
+
+    let mut problems = Vec::new();
+    for copy in [&live, &baseline] {
+        let actual: BTreeSet<String> = walk_files(copy)
+            .iter()
+            .map(|path| rel(copy, path))
+            .collect();
+        for file in expected.symmetric_difference(&actual) {
+            problems.push(format!("{}: file-set drift at {file}", copy.display()));
+        }
+        for file in expected.intersection(&actual) {
+            let authored = std::fs::read(source.join(file)).expect("read authored schema");
+            let deployed = std::fs::read(copy.join(file)).expect("read deployed schema");
+            if authored != deployed {
+                problems.push(format!("{}: byte drift at {file}", copy.display()));
+            }
+        }
+    }
+
+    for file in &expected {
+        let bytes = std::fs::read(source.join(file)).expect("read presentation schema");
+        let schema: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("presentation schema is valid JSON");
+        assert_eq!(
+            schema.get("$schema").and_then(serde_json::Value::as_str),
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "{file}: wrong or missing JSON Schema dialect"
+        );
+        assert!(
+            schema
+                .get("$id")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
+            "{file}: public schema needs a stable $id"
+        );
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&serde_json::Value::Bool(false)),
+            "{file}: public root contract must reject unknown fields"
+        );
+    }
+
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "presentation schema source/live/baseline copies drifted:\n  {}",
+        problems.join("\n  ")
+    );
+}

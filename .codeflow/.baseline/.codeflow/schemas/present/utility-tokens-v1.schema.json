@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codeflow:schema:present:utility-tokens:1",
+  "title": "CodeFlow presentation primitive tokens v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["light", "dark"],
+      "properties": {
+        "light": {"$ref": "#/$defs/colors"},
+        "dark": {"$ref": "#/$defs/colors"}
+      }
+    },
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sans_family": {"$ref": "#/$defs/font_family"},
+        "mono_family": {"$ref": "#/$defs/font_family"},
+        "reading_measure_ch": {"type": "integer", "minimum": 45, "maximum": 100}
+      }
+    },
+    "spacing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale_percent"],
+      "properties": {"scale_percent": {"type": "integer", "minimum": 75, "maximum": 150}}
+    },
+    "radius": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["radius_px"],
+      "properties": {"radius_px": {"type": "integer", "minimum": 0, "maximum": 32}}
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mime_type", "data_base64", "alt"],
+      "properties": {
+        "mime_type": {"enum": ["image/png", "image/webp"]},
+        "data_base64": {"type": "string", "contentEncoding": "base64", "x-codeflow-max-decoded-bytes": 131072},
+        "alt": {"type": "string", "minLength": 1, "x-codeflow-max-bytes": 512}
+      }
+    }
+  },
+  "$comment": "The complete token file is limited to 256 KiB. When colors is present, the runtime requires the complete five-role light and dark sets and verifies text at 4.5:1 against canvas and surface, accent at 4.5:1 against surface, and focus at 3:1 against canvas and surface. Identity data is decoded, byte-bounded, and checked for a PNG or WebP file signature matching its declared MIME type.",
+  "$defs": {
+    "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canvas", "surface", "text", "accent", "focus"],
+      "properties": {
+        "canvas": {"$ref": "#/$defs/color"},
+        "surface": {"$ref": "#/$defs/color"},
+        "text": {"$ref": "#/$defs/color"},
+        "accent": {"$ref": "#/$defs/color"},
+        "focus": {"$ref": "#/$defs/color"}
+      }
+    },
+    "font_family": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9 _.-]+$"
+    }
+  }
+}

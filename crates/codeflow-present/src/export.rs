@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, path::Path};
+use std::{fmt::Write as _, fs::OpenOptions, io::Write as _, path::Path};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
@@ -33,6 +33,7 @@ pub fn export_session(
     mode: ExportMode,
 ) -> Result<()> {
     let revision = store.current_revision(session_id)?;
+    let utility_style = store.utility_tokens()?.map(|tokens| tokens.css());
     let html = match revision.content {
         RevisionContent::Supported { document } => {
             let static_html = render_document(
@@ -40,15 +41,23 @@ pub fn export_session(
                 &RenderOptions {
                     session_id: "export",
                     revision: revision.revision,
+                    event_sequence: 0,
                     script_path: None,
                     style_path: None,
                     prepaint_source: None,
+                    utility_style: None,
+                    identity: None,
                     read_only_warning: None,
                     interactive: false,
                 },
             );
             let base_bytes = static_html.len();
-            let enhanced = enhance_export(static_html, theme, mode)?;
+            let enhanced = enhance_export(
+                static_html,
+                theme,
+                mode,
+                utility_style.as_deref().unwrap_or_default(),
+            )?;
             if u64::try_from(enhanced.len().saturating_sub(base_bytes)).unwrap_or(u64::MAX)
                 > limits::MAX_EXPORT_SHELL_BYTES
             {
@@ -67,7 +76,12 @@ pub fn export_session(
     write_new_private(output, html.as_bytes())
 }
 
-fn enhance_export(mut html: String, theme: ExportTheme, mode: ExportMode) -> Result<String> {
+fn enhance_export(
+    mut html: String,
+    theme: ExportTheme,
+    mode: ExportMode,
+    utility_style: &str,
+) -> Result<String> {
     let manifest = load_manifest()?;
     let asset = &manifest.export.renderer;
     if asset.content_encoding != "gzip"
@@ -90,7 +104,10 @@ fn enhance_export(mut html: String, theme: ExportTheme, mode: ExportMode) -> Res
         ));
     }
     let digest = Sha256::digest(&bytes.data);
-    let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut actual = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(actual, "{byte:02x}").expect("writing to a String cannot fail");
+    }
     if actual != asset.sha256 {
         return Err(PresentError::CorruptState(
             "offline export renderer does not match its SHA-256".to_string(),
@@ -120,8 +137,9 @@ fn enhance_export(mut html: String, theme: ExportTheme, mode: ExportMode) -> Res
         1,
     );
     let styles = include_str!("../web/src/styles.css");
+    let system_fallback = include_str!("../web/src/export-fallback.css");
     let head = format!(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}</style>"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{system_fallback}\n{utility_style}</style>"
     );
     html = html.replacen(marker, &format!("{head}{marker}"), 1);
     let payload = format!(

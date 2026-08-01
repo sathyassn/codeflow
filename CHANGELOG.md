@@ -416,6 +416,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bounded interactive review documents (ADR-0049, ADR-0050).** Standard/full
+  scaffolds gain the cross-harness `cf-present` skill and managed public
+  document, primitive-token, and history schemas. The new `codeflow present`
+  surface opens, updates, lists, resumes, exports, closes, and clears immutable
+  local review sessions and delivers stable feedback envelopes at least once.
+  One loopback-only authenticated service and a CodeFlow-owned isolated browser
+  profile render a closed accessible block catalog with light/dark utility
+  modes, inert HTML sandboxing, strict optional project primitive tokens, and
+  self-contained read-only export. State is owner-private, project-keyed,
+  bounded, and cleanup is identity-scoped; event recovery uses one bounded
+  opened handle, diagram count/source/enhancement are capped, and native
+  adapters use trusted platform paths plus exact process identity. No daemon,
+  remote viewer, product UI framework, or documentation portal is introduced.
+  Native platform and browser qualification remains the explicit
+  CAP-016/TSK-007 release boundary.
+
 - **Transport-neutral durable delegate lifecycle (ADR-0036).** New
   `codeflow delegate init|arm|wait` commands and a schema-v2
   `hook delegate-turn --state-dir` mode drive a delegated harness turn through

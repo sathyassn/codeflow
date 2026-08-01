@@ -520,6 +520,33 @@
         {"path": ".agents/skills/cf-method/SKILL.md", "markers": ["first partition it by coherent", "not itself a reason to share a branch", "default landing shape for a multi-task epic", "never a holding branch for unrelated standalone tasks", "does not defer or replace task-level orchestration", "before landing", "additional integration layer", "chooses this routine mechanism without an operator question", "explicit operator request is valid input", "approval from both primary seats before tasks are allocated", "serial tasks branch from the updated integration", "parallel tasks branch concurrently", "both primary seats review the exact combined integration diff"]},
         {"path": ".agents/skills/cf-method/references/project-organization.md", "markers": ["the request boundary is not automatically an epic", "for every task in a multi-task epic", "Create that one shared branch from the intended protected target"]}
       ]
+    },
+    {
+      "id": "CF-PRES-001",
+      "level": "hard",
+      "statement": "Interactive presentation is proportional and user-invokable: use cf-present when a complex explanation or review materially benefits from one coherent visual surface or anchored feedback, keep short linear answers in the native conversation, and never confuse the utility with consuming-product UI or a durable documentation portal.",
+      "sources": [
+        {"path": "AGENTS.md", "markers": ["Present a complex result for interactive review", "keep simple answers in chat", "never treat the utility as product UI or durable documentation"]},
+        {"path": ".agents/skills/cf-present/SKILL.md", "markers": ["Decide whether the surface earns its cost", "Stay in chat for a short answer", "Do not turn formatting preference into a runtime session"]}
+      ]
+    },
+    {
+      "id": "CF-PRES-002",
+      "level": "hard",
+      "statement": "A cf-present document uses the closed validated declarative envelope and reusable accessible blocks selected by information shape; visuals carry information rather than decorate prose, substantial language remains evidence-bound and audience-fit, stable block IDs preserve revision meaning, and accepted durable outcomes are promoted to their one canonical authority rather than left in presentation history.",
+      "sources": [
+        {"path": ".agents/skills/cf-present/SKILL.md", "markers": ["Choose blocks by information shape", "A visual must communicate", "Promote an accepted durable decision"]},
+        {"path": ".agents/skills/cf-present/references/document-authoring.md", "markers": ["Every block ID is unique", "Keep the first reading path complete", "Accepted decisions are summarized to their canonical durable home"]}
+      ]
+    },
+    {
+      "id": "CF-PRES-003",
+      "level": "hard",
+      "statement": "cf-present lifecycle preserves the runtime trust boundary: validate with the public schema and authoritative runtime, open only a CodeFlow-owned isolated profile, never replay history without explicit look-back, deduplicate at-least-once feedback by event ID, export only on demand without treating utility themes as product authority, and close and clean only verified task-owned state.",
+      "sources": [
+        {"path": ".agents/skills/cf-present/SKILL.md", "markers": ["let `codeflow present open", "Deduplicate by stable `event_id`", "Never inject old presentation history", "Verify the isolated browser/process"]},
+        {"path": ".agents/skills/cf-present/references/document-authoring.md", "markers": ["without scripts, same-origin access, forms, navigation, or network", "orphaned annotations as visible unresolved context", "utility defaults never influence the product"]}
+      ]
     }
   ]
 }

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "colors": {
+    "light": {
+      "canvas": "#FFFFFF",
+      "surface": "#F3F4F6",
+      "text": "#111827",
+      "accent": "#1D4ED8",
+      "focus": "#1D4ED8"
+    },
+    "dark": {
+      "canvas": "#111827",
+      "surface": "#1F2937",
+      "text": "#F9FAFB",
+      "accent": "#93C5FD",
+      "focus": "#93C5FD"
+    }
+  },
+  "typography": {
+    "sans_family": "Inter",
+    "mono_family": "Berkeley Mono",
+    "reading_measure_ch": 72
+  },
+  "spacing": {"scale_percent": 100},
+  "radius": {"radius_px": 8}
+}

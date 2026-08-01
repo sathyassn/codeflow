@@ -652,3 +652,47 @@ AskUserQuestion, and permission-response routing on the available macOS arm64
 host. The reusable sibling-hook rejection procedure, full fake-TUI stress
 matrix, and broader native-platform evidence remain PR2/release gates and are
 not claimed complete.
+
+## CAP-016 — interactive-presentation-review
+
+```yaml
+id: CAP-016
+name: interactive-presentation-review
+area: engine
+status: building
+verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
+epics: [EPC-005]
+adrs: [ADR-0049, ADR-0050]
+```
+
+`codeflow present` turns a closed versioned JSON+Markdown document into one
+bounded local review surface. The standard/full scaffold supplies the
+cross-harness `cf-present` authoring skill, canonical document/token/history
+schemas, representative assets, and proportional routing: simple answers stay
+in chat; a complex explanation, comparison, plan, decision, evidence set, diff,
+or review uses the utility only when coherent visual inspection or anchored
+feedback materially helps.
+
+The runtime validates the declarative block tree, embeds its deterministic
+renderer, stores immutable revisions and append-only feedback in owner-private
+project-keyed state, and exposes open/update/list/show/history/feedback/export/
+close/clear through the CLI. A one-time tokenless file bootstrap opens a
+CodeFlow-owned isolated browser profile against an authenticated loopback-only
+service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
+sandboxing, strict primitive-token import, crash recovery, bounded retention,
+and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
+repair are self-bounded and operate through one opened handle. Mermaid input is
+capped per diagram and per document; browser enhancement is serialized, yields
+between diagrams, and fails remaining items to escaped source when the eager
+fallback exhausts its cumulative budget. Static export remains self-contained
+and excludes review/authentication/runtime state.
+
+The capability remains `building` until TSK-007 records the full native
+macOS/Linux/WSL2/Windows and qualified-browser matrix, adversarial service and
+state evidence, design/accessibility/responsive comparisons, deterministic
+asset/release checks, and fresh native interactive model trials. That matrix
+includes Windows Unicode known-folder/profile paths, creation-time ACLs,
+trusted system tools, exact process-tree identity and file URLs; Linux/WSL2
+bounded `/proc` identity and group signaling; and a dense multi-diagram browser
+corpus with long-task evidence. Cross-builds alone do not claim native runtime
+support.

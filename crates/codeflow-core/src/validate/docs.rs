@@ -193,7 +193,15 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
         });
     }
 
+    let mut seen_capabilities = BTreeSet::new();
     for entry in entries {
+        if !seen_capabilities.insert(entry.id.clone()) {
+            report.issues.push(DocsLintIssue {
+                file: rel.clone(),
+                line: entry.line,
+                message: format!("{}: duplicate capability id", entry.id),
+            });
+        }
         // Status legality.
         if !CAPABILITY_STATUS_VALUES.contains(&entry.status.as_str()) {
             report.issues.push(DocsLintIssue {
@@ -870,6 +878,26 @@ mod tests {
         );
         epic_file(root, "EPC-001", "[CAP-001]", "[ADR-0001]");
         dir
+    }
+
+    #[test]
+    fn duplicate_capability_ids_are_loud() {
+        let dir = clean_repo();
+        let path = dir.path().join("docs/capabilities.md");
+        let mut registry = std::fs::read_to_string(&path).unwrap();
+        registry.push_str(&capability_block(
+            "CAP-001",
+            "building",
+            "[EPC-001]",
+            "[ADR-0001]",
+            "[]",
+        ));
+        std::fs::write(path, registry).unwrap();
+        let report = lint_docs(dir.path());
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message == "CAP-001: duplicate capability id"));
     }
 
     #[test]

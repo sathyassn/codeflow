@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
+    fmt::Write as _,
     fs,
+    io::Write as _,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -20,6 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use getrandom::fill as fill_random;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
@@ -28,10 +31,12 @@ use tokio::{net::TcpListener, sync::Notify};
 use uuid::Uuid;
 
 use crate::{
+    config::UtilityTokens,
     document::Block,
     error::{PresentError, Result},
     limits,
-    render::{render_document, render_unsupported, sandbox_id, RenderOptions},
+    platform::{harden_private_path, is_link_like},
+    render::{render_document, render_unsupported, sandbox_id, RenderIdentity, RenderOptions},
     state::{
         create_private_dir_all, write_json_atomic, FeedbackEnvelope, FeedbackKind, FeedbackNote,
         FeedbackVerdict, RevisionContent, SessionStatus, SessionStore, TextSelector,
@@ -97,6 +102,7 @@ pub struct ReadyRecord {
     pub port: u16,
     pub instance_id: Uuid,
     pub bootstrap_path: PathBuf,
+    pub recovery_capability: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -113,21 +119,31 @@ struct AppState {
     session_id: Uuid,
     instance_id: Uuid,
     authority: String,
-    capability: Arc<String>,
+    bootstrap: Arc<Mutex<BootstrapState>>,
+    recovery_capability: Arc<String>,
     cookie_name: Arc<String>,
     cookie_value: Arc<String>,
     bootstrap_path: Arc<PathBuf>,
-    bootstrap_used: Arc<AtomicBool>,
-    started_at: u64,
     last_activity: Arc<AtomicU64>,
     shutdown: Arc<Notify>,
     assets: Arc<AssetManifest>,
-    sandbox: Arc<HashMap<String, String>>,
+    tokens: Arc<Option<UtilityTokens>>,
+}
+
+struct BootstrapState {
+    capability: String,
+    used: bool,
+    issued_at: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct BootstrapForm {
     capability: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RebootstrapForm {
+    recovery_capability: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,8 +200,8 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     if session.status != SessionStatus::Active {
         return Err(PresentError::SessionClosed(session_id.to_string()));
     }
-    let revision = store.current_revision(session_id)?;
     let assets = Arc::new(load_manifest()?);
+    let tokens = Arc::new(store.utility_tokens()?);
     let runtime_dir = store.runtime_dir(session_id)?;
     let profile_dir = runtime_dir.join("browser-profile");
     create_private_dir_all(&profile_dir)?;
@@ -205,10 +221,12 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     let authority = format!("127.0.0.1:{port}");
     let instance_id = Uuid::new_v4();
     let capability = random_hex(32)?;
+    let recovery_capability = random_hex(32)?;
     let cookie_value = random_hex(32)?;
     let cookie_name = format!("cf_present_{}", session_id.simple());
     write_bootstrap(&bootstrap_path, &authority, &capability)?;
     store.set_service(session_id, port, std::process::id(), instance_id)?;
+    let _service_registration = ServiceRegistration::new(store.clone(), session_id, instance_id);
     write_json_atomic(
         &ready_path,
         &ReadyRecord {
@@ -217,26 +235,29 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
             port,
             instance_id,
             bootstrap_path: bootstrap_path.clone(),
+            recovery_capability: recovery_capability.clone(),
         },
     )?;
 
-    let sandbox_map = Arc::new(sandbox_blocks(session_id, &revision.content));
     let now = now_unix();
     let state = AppState {
         store,
         session_id,
         instance_id,
         authority,
-        capability: Arc::new(capability),
+        bootstrap: Arc::new(Mutex::new(BootstrapState {
+            capability,
+            used: false,
+            issued_at: now,
+        })),
+        recovery_capability: Arc::new(recovery_capability),
         cookie_name: Arc::new(cookie_name),
         cookie_value: Arc::new(cookie_value),
         bootstrap_path: Arc::new(bootstrap_path.clone()),
-        bootstrap_used: Arc::new(AtomicBool::new(false)),
-        started_at: now,
         last_activity: Arc::new(AtomicU64::new(now)),
         shutdown: Arc::new(Notify::new()),
         assets,
-        sandbox: sandbox_map,
+        tokens,
     };
 
     let monitor_state = state.clone();
@@ -244,12 +265,13 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     let shutdown = state.shutdown.clone();
     let app = Router::new()
         .route("/bootstrap", post(bootstrap))
+        .route("/_cf-present/rebootstrap/{instance_id}", post(rebootstrap))
         .route("/_cf-present/health/{instance_id}", get(health))
         .route("/app/", get(application))
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
         .route("/app/api/events/poll", post(poll_events))
-        .route("/sandbox/{id}", get(sandbox))
+        .route("/sandbox/{revision}/{id}", get(sandbox))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
         .with_state(state);
@@ -305,30 +327,33 @@ async fn bootstrap(
     if !matches!(origin, None | Some("null")) {
         return plain(StatusCode::FORBIDDEN, "bootstrap Origin is not allowed");
     }
-    if now_unix().saturating_sub(state.started_at) > limits::BOOTSTRAP_TTL_SECONDS {
+    let Ok(mut bootstrap_state) = state.bootstrap.lock() else {
+        return plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "bootstrap state is unavailable",
+        );
+    };
+    if now_unix().saturating_sub(bootstrap_state.issued_at) > limits::BOOTSTRAP_TTL_SECONDS {
+        drop(bootstrap_state);
+        expire_unbootstrapped_session(&state);
         return plain(
             StatusCode::GONE,
             "bootstrap expired; reopen the presentation",
         );
     }
-    if state.bootstrap_used.load(Ordering::Acquire)
-        || !constant_time_equal(form.capability.as_bytes(), state.capability.as_bytes())
+    if bootstrap_state.used
+        || !constant_time_equal(
+            form.capability.as_bytes(),
+            bootstrap_state.capability.as_bytes(),
+        )
     {
         return plain(
             StatusCode::UNAUTHORIZED,
             "invalid or consumed bootstrap capability",
         );
     }
-    if state
-        .bootstrap_used
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return plain(
-            StatusCode::UNAUTHORIZED,
-            "bootstrap capability already consumed",
-        );
-    }
+    bootstrap_state.used = true;
+    drop(bootstrap_state);
     let _ = remove_if_regular(&state.bootstrap_path);
     state.last_activity.store(now_unix(), Ordering::Release);
     let cookie = format!(
@@ -346,6 +371,55 @@ async fn bootstrap(
     )
 }
 
+async fn rebootstrap(
+    State(state): State<AppState>,
+    Path(instance_id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<RebootstrapForm>,
+) -> Response<Body> {
+    if let Err(response) = require_host(&state, &headers) {
+        return response;
+    }
+    if Uuid::parse_str(&instance_id).ok() != Some(state.instance_id)
+        || !constant_time_equal(
+            form.recovery_capability.as_bytes(),
+            state.recovery_capability.as_bytes(),
+        )
+    {
+        return plain(StatusCode::UNAUTHORIZED, "invalid recovery capability");
+    }
+    let Ok(capability) = random_hex(32) else {
+        return plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "bootstrap rotation failed",
+        );
+    };
+    if remove_if_regular(&state.bootstrap_path).is_err()
+        || write_bootstrap(&state.bootstrap_path, &state.authority, &capability).is_err()
+    {
+        return plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "bootstrap rotation failed",
+        );
+    }
+    let Ok(mut bootstrap) = state.bootstrap.lock() else {
+        return plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "bootstrap state is unavailable",
+        );
+    };
+    *bootstrap = BootstrapState {
+        capability,
+        used: false,
+        issued_at: now_unix(),
+    };
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::empty())
+        .expect("static recovery response is valid")
+}
+
 async fn application(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
     if let Err(response) = require_application_request(&state, &headers, false) {
         return response;
@@ -355,6 +429,10 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Ok(revision) => revision,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
+    let event_sequence = match state.store.latest_event_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
     let manifest = &state.assets.service;
     let style = manifest
         .entrypoints
@@ -362,15 +440,30 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         .map(String::as_str);
     let script = manifest.entrypoints.get("present.app").map(String::as_str);
     let prepaint = manifest.inline.get("present.prepaint");
+    let utility_style = state.tokens.as_ref().as_ref().map(UtilityTokens::css);
+    let identity_src = state
+        .tokens
+        .as_ref()
+        .as_ref()
+        .and_then(UtilityTokens::identity_data_url);
+    let identity = state.tokens.as_ref().as_ref().and_then(|tokens| {
+        Some(RenderIdentity {
+            src: identity_src.as_deref()?,
+            alt: &tokens.identity.as_ref()?.alt,
+        })
+    });
     let body = match revision.content {
         RevisionContent::Supported { document } => render_document(
             &document,
             &RenderOptions {
                 session_id: &state.session_id.to_string(),
                 revision: revision.revision,
+                event_sequence,
                 script_path: script,
                 style_path: style,
                 prepaint_source: prepaint.map(|asset| asset.source.as_str()),
+                utility_style: utility_style.as_deref(),
+                identity,
                 read_only_warning: None,
                 interactive: true,
             },
@@ -380,11 +473,24 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
             raw,
         } => render_unsupported(&raw, schema_version),
     };
+    let prepaint_hash = prepaint
+        .map(|asset| format!("'{}'", asset.csp_sha256))
+        .unwrap_or_default();
+    // Mermaid necessarily creates transient inline SVG styles while rendering.
+    // The document renderer drops raw HTML, isolates explicit HTML blocks, and
+    // the final SVG sanitizer rejects active attributes and external CSS URLs.
+    // Split directives keep scripts strict while allowing only local/inline CSS.
     let csp = format!(
-        "default-src 'none'; script-src 'self' {}; style-src 'self'; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-        prepaint.map_or("", |asset| asset.csp_sha256.as_str())
+        "default-src 'none'; script-src 'self' {prepaint_hash}; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     );
     secure_html(StatusCode::OK, body, &csp)
+}
+
+fn csp_source_hash(source: &str) -> String {
+    format!(
+        "'sha256-{}'",
+        STANDARD.encode(sha2::Sha256::digest(source.as_bytes()))
+    )
 }
 
 async fn asset(
@@ -451,15 +557,13 @@ async fn submit_review(
     if let Err(response) = require_application_request(&state, &headers, true) {
         return response;
     }
-    let session_id = match Uuid::parse_str(&request.session_id) {
-        Ok(session_id) => session_id,
-        Err(_) => return plain(StatusCode::BAD_REQUEST, "review session id is invalid"),
+    let Ok(session_id) = Uuid::parse_str(&request.session_id) else {
+        return plain(StatusCode::BAD_REQUEST, "review session id is invalid");
     };
     let mut notes = Vec::with_capacity(request.notes.len());
     for note in request.notes {
-        let id = match Uuid::parse_str(&note.client_id) {
-            Ok(id) => id,
-            Err(_) => return plain(StatusCode::BAD_REQUEST, "review note id is invalid"),
+        let Ok(id) = Uuid::parse_str(&note.client_id) else {
+            return plain(StatusCode::BAD_REQUEST, "review note id is invalid");
         };
         notes.push(FeedbackNote {
             id,
@@ -470,9 +574,8 @@ async fn submit_review(
             selector: note.selector,
         });
     }
-    let event_id = match Uuid::parse_str(&request.event_id) {
-        Ok(event_id) => event_id,
-        Err(_) => return plain(StatusCode::BAD_REQUEST, "review event id is invalid"),
+    let Ok(event_id) = Uuid::parse_str(&request.event_id) else {
+        return plain(StatusCode::BAD_REQUEST, "review event id is invalid");
     };
     let envelope = FeedbackEnvelope {
         event_id,
@@ -600,13 +703,17 @@ fn parse_event_cursor(cursor: &str) -> Option<(u64, u64)> {
 
 async fn sandbox(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path((revision, id)): Path<(u64, String)>,
     headers: HeaderMap,
 ) -> Response<Body> {
     if let Err(response) = require_host(&state, &headers) {
         return response;
     }
-    let Some(html) = state.sandbox.get(&id) else {
+    let Ok(revision) = state.store.revision(state.session_id, revision) else {
+        return plain(StatusCode::NOT_FOUND, "sandbox revision not found");
+    };
+    let sandbox = sandbox_blocks(state.session_id, &revision.content);
+    let Some(html) = sandbox.get(&id) else {
         return plain(StatusCode::NOT_FOUND, "sandbox block not found");
     };
     let csp = format!(
@@ -631,6 +738,10 @@ async fn not_found() -> Response<Body> {
     plain(StatusCode::NOT_FOUND, "not found")
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Axum responses preserve exact request-rejection headers at this private boundary"
+)]
 fn require_application_request(
     state: &AppState,
     headers: &HeaderMap,
@@ -689,6 +800,10 @@ fn require_application_request(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Axum responses preserve exact request-rejection headers at this private boundary"
+)]
 fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<(), Response<Body>> {
     if headers
         .get(header::HOST)
@@ -788,9 +903,16 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             )));
         }
     }
-    if !manifest.service.inline.contains_key("present.prepaint") {
+    let Some(prepaint) = manifest.service.inline.get("present.prepaint") else {
         return Err(PresentError::CorruptState(
             "renderer prepaint source is missing".to_string(),
+        ));
+    };
+    if prepaint.source.len() > 64 * 1024
+        || prepaint.csp_sha256 != csp_source_hash(&prepaint.source).trim_matches('\'')
+    {
+        return Err(PresentError::CorruptState(
+            "renderer prepaint source violates its CSP integrity contract".to_string(),
         ));
     }
     let mut total = 0_u64;
@@ -815,7 +937,10 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             PresentError::CorruptState(format!("renderer asset {} is missing", asset.stored_path))
         })?;
         let digest = sha2::Sha256::digest(&bytes.data);
-        let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let mut actual = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            write!(actual, "{byte:02x}").expect("writing to a String cannot fail");
+        }
         if actual != asset.sha256 {
             return Err(PresentError::CorruptState(format!(
                 "renderer asset {} does not match its SHA-256",
@@ -876,7 +1001,7 @@ fn write_bootstrap(path: &std::path::Path, authority: &str, capability: &str) ->
     let mut file = options
         .open(path)
         .map_err(|error| PresentError::io(path, error))?;
-    use std::io::Write as _;
+    harden_private_path(path, false)?;
     file.write_all(html.as_bytes())
         .and_then(|()| file.sync_all())
         .map_err(|error| PresentError::io(path, error))
@@ -886,22 +1011,25 @@ async fn monitor_session(state: AppState) {
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
         let now = now_unix();
-        if !state.bootstrap_used.load(Ordering::Acquire)
-            && now.saturating_sub(state.started_at) > limits::BOOTSTRAP_TTL_SECONDS
-        {
-            let _ = remove_if_regular(&state.bootstrap_path);
-            state.shutdown.notify_waiters();
+        let bootstrap_expired = state.bootstrap.lock().is_ok_and(|bootstrap| {
+            !bootstrap.used
+                && now.saturating_sub(bootstrap.issued_at) > limits::BOOTSTRAP_TTL_SECONDS
+        });
+        if bootstrap_expired {
+            expire_unbootstrapped_session(&state);
             return;
         }
         if now.saturating_sub(state.last_activity.load(Ordering::Acquire))
             > limits::SESSION_IDLE_SECONDS
         {
             let _ = state.store.close(state.session_id);
+            cleanup_owned_browser(&state);
             state.shutdown.notify_waiters();
             return;
         }
         match state.store.load(state.session_id) {
             Ok(session) if session.status == SessionStatus::Closed => {
+                cleanup_owned_browser(&state);
                 state.shutdown.notify_waiters();
                 return;
             }
@@ -914,9 +1042,67 @@ async fn monitor_session(state: AppState) {
     }
 }
 
+fn expire_unbootstrapped_session(state: &AppState) {
+    let _ = remove_if_regular(&state.bootstrap_path);
+    let _ = state.store.close(state.session_id);
+    cleanup_owned_browser(state);
+    state.shutdown.notify_waiters();
+}
+
+fn cleanup_owned_browser(state: &AppState) {
+    let Ok(session) = state.store.load(state.session_id) else {
+        return;
+    };
+    let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) else {
+        return;
+    };
+    let Ok(profile) = state
+        .store
+        .runtime_dir(state.session_id)
+        .map(|runtime| runtime.join("browser-profile"))
+    else {
+        return;
+    };
+    let _ = crate::browser::terminate_isolated(
+        &state.store,
+        state.session_id,
+        pid,
+        instance_id,
+        &profile,
+    );
+}
+
 struct RuntimeCleanup {
     bootstrap_path: PathBuf,
     ready_path: PathBuf,
+}
+
+struct ServiceRegistration {
+    store: SessionStore,
+    session_id: Uuid,
+    instance_id: Uuid,
+}
+
+impl ServiceRegistration {
+    fn new(store: SessionStore, session_id: Uuid, instance_id: Uuid) -> Self {
+        Self {
+            store,
+            session_id,
+            instance_id,
+        }
+    }
+}
+
+impl Drop for ServiceRegistration {
+    fn drop(&mut self) {
+        if self
+            .store
+            .clear_service(self.session_id, self.instance_id)
+            .unwrap_or(false)
+        {
+            let _ = self.store.enforce_retention();
+        }
+    }
 }
 
 impl RuntimeCleanup {
@@ -937,7 +1123,7 @@ impl Drop for RuntimeCleanup {
 
 fn remove_if_regular(path: &std::path::Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+        Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => {
             fs::remove_file(path).map_err(|error| PresentError::io(path, error))
         }
         Ok(_) => Err(PresentError::UnsafePath(path.to_path_buf())),
@@ -951,7 +1137,11 @@ fn random_hex(bytes: usize) -> Result<String> {
     fill_random(&mut value).map_err(|error| {
         PresentError::ServiceUnavailable(format!("random source failed: {error}"))
     })?;
-    Ok(value.iter().map(|byte| format!("{byte:02x}")).collect())
+    let mut output = String::with_capacity(value.len() * 2);
+    for byte in value {
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(output)
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
@@ -978,6 +1168,16 @@ mod tests {
     use super::*;
     use crate::document::{Block, ParsedDocument, PresentationDocument, Provenance};
 
+    fn parsed_with(block: Block) -> ParsedDocument {
+        ParsedDocument::Supported(PresentationDocument {
+            schema_version: 1,
+            title: "Review".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![block],
+        })
+    }
+
     fn app_state() -> (tempfile::TempDir, AppState) {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::at_root(temp.path().join("project"), "key".to_string()).unwrap();
@@ -1001,16 +1201,19 @@ mod tests {
             session_id: session.id,
             instance_id: Uuid::new_v4(),
             authority: "127.0.0.1:43210".to_string(),
-            capability: Arc::new("capability".to_string()),
+            bootstrap: Arc::new(Mutex::new(BootstrapState {
+                capability: "capability".to_string(),
+                used: false,
+                issued_at: now,
+            })),
+            recovery_capability: Arc::new("recovery".to_string()),
             cookie_name: Arc::new("cf_present_test".to_string()),
             cookie_value: Arc::new("cookie".to_string()),
             bootstrap_path: Arc::new(bootstrap_path),
-            bootstrap_used: Arc::new(AtomicBool::new(false)),
-            started_at: now,
             last_activity: Arc::new(AtomicU64::new(now)),
             shutdown: Arc::new(Notify::new()),
             assets: Arc::new(load_manifest().unwrap()),
-            sandbox: Arc::new(HashMap::new()),
+            tokens: Arc::new(None),
         };
         (temp, state)
     }
@@ -1041,6 +1244,20 @@ mod tests {
             );
         }
         headers
+    }
+
+    #[test]
+    fn expired_bootstrap_closes_session_and_removes_capability_file() {
+        let (_temp, state) = app_state();
+        assert!(state.bootstrap_path.exists());
+
+        expire_unbootstrapped_session(&state);
+
+        assert!(!state.bootstrap_path.exists());
+        assert_eq!(
+            state.store.load(state.session_id).unwrap().status,
+            SessionStatus::Closed
+        );
     }
 
     #[test]
@@ -1152,6 +1369,174 @@ mod tests {
         )
         .await;
         assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn recovery_capability_rotates_a_consumed_bootstrap() {
+        let (_temp, state) = app_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&state.authority).unwrap(),
+        );
+        let consumed = bootstrap(
+            State(state.clone()),
+            headers.clone(),
+            Form(BootstrapForm {
+                capability: "capability".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(consumed.status(), StatusCode::SEE_OTHER);
+
+        let rejected = rebootstrap(
+            State(state.clone()),
+            Path(state.instance_id.to_string()),
+            headers.clone(),
+            Form(RebootstrapForm {
+                recovery_capability: "wrong".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+        let rotated = rebootstrap(
+            State(state.clone()),
+            Path(state.instance_id.to_string()),
+            headers.clone(),
+            Form(RebootstrapForm {
+                recovery_capability: "recovery".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(rotated.status(), StatusCode::NO_CONTENT);
+        let html = fs::read_to_string(&*state.bootstrap_path).unwrap();
+        assert!(!html.contains("capability\" value=\"capability"));
+        let capability = html
+            .split_once("name=\"capability\" value=\"")
+            .and_then(|(_, tail)| tail.split_once('\"').map(|(value, _)| value))
+            .unwrap();
+        let accepted = bootstrap(
+            State(state),
+            headers,
+            Form(BootstrapForm {
+                capability: capability.to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+    }
+
+    #[tokio::test]
+    async fn first_poll_after_render_observes_a_revision_created_in_between() {
+        let (_temp, state) = app_state();
+        let rendered = application(State(state.clone()), application_headers(&state, false)).await;
+        assert_eq!(rendered.status(), StatusCode::OK);
+        let rendered = axum::body::to_bytes(rendered.into_body(), limits::MAX_DOCUMENT_BYTES * 2)
+            .await
+            .unwrap();
+        let rendered = std::str::from_utf8(&rendered).unwrap();
+        assert!(
+            rendered.contains("&quot;event_sequence&quot;:0")
+                || rendered.contains("\"event_sequence\":0")
+        );
+        assert!(rendered.contains("&quot;revision&quot;:1") || rendered.contains("\"revision\":1"));
+
+        state
+            .store
+            .update_document(
+                state.session_id,
+                parsed_with(Block::Narrative {
+                    id: "intro".to_string(),
+                    markdown: "Updated".to_string(),
+                }),
+            )
+            .unwrap();
+        let response = poll_events(
+            State(state.clone()),
+            application_headers(&state, true),
+            Json(PollRequest {
+                cursor: Some("1:0".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(event["kind"], "revision");
+        assert_eq!(event["cursor"], "2:0");
+    }
+
+    #[tokio::test]
+    async fn sandbox_urls_are_bound_to_the_requested_immutable_revision() {
+        let (_temp, state) = app_state();
+        let opaque = sandbox_id(&state.session_id.to_string(), "sample");
+        let revision_two = state
+            .store
+            .update_document(
+                state.session_id,
+                parsed_with(Block::Html {
+                    id: "sample".to_string(),
+                    html: "<p>revision two</p>".to_string(),
+                    title: Some("Sample".to_string()),
+                }),
+            )
+            .unwrap();
+        let revision_three = state
+            .store
+            .update_document(
+                state.session_id,
+                parsed_with(Block::Html {
+                    id: "sample".to_string(),
+                    html: "<p>revision three</p>".to_string(),
+                    title: Some("Sample".to_string()),
+                }),
+            )
+            .unwrap();
+        let revision_four = state
+            .store
+            .update_document(
+                state.session_id,
+                parsed_with(Block::Narrative {
+                    id: "replacement".to_string(),
+                    markdown: "No sandbox here.".to_string(),
+                }),
+            )
+            .unwrap();
+
+        for (revision, expected) in [
+            (revision_two, "revision two"),
+            (revision_three, "revision three"),
+        ] {
+            let response = sandbox(
+                State(state.clone()),
+                Path((revision, opaque.clone())),
+                application_headers(&state, false),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(response
+                .headers()
+                .get("content-security-policy")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("script-src 'none'"));
+            let body = axum::body::to_bytes(response.into_body(), limits::MAX_HTML_BYTES)
+                .await
+                .unwrap();
+            assert!(std::str::from_utf8(&body).unwrap().contains(expected));
+        }
+
+        let missing = sandbox(
+            State(state.clone()),
+            Path((revision_four, opaque)),
+            application_headers(&state, false),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

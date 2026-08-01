@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "title": "Review the delivery decision",
+  "language": "en",
+  "provenance": {
+    "task_id": "TSK-042"
+  },
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "outcome",
+      "markdown": "The implementation is ready for a bounded decision. The evidence below separates what passed from what remains unverified."
+    },
+    {
+      "type": "comparison",
+      "id": "options",
+      "columns": [
+        {
+          "title": "Ship now",
+          "markdown": "Accept the remaining platform qualification as explicit release follow-up."
+        },
+        {
+          "title": "Hold",
+          "markdown": "Wait until every supported native platform canary is complete."
+        }
+      ]
+    },
+    {
+      "type": "status",
+      "id": "evidence",
+      "items": [
+        {
+          "label": "Workspace tests",
+          "state": "pass",
+          "detail": "Recorded in the task evidence"
+        },
+        {
+          "label": "Native Windows canary",
+          "state": "not_run",
+          "detail": "Release qualification owns this check"
+        }
+      ]
+    },
+    {
+      "type": "feedback_prompt",
+      "id": "decision-request",
+      "prompt": "Approve the current boundary, request changes, or identify the evidence still needed."
+    }
+  ]
+}

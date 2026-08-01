@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{PresentError, Result},
     limits,
+    media::matches_declared_media,
+    safe_html::validate_sandbox_html,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -277,12 +279,17 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParsedDocument> {
 impl PresentationDocument {
     pub fn validate(&self) -> Result<()> {
         require_nonempty_bounded("title", &self.title, limits::MAX_TITLE_BYTES)?;
+        if let Some(language) = &self.language {
+            validate_language(language)?;
+        }
+        validate_provenance(&self.provenance)?;
         if self.blocks.is_empty() {
             return Err(invalid("blocks must not be empty"));
         }
         let mut ids = HashSet::new();
         let mut count = 0;
-        validate_blocks(&self.blocks, 1, &mut count, &mut ids)
+        let mut diagram_count = 0;
+        validate_blocks(&self.blocks, 1, &mut count, &mut diagram_count, &mut ids)
     }
 }
 
@@ -327,25 +334,27 @@ impl Block {
                 ..
             } => format!("{title}{status:?}{}", markdown_text(markdown)),
             Self::Bullets { items, .. } => items.iter().map(|item| markdown_text(item)).collect(),
-            Self::Comparison { columns, .. } => columns
-                .iter()
-                .map(|column| format!("{}{}", column.title, markdown_text(&column.markdown)))
-                .collect(),
+            Self::Comparison { columns, .. } => {
+                let mut output = String::new();
+                for column in columns {
+                    output.push_str(&column.title);
+                    output.push_str(&markdown_text(&column.markdown));
+                }
+                output
+            }
             Self::Table { columns, rows, .. } => columns
                 .iter()
                 .cloned()
                 .chain(rows.iter().flatten().map(|cell| markdown_text(cell)))
                 .collect(),
-            Self::Status { items, .. } => items
-                .iter()
-                .map(|item| {
-                    format!(
-                        "{}{}",
-                        item.label,
-                        item.detail.as_deref().unwrap_or_default()
-                    )
-                })
-                .collect(),
+            Self::Status { items, .. } => {
+                let mut output = String::new();
+                for item in items {
+                    output.push_str(&item.label);
+                    output.push_str(item.detail.as_deref().unwrap_or_default());
+                }
+                output
+            }
             Self::Code { code, caption, .. } => {
                 format!("{}{}", caption.as_deref().unwrap_or_default(), code)
             }
@@ -374,29 +383,8 @@ impl Block {
                 ..
             } => format!("{source}{acc_title} — {acc_description}"),
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
-            Self::Disclosure {
-                summary, blocks, ..
-            } => format!(
-                "{}{}",
-                summary,
-                blocks
-                    .iter()
-                    .map(Self::canonical_review_text)
-                    .collect::<String>()
-            ),
-            Self::Tabs { tabs, .. } => tabs
-                .iter()
-                .map(|tab| {
-                    format!(
-                        "{}{}",
-                        tab.label,
-                        tab.blocks
-                            .iter()
-                            .map(Self::canonical_review_text)
-                            .collect::<String>()
-                    )
-                })
-                .collect(),
+            Self::Disclosure { summary, .. } => summary.clone(),
+            Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
             Self::FeedbackPrompt { prompt, .. } => prompt.clone(),
             Self::Html { title, .. } => title.clone().unwrap_or_default(),
         }
@@ -418,8 +406,9 @@ impl Block {
             }
             | Self::Html {
                 title: Some(title), ..
-            } => title.clone(),
-            Self::Decision { title, .. } | Self::Tree { label: title, .. } => title.clone(),
+            }
+            | Self::Decision { title, .. }
+            | Self::Tree { label: title, .. } => title.clone(),
             Self::Diagram { acc_title, .. } => acc_title.clone(),
             Self::Media { alt, .. } => alt.clone(),
             Self::Disclosure { summary, .. } => summary.clone(),
@@ -433,6 +422,7 @@ fn validate_blocks(
     blocks: &[Block],
     depth: usize,
     count: &mut usize,
+    diagram_count: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     if depth > limits::MAX_NESTING {
@@ -449,11 +439,20 @@ fn validate_blocks(
                 limits::MAX_BLOCKS
             )));
         }
+        if matches!(block, Block::Diagram { .. }) {
+            *diagram_count += 1;
+            if *diagram_count > limits::MAX_DIAGRAM_BLOCKS {
+                return Err(invalid(format!(
+                    "diagram count exceeds {}",
+                    limits::MAX_DIAGRAM_BLOCKS
+                )));
+            }
+        }
         validate_id(block.id())?;
         if !ids.insert(block.id().to_string()) {
             return Err(invalid(format!("duplicate block id {}", block.id())));
         }
-        validate_block(block, depth, count, ids)?;
+        validate_block(block, depth, count, diagram_count, ids)?;
     }
     Ok(())
 }
@@ -463,6 +462,7 @@ fn validate_block(
     block: &Block,
     depth: usize,
     count: &mut usize,
+    diagram_count: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     match block {
@@ -513,9 +513,15 @@ fn validate_block(
             if rows.len() > limits::MAX_TABLE_ROWS {
                 return Err(invalid("table has too many rows"));
             }
+            for column in columns {
+                require_nonempty_bounded("table column", column, limits::MAX_TITLE_BYTES)?;
+            }
             for row in rows {
                 if row.len() != columns.len() {
                     return Err(invalid("every table row must match the column count"));
+                }
+                for cell in row {
+                    bounded("table cell", cell, limits::MAX_PROSE_BYTES)?;
                 }
             }
             Ok(())
@@ -523,6 +529,14 @@ fn validate_block(
         Block::Status { items, .. } => {
             if items.is_empty() {
                 return Err(invalid("status block must contain at least one item"));
+            }
+            for item in items {
+                require_nonempty_bounded("status label", &item.label, limits::MAX_LABEL_BYTES)?;
+                optional_bounded(
+                    "status detail",
+                    item.detail.as_deref(),
+                    limits::MAX_PROSE_BYTES,
+                )?;
             }
             Ok(())
         }
@@ -563,12 +577,13 @@ fn validate_block(
             )
         }
         Block::Media {
+            mime_type,
             data_base64,
             alt,
             caption,
             ..
         } => {
-            require_nonempty_bounded("media alternative text", alt, limits::MAX_PROSE_BYTES)?;
+            require_nonempty_bounded("media alternative text", alt, limits::MAX_LABEL_BYTES)?;
             optional_bounded("media caption", caption.as_deref(), limits::MAX_PROSE_BYTES)?;
             let decoded = STANDARD
                 .decode(data_base64)
@@ -576,13 +591,18 @@ fn validate_block(
             if decoded.len() > limits::MAX_MEDIA_BYTES {
                 return Err(invalid("decoded media exceeds the allowed size"));
             }
+            if !matches_declared_media(mime_type, &decoded) {
+                return Err(invalid(
+                    "media bytes do not match the declared closed MIME family",
+                ));
+            }
             Ok(())
         }
         Block::Disclosure {
             summary, blocks, ..
         } => {
             require_nonempty_bounded("disclosure summary", summary, limits::MAX_TITLE_BYTES)?;
-            validate_blocks(blocks, depth + 1, count, ids)
+            validate_blocks(blocks, depth + 1, count, diagram_count, ids)
         }
         Block::Tabs { tabs, .. } => {
             if tabs.is_empty() || tabs.len() > 12 {
@@ -590,15 +610,16 @@ fn validate_block(
             }
             for tab in tabs {
                 require_nonempty_bounded("tab label", &tab.label, limits::MAX_TITLE_BYTES)?;
-                validate_blocks(&tab.blocks, depth + 1, count, ids)?;
+                validate_blocks(&tab.blocks, depth + 1, count, diagram_count, ids)?;
             }
             Ok(())
         }
         Block::FeedbackPrompt { prompt, .. } => {
-            require_nonempty_bounded("feedback prompt", prompt, limits::MAX_PROSE_BYTES)
+            require_nonempty_bounded("feedback prompt", prompt, limits::MAX_LABEL_BYTES)
         }
         Block::Html { html, title, .. } => {
             bounded("sandboxed html", html, limits::MAX_HTML_BYTES)?;
+            validate_sandbox_html(html)?;
             optional_bounded(
                 "sandboxed html title",
                 title.as_deref(),
@@ -606,6 +627,24 @@ fn validate_block(
             )
         }
     }
+}
+
+fn validate_language(language: &str) -> Result<()> {
+    require_nonempty_bounded("language", language, limits::MAX_LANGUAGE_BYTES)?;
+    let mut parts = language.split('-');
+    let Some(primary) = parts.next() else {
+        return Err(invalid("language must be a compact BCP-47-like tag"));
+    };
+    if !(2..=8).contains(&primary.len()) || !primary.bytes().all(|byte| byte.is_ascii_alphabetic())
+    {
+        return Err(invalid("language must be a compact BCP-47-like tag"));
+    }
+    if parts.any(|part| {
+        part.is_empty() || part.len() > 8 || !part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }) {
+        return Err(invalid("language must be a compact BCP-47-like tag"));
+    }
+    Ok(())
 }
 
 fn validate_tree(nodes: &[TreeNode], depth: usize) -> Result<()> {
@@ -650,6 +689,47 @@ fn validate_id(id: &str) -> Result<()> {
         return Err(invalid(format!("invalid block id {id:?}")));
     }
     Ok(())
+}
+
+fn validate_provenance(provenance: &Provenance) -> Result<()> {
+    if provenance
+        .task_id
+        .as_deref()
+        .is_some_and(|value| !valid_task_id(value))
+    {
+        return Err(invalid("provenance task_id must be TSK-NNN or TSK-NNN-NNN"));
+    }
+    for (name, value, prefix, digits) in [
+        ("spec_id", provenance.spec_id.as_deref(), "SPC-", 3),
+        ("adr_id", provenance.adr_id.as_deref(), "ADR-", 4),
+    ] {
+        if value.is_some_and(|value| !valid_fixed_id(value, prefix, digits)) {
+            return Err(invalid(format!(
+                "provenance {name} must use its canonical numeric ID"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn valid_task_id(value: &str) -> bool {
+    let Some(suffix) = value.strip_prefix("TSK-") else {
+        return false;
+    };
+    let mut groups = suffix.split('-');
+    let first = groups.next().is_some_and(valid_three_digits);
+    let second = groups.next().is_none_or(valid_three_digits);
+    first && second && groups.next().is_none()
+}
+
+fn valid_fixed_id(value: &str, prefix: &str, digits: usize) -> bool {
+    value.strip_prefix(prefix).is_some_and(|suffix| {
+        suffix.len() == digits && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+fn valid_three_digits(value: &str) -> bool {
+    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn require_nonempty_bounded(name: &str, value: &str, max: usize) -> Result<()> {
@@ -737,5 +817,48 @@ mod tests {
     fn utf16_selector_basis_preserves_emoji_units() {
         let text = "a😀b";
         assert_eq!(text.encode_utf16().count(), 4);
+    }
+
+    #[test]
+    fn provenance_accepts_canonical_ids_and_rejects_lookalikes() {
+        let mut value = document(vec![Block::Narrative {
+            id: "intro".to_string(),
+            markdown: "hello".to_string(),
+        }]);
+        value.provenance = Provenance {
+            task_id: Some("TSK-002-001".to_string()),
+            spec_id: Some("SPC-004".to_string()),
+            adr_id: Some("ADR-0050".to_string()),
+        };
+        assert!(value.validate().is_ok());
+
+        for invalid in ["TSK-2", "TSK-002-1", "tsk-002", "TSK-002-001-extra"] {
+            value.provenance.task_id = Some(invalid.to_string());
+            assert!(value.validate().is_err(), "accepted {invalid}");
+        }
+        value.provenance.task_id = None;
+        value.provenance.spec_id = Some("SPC-4".to_string());
+        assert!(value.validate().is_err());
+        value.provenance.spec_id = None;
+        value.provenance.adr_id = Some("ADR-50".to_string());
+        assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn diagram_sources_and_document_counts_are_bounded_before_rendering() {
+        let diagram = |index: usize, source: String| Block::Diagram {
+            id: format!("diagram-{index}"),
+            kind: DiagramKind::Flowchart,
+            source,
+            acc_title: format!("Diagram {index}"),
+            acc_description: "A bounded test diagram.".to_string(),
+        };
+        let oversized = document(vec![diagram(0, "x".repeat(limits::MAX_DIAGRAM_BYTES + 1))]);
+        assert!(oversized.validate().is_err());
+
+        let diagrams = (0..=limits::MAX_DIAGRAM_BLOCKS)
+            .map(|index| diagram(index, "flowchart LR\nA-->B".to_string()))
+            .collect();
+        assert!(document(diagrams).validate().is_err());
     }
 }
