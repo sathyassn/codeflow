@@ -1171,9 +1171,7 @@ fn valid_repository_url(value: &str) -> bool {
         let Some(end) = authority.find(']') else {
             return false;
         };
-        if authority[1..end].parse::<std::net::Ipv6Addr>().is_err()
-            || !valid_port_suffix(&authority[end + 1..])
-        {
+        if !valid_ipv6(&authority[1..end]) || !valid_port_suffix(&authority[end + 1..]) {
             return false;
         }
         return true;
@@ -1181,9 +1179,7 @@ fn valid_repository_url(value: &str) -> bool {
         let mut parts = authority.split(':');
         let host = parts.next().unwrap_or_default();
         let port = parts.next();
-        if parts.next().is_some()
-            || port.is_some_and(|value| !valid_port_suffix(&format!(":{value}")))
-        {
+        if parts.next().is_some() || port.is_some_and(|value| !valid_port(value)) {
             return false;
         }
         host
@@ -1208,13 +1204,63 @@ fn valid_repository_url(value: &str) -> bool {
 }
 
 fn valid_port_suffix(value: &str) -> bool {
-    value.is_empty()
-        || value.strip_prefix(':').is_some_and(|port| {
-            !port.is_empty()
-                && port.len() <= 5
-                && port.bytes().all(|byte| byte.is_ascii_digit())
-                && port.parse::<u16>().is_ok()
-        })
+    value.is_empty() || value.strip_prefix(':').is_some_and(valid_port)
+}
+
+fn valid_port(port: &str) -> bool {
+    !port.is_empty()
+        && port.len() <= 5
+        && port.bytes().all(|byte| byte.is_ascii_digit())
+        && port.parse::<u16>().is_ok()
+}
+
+fn valid_ipv6(value: &str) -> bool {
+    let compressed = value.contains("::");
+    if value.is_empty()
+        || value.contains(":::")
+        || compressed && value.matches("::").count() != 1
+        || !compressed && (value.starts_with(':') || value.ends_with(':'))
+    {
+        return false;
+    }
+    let mut segments = value
+        .split(':')
+        .filter(|segment| !segment.is_empty())
+        .peekable();
+    let mut groups = 0_usize;
+    while let Some(segment) = segments.next() {
+        if segment.contains('.') {
+            if segments.peek().is_some() || !valid_ipv4(segment) {
+                return false;
+            }
+            groups += 2;
+        } else if segment.len() > 4 || !segment.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return false;
+        } else {
+            groups += 1;
+        }
+    }
+    if compressed {
+        groups < 8
+    } else {
+        groups == 8
+    }
+}
+
+fn valid_ipv4(value: &str) -> bool {
+    let mut count = 0_usize;
+    for octet in value.split('.') {
+        count += 1;
+        if octet.is_empty()
+            || octet.len() > 3
+            || octet.len() > 1 && octet.starts_with('0')
+            || !octet.bytes().all(|byte| byte.is_ascii_digit())
+            || octet.parse::<u8>().is_err()
+        {
+            return false;
+        }
+    }
+    count == 4
 }
 
 fn valid_portal_base(value: &str) -> bool {

@@ -73,7 +73,7 @@
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
-      "pristine_sha256": "ee9b3274eed12479891a6f62c8caf9e0592fdd5f22251d1407000130236f059f"
+      "pristine_sha256": "721cc7a8dded9d355ee12683556a6b567bea78af77c6364c7ec507363315b043"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
