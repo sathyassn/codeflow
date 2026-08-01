@@ -41,7 +41,7 @@
     },
     "scripts/git-snapshot.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2484443455c95f90068af78a97059fedbf96876c948358cd471a29c1ae5563b7"
+      "pristine_sha256": "27059fc769e5e414260dba06312748ff550b0d01ead9100102cc2c4912565492"
     },
     "scripts/lib.mjs": {
       "ownership": "managed",

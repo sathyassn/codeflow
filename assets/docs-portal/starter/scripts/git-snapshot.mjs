@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import path from "node:path";
 import { TextDecoder } from "node:util";
 import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.mjs";
 
@@ -143,7 +142,7 @@ export class GitSnapshot {
       });
     } catch (error) {
       const detail = String(error.stderr ?? error.message ?? error).trim().slice(0, 2048);
-      throw new Error(`Git snapshot command failed (${args[0]}): ${detail || "no diagnostic"}`);
+      throw new Error(`Git snapshot ${label} failed (${args[0]}): ${detail || "no diagnostic"}`);
     }
   }
 
