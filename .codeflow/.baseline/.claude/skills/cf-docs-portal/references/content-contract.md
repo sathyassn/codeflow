@@ -26,24 +26,28 @@ Accept only project-supported strict IDs such as `CAP-001`, `ADR-001`,
 Every relationship target must exist. Derived backlinks must be the exact
 inverse of declared forward relationships.
 Repository-relative document links resolve through the source-to-route graph.
-Local media is copied only from committed, bounded, signature-checked PNG,
-JPEG, GIF, WebP, or AVIF files and recorded in evidence. Remote images, active
+Local media is copied only from committed, bounded PNG, JPEG, GIF, or WebP
+blobs whose signatures, headers, dimensions, and aggregate pixel/byte budgets
+are verified and recorded in evidence. Remote images, active
 SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed;
 ordinary HTTPS and mail links remain links and are never fetched.
 Pin source links to the evidenced commit on known GitHub, GitLab, and Bitbucket
-HTTPS repository URLs. For another provider, show the source path and commit
-without manufacturing a provider route.
+HTTPS repository URLs. A committed document excluded from the portal remains a
+pinned provider link; for another provider, show a visible source path and
+commit without manufacturing a route. A genuinely absent document still fails.
 
 ## Failure and staleness
 
 Fail closed on malformed configuration, traversal, symlink escape, route
-collision, duplicate identity, invalid frontmatter, or unsupported evidence
-schema. When current committed source cannot parse, reconstruct a last-good
-page only from a bounded, successfully parsed source blob at a verified
-ancestor commit. Record both that blob's hash and ancestor commit, mark the
-page stale visibly, and exclude it from search and normal current-content
-indexes. Never trust prior generated output or evidence as a stale-content
-authority, and never silently serve stale content as current.
+collision, duplicate identity, invalid configuration, or unsupported evidence
+schema. A configured source root must be a non-empty committed directory. When
+one current committed Markdown blob cannot parse, emit only a bounded visible
+error page at its stable route. Record the current source path, blob hash,
+commit, output hashes, and bounded diagnostic; clear IDs, relationships,
+backlinks, snippets, and status; and exclude the page from search, previews,
+normal `llms.txt`, and the active graph. Continue healthy sibling pages. Never
+walk Git history, republish an ancestor, or trust prior generated output or
+evidence as content authority.
 
 ## Rendering
 

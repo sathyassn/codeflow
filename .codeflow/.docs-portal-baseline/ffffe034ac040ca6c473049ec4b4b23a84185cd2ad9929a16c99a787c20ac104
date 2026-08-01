@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { copyFile, lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.mjs";
 
@@ -196,8 +196,13 @@ export async function publishOwnedCorpus(portalRoot, groups, options = {}) {
   return withPublicationLeaseLocked(portalRoot, (lease) => publishOwnedCorpusLocked(portalRoot, groups, options, lease));
 }
 
-async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, simulateCrash = false } = {}, lease) {
+async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, simulateCrash = false, testHooks = {} } = {}, lease) {
   await assertPublicationLease(portalRoot, lease);
+  if (!testHooks || typeof testHooks !== "object" || Array.isArray(testHooks)
+    || Object.keys(testHooks).some((key) => key !== "afterPreservedOpen")
+    || testHooks.afterPreservedOpen !== undefined && typeof testHooks.afterPreservedOpen !== "function") {
+    throw new Error("publication testHooks are invalid");
+  }
   if (!Array.isArray(groups) || groups.length < 1 || groups.length > 3 || new Set(groups.map((group) => group.live)).size !== groups.length) {
     throw new Error("generated corpus must contain 1 to 3 unique live groups");
   }
@@ -232,7 +237,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
     maybeFault("after-journal", faultAt);
     for (const [index, group] of preparedGroups.entries()) {
       await refreshPublicationLease(portalRoot, lease);
-      await prepareOwnedStage(group.live, group.stage, group.planned, group.preserveUnknown);
+      await prepareOwnedStage(group.live, group.stage, group.planned, group.preserveUnknown, testHooks);
       maybeFault(`after-prepare-${index}`, faultAt);
     }
     transaction.phase = "prepared";
@@ -269,7 +274,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
   }
 }
 
-async function prepareOwnedStage(live, stage, planned, preserveUnknown) {
+async function prepareOwnedStage(live, stage, planned, preserveUnknown, testHooks) {
   const { inventory } = await inspectOwnedDirectory(live, preserveUnknown);
   const owned = new Set(inventory ?? []);
   await rm(stage, { recursive: true, force: true });
@@ -279,15 +284,16 @@ async function prepareOwnedStage(live, stage, planned, preserveUnknown) {
     if (relative === ".codeflow-generated.json" || owned.has(relative)) continue;
     if (planned.has(relative)) throw new Error(`refusing to overwrite unowned generated path: ${path.join(live, relative)}`);
     const source = path.join(live, relative);
-    const metadata = await lstat(source);
-    if (!metadata.isFile()) throw new Error(`non-regular file refused in generated corpus: ${source}`);
-    preservedBytes += metadata.size;
-    if (preservedBytes > MAX_PRESERVED_UNKNOWN_BYTES) throw new Error(`preserved unknown corpus exceeds ${MAX_PRESERVED_UNKNOWN_BYTES} bytes: ${live}`);
+    const remaining = MAX_PRESERVED_UNKNOWN_BYTES - preservedBytes;
+    const bytes = await readBoundedRegularFile(source, remaining, "preserved unknown portal file", {
+      afterOpen: testHooks.afterPreservedOpen === undefined ? undefined : () => testHooks.afterPreservedOpen(source),
+    });
+    preservedBytes += bytes.length;
     const destination = path.join(stage, relative);
     await assertNoSymlink(live, path.posix.dirname(relative));
     await assertNoSymlink(stage, path.posix.dirname(relative));
     await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(source, destination);
+    await writeText(destination, bytes);
   }
   for (const [relative, content] of planned) await writeText(path.join(stage, relative), content);
   await writeText(path.join(stage, ".codeflow-generated.json"), `${JSON.stringify({ schema_version: 1, files: [...planned.keys()].sort(compareDeterministicText) }, null, 2)}\n`);

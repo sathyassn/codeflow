@@ -128,7 +128,11 @@ fn diagnostic_packs_only_compose_existing_cases() {
             "docs-portal-declines-tiny-repository",
             "docs-portal-adopts-layered-source-authority",
             "docs-portal-dirty-snapshot-fails-closed",
-            "docs-portal-boundary-and-ship-routing"
+            "docs-portal-boundary-and-ship-routing",
+            "docs-portal-broken-current-source-is-a-bounded-stub",
+            "docs-portal-single-project-information-architecture",
+            "docs-portal-monorepo-global-to-area-drilldown",
+            "docs-portal-refuses-unjustified-split"
         ])
     );
 }

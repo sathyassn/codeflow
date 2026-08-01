@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-08-02-presentation-docs-portal-v1",
+  "fixtures_version": "2026-08-02-presentation-docs-portal-v2",
   "fixtures": [
     {
       "id": "approved-plan-change",
@@ -249,6 +249,22 @@
       }
     },
     {
+      "id": "docs-portal-broken-current-source",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/docs-portal-broken-current",
+        "peer": "available",
+        "portal_adopted": true,
+        "head_clean": true,
+        "guide_parseable": false
+      },
+      "files": {
+        ".codeflow/docs-portal.json": "{\"schema_version\":1,\"root\":\"docs-portal\",\"starter_version\":\"1.0.0\",\"files\":{}}\n",
+        "docs/guide.md": "---\ntitle: [broken\n---\n",
+        "docs/healthy.md": "---\nid: CAP-301\ntitle: Healthy sibling\n---\n\n# Healthy sibling\n"
+      }
+    },
+    {
       "id": "docs-portal-dirty-snapshot",
       "tier": "full",
       "state": {
@@ -287,6 +303,47 @@
       }
     },
     {
+      "id": "docs-portal-monorepo-ia",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/docs-portal-monorepo-ia",
+        "peer": "available",
+        "portal_adopted": false,
+        "surfaces": [
+          "web",
+          "ios",
+          "android",
+          "api",
+          "infra"
+        ]
+      },
+      "files": {
+        "docs/product.md": "# Product\n\nOne product across web and mobile clients.\n",
+        "docs/architecture.md": "# Shared architecture\n\nClients use the same API and identity boundary.\n",
+        "apps/web/README.md": "# Web surface\n",
+        "apps/ios/README.md": "# iOS surface\n",
+        "apps/android/README.md": "# Android surface\n",
+        "services/api/README.md": "# API area\n",
+        "infra/README.md": "# Infrastructure area\n"
+      }
+    },
+    {
+      "id": "docs-portal-single-project-ia",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/docs-portal-single-ia",
+        "peer": "available",
+        "portal_adopted": false,
+        "durable_product": true
+      },
+      "files": {
+        "docs/product.md": "# Product\n\nOne durable product with two user journeys.\n",
+        "docs/journeys.md": "# Journeys\n\nOnboard and recover access.\n",
+        "docs/architecture.md": "# Architecture\n\nWeb, API, and worker boundaries.\n",
+        "project-management/tasks/TSK-201.md": "---\nid: TSK-201\nepic_id: null\nstandalone_reason: Repository guide adoption.\ntitle: Adopt guide\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n"
+      }
+    },
+    {
       "id": "docs-portal-tiny",
       "tier": "standard",
       "state": {
@@ -297,6 +354,23 @@
       "files": {
         "README.md": "# Tiny utility\n\nOne short-lived script with no durable architecture or layered documentation.\n",
         "tool.sh": "#!/bin/sh\nprintf '%s\\n' ok\n"
+      }
+    },
+    {
+      "id": "docs-portal-unjustified-split",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/docs-portal-split",
+        "peer": "available",
+        "portal_adopted": false,
+        "packages": 42,
+        "teams": 8,
+        "access_boundary": false,
+        "independent_releases": false
+      },
+      "files": {
+        "PORTAL_PROPOSAL.md": "# Proposal\n\nCreate one portal for each package because eight teams own 42 packages and one sidebar may be long. Copy shared product and architecture pages into each portal.\n",
+        "docs/product.md": "# Product\n\nAll packages deliver one product under one access and release boundary.\n"
       }
     },
     {

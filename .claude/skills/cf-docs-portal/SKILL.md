@@ -44,6 +44,10 @@ Do not copy prose into a portal-only content authority. Generated
 content under `.portal/generated/`, generated Starlight content, search data,
 and build output are disposable.
 
+Read
+[references/information-architecture.md](references/information-architecture.md)
+before choosing source roots, layers, or more than one portal. It defines the
+single-project and monorepo defaults and the narrow reasons to split.
 Read [references/content-contract.md](references/content-contract.md) before
 changing source interpretation, IDs, relationships, provenance, or stale-page
 behavior. Read [references/operations.md](references/operations.md) before
@@ -68,6 +72,10 @@ and bullets when they improve scanning. Avoid cryptic headings, invented
 personality, gratuitous emoji, and generic promotional language. Match an
 established project voice when it exists; otherwise use calm, direct,
 third-person documentation language.
+
+For a monorepo, keep global orientation and shared concepts above area or
+surface drill-down. Use multiple `source_roots` and layer paths to expose that
+graph; do not dump one navigation folder per package or duplicate shared prose.
 
 The bundled `signal` and `folio` themes are utility fallbacks, each supporting
 light and dark preference. A project may adapt the utility one way from its own

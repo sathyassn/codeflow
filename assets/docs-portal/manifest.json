@@ -11,6 +11,7 @@
     { "path": "public/portal-preview.js", "ownership": "managed" },
     { "path": "scripts/adapter.mjs", "ownership": "managed" },
     { "path": "scripts/evidence.mjs", "ownership": "managed" },
+    { "path": "scripts/git-snapshot.mjs", "ownership": "managed" },
     { "path": "scripts/lib.mjs", "ownership": "managed" },
     { "path": "scripts/publication.mjs", "ownership": "managed" },
     { "path": "scripts/workflow.mjs", "ownership": "managed" },

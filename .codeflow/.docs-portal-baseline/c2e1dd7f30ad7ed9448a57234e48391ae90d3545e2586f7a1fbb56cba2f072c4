@@ -71,7 +71,10 @@ export function titleFor(frontmatter, body, sourcePath) {
   return headingText || path.posix.basename(sourcePath, ".md").replaceAll("-", " ");
 }
 
-export function rewriteRepositoryMarkdown(body, { sourcePath, sourceRoutes, base, strictTargets, mediaReferences }) {
+export function rewriteRepositoryMarkdown(body, {
+  sourcePath, sourceRoutes, repositoryFiles = new Map(), pinnedSourceUrl = () => null,
+  commit = "", base, strictTargets, mediaReferences,
+}) {
   const tree = markdownTree(body);
   const referenceKinds = new Map();
   visitMarkdown(tree, (node) => {
@@ -81,6 +84,12 @@ export function rewriteRepositoryMarkdown(body, { sourcePath, sourceRoutes, base
     if (prior && prior !== kind) throw new Error(`${sourcePath}: reference ${node.identifier} is used as both a link and an image`);
     referenceKinds.set(node.identifier, kind);
   });
+  const definitionResolutions = new Map();
+  visitMarkdown(tree, (node) => {
+    if (node.type !== "definition") return;
+    const kind = referenceKinds.get(node.identifier);
+    if (kind) definitionResolutions.set(node.identifier, resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind }));
+  });
   let previewSequence = 0;
   visitMarkdown(tree, (node, parent, index, ancestors) => {
     if (node.type === "html") {
@@ -89,13 +98,23 @@ export function rewriteRepositoryMarkdown(body, { sourcePath, sourceRoutes, base
         : { type: "html", value: escapeGeneratedHtml(node.value) };
       return;
     }
+    if (["linkReference", "imageReference"].includes(node.type)) {
+      const resolved = definitionResolutions.get(node.identifier);
+      if (resolved?.sourceReference) parent.children[index] = sourceReferenceNode(node, resolved.sourceReference, commit);
+      return;
+    }
     if (["link", "image", "definition"].includes(node.type)) {
       const kind = node.type === "definition" ? referenceKinds.get(node.identifier) : node.type;
       if (!kind) {
         if (unsafeUrl(node.url)) throw new Error(`${sourcePath}: unsafe Markdown URL scheme`);
         return;
       }
-      node.url = resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, base, mediaReferences, kind });
+      const resolved = node.type === "definition"
+        ? definitionResolutions.get(node.identifier)
+        : resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind });
+      if (resolved.sourceReference) {
+        parent.children[index] = node.type === "definition" ? { type: "text", value: "" } : sourceReferenceNode(node, resolved.sourceReference, commit);
+      } else node.url = resolved.url;
       return;
     }
     if (node.type !== "text" || ancestors.some((ancestor) => ["link", "linkReference", "definition", "code", "inlineCode", "html"].includes(ancestor.type))) return;
@@ -163,13 +182,13 @@ function unsafeUrl(value) {
   return /^(?:javascript|data|file|vbscript):/.test(normalized);
 }
 
-function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, base, mediaReferences, kind }) {
+function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind }) {
   if (unsafeUrl(value)) throw new Error(`${sourcePath}: unsafe Markdown URL scheme`);
   if (/^(?:https?:|mailto:)/i.test(value)) {
     if (kind === "image") throw new Error(`${sourcePath}: remote images are not imported: ${value}`);
-    return value;
+    return { url: value };
   }
-  if (value.startsWith("#")) return value;
+  if (value.startsWith("#")) return { url: value };
   if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//") || value.startsWith("/")) throw new Error(`${sourcePath}: unsupported Markdown URL: ${value}`);
   const match = String(value).match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
   if (!match || !match[1]) throw new Error(`${sourcePath}: invalid repository-relative Markdown URL: ${value}`);
@@ -179,16 +198,29 @@ function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, base, mediaRefe
   const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(sourcePath), decoded));
   const safe = safeRelative(resolved, `${sourcePath} Markdown target`);
   const suffix = `${match[2] ?? ""}${match[3] ?? ""}`;
-  if (sourceRoutes.has(safe)) return `${withBase(base, sourceRoutes.get(safe))}${suffix}`;
+  if (sourceRoutes.has(safe)) return { url: `${withBase(base, sourceRoutes.get(safe))}${suffix}` };
+  if (kind === "link" && repositoryFiles.has(safe)) {
+    const href = pinnedSourceUrl(safe);
+    return href === null ? { sourceReference: safe } : { url: `${href}${suffix}` };
+  }
   if (/\.(?:md|mdx)$/i.test(safe) || kind === "link" && !path.posix.extname(safe)) throw new Error(`${sourcePath}: repository document target does not exist: ${safe}`);
   const extension = path.posix.extname(safe).toLowerCase();
-  const mediaExtensions = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
+  const mediaExtensions = new Set([".gif", ".jpeg", ".jpg", ".png", ".webp"]);
   if (!mediaExtensions.has(extension)) {
     throw new Error(`${sourcePath}: unsupported local media type: ${safe}`);
   }
   const mediaRoute = `media/${sha256(safe).slice(0, 16)}-${path.posix.basename(safe)}`;
   mediaReferences.set(safe, mediaRoute);
-  return `${base === "/" ? `/${mediaRoute}` : `${base}${mediaRoute}`}${suffix}`;
+  return { url: `${base === "/" ? `/${mediaRoute}` : `${base}${mediaRoute}`}${suffix}` };
+}
+
+function sourceReferenceNode(node, sourcePath, commit) {
+  const label = visibleNodeText(node).trim() || sourcePath;
+  const revision = /^[a-f0-9]{40}$/.test(commit) ? commit.slice(0, 12) : "pinned commit";
+  return {
+    type: "html",
+    value: `<span class="portal-source-reference">${escapeGeneratedHtml(label)} (<code>${escapeGeneratedHtml(sourcePath)}</code> at <code>${revision}</code>)</span>`,
+  };
 }
 
 function strictIdPreview(id, target, suffix) {

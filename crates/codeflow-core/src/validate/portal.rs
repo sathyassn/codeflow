@@ -1,9 +1,12 @@
 //! Read-only verification of documentation-portal evidence claims.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -18,7 +21,14 @@ const MAX_ARTIFACTS: usize = 100_000;
 const MAX_CLAIMED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_TOTAL_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MEDIA_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_TOTAL_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_RASTER_DIMENSION: u32 = 8_192;
+const MAX_RASTER_PIXELS: u64 = 33_554_432;
 const MAX_TOTAL_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_STALE_REASON_BYTES: usize = 512;
+const MAX_STALE_STUB_BYTES: u64 = 4 * 1024;
+const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Default)]
 pub struct PortalValidationReport {
@@ -142,9 +152,7 @@ struct Page {
     backlinks: Vec<Backlink>,
     snippets: Vec<Snippet>,
     #[serde(default)]
-    last_good_commit: Option<String>,
-    #[serde(default)]
-    last_good_source_sha256: Option<String>,
+    stale_reason: Option<String>,
 }
 
 fn deserialize_adoption_files<'de, D>(
@@ -182,6 +190,7 @@ where
 
 /// Verify evidence without executing project code or writing output.
 #[must_use]
+#[allow(clippy::too_many_lines)] // Sequential independent claims intentionally remain visible in one audit pipeline.
 pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidationReport {
     let mut report = PortalValidationReport::default();
     let Some(normalized_portal_root) = normalized_relative(portal_root) else {
@@ -347,8 +356,50 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         return report;
     }
     let repository = repo_root.to_path_buf();
-    let authority = collect_ids(&repository, &evidence.pages, &evidence.repository.commit);
-    report.issues.extend(authority.issues);
+    let config_source_path = normalized_portal_root
+        .join("portal.config.json")
+        .to_string_lossy()
+        .replace('\\', "/");
+    match git_batch_blobs(
+        &repository,
+        &evidence.repository.commit,
+        &[config_source_path.as_str()],
+        64 * 1024,
+        64 * 1024,
+    ) {
+        Ok(blobs)
+            if blobs
+                .get(&config_source_path)
+                .is_some_and(|bytes| sha256_hex(bytes) == evidence.config_sha256) => {}
+        Ok(_) => report
+            .issues
+            .push("configuration does not match its authoritative Git blob".into()),
+        Err(error) => report.issues.push(format!(
+            "authoritative Git configuration blob is unreadable: {error}"
+        )),
+    }
+    let source_paths: Vec<&str> = evidence
+        .pages
+        .iter()
+        .map(|page| page.source_path.as_str())
+        .collect();
+    let source_blobs = match git_batch_blobs(
+        &repository,
+        &evidence.repository.commit,
+        &source_paths,
+        MAX_SOURCE_BYTES,
+        MAX_TOTAL_SOURCE_BYTES,
+    ) {
+        Ok(blobs) => blobs,
+        Err(error) => {
+            report.issues.push(format!(
+                "authoritative Git source batch is unreadable: {error}"
+            ));
+            BTreeMap::new()
+        }
+    };
+    let authority = collect_ids(&evidence.pages, &source_blobs);
+    report.issues.extend(authority.issues.iter().cloned());
     let ids: BTreeSet<String> = authority.owners.keys().cloned().collect();
     let mut routes = BTreeSet::new();
     let mut claimed_paths = BTreeSet::new();
@@ -382,34 +433,39 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
         if page.output_markdown != format!("src/content/docs/{}.md", page.route)
             || page.markdown_twin != format!("public/markdown/{}.md", page.route)
+            || page.output_markdown_sha256 != page.markdown_twin_sha256
         {
             report.issues.push(format!(
-                "{} output and Markdown twin do not match their canonical route",
+                "{} output and Markdown twin do not match their canonical route/content",
                 page.route
             ));
         }
         if page.stale {
-            if !page.last_good_commit.as_deref().is_some_and(valid_commit)
-                || !page
-                    .last_good_source_sha256
-                    .as_deref()
-                    .is_some_and(valid_sha256)
+            let fallback_title = Path::new(&page.source_path)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(|value| value.replace('-', " "));
+            if page.ids.len()
+                + page.relationships.len()
+                + page.backlinks.len()
+                + page.snippets.len()
+                != 0
+                || page.status.is_some()
+                || page.searchable
+                || page.stale_reason.as_deref().is_none_or(|reason| {
+                    reason.is_empty()
+                        || reason.len() > MAX_STALE_REASON_BYTES
+                        || reason.chars().any(char::is_control)
+                })
+                || fallback_title.as_deref() != Some(page.title.as_str())
             {
-                report.issues.push(format!(
-                    "{} stale page lacks valid last-good source provenance",
-                    page.route
-                ));
-            } else {
-                verify_last_good_source(
-                    &repository,
-                    &evidence.repository.commit,
-                    page,
-                    &mut report,
-                );
+                report
+                    .issues
+                    .push(format!("{} has an invalid stale-stub envelope", page.route));
             }
-        } else if page.last_good_commit.is_some() || page.last_good_source_sha256.is_some() {
+        } else if page.stale_reason.is_some() {
             report.issues.push(format!(
-                "{} active page unexpectedly claims last-good source provenance",
+                "{} active page unexpectedly claims a stale diagnostic",
                 page.route
             ));
         }
@@ -435,13 +491,16 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                     .push(format!("{} has an invalid {label} hash", page.route));
             }
         }
-        verify_file(
-            &repository,
-            &page.source_path,
-            &page.source_sha256,
-            "source",
-            &mut report,
-        );
+        match source_blobs.get(&page.source_path) {
+            Some(bytes) if sha256_hex(bytes) == page.source_sha256 => {}
+            Some(_) => report.issues.push(format!(
+                "{} authoritative Git source hash mismatch",
+                page.route
+            )),
+            None => report
+                .issues
+                .push(format!("{} authoritative Git source is absent", page.route)),
+        }
         verify_file(
             &portal,
             &page.output_markdown,
@@ -482,7 +541,24 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 ));
             }
         }
-        verify_snippets(&repository, &portal, page, &mut report);
+        let claimed_ids: BTreeSet<String> = page.ids.iter().cloned().collect();
+        let expected_ids = authority
+            .ids_by_source
+            .get(&page.source_path)
+            .cloned()
+            .unwrap_or_default();
+        if claimed_ids != expected_ids {
+            report.issues.push(format!(
+                "{} identities do not exactly match authoritative source",
+                page.route
+            ));
+        }
+        verify_snippets(
+            &portal,
+            page,
+            source_blobs.get(&page.source_path).map(Vec::as_slice),
+            &mut report,
+        );
         verify_rendered_claims(&portal, &evidence, page, &mut report);
         let mut relationship_claims = BTreeSet::new();
         for relationship in &page.relationships {
@@ -494,6 +570,12 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                     page.route
                 ));
             }
+        }
+        if !relationships_match_authority(page, &relationship_claims, &authority) {
+            report.issues.push(format!(
+                "{} relationships do not exactly match authoritative source",
+                page.route
+            ));
         }
         let mut backlink_claims = BTreeSet::new();
         for backlink in &page.backlinks {
@@ -597,7 +679,13 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
     }
     verify_primitive_tokens(&repository, &portal, &evidence, &mut report);
-    verify_media(&repository, &portal, &evidence.media, &mut report);
+    verify_media(
+        &repository,
+        &portal,
+        &evidence.repository.commit,
+        &evidence.media,
+        &mut report,
+    );
     let mut artifact_paths = BTreeSet::new();
     for artifact in &evidence.artifacts {
         if !artifact.path.starts_with("dist/") || !safe_path_text(&artifact.path) {
@@ -663,10 +751,14 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         if page.stale {
             match read_bounded_text(&portal.join(&page.output_markdown), MAX_CLAIMED_FILE_BYTES) {
                 Ok(markdown)
-                    if markdown.contains("data-pagefind-ignore=\"all\"")
-                        && markdown.contains("Stale rendering") => {}
+                    if markdown.len() as u64 <= MAX_STALE_STUB_BYTES
+                        && markdown.starts_with("---\n")
+                        && markdown.contains("\npagefind: false\n")
+                        && markdown.contains("data-pagefind-ignore=\"all\"")
+                        && markdown.contains("Source unavailable")
+                        && markdown.contains("the previous version of this page is not shown") => {}
                 _ => report.issues.push(format!(
-                    "stale page lacks visible stale and search-exclusion markers: {}",
+                    "stale page lacks its bounded visible error-stub contract: {}",
                     page.route
                 )),
             }
@@ -677,17 +769,14 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
 
 fn verify_config_contract(portal: &Path, evidence: &Evidence, report: &mut PortalValidationReport) {
     let path = portal.join("portal.config.json");
-    let config: serde_json::Value = match read_bounded_regular(&path, 64 * 1024)
+    let Some(config): Option<serde_json::Value> = read_bounded_regular(&path, 64 * 1024)
         .ok()
         .and_then(|bytes| parse_strict_json(&bytes).ok())
-    {
-        Some(config) => config,
-        None => {
-            report
-                .issues
-                .push("portal configuration contract is unreadable or invalid".into());
-            return;
-        }
+    else {
+        report
+            .issues
+            .push("portal configuration contract is unreadable or invalid".into());
+        return;
     };
     let configured_release = config
         .get("release_version")
@@ -695,7 +784,7 @@ fn verify_config_contract(portal: &Path, evidence: &Evidence, report: &mut Porta
     if configured_release != evidence.repository.release_version.as_deref()
         || (!config
             .get("release_version")
-            .is_some_and(|value| value.is_null())
+            .is_some_and(serde_json::Value::is_null)
             && configured_release.is_none())
     {
         report
@@ -712,7 +801,7 @@ fn verify_config_contract(portal: &Path, evidence: &Evidence, report: &mut Porta
             .map(|value| value.source_path.as_str())
         || (!config
             .get("primitive_tokens")
-            .is_some_and(|value| value.is_null())
+            .is_some_and(serde_json::Value::is_null)
             && configured_tokens.is_none())
     {
         report
@@ -743,13 +832,24 @@ fn verify_primitive_tokens(
             report.issues.push(format!("{label} hash is invalid"));
         }
     }
-    verify_file(
+    match git_batch_blobs(
         repository,
-        &tokens.source_path,
-        &tokens.source_sha256,
-        "primitive-token source",
-        report,
-    );
+        &evidence.repository.commit,
+        &[tokens.source_path.as_str()],
+        16 * 1024,
+        16 * 1024,
+    ) {
+        Ok(blobs)
+            if blobs
+                .get(&tokens.source_path)
+                .is_some_and(|bytes| sha256_hex(bytes) == tokens.source_sha256) => {}
+        Ok(_) => report
+            .issues
+            .push("primitive-token authoritative Git blob hash mismatch".into()),
+        Err(error) => report.issues.push(format!(
+            "primitive-token authoritative Git blob is unreadable: {error}"
+        )),
+    }
     verify_file(
         portal,
         &tokens.output_path,
@@ -759,9 +859,11 @@ fn verify_primitive_tokens(
     );
 }
 
+#[allow(clippy::too_many_lines)] // Media validation keeps all evidence checks in one fail-closed pass.
 fn verify_media(
     repository: &Path,
     portal: &Path,
+    commit: &str,
     media: &[Media],
     report: &mut PortalValidationReport,
 ) {
@@ -771,6 +873,22 @@ fn verify_media(
             .push("referenced media count exceeds 1000".into());
         return;
     }
+    let source_paths: Vec<&str> = media.iter().map(|item| item.source_path.as_str()).collect();
+    let source_blobs = match git_batch_blobs(
+        repository,
+        commit,
+        &source_paths,
+        MAX_MEDIA_BYTES,
+        MAX_TOTAL_MEDIA_BYTES,
+    ) {
+        Ok(blobs) => blobs,
+        Err(error) => {
+            report.issues.push(format!(
+                "referenced media authoritative Git batch is unreadable: {error}"
+            ));
+            BTreeMap::new()
+        }
+    };
     let mut sources = BTreeSet::new();
     let mut outputs = BTreeSet::new();
     let mut total_bytes = 0_u64;
@@ -780,10 +898,7 @@ fn verify_media(
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        if !matches!(
-            extension.as_str(),
-            "avif" | "gif" | "jpeg" | "jpg" | "png" | "webp"
-        ) {
+        if !matches!(extension.as_str(), "gif" | "jpeg" | "jpg" | "png" | "webp") {
             report.issues.push(format!(
                 "referenced media has an unsupported type: {}",
                 item.source_path
@@ -820,40 +935,38 @@ fn verify_media(
             ));
         }
         verify_file(
-            repository,
-            &item.source_path,
-            &item.source_sha256,
-            "referenced media source",
-            report,
-        );
-        verify_file(
             portal,
             &item.output_path,
             &item.output_sha256,
             "referenced media output",
             report,
         );
-        if let Some(path) = safe_join(
-            repository,
-            Path::new(&item.source_path),
-            "referenced media source",
-            report,
-        ) {
-            match read_bounded_regular(&path, 8 * 1024 * 1024) {
-                Ok(bytes) => {
-                    total_bytes = total_bytes.saturating_add(bytes.len() as u64);
-                    if !raster_signature_matches(&extension, &bytes) {
-                        report.issues.push(format!(
-                            "referenced media bytes do not match the claimed type: {}",
-                            item.source_path
-                        ));
-                    }
+        match source_blobs.get(&item.source_path) {
+            Some(bytes) => {
+                total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+                if sha256_hex(bytes) != item.source_sha256 {
+                    report.issues.push(format!(
+                        "referenced media authoritative Git blob hash mismatch: {}",
+                        item.source_path
+                    ));
                 }
-                Err(error) => report.issues.push(format!(
-                    "referenced media source is unreadable or exceeds 8388608 bytes: {}: {error}",
-                    item.source_path
-                )),
+                match raster_dimensions(&extension, bytes) {
+                    Some((width, height))
+                        if width > 0
+                            && height > 0
+                            && width <= MAX_RASTER_DIMENSION
+                            && height <= MAX_RASTER_DIMENSION
+                            && u64::from(width) * u64::from(height) <= MAX_RASTER_PIXELS => {}
+                    _ => report.issues.push(format!(
+                        "referenced media bytes or dimensions are invalid: {}",
+                        item.source_path
+                    )),
+                }
             }
+            None => report.issues.push(format!(
+                "referenced media authoritative Git blob is absent: {}",
+                item.source_path
+            )),
         }
     }
     if total_bytes > 64 * 1024 * 1024 {
@@ -863,20 +976,104 @@ fn verify_media(
     }
 }
 
-fn raster_signature_matches(extension: &str, bytes: &[u8]) -> bool {
+fn raster_dimensions(extension: &str, bytes: &[u8]) -> Option<(u32, u32)> {
     match extension {
-        "png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
-        "jpg" | "jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
-        "gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
-        "webp" => bytes.get(0..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
-        "avif" => {
-            bytes.get(4..8) == Some(b"ftyp")
-                && matches!(bytes.get(8..12), Some(b"avif") | Some(b"avis"))
+        "png"
+            if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a])
+                && bytes.get(8..12) == Some(&13_u32.to_be_bytes())
+                && bytes.get(12..16) == Some(b"IHDR") =>
+        {
+            Some((read_u32_be(bytes, 16)?, read_u32_be(bytes, 20)?))
         }
-        _ => false,
+        "gif" if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") => Some((
+            u32::from(read_u16_le(bytes, 6)?),
+            u32::from(read_u16_le(bytes, 8)?),
+        )),
+        "webp" if bytes.get(0..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") => {
+            webp_dimensions(bytes)
+        }
+        "jpg" | "jpeg" if bytes.starts_with(&[0xff, 0xd8, 0xff]) => jpeg_dimensions(bytes),
+        _ => None,
     }
 }
 
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+fn read_u24_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let chunk = bytes.get(offset..offset + 3)?;
+    Some(u32::from(chunk[0]) | (u32::from(chunk[1]) << 8) | (u32::from(chunk[2]) << 16))
+}
+
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match bytes.get(12..16)? {
+        b"VP8X" => Some((read_u24_le(bytes, 24)? + 1, read_u24_le(bytes, 27)? + 1)),
+        b"VP8L" if bytes.get(20) == Some(&0x2f) => {
+            let one = u32::from(*bytes.get(21)?);
+            let two = u32::from(*bytes.get(22)?);
+            let three = u32::from(*bytes.get(23)?);
+            let four = u32::from(*bytes.get(24)?);
+            Some((
+                1 + one + ((two & 0x3f) << 8),
+                1 + (two >> 6) + (three << 2) + ((four & 0x0f) << 10),
+            ))
+        }
+        b"VP8 " if bytes.get(23..26) == Some(&[0x9d, 0x01, 0x2a]) => Some((
+            u32::from(read_u16_le(bytes, 26)? & 0x3fff),
+            u32::from(read_u16_le(bytes, 28)? & 0x3fff),
+        )),
+        _ => None,
+    }
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let mut offset = 2_usize;
+    while offset < bytes.len() {
+        while bytes.get(offset) == Some(&0xff) {
+            offset += 1;
+        }
+        let marker = *bytes.get(offset)?;
+        offset += 1;
+        if matches!(marker, 0xd9 | 0xda) {
+            return None;
+        }
+        if marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+        let length = usize::from(read_u16_be(bytes, offset)?);
+        if length < 2 || offset.checked_add(length)? > bytes.len() {
+            return None;
+        }
+        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+            if length < 7 {
+                return None;
+            }
+            return Some((
+                u32::from(read_u16_be(bytes, offset + 5)?),
+                u32::from(read_u16_be(bytes, offset + 3)?),
+            ));
+        }
+        offset += length;
+    }
+    None
+}
+
+#[allow(clippy::too_many_lines)] // Includes the bounded recursive visitor and its top-level invariants.
 fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) -> BTreeSet<String> {
     fn visit(
         root: &Path,
@@ -1004,28 +1201,25 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
 }
 
 fn verify_snippets(
-    repository: &Path,
     portal: &Path,
     page: &Page,
+    source: Option<&[u8]>,
     report: &mut PortalValidationReport,
 ) {
-    let Some(path) = safe_join(
-        repository,
-        Path::new(&page.source_path),
-        "snippet source",
-        report,
-    ) else {
-        return;
-    };
-    let text = match read_bounded_text(&path, MAX_SOURCE_BYTES) {
-        Ok(text) => text,
-        Err(error) => {
-            report.issues.push(format!(
-                "{} snippet source is not valid UTF-8 or readable: {error}",
-                page.source_path
-            ));
-            return;
+    if page.stale {
+        if !page.snippets.is_empty() {
+            report
+                .issues
+                .push(format!("{} stale stub claims source snippets", page.route));
         }
+        return;
+    }
+    let Some(text) = source.and_then(|bytes| std::str::from_utf8(bytes).ok()) else {
+        report.issues.push(format!(
+            "{} snippet source is not valid UTF-8 or readable",
+            page.source_path
+        ));
+        return;
     };
     let lines: Vec<&str> = text.split('\n').collect();
     for snippet in &page.snippets {
@@ -1082,24 +1276,23 @@ fn verify_rendered_claims(
         evidence.generator.version,
         release
     );
-    if !output.lines().take(20).any(|line| line == marker) {
+    if !output.lines().any(|line| line == marker) {
         report.issues.push(format!(
             "{} lacks its exact rendered provenance marker",
             page.route
         ));
     }
-    if page.stale {
-        let last_good_marker = format!(
-            "<!-- codeflow-last-good-provenance source_sha256={} built_from_commit={} -->",
-            page.last_good_source_sha256.as_deref().unwrap_or_default(),
-            page.last_good_commit.as_deref().unwrap_or_default()
-        );
-        if !output.lines().take(20).any(|line| line == last_good_marker) {
-            report.issues.push(format!(
-                "{} lacks its exact last-good source marker",
-                page.route
-            ));
-        }
+    if page.stale
+        && (!output.contains("\npagefind: false\n")
+            || !output.contains("data-pagefind-ignore=\"all\"")
+            || !output.contains("Source unavailable")
+            || !output.contains("the previous version of this page is not shown")
+            || output.len() as u64 > MAX_STALE_STUB_BYTES)
+    {
+        report.issues.push(format!(
+            "{} lacks its exact bounded stale-stub markers",
+            page.route
+        ));
     }
     if !output.contains(&format!("<code>{}</code>", page.source_path))
         || !output.contains(&format!("<code>{}</code>", evidence.repository.commit))
@@ -1133,47 +1326,6 @@ fn verify_rendered_claims(
                 page.route
             ));
         }
-    }
-}
-
-fn verify_last_good_source(
-    repository: &Path,
-    current_commit: &str,
-    page: &Page,
-    report: &mut PortalValidationReport,
-) {
-    let Some(ancestor) = page.last_good_commit.as_deref() else {
-        return;
-    };
-    let status = Command::new("git")
-        .args(["-C"])
-        .arg(repository)
-        .args(["merge-base", "--is-ancestor", ancestor, current_commit])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if !status.is_ok_and(|status| status.success()) {
-        report.issues.push(format!(
-            "{} last-good commit is not an ancestor of the evidenced commit",
-            page.route
-        ));
-        return;
-    }
-    match git_blob_bounded(repository, ancestor, &page.source_path, MAX_SOURCE_BYTES) {
-        Ok(bytes)
-            if page
-                .last_good_source_sha256
-                .as_ref()
-                .is_some_and(|expected| sha256_hex(&bytes) == *expected) => {}
-        Ok(_) => report.issues.push(format!(
-            "{} last-good Git blob hash does not match evidence",
-            page.route
-        )),
-        Err(error) => report.issues.push(format!(
-            "{} last-good Git blob cannot be verified: {error}",
-            page.route
-        )),
     }
 }
 
@@ -1305,51 +1457,259 @@ fn relationship_kind(value: &str) -> bool {
 }
 
 fn git_text_bounded(root: &Path, args: &[&str], maximum_bytes: u64) -> std::io::Result<String> {
-    String::from_utf8(git_output_bounded(root, args, maximum_bytes)?)
+    String::from_utf8(git_output_bounded(root, args, None, maximum_bytes)?)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
 }
 
-fn git_blob_bounded(
+fn git_batch_blobs(
     root: &Path,
     commit: &str,
-    source_path: &str,
-    maximum_bytes: u64,
-) -> std::io::Result<Vec<u8>> {
-    if !valid_commit(commit) || !safe_path_text(source_path) {
+    source_paths: &[&str],
+    maximum_blob_bytes: u64,
+    maximum_total_bytes: u64,
+) -> std::io::Result<BTreeMap<String, Vec<u8>>> {
+    if !valid_commit(commit) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "invalid Git blob identity",
+            "invalid Git commit identity",
         ));
     }
-    let object = format!("{commit}:{source_path}");
-    git_output_bounded(root, &["cat-file", "blob", &object], maximum_bytes)
+    let paths: BTreeSet<&str> = source_paths.iter().copied().collect();
+    if paths.len() > MAX_PAGES || paths.iter().any(|path| !safe_path_text(path)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid or excessive Git blob paths",
+        ));
+    }
+    let mut input = Vec::new();
+    for path in &paths {
+        writeln!(input, "{commit}:{path}")?;
+    }
+    let framing_bytes = u64::try_from(paths.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(128);
+    let maximum_output = maximum_total_bytes.saturating_add(framing_bytes);
+    let output = git_output_bounded(root, &["cat-file", "--batch"], Some(input), maximum_output)?;
+    parse_git_batch(&output, &paths, maximum_blob_bytes, maximum_total_bytes)
 }
 
-fn git_output_bounded(root: &Path, args: &[&str], maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
-    let mut child = Command::new("git")
+fn parse_git_batch(
+    output: &[u8],
+    paths: &BTreeSet<&str>,
+    maximum_blob_bytes: u64,
+    maximum_total_bytes: u64,
+) -> std::io::Result<BTreeMap<String, Vec<u8>>> {
+    let mut cursor = 0_usize;
+    let mut total = 0_u64;
+    let mut blobs = BTreeMap::new();
+    for path in paths {
+        let line_end = output[cursor..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|offset| cursor + offset)
+            .ok_or_else(|| std::io::Error::other("Git batch header is truncated"))?;
+        let header = std::str::from_utf8(&output[cursor..line_end]).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+        })?;
+        cursor = line_end + 1;
+        if header.ends_with(" missing") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Git blob is absent at the evidenced commit: {path}"),
+            ));
+        }
+        let mut fields = header.split_ascii_whitespace();
+        let object_id = fields.next().unwrap_or_default();
+        let object_type = fields.next().unwrap_or_default();
+        let size = fields
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| std::io::Error::other("Git batch size is invalid"))?;
+        if fields.next().is_some()
+            || object_id.len() < 40
+            || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || object_type != "blob"
+            || size > maximum_blob_bytes
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Git batch blob metadata is invalid: {path}"),
+            ));
+        }
+        total = total.checked_add(size).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Git blob total overflow")
+        })?;
+        if total > maximum_total_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Git blob corpus exceeds its byte limit",
+            ));
+        }
+        let size = usize::try_from(size).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Git blob size is unsupported",
+            )
+        })?;
+        let end = cursor
+            .checked_add(size)
+            .ok_or_else(|| std::io::Error::other("Git batch offset overflow"))?;
+        if end >= output.len() || output[end] != b'\n' {
+            return Err(std::io::Error::other("Git batch blob is truncated"));
+        }
+        blobs.insert((*path).to_string(), output[cursor..end].to_vec());
+        cursor = end + 1;
+    }
+    if cursor != output.len() {
+        return Err(std::io::Error::other(
+            "Git batch emitted unexpected trailing output",
+        ));
+    }
+    Ok(blobs)
+}
+
+fn hardened_git(
+    root: &Path,
+    args: &[&str],
+    piped_stdin: bool,
+) -> std::io::Result<std::process::Child> {
+    let mut command = Command::new("git");
+    command
+        .arg("--no-pager")
         .args(["-C"])
         .arg(root)
+        .args(["-c", "core.fsmonitor=false", "-c", "core.pager=cat"])
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if piped_stdin {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let mut bytes = Vec::new();
-    child
+        .stderr(Stdio::piped())
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .env("GIT_PAGER", "cat")
+        .env("PAGER", "cat")
+        .env("LC_ALL", "C");
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_DIFF_OPTS",
+    ] {
+        command.env_remove(name);
+    }
+    command.spawn()
+}
+
+fn drain_bounded(
+    mut stream: impl Read,
+    maximum_bytes: u64,
+    overflow: Option<&AtomicBool>,
+) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::new();
+    let mut total = 0_u64;
+    let mut chunk = [0_u8; 16 * 1024];
+    loop {
+        let count = stream.read(&mut chunk)?;
+        if count == 0 {
+            break;
+        }
+        total = total.saturating_add(count as u64);
+        let remaining = maximum_bytes.saturating_sub(retained.len() as u64);
+        let keep = usize::try_from(remaining.min(count as u64)).unwrap_or(0);
+        retained.extend_from_slice(&chunk[..keep]);
+        if total > maximum_bytes {
+            if let Some(flag) = overflow {
+                flag.store(true, Ordering::Release);
+            }
+        }
+    }
+    Ok(retained)
+}
+
+fn git_output_bounded(
+    root: &Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    maximum_bytes: u64,
+) -> std::io::Result<Vec<u8>> {
+    let mut child = hardened_git(root, args, input.is_some())?;
+    let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| std::io::Error::other("Git stdout was not captured"))?
-        .take(maximum_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    let status = child.wait()?;
-    if !status.success() {
-        return Err(std::io::Error::other("Git object lookup failed"));
+        .ok_or_else(|| std::io::Error::other("Git stdout was not captured"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("Git stderr was not captured"))?;
+    let overflow = Arc::new(AtomicBool::new(false));
+    let stdout_overflow = Arc::clone(&overflow);
+    let stdout_thread =
+        std::thread::spawn(move || drain_bounded(stdout, maximum_bytes, Some(&stdout_overflow)));
+    let stderr_thread = std::thread::spawn(move || drain_bounded(stderr, 4 * 1024, None));
+    let stdin_thread = input.map(|bytes| {
+        let mut stdin = child.stdin.take().expect("piped Git stdin");
+        std::thread::spawn(move || stdin.write_all(&bytes))
+    });
+    let started = Instant::now();
+    let (status, aborted) = loop {
+        if overflow.load(Ordering::Acquire) {
+            let _ = child.kill();
+            break (child.wait()?, Some("Git output exceeds its byte limit"));
+        }
+        if started.elapsed() >= GIT_TIMEOUT {
+            let _ = child.kill();
+            break (child.wait()?, Some("Git command exceeded its time limit"));
+        }
+        if let Some(status) = child.try_wait()? {
+            break (status, None);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let bytes = stdout_thread
+        .join()
+        .map_err(|_| std::io::Error::other("Git stdout reader panicked"))??;
+    let error_bytes = stderr_thread
+        .join()
+        .map_err(|_| std::io::Error::other("Git stderr reader panicked"))??;
+    if let Some(stdin_thread) = stdin_thread {
+        match stdin_thread.join() {
+            Ok(Err(error)) if aborted.is_none() => return Err(error),
+            Ok(Ok(()) | Err(_)) => {}
+            Err(_) => return Err(std::io::Error::other("Git stdin writer panicked")),
+        }
     }
-    if bytes.len() as u64 > maximum_bytes {
+    if let Some(message) = aborted {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "Git output exceeds its byte limit",
+            message,
         ));
+    }
+    if !status.success() {
+        let detail = String::from_utf8_lossy(&error_bytes);
+        return Err(std::io::Error::other(format!(
+            "Git command failed{}",
+            if detail.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", detail.trim())
+            }
+        )));
     }
     Ok(bytes)
 }
@@ -1384,12 +1744,13 @@ fn read_bounded_regular_with_hook(
     }
     let file = options.open(path)?;
     let opened = file.metadata()?;
-    if !opened.is_file() || !same_file_identity(&before, &opened) || opened.len() > maximum_bytes {
+    if !opened.is_file() || opened.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "file changed identity or type while opening",
         ));
     }
+    let opened_identity = same_file::Handle::from_file(file.try_clone()?)?;
     after_open()?;
     let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or(0));
     file.take(maximum_bytes.saturating_add(1))
@@ -1401,12 +1762,13 @@ fn read_bounded_regular_with_hook(
         ));
     }
     let after = std::fs::symlink_metadata(path)?;
+    let linked_identity = same_file::Handle::from_path(path)?;
     if after.file_type().is_symlink()
         || !after.is_file()
-        || !same_file_identity(&opened, &after)
+        || opened_identity != linked_identity
         || opened.len() != bytes.len() as u64
         || opened.len() != after.len()
-        || opened.modified()? != after.modified()?
+        || !stable_metadata(&opened, &after)?
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -1416,17 +1778,17 @@ fn read_bounded_regular_with_hook(
     Ok(bytes)
 }
 
-#[cfg(unix)]
-fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(windows)]
-fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+fn stable_metadata(left: &std::fs::Metadata, right: &std::fs::Metadata) -> std::io::Result<bool> {
+    if left.modified()? != right.modified()? {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(left.ctime() == right.ctime() && left.ctime_nsec() == right.ctime_nsec())
+    }
+    #[cfg(not(unix))]
+    Ok(true)
 }
 
 fn read_bounded_text(path: &Path, maximum_bytes: u64) -> std::io::Result<String> {
@@ -1535,99 +1897,43 @@ fn parse_strict_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json:
 
 struct AuthorityIds {
     owners: BTreeMap<String, String>,
+    ids_by_source: BTreeMap<String, BTreeSet<String>>,
+    relationships: BTreeMap<String, BTreeSet<Relationship>>,
     issues: Vec<String>,
 }
 
-fn collect_ids(root: &Path, pages: &[Page], current_commit: &str) -> AuthorityIds {
+fn relationships_match_authority(
+    page: &Page,
+    claims: &BTreeSet<Relationship>,
+    authority: &AuthorityIds,
+) -> bool {
+    claims
+        == &authority
+            .relationships
+            .get(&page.source_path)
+            .cloned()
+            .unwrap_or_default()
+}
+
+fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> AuthorityIds {
     let mut authority = AuthorityIds {
         owners: BTreeMap::new(),
+        ids_by_source: BTreeMap::new(),
+        relationships: BTreeMap::new(),
         issues: Vec::new(),
     };
-    fn add_id(id: String, owner: &Path, root: &Path, authority: &mut AuthorityIds) {
-        let relative = owner
-            .strip_prefix(root)
-            .unwrap_or(owner)
-            .to_string_lossy()
-            .replace('\\', "/");
-        if let Some(prior) = authority.owners.insert(id.clone(), relative.clone()) {
-            authority.issues.push(format!(
-                "authoritative ID {id} is declared more than once: {prior} and {relative}"
-            ));
-        }
-    }
-    fn frontmatter_id(text: &str) -> Option<String> {
-        let mut lines = text.lines();
-        if lines.next()? != "---" {
-            return None;
-        }
-        for line in lines {
-            if line == "---" {
-                break;
-            }
-            let trimmed = line.trim().trim_start_matches('-').trim();
-            if let Some(value) = trimmed.strip_prefix("id:").map(str::trim) {
-                let value = value.trim_matches(['\'', '"']);
-                if strict_id(value) {
-                    return Some(value.into());
-                }
-            }
-        }
-        None
-    }
-    let mut total_bytes = 0_u64;
     let mut seen_sources = BTreeSet::new();
     for page in pages {
-        if !seen_sources.insert(page.source_path.as_str()) || !safe_path_text(&page.source_path) {
+        if page.stale
+            || !seen_sources.insert(page.source_path.as_str())
+            || !safe_path_text(&page.source_path)
+        {
             continue;
         }
-        let mut path_report = PortalValidationReport::default();
-        if safe_join(
-            root,
-            Path::new(&page.source_path),
-            "authoritative source",
-            &mut path_report,
-        )
-        .is_none()
-        {
-            authority.issues.extend(path_report.issues);
+        let Some(bytes) = source_blobs.get(&page.source_path) else {
             continue;
-        }
-        let source_commit = if page.stale {
-            page.last_good_commit.as_deref().unwrap_or_default()
-        } else {
-            current_commit
         };
-        let expected_hash = if page.stale {
-            page.last_good_source_sha256.as_deref().unwrap_or_default()
-        } else {
-            &page.source_sha256
-        };
-        let bytes = match git_blob_bounded(root, source_commit, &page.source_path, MAX_SOURCE_BYTES)
-        {
-            Ok(bytes) if sha256_hex(&bytes) == expected_hash => bytes,
-            Ok(_) => {
-                authority.issues.push(format!(
-                    "authoritative Git source hash mismatch: {}",
-                    page.source_path
-                ));
-                continue;
-            }
-            Err(error) => {
-                authority.issues.push(format!(
-                    "authoritative Git source is unreadable {}: {error}",
-                    page.source_path
-                ));
-                continue;
-            }
-        };
-        total_bytes = total_bytes.saturating_add(bytes.len() as u64);
-        if total_bytes > MAX_TOTAL_SOURCE_BYTES {
-            authority.issues.push(format!(
-                "authoritative source corpus exceeds {MAX_TOTAL_SOURCE_BYTES} bytes"
-            ));
-            break;
-        }
-        let text = match String::from_utf8(bytes) {
+        let text = match String::from_utf8(bytes.clone()) {
             Ok(text) => text
                 .strip_prefix('\u{feff}')
                 .unwrap_or(&text)
@@ -1635,42 +1941,162 @@ fn collect_ids(root: &Path, pages: &[Page], current_commit: &str) -> AuthorityId
                 .replace('\r', "\n"),
             Err(error) => {
                 authority.issues.push(format!(
-                    "authoritative source is not valid UTF-8 or readable {}: {error}",
+                    "authoritative source is not valid UTF-8 {}: {error}",
                     page.source_path
                 ));
                 continue;
             }
         };
         if page.source_path == "docs/capabilities.md" {
-            let (entries, parse_issues) = parse_capabilities(&text);
-            for issue in parse_issues {
+            collect_capability_authority(&text, &page.source_path, &mut authority);
+            continue;
+        }
+        let frontmatter = match parse_frontmatter_mapping(&text) {
+            Ok(frontmatter) => frontmatter,
+            Err(error) => {
                 authority.issues.push(format!(
-                    "docs/capabilities.md:{}: {}",
-                    issue.line, issue.message
+                    "authoritative frontmatter is invalid {}: {error}",
+                    page.source_path
                 ));
+                continue;
             }
-            for entry in entries {
-                if strict_id(&entry.id) {
-                    add_id(entry.id, Path::new(&page.source_path), root, &mut authority);
-                }
-            }
-            continue;
-        }
-        if let Some(id) = frontmatter_id(&text) {
-            add_id(id, Path::new(&page.source_path), root, &mut authority);
-            continue;
-        }
-        if let Some(stem) = Path::new(&page.source_path)
+        };
+        let source_id = mapping_string(&frontmatter, "id").filter(|id| strict_id(id));
+        if let Some(id) = source_id {
+            add_authoritative_id(id, &page.source_path, &mut authority);
+        } else if let Some(stem) = Path::new(&page.source_path)
             .file_stem()
             .and_then(|value| value.to_str())
         {
             let id = stem.to_ascii_uppercase();
             if strict_id(&id) {
-                add_id(id, Path::new(&page.source_path), root, &mut authority);
+                add_authoritative_id(&id, &page.source_path, &mut authority);
             }
+        }
+        for relationship in relationships_from_mapping(&frontmatter, source_id) {
+            authority
+                .relationships
+                .entry(page.source_path.clone())
+                .or_default()
+                .insert(relationship);
         }
     }
     authority
+}
+
+fn add_authoritative_id(id: &str, source_path: &str, authority: &mut AuthorityIds) {
+    authority
+        .ids_by_source
+        .entry(source_path.to_string())
+        .or_default()
+        .insert(id.to_string());
+    if let Some(prior) = authority
+        .owners
+        .insert(id.to_string(), source_path.to_string())
+    {
+        if prior != source_path {
+            authority.issues.push(format!(
+                "authoritative ID {id} is declared more than once: {prior} and {source_path}"
+            ));
+        }
+    }
+}
+
+fn collect_capability_authority(text: &str, source_path: &str, authority: &mut AuthorityIds) {
+    let (entries, parse_issues) = parse_capabilities(text);
+    for issue in parse_issues {
+        authority.issues.push(format!(
+            "docs/capabilities.md:{}: {}",
+            issue.line, issue.message
+        ));
+    }
+    for entry in entries {
+        if !strict_id(&entry.id) {
+            continue;
+        }
+        add_authoritative_id(&entry.id, source_path, authority);
+        for (kind, targets) in [
+            ("epic", entry.epic_id),
+            ("epic", entry.epics),
+            ("spec", entry.specs),
+            ("depends_on", entry.depends_on),
+            ("capability", entry.capabilities),
+            ("decision", entry.adrs),
+            ("related", entry.related),
+            ("superseded_by", entry.superseded_by),
+        ] {
+            for target in targets.into_iter().filter(|target| strict_id(target)) {
+                authority
+                    .relationships
+                    .entry(source_path.to_string())
+                    .or_default()
+                    .insert(Relationship {
+                        kind: kind.to_string(),
+                        target,
+                        source_id: Some(entry.id.clone()),
+                    });
+            }
+        }
+    }
+}
+
+fn parse_frontmatter_mapping(text: &str) -> Result<serde_yaml::Mapping, String> {
+    if !text.starts_with("---\n") {
+        return Ok(serde_yaml::Mapping::new());
+    }
+    let Some(end) = text[4..].find("\n---\n").map(|index| index + 4) else {
+        return Err("unclosed YAML frontmatter".into());
+    };
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(&text[4..end]).map_err(|error| error.to_string())?;
+    value
+        .as_mapping()
+        .cloned()
+        .ok_or_else(|| "frontmatter must be a mapping".into())
+}
+
+fn mapping_string<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a str> {
+    mapping
+        .get(serde_yaml::Value::String(key.to_string()))
+        .and_then(serde_yaml::Value::as_str)
+}
+
+fn relationships_from_mapping(
+    mapping: &serde_yaml::Mapping,
+    source_id: Option<&str>,
+) -> BTreeSet<Relationship> {
+    const FIELDS: [(&str, &str); 8] = [
+        ("epic_id", "epic"),
+        ("epics", "epic"),
+        ("specs", "spec"),
+        ("depends_on", "depends_on"),
+        ("capabilities", "capability"),
+        ("adrs", "decision"),
+        ("related", "related"),
+        ("superseded_by", "superseded_by"),
+    ];
+    let mut relationships = BTreeSet::new();
+    for (field, kind) in FIELDS {
+        let Some(value) = mapping.get(serde_yaml::Value::String(field.to_string())) else {
+            continue;
+        };
+        let targets: Vec<&str> = match value {
+            serde_yaml::Value::String(target) => vec![target],
+            serde_yaml::Value::Sequence(targets) => targets
+                .iter()
+                .filter_map(serde_yaml::Value::as_str)
+                .collect(),
+            _ => Vec::new(),
+        };
+        for target in targets.into_iter().filter(|target| strict_id(target)) {
+            relationships.insert(Relationship {
+                kind: kind.to_string(),
+                target: target.to_string(),
+                source_id: source_id.map(str::to_string),
+            });
+        }
+    }
+    relationships
 }
 
 fn strict_id(value: &str) -> bool {
@@ -1713,8 +2139,7 @@ mod tests {
             relationships: Vec::new(),
             backlinks: Vec::new(),
             snippets: Vec::new(),
-            last_good_commit: None,
-            last_good_source_sha256: None,
+            stale_reason: None,
         }
     }
 
@@ -1758,15 +2183,23 @@ mod tests {
     }
 
     #[test]
-    fn raster_media_requires_bytes_matching_the_claimed_type() {
-        assert!(raster_signature_matches(
-            "png",
-            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
-        ));
-        assert!(raster_signature_matches("jpg", &[0xff, 0xd8, 0xff]));
-        assert!(raster_signature_matches("webp", b"RIFFxxxxWEBP"));
-        assert!(!raster_signature_matches("png", b"<svg></svg>"));
-        assert!(!raster_signature_matches("gif", b"not-a-gif"));
+    fn raster_media_requires_bounded_dimensions_matching_the_claimed_type() {
+        let mut png = vec![0_u8; 24];
+        png[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        png[8..12].copy_from_slice(&13_u32.to_be_bytes());
+        png[12..16].copy_from_slice(b"IHDR");
+        png[16..20].copy_from_slice(&1_u32.to_be_bytes());
+        png[20..24].copy_from_slice(&1_u32.to_be_bytes());
+        assert_eq!(raster_dimensions("png", &png), Some((1, 1)));
+        png[16..20].copy_from_slice(&65_535_u32.to_be_bytes());
+        assert!(
+            raster_dimensions("png", &png).is_some_and(|(width, height)| {
+                width > MAX_RASTER_DIMENSION
+                    || u64::from(width) * u64::from(height) > MAX_RASTER_PIXELS
+            })
+        );
+        assert_eq!(raster_dimensions("png", b"<svg></svg>"), None);
+        assert_eq!(raster_dimensions("gif", b"not-a-gif"), None);
     }
 
     #[test]
@@ -1814,7 +2247,16 @@ mod tests {
         example.source_sha256 =
             sha256_hex(&std::fs::read(temp.path().join("docs/example.md")).unwrap());
         let pages = vec![capabilities, example];
-        let authority = collect_ids(temp.path(), &pages, &commit);
+        let paths = ["docs/capabilities.md", "docs/example.md"];
+        let blobs = git_batch_blobs(
+            temp.path(),
+            &commit,
+            &paths,
+            MAX_SOURCE_BYTES,
+            MAX_TOTAL_SOURCE_BYTES,
+        )
+        .unwrap();
+        let authority = collect_ids(&pages, &blobs);
         assert!(authority.issues.is_empty(), "{:?}", authority.issues);
         assert_eq!(
             authority.owners.get("CAP-101").map(String::as_str),
@@ -1822,6 +2264,139 @@ mod tests {
         );
         assert!(!authority.owners.contains_key("CAP-999"));
         assert!(!authority.owners.contains_key("TSK-999"));
+    }
+
+    #[test]
+    fn relationship_evidence_must_exactly_match_authoritative_kind_target_and_source_id() {
+        let mut record = page("project-management/tasks/TSK-101.md");
+        record.ids = vec!["TSK-101".into()];
+        let bytes = b"---\nid: TSK-101\nepic_id: EPC-100\ndepends_on: [TSK-099]\nadrs: [ADR-0001]\n---\n# Task\n".to_vec();
+        let blobs = BTreeMap::from([(record.source_path.clone(), bytes)]);
+        let authority = collect_ids(&[page("project-management/tasks/TSK-101.md")], &blobs);
+        let exact = authority
+            .relationships
+            .get(&record.source_path)
+            .cloned()
+            .unwrap();
+        assert!(relationships_match_authority(&record, &exact, &authority));
+
+        let mut omitted = exact.clone();
+        omitted.pop_first();
+        assert!(!relationships_match_authority(
+            &record, &omitted, &authority
+        ));
+
+        let mut extra = exact.clone();
+        extra.insert(Relationship {
+            kind: "related".into(),
+            target: "CAP-999".into(),
+            source_id: Some("TSK-101".into()),
+        });
+        assert!(!relationships_match_authority(&record, &extra, &authority));
+
+        let mut wrong_kind = exact.clone();
+        let relation = wrong_kind.pop_first().unwrap();
+        wrong_kind.insert(Relationship {
+            kind: "related".into(),
+            ..relation
+        });
+        assert!(!relationships_match_authority(
+            &record,
+            &wrong_kind,
+            &authority
+        ));
+
+        let mut wrong_source = exact.clone();
+        let relation = wrong_source.pop_first().unwrap();
+        wrong_source.insert(Relationship {
+            source_id: Some("TSK-404".into()),
+            ..relation
+        });
+        assert!(!relationships_match_authority(
+            &record,
+            &wrong_source,
+            &authority
+        ));
+    }
+
+    #[test]
+    fn bounded_git_output_aborts_large_blobs_without_deadlock() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repository.path().join("large.bin"),
+            vec![b'x'; 8 * 1024 * 1024],
+        )
+        .unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "large.bin"][..],
+            &["commit", "-q", "-m", "large fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(repository.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let started = Instant::now();
+        let error = git_output_bounded(repository.path(), &["show", "HEAD:large.bin"], None, 1024)
+            .unwrap_err();
+        assert!(error.to_string().contains("byte limit"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn batch_blob_lookup_fails_closed_when_the_local_object_is_missing() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repository.path().join("docs")).unwrap();
+        std::fs::write(repository.path().join("docs/guide.md"), "# Guide\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "docs/guide.md"][..],
+            &["commit", "-q", "-m", "fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(repository.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let commit = git_text_bounded(repository.path(), &["rev-parse", "HEAD"], 1024)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let object = git_text_bounded(
+            repository.path(),
+            &["rev-parse", "HEAD:docs/guide.md"],
+            1024,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+        std::fs::remove_file(
+            repository
+                .path()
+                .join(".git/objects")
+                .join(&object[..2])
+                .join(&object[2..]),
+        )
+        .unwrap();
+        let result = git_batch_blobs(
+            repository.path(),
+            &commit,
+            &["docs/guide.md"],
+            MAX_SOURCE_BYTES,
+            MAX_TOTAL_SOURCE_BYTES,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1877,74 +2452,6 @@ mod tests {
         .is_err());
     }
 
-    #[test]
-    fn last_good_source_requires_an_ancestor_git_blob_and_exact_hash() {
-        fn git(root: &Path, args: &[&str]) -> String {
-            let output = Command::new("git")
-                .args(["-C"])
-                .arg(root)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(output.status.success());
-            String::from_utf8(output.stdout).unwrap()
-        }
-        fn initialize(root: &Path, content: &str) -> String {
-            std::fs::create_dir_all(root.join("docs")).unwrap();
-            std::fs::write(root.join("docs/guide.md"), content).unwrap();
-            git(root, &["init", "-q"]);
-            git(
-                root,
-                &["config", "user.email", "portal-tests@codeflow.invalid"],
-            );
-            git(root, &["config", "user.name", "Portal tests"]);
-            git(root, &["add", "docs/guide.md"]);
-            git(root, &["commit", "-q", "-m", "fixture"]);
-            git(root, &["rev-parse", "HEAD"]).trim().to_owned()
-        }
-
-        let repository = tempfile::tempdir().unwrap();
-        let ancestor = initialize(repository.path(), "---\nid: TSK-0102\n---\n# Valid\n");
-        let ancestor_bytes = std::fs::read(repository.path().join("docs/guide.md")).unwrap();
-        std::fs::write(repository.path().join("docs/guide.md"), "---\nbroken\n").unwrap();
-        git(repository.path(), &["add", "docs/guide.md"]);
-        git(repository.path(), &["commit", "-q", "-m", "break source"]);
-        let current = git(repository.path(), &["rev-parse", "HEAD"])
-            .trim()
-            .to_owned();
-
-        let mut stale = page("docs/guide.md");
-        stale.stale = true;
-        stale.searchable = false;
-        stale.last_good_commit = Some(ancestor);
-        stale.last_good_source_sha256 = Some(sha256_hex(&ancestor_bytes));
-        let mut report = PortalValidationReport::default();
-        verify_last_good_source(repository.path(), &current, &stale, &mut report);
-        assert!(report.is_clean(), "{:?}", report.issues);
-
-        let unrelated = tempfile::tempdir().unwrap();
-        stale.last_good_commit = Some(initialize(unrelated.path(), "# Unrelated\n"));
-        let mut report = PortalValidationReport::default();
-        verify_last_good_source(repository.path(), &current, &stale, &mut report);
-        assert!(report
-            .issues
-            .iter()
-            .any(|issue| issue.contains("not an ancestor")));
-
-        stale.last_good_commit = Some(
-            git(repository.path(), &["rev-list", "--max-parents=0", "HEAD"])
-                .trim()
-                .to_owned(),
-        );
-        stale.last_good_source_sha256 = Some("f".repeat(64));
-        let mut report = PortalValidationReport::default();
-        verify_last_good_source(repository.path(), &current, &stale, &mut report);
-        assert!(report
-            .issues
-            .iter()
-            .any(|issue| issue.contains("hash does not match")));
-    }
-
     #[cfg(unix)]
     #[test]
     fn authority_and_artifact_roots_refuse_parent_symlinks() {
@@ -1952,12 +2459,9 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("task.md"), "---\nid: TSK-777\n---\n").unwrap();
         std::os::unix::fs::symlink(outside.path(), temp.path().join("docs")).unwrap();
-        let authority = collect_ids(temp.path(), &[page("docs/task.md")], &"0".repeat(40));
+        let authority = collect_ids(&[page("docs/task.md")], &BTreeMap::new());
         assert!(!authority.owners.contains_key("TSK-777"));
-        assert!(authority
-            .issues
-            .iter()
-            .any(|issue| issue.contains("traverses a symlink")));
+        assert!(authority.issues.is_empty());
 
         let portal = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), portal.path().join("dist")).unwrap();

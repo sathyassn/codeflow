@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePortalConfig, validatePrimitiveTokens, withBase } from "../scripts/lib.mjs";
 import { collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
+import { GitSnapshot } from "../scripts/git-snapshot.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
@@ -267,6 +268,31 @@ test("unknown symlinks are refused instead of copied into a staged corpus", { sk
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("preserved unknown files fail closed on growth and swap-to-secret races", { skip: process.platform === "win32" }, async () => {
+  const { rename, symlink } = await import("node:fs/promises");
+  for (const race of ["growth", "swap"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-preserve-${race}-`));
+    try {
+      await mkdir(path.join(root, "public"));
+      const preserved = path.join(root, "public/keep.txt");
+      const secret = path.join(root, "secret.txt");
+      await writeFile(preserved, "safe");
+      await writeFile(secret, "DO-NOT-PUBLISH");
+      await assert.rejects(publishOwnedCorpus(root, [
+        { live: "public", preserveUnknown: true, files: new Map([["llms.txt", "new"]]) },
+      ], { testHooks: { afterPreservedOpen: async (source) => {
+        if (source !== preserved) return;
+        if (race === "growth") await writeFile(source, "safe-but-changed");
+        else {
+          await rename(source, `${source}.opened`);
+          await symlink(secret, source);
+        }
+      } } }), /changed while it was being read/);
+      await assert.rejects(readFile(path.join(root, "public/llms.txt")), /ENOENT/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test("symlinked corpus roots and unsafe ownership inventories fail closed", { skip: process.platform === "win32" }, async () => {
   const { symlink } = await import("node:fs/promises");
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-root-symlink-"));
@@ -309,7 +335,36 @@ test("built artifact evidence is deterministic and bounded", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("the adapter preserves exactly one non-searchable last-good page across repeated source failures", async () => {
+test("Git snapshot reads scale by corpus phase and disable configured fsmonitor execution", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-git-snapshot-"));
+  try {
+    await mkdir(path.join(root, "docs"));
+    for (let index = 0; index < 256; index += 1) {
+      await writeFile(path.join(root, `docs/page-${String(index).padStart(3, "0")}.md`), `# Page ${index}\n`);
+    }
+    git(root, ["init", "-q"]);
+    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+    git(root, ["config", "user.name", "CodeFlow portal tests"]);
+    commitFixture(root, "large snapshot fixture");
+    const sentinel = path.join(root, "fsmonitor-ran");
+    const monitor = path.join(root, "monitor.sh");
+    await writeFile(monitor, `#!/bin/sh\nprintf ran > "${sentinel}"\n`);
+    await chmod(monitor, 0o755);
+    git(root, ["config", "core.fsmonitor", monitor]);
+    const commands = [];
+    const snapshot = new GitSnapshot(root, { onCommand: (args) => commands.push(args[0]) });
+    const commit = snapshot.resolveHead();
+    snapshot.loadInventory(commit);
+    const records = snapshot.requireDirectory("docs", "source_root");
+    const blobs = snapshot.readBlobs(records, { perObjectBytes: 1024, totalBytes: 512 * 1024, label: "fixture corpus" });
+    snapshot.assertClean(["docs"]);
+    assert.equal(blobs.size, 256);
+    assert.deepEqual(commands, ["rev-parse", "ls-tree", "cat-file", "status"]);
+    await assert.rejects(readFile(sentinel), /ENOENT/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the adapter emits one bounded non-searchable current-source stub without ancestor content", async () => {
   const root = await portalFixture();
   try {
     const source = path.join(root, "docs/guide.md");
@@ -317,26 +372,32 @@ test("the adapter preserves exactly one non-searchable last-good page across rep
     await writeFile(path.join(root, "docs/target.md"), "---\nid: TSK-102\ntitle: Current target\n---\n\n# Target\n\nThis current page references TSK-101.\n");
     commitFixture(root, "add valid guide");
     runAdapter(root);
+    const prior = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+    assert.match(prior, /Grounded content/);
     await writeFile(source, "---\ntitle: broken\n");
     commitFixture(root, "break guide");
     runAdapter(root);
     const output = path.join(root, "src/content/docs/reference/guide.md");
     const first = await readFile(output, "utf8");
-    assert.equal(first.match(/Stale rendering:/g)?.length, 1);
-    commitFixture(root, "advance snapshot", true);
+    assert.equal(first.match(/Source unavailable:/g)?.length, 1);
+    assert.doesNotMatch(first, /Grounded content|Current target/);
     runAdapter(root);
     const second = await readFile(output, "utf8");
-    assert.equal(second.match(/Stale rendering:/g)?.length, 1);
-    assert.notEqual(second, first);
+    assert.equal(second, first);
     const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
     const stale = evidence.pages.find((page) => page.source_path === "docs/guide.md");
     const target = evidence.pages.find((page) => page.source_path === "docs/target.md");
     assert.equal(stale.stale, true);
     assert.equal(stale.searchable, false);
     assert.deepEqual(stale.snippets, []);
+    assert.deepEqual(stale.ids, []);
+    assert.deepEqual(stale.relationships, []);
+    assert.equal(typeof stale.stale_reason, "string");
+    assert.equal("last_good_commit" in stale, false);
+    assert.equal("last_good_source_sha256" in stale, false);
     assert.deepEqual(target.backlinks, []);
     const targetOutput = await readFile(path.join(root, "src/content/docs/reference/target.md"), "utf8");
-    assert.match(targetOutput, /stale — excluded from the current graph/);
+    assert.doesNotMatch(targetOutput, /stale — excluded from the current graph/);
     assert.doesNotMatch(targetOutput, /### Inverse links/);
     const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
     assert.doesNotMatch(landing, /Guide/);
@@ -357,6 +418,8 @@ test("the adapter refuses config and output symlinks without changing their targ
     await symlink(outsideConfig, path.join(configRoot, "portal.config.json"));
     assert.match(runAdapter(configRoot, false).stderr, /symlink refused|must match HEAD exactly/);
 
+    await writeFile(path.join(outputRoot, "docs/guide.md"), "# Guide\n");
+    commitFixture(outputRoot, "add output fixture source");
     const sentinel = path.join(outputRoot, "sentinel.txt");
     await writeFile(sentinel, "safe");
     await mkdir(path.join(outputRoot, "public"));
@@ -369,7 +432,7 @@ test("the adapter refuses config and output symlinks without changing their targ
   }
 });
 
-test("the adapter rejects reserved routes and non-UTF-8 source bytes", async () => {
+test("the adapter rejects reserved routes and stubs non-UTF-8 source bytes", async () => {
   const reservedRoot = await portalFixture();
   const encodingRoot = await portalFixture();
   try {
@@ -378,7 +441,10 @@ test("the adapter rejects reserved routes and non-UTF-8 source bytes", async () 
     assert.match(runAdapter(reservedRoot, false).stderr, /reserved generated route/);
     await writeFile(path.join(encodingRoot, "docs/binary.md"), Buffer.from([0xff, 0xfe, 0xfd]));
     commitFixture(encodingRoot, "binary source");
-    assert.match(runAdapter(encodingRoot, false).stderr, /not valid UTF-8/);
+    runAdapter(encodingRoot);
+    const stub = await readFile(path.join(encodingRoot, "src/content/docs/reference/binary.md"), "utf8");
+    assert.match(stub, /Source unavailable:/);
+    assert.doesNotMatch(stub, /data-pagefind-body|data-codeflow-search-root/);
   } finally {
     await rm(reservedRoot, { recursive: true, force: true });
     await rm(encodingRoot, { recursive: true, force: true });
@@ -449,6 +515,54 @@ test("a source-root pathspec does not capture a similarly prefixed ignored direc
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("source roots are committed directories with publishable Markdown", async () => {
+  for (const scenario of ["file", "no-markdown"]) {
+    const root = await portalFixture();
+    try {
+      const configPath = path.join(root, "portal.config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      if (scenario === "file") {
+        await writeFile(path.join(root, "README.md"), "# Root file\n");
+        config.source_roots = ["README.md"];
+      } else {
+        await writeFile(path.join(root, "docs/notes.txt"), "not Markdown\n");
+      }
+      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      commitFixture(root, `source root ${scenario}`);
+      assert.match(runAdapter(root, false).stderr, scenario === "file" ? /committed directory, not a file/ : /no publishable Markdown/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("monorepo source roots produce one deterministic global-to-area route graph", async () => {
+  const root = await portalFixture();
+  try {
+    await mkdir(path.join(root, "apps/web/docs"), { recursive: true });
+    await mkdir(path.join(root, "services/api/docs"), { recursive: true });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n");
+    await writeFile(path.join(root, "apps/web/docs/journey.md"), "# Web journey\n");
+    await writeFile(path.join(root, "services/api/docs/contract.md"), "# API contract\n");
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.source_roots = ["docs", "apps/web/docs", "services/api/docs"];
+    config.layers = [
+      { id: "orient", label: "Orient", description: "Global", paths: ["docs/product.md"] },
+      { id: "web", label: "Web", description: "Web surface", prefixes: ["apps/web/docs"] },
+      { id: "api", label: "API", description: "API area", prefixes: ["services/api/docs"] },
+      { id: "reference", label: "Reference", description: "Reference", fallback: true },
+    ];
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    commitFixture(root, "monorepo route fixture");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.deepEqual(evidence.pages.map(({ source_path, route }) => [source_path, route]), [
+      ["apps/web/docs/journey.md", "web/apps/web/docs/journey"],
+      ["docs/product.md", "orient/product"],
+      ["services/api/docs/contract.md", "api/services/api/docs/contract"],
+    ]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("generated strict-ID previews are source-grounded and keyboard-native", async () => {
   const root = await portalFixture();
   try {
@@ -475,15 +589,24 @@ test("pinned source links use known provider routes and fall back visibly", asyn
       const configPath = path.join(root, "portal.config.json");
       const config = JSON.parse(await readFile(configPath, "utf8"));
       config.repository_url = repositoryUrl;
+      config.exclude = ["docs/excluded.md"];
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-      await writeFile(path.join(root, "docs/guide (one).md"), "# Guide\n");
+      await writeFile(path.join(root, "docs/excluded.md"), "# Excluded but committed\n");
+      await writeFile(path.join(root, "docs/guide (one).md"), "# Guide\n\n[Excluded source](excluded.md)\n\n[Excluded reference][excluded]\n\n[excluded]: excluded.md\n");
       commitFixture(root, "configure source provider");
       const commit = git(root, ["rev-parse", "HEAD"]).trim();
       runAdapter(root);
       const output = await readFile(path.join(root, "src/content/docs/reference/guide%20%28one%29.md"), "utf8");
       assert.match(output, /<code>docs\/guide \(one\)\.md<\/code> at <code>[a-f0-9]{12}<\/code>/);
-      if (expected === null) assert.doesNotMatch(output, new RegExp(`${repositoryUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`));
-      else assert.match(output, new RegExp(`${expected.replaceAll("/", "\\/")}${commit}\\/docs\\/guide%20%28one%29\\.md`));
+      if (expected === null) {
+        assert.doesNotMatch(output, /<a[^>]+>Excluded source<\/a>/);
+        assert.match(output, /Excluded source \(<code>docs\/excluded\.md<\/code> at <code>[a-f0-9]{12}<\/code>\)/);
+        assert.match(output, /Excluded reference \(<code>docs\/excluded\.md<\/code> at <code>[a-f0-9]{12}<\/code>\)/);
+      } else {
+        assert.match(output, new RegExp(`${expected.replaceAll("/", "\\/")}${commit}\\/docs\\/guide%20%28one%29\\.md`));
+        assert.match(output, new RegExp(`${expected.replaceAll("/", "\\/")}${commit}\\/docs\\/excluded\\.md`));
+        assert.match(output, /Excluded reference/);
+      }
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 });
@@ -515,17 +638,16 @@ test("source and configuration metadata cannot inject active generated Markdown"
     const stale = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
     const staleBody = stale.slice(stale.indexOf("---", 4) + 3);
     assert.doesNotMatch(staleBody, /<script>|!\[probe\]\(https:|data-pagefind-body|data-codeflow-search-root/);
-    assert.match(staleBody, /Stale rendering:/);
+    assert.match(staleBody, /Source unavailable:/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("stale output is reconstructed from an authenticated ancestor, never prior generated bytes", async () => {
+test("stale output never republishes authenticated ancestors or forged prior generated bytes", async () => {
   const root = await portalFixture();
   try {
     const source = path.join(root, "docs/guide.md");
     await writeFile(source, "---\nid: TSK-0102\ntitle: Authenticated guide\n---\n\n# Safe ancestor\n\nGrounded content.\n");
     commitFixture(root, "add valid ancestor");
-    const ancestor = git(root, ["rev-parse", "HEAD"]).trim();
     runAdapter(root);
     const output = path.join(root, "src/content/docs/reference/guide.md");
     await writeFile(output, "<script>globalThis.pwned=1</script><img src=https://attacker.invalid/pixel.png>");
@@ -540,9 +662,9 @@ test("stale output is reconstructed from an authenticated ancestor, never prior 
     commitFixture(root, "break current source");
     runAdapter(root);
     const stale = await readFile(output, "utf8");
-    assert.match(stale, /# Safe ancestor/);
-    assert.match(stale, new RegExp(`codeflow-last-good-provenance source_sha256=[a-f0-9]{64} built_from_commit=${ancestor}`));
-    assert.doesNotMatch(stale, /globalThis\.pwned|<img|attacker\.invalid|built_from_commit=f{40}/);
+    assert.match(stale, /Source unavailable:/);
+    assert.match(stale, /the previous version of this page is not shown/);
+    assert.doesNotMatch(stale, /# Safe ancestor|Grounded content|globalThis\.pwned|<img|attacker\.invalid|built_from_commit=f{40}|codeflow-last-good-provenance/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -552,7 +674,7 @@ test("the AST adapter rewrites cross-layer documents and copies bounded committe
     await mkdir(path.join(root, "docs/decisions"), { recursive: true });
     await mkdir(path.join(root, "docs/media"), { recursive: true });
     await writeFile(path.join(root, "docs/decisions/ADR-0001.md"), "---\nid: ADR-0001\ntitle: Decision\n---\n\n# Decision\n");
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const png = pngHeader(1, 1);
     await writeFile(path.join(root, "docs/media/flow.png"), png);
     await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\n[Decision](decisions/ADR-0001.md#outcome)\n\n![Flow](media/flow.png)\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n`[literal](missing.md)`\n");
     commitFixture(root, "add AST fixture");
@@ -565,6 +687,23 @@ test("the AST adapter rewrites cross-layer documents and copies bounded committe
     assert.match(rendered, /\| A \| B \|/);
     assert.match(rendered, /`\[literal\]\(missing\.md\)`/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the adapter rejects raster truncation, type mismatch, and dimension bombs", async () => {
+  for (const [name, bytes, expected] of [
+    ["truncated.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), /truncated or invalid/],
+    ["mismatch.jpg", pngHeader(1, 1), /do not match the approved raster type/],
+    ["bomb.png", pngHeader(8192, 8192), /dimensions exceed the portal limit/],
+  ]) {
+    const root = await portalFixture();
+    try {
+      await mkdir(path.join(root, "docs/media"));
+      await writeFile(path.join(root, `docs/media/${name}`), bytes);
+      await writeFile(path.join(root, "docs/guide.md"), `# Guide\n\n![Fixture](media/${name})\n`);
+      commitFixture(root, `add ${name}`);
+      assert.match(runAdapter(root, false).stderr, expected);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("the AST adapter fails broken documents and repository traversal", async () => {
@@ -624,4 +763,14 @@ function runAdapter(root, expectSuccess = true) {
   if (expectSuccess) assert.equal(result.status, 0, result.stderr);
   else assert.notEqual(result.status, 0, result.stdout);
   return result;
+}
+
+function pngHeader(width, height) {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
 }

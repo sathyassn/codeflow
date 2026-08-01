@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-02-presentation-docs-portal-v1",
+  "requirements_version": "2026-08-02-presentation-docs-portal-v2",
   "requirements": [
     {
       "id": "CF-DES-001",
@@ -1010,14 +1010,15 @@
     {
       "id": "CF-PORTAL-003",
       "level": "hard",
-      "statement": "Only one clean committed snapshot may be called current; dirty, staged, deleted, untracked, ignored, inaccessible, changing, or unverifiable configuration/runtime/source/token/media input blocks publication, while retained last-good pages and graph edges are visibly stale and excluded from current search, indexes, inverse links, and agent-readable listings.",
+      "statement": "Only one clean committed snapshot may be called current; dirty, staged, deleted, untracked, ignored, inaccessible, changing, or unverifiable configuration/runtime/source/token/media input blocks publication. A current committed Markdown blob that cannot parse receives only a bounded visible error page at its stable route, with no IDs, relationships, backlinks, snippets, status, preview, search entry, or normal agent-readable listing; history and prior generated output are never republished.",
       "sources": [
         {
           "path": ".agents/skills/cf-docs-portal/references/content-contract.md",
           "markers": [
             "Build only from one clean, full Git commit",
             "Never label worktree bytes with `HEAD`",
-            "exclude it from search"
+            "emit only a bounded visible",
+            "Never walk Git history"
           ]
         }
       ]
@@ -1038,6 +1039,30 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "Non-adopters receive no portal gate"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-005",
+      "level": "hard",
+      "statement": "Repository-guide information architecture defaults to one authoritative source graph and one portal: a single project progresses from concept through capability or journey, system or area, and technical evidence; a monorepo retains global orientation and shared concepts before meaningful surface/area drill-down through multiple source roots and layer paths. A second portal requires a material audience/access, independent release/version, ownership/lifecycle, or measured scale boundary; tiny repositories are refused, and package/team count never justifies folder-dump navigation or duplicated prose.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/references/information-architecture.md",
+          "markers": [
+            "Default: one source graph, one portal",
+            "Single-project repository",
+            "Monorepo",
+            "When to split",
+            "folder-per-package navigation dump"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/SKILL.md",
+          "markers": [
+            "before choosing source roots, layers, or more than one portal",
+            "global orientation and shared concepts above area or surface drill-down"
           ]
         }
       ]

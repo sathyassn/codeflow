@@ -78,8 +78,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dogfoods the optional utility under `docs-portal/`. The pinned GFM adapter
   now requires one clean committed runtime/source/media snapshot, reads source
   claims from bounded Git blobs, detects index-masked worktree changes, rebuilds
-  stale pages only from authenticated ancestor source, uses bounded no-follow
-  reads and locale-independent ordering, neutralizes derived metadata, and
+  broken-source routes as bounded non-searchable current-source error pages
+  without walking or republishing history, uses bounded batched Git reads,
+  stable no-follow publication copies, raster-dimension limits, and
+  locale-independent ordering, neutralizes derived metadata, and
   publishes under recoverable corpus and whole-workflow leases (ADR-0048,
   CAP-015).
 

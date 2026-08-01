@@ -27,6 +27,7 @@ quick-xml = "0.41"
 regex = "1"
 git2 = { version = "0.21", default-features = false }
 fs2 = "0.4"
+same-file = "1.0.6"
 rusqlite = { version = "0.37", features = ["bundled"] }
 ulid = "1"
 tokio = { version = "1", features = ["process", "time", "rt-multi-thread", "macros"] }

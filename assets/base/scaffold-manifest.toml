@@ -430,6 +430,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-docs-portal/references/information-architecture.md"
+dest = ".claude/skills/cf-docs-portal/references/information-architecture.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-docs-portal/agents/openai.yaml"
 dest = ".claude/skills/cf-docs-portal/agents/openai.yaml"
 ownership = "managed"
@@ -684,6 +690,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/references/operations.md"
 dest = ".agents/skills/cf-docs-portal/references/operations.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/information-architecture.md"
+dest = ".agents/skills/cf-docs-portal/references/information-architecture.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

@@ -42,22 +42,26 @@ commit, compares the adopted runtime and configuration with that commit through
 bounded, no-follow file handles, parses GFM structurally, refuses active or
 remote source content, and publishes generated directories through a
 recoverable single-writer transaction. Git pathspecs are top-anchored and
-literal, and blob comparison defeats index flags that hide worktree changes. A
-stale rendering is reconstructed only from a successfully parsed bounded blob
-at an authenticated ancestor commit; prior generated output and evidence are
-never an input authority. A workflow lease spans adapter, renderer, and final
-evidence collection so a concurrent build cannot bind output to a different
-snapshot.
+literal, and blob comparison defeats index flags that hide worktree changes.
+The adapter inventories the commit once and reads source/media objects in
+bounded batches with prompts, lazy fetching, fsmonitor, pagers, optional locks,
+and inherited Git redirection disabled. If one current source cannot parse, its
+route contains only a small visible error page for that current blob. It has no
+active identities or relationships and is absent from search, previews, and
+normal current-content indexes. The adapter never walks history or republishes
+ancestor or prior generated content. A workflow lease spans adapter, renderer,
+and final evidence collection so a concurrent build cannot bind output to a
+different snapshot.
 Ordering is defined by one locale-independent comparator. The adapter emits a
 versioned evidence manifest beside disposable build data. The new
 `codeflow validate --portal <portal-root>` path performs no writes and executes
 no project code. Rust validates only claims that can be checked independently
 against repository and output bytes: schema and size limits, safe relative
 paths, source and line-range snippet hashes, existing strict IDs, unique
-routes, declared and derived relationship consistency, stale-page search
-exclusion, pinned commit/version/source metadata, exact ancestor-source hashes,
-signature-checked raster media, covered output pages, per-page Markdown twins,
-and `llms.txt`. Rendering
+routes, exact source-derived identities and forward relationships, derived
+backlink consistency, error-page exclusion, pinned commit/version/source
+metadata, bounded raster headers/dimensions, covered output pages, per-page
+Markdown twins, and `llms.txt`. Rendering
 and graph-generation semantics remain in the exact-pinned Node build and test
 lanes; Rust does not implement a second content graph.
 
@@ -103,3 +107,13 @@ The scaffold area gains a single-instance, opt-in managed bundle backed by an
 embedded non-scaffold asset source. The engine validation area gains a bounded
 portal evidence-manifest verifier; the generated graph and frontend stay in the
 isolated Node utility.
+
+## Update — 2026-08-01: current-source failure boundary
+
+The task-level Claude and Codex architecture/security checkpoint rejected
+automatic ancestor-page recovery. Although an ancestor can be authenticated,
+republishing it can disclose content deliberately removed later, preserve links
+that no longer resolve, and make a current route look semantically usable when
+its current source is broken. Plan v3 therefore adopts the bounded current-source
+error-page behavior above. This changes an unshipped `building` capability; no
+legacy evidence compatibility path is retained.

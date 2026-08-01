@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-08-02-presentation-docs-portal-v1",
+  "cases_version": "2026-08-02-presentation-docs-portal-v2",
   "full_trials": 3,
   "cases": [
     {
@@ -922,6 +922,44 @@
       }
     },
     {
+      "id": "docs-portal-broken-current-source-is-a-bounded-stub",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-broken-current-source",
+      "requirements": [
+        "CF-PORTAL-003"
+      ],
+      "prompt": "The adopted portal is building from a clean commit whose guide Markdown cannot parse. Decide what may be emitted for that route and what graph, search, preview, and history behavior is allowed. Do not edit files.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "stable_route_retained",
+          "bounded_visible_current_source_error",
+          "current_blob_hash_and_commit_retained",
+          "ids_relationships_backlinks_snippets_and_status_cleared",
+          "search_preview_and_normal_llms_excluded",
+          "healthy_sibling_pages_continue",
+          "history_never_walked_or_republished"
+        ],
+        "references": [
+          ".codeflow/docs-portal.json",
+          "docs/guide.md",
+          "docs/healthy.md"
+        ],
+        "must_not": [
+          "ancestor_content_republished",
+          "prior_generated_output_trusted",
+          "broken_page_called_current_content",
+          "stale_identity_kept_active",
+          "whole_build_aborted_for_one_parse_error"
+        ]
+      }
+    },
+    {
       "id": "docs-portal-declines-tiny-repository",
       "kind": "regression",
       "category": "documentation-portal",
@@ -972,8 +1010,8 @@
           "dirty_snapshot_detected",
           "publication_blocked",
           "head_not_applied_to_worktree_bytes",
-          "last_good_is_visibly_stale",
-          "stale_excluded_from_current_graph_search_and_llms"
+          "prior_output_not_current_authority",
+          "no_history_or_generated_content_republication"
         ],
         "references": [
           ".codeflow/docs-portal.json",
@@ -982,8 +1020,119 @@
         "must_not": [
           "publish_dirty_snapshot",
           "claim_current_head",
-          "silent_stale_page",
-          "stale_backlink_counted_current"
+          "serve_prior_page_as_current",
+          "walk_history_for_content"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-monorepo-global-to-area-drilldown",
+      "kind": "capability",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-monorepo-ia",
+      "requirements": [
+        "CF-PORTAL-005"
+      ],
+      "prompt": "Design the repository-guide information architecture for this web, iOS, Android, backend, and infrastructure monorepo. State the portal count, source-root/layer approach, shared-to-area navigation, and source/version implications. Do not implement.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "one_authoritative_cross_area_graph",
+          "one_portal_default",
+          "global_orientation_and_shared_journeys_first",
+          "surface_and_owned_area_drilldown",
+          "multiple_source_roots_and_explicit_layer_paths",
+          "cross_area_edges_preserve_identity",
+          "pinned_source_and_repository_version_context"
+        ],
+        "references": [
+          "docs/product.md",
+          "docs/architecture.md",
+          "apps/web/README.md",
+          "apps/ios/README.md",
+          "services/api/README.md",
+          "infra/README.md"
+        ],
+        "must_not": [
+          "package_folder_dump",
+          "portal_per_team",
+          "shared_prose_duplicated",
+          "repository_layout_required_for_orientation"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-refuses-unjustified-split",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-unjustified-split",
+      "requirements": [
+        "CF-PORTAL-005"
+      ],
+      "prompt": "Review the proposal to create one documentation portal per package because the monorepo has many teams and a long sidebar. Decide whether to split and identify the evidence that could justify revisiting the decision. Do not implement.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "unjustified_split_refused",
+          "team_and_package_count_not_material_boundary",
+          "layering_and_search_tried_first",
+          "split_requires_audience_access_release_ownership_or_measured_scale",
+          "shared_authority_remains_single"
+        ],
+        "references": [
+          "PORTAL_PROPOSAL.md",
+          "docs/product.md"
+        ],
+        "must_not": [
+          "portal_per_package",
+          "portal_per_team",
+          "duplicate_shared_docs",
+          "split_for_sidebar_length_alone"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-single-project-information-architecture",
+      "kind": "capability",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-single-project-ia",
+      "requirements": [
+        "CF-PORTAL-005"
+      ],
+      "prompt": "Propose the source roots, layers, and navigation for this durable single-product repository. Decide whether one portal is sufficient and explain the authority boundary. Do not implement.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "one_authoritative_graph",
+          "one_portal_default",
+          "concept_to_journey_to_system_to_reference",
+          "stable_meaning_based_routes",
+          "shared_prose_linked_not_copied",
+          "pinned_source_and_version_context"
+        ],
+        "references": [
+          "docs/product.md",
+          "docs/journeys.md",
+          "docs/architecture.md",
+          "project-management/tasks/TSK-201.md"
+        ],
+        "must_not": [
+          "folder_tree_as_information_architecture",
+          "second_content_authority",
+          "duplicated_concept_prose",
+          "unjustified_portal_split"
         ]
       }
     },

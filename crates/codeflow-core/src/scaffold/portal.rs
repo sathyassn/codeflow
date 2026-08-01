@@ -152,6 +152,13 @@ where
 }
 
 /// Adopt or reconcile the embedded portal starter beneath `portal_root`.
+///
+/// # Errors
+///
+/// Returns an error when the repository is not initialized, the selected path
+/// is unsafe, the embedded bundle/state is invalid, or a managed update cannot
+/// be applied without violating the never-clobber contract.
+#[allow(clippy::too_many_lines)] // One transactional reconciliation pipeline; splitting would obscure rollback/state ordering.
 pub fn setup_portal(
     source: &dyn AssetSource,
     repo_root: &Path,
@@ -336,6 +343,10 @@ pub fn setup_portal(
 }
 
 /// Reconcile an adopted portal during ordinary `codeflow update`.
+///
+/// # Errors
+///
+/// Returns an error when adoption state is invalid or reconciliation fails.
 pub fn update_adopted_portal(
     source: &dyn AssetSource,
     repo_root: &Path,
@@ -355,15 +366,13 @@ fn reconcile_managed(
     read_budget: &mut ReadBudget,
     report: &mut Report,
 ) -> Result<(), ScaffoldError> {
-    let current_bytes =
-        match read_project_file(root, dest_text, "managed portal file", read_budget)? {
-            Some(value) => value,
-            None => {
-                write_beneath_root(root, dest_text, pristine.as_bytes())?;
-                report.file(dest_text, Action::Added);
-                return Ok(());
-            }
-        };
+    let Some(current_bytes) =
+        read_project_file(root, dest_text, "managed portal file", read_budget)?
+    else {
+        write_beneath_root(root, dest_text, pristine.as_bytes())?;
+        report.file(dest_text, Action::Added);
+        return Ok(());
+    };
     let current =
         String::from_utf8(current_bytes).map_err(|error| ScaffoldError::InvalidState {
             what: dest_text.into(),
@@ -599,7 +608,6 @@ fn validate_portal_root(path: &Path) -> Result<PathBuf, ScaffoldError> {
         .components()
         .filter_map(|component| match component {
             Component::Normal(part) => Some(part),
-            Component::CurDir => None,
             _ => None,
         })
         .collect();
@@ -681,12 +689,13 @@ fn read_bounded_regular_with_hook(
     }
     let file = options.open(path)?;
     let opened = file.metadata()?;
-    if !opened.is_file() || !same_file_identity(&before, &opened) || opened.len() > maximum_bytes {
+    if !opened.is_file() || opened.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "file changed identity or type while opening",
         ));
     }
+    let opened_identity = same_file::Handle::from_file(file.try_clone()?)?;
     after_open()?;
     let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or(0));
     file.take(maximum_bytes.saturating_add(1))
@@ -698,12 +707,13 @@ fn read_bounded_regular_with_hook(
         ));
     }
     let after = std::fs::symlink_metadata(path)?;
+    let linked_identity = same_file::Handle::from_path(path)?;
     if after.file_type().is_symlink()
         || !after.is_file()
-        || !same_file_identity(&opened, &after)
+        || opened_identity != linked_identity
         || opened.len() != bytes.len() as u64
         || opened.len() != after.len()
-        || opened.modified()? != after.modified()?
+        || !stable_metadata(&opened, &after)?
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -713,17 +723,17 @@ fn read_bounded_regular_with_hook(
     Ok(bytes)
 }
 
-#[cfg(unix)]
-fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(windows)]
-fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+fn stable_metadata(left: &std::fs::Metadata, right: &std::fs::Metadata) -> std::io::Result<bool> {
+    if left.modified()? != right.modified()? {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(left.ctime() == right.ctime() && left.ctime_nsec() == right.ctime_nsec())
+    }
+    #[cfg(not(unix))]
+    Ok(true)
 }
 
 fn validate_asset_path(path: &str) -> Result<(), ScaffoldError> {
@@ -844,7 +854,7 @@ mod tests {
 
         std::fs::write(
             temp.path().join(STATE_PATH),
-            vec![b'x'; MAX_STATE_BYTES as usize + 1],
+            vec![b'x'; usize::try_from(MAX_STATE_BYTES).unwrap() + 1],
         )
         .unwrap();
         assert!(update_adopted_portal(&source("1.0.0", "one\n"), temp.path()).is_err());
@@ -852,7 +862,7 @@ mod tests {
 
     #[test]
     fn reconciliation_refuses_oversized_current_baseline_and_retired_files() {
-        let oversized = vec![b'x'; MAX_MANAGED_FILE_BYTES as usize + 1];
+        let oversized = vec![b'x'; usize::try_from(MAX_MANAGED_FILE_BYTES).unwrap() + 1];
 
         let current = initialized_root();
         setup_portal(

@@ -752,11 +752,13 @@ clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
 literal Git pathspecs, committed-blob authority, locale-independent ordering,
 workflow lease, and recoverable publication transaction fail closed before
 mixed or active content can be claimed. Index flags cannot hide changed
-runtime or configuration bytes, and stale output is reconstructed only from a
-verified ancestor source blob rather than previous generated data.
+runtime or configuration bytes. A broken current Markdown blob yields only a
+bounded, visible, non-searchable current-source error page; Git history and
+previous generated data are never republished.
 `codeflow validate --portal <directory>` executes no project code and writes
-nothing; it independently checks bounded path, hash, identity, relationship,
-staleness, provenance, version, raster-media, output-coverage, twin, and
+nothing; it independently checks bounded path, hash, exact source-derived
+identity/relationship, error-page, provenance, version, raster-dimension,
+output-coverage, twin, and
 `llms.txt` claims.
 
 The mirrored `cf-docs-portal` skill owns proportional adoption, layered
