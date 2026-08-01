@@ -668,7 +668,9 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             .map(|page| {
                 format!(
                     "- [{}](./markdown/{}.md) — {}",
-                    page.route, page.route, page.source_path
+                    escape_markdown_inline(&page.route),
+                    page.route,
+                    escape_markdown_inline(&page.source_path)
                 )
             })
             .collect();
@@ -765,6 +767,39 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
     }
     report
+}
+
+fn escape_markdown_inline(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut replacing_spacing = false;
+    for character in value.chars() {
+        if matches!(character, '\r' | '\n' | '\t') {
+            if !replacing_spacing {
+                normalized.push(' ');
+                replacing_spacing = true;
+            }
+        } else {
+            normalized.push(character);
+            replacing_spacing = false;
+        }
+    }
+
+    let mut escaped = String::with_capacity(normalized.len());
+    for character in normalized.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\\' | '`' | '*' | '_' | '[' | ']' | '{' | '}' | '(' | ')' | '#' | '+' | '.' | '!' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            ':' => escaped.push_str("&#58;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn verify_config_contract(portal: &Path, evidence: &Evidence, report: &mut PortalValidationReport) {
@@ -2156,6 +2191,14 @@ mod tests {
         }
         assert!(!safe_path_text(&format!("docs/{}", "é".repeat(128))));
         assert!(safe_path_text(&format!("docs/{}", "é".repeat(127))));
+    }
+
+    #[test]
+    fn llms_markdown_escaping_matches_the_adapter_contract() {
+        assert_eq!(
+            escape_markdown_inline("docs/a.b_[c]:d&<e>\t\nnext"),
+            r"docs/a\.b\_\[c\]&#58;d&amp;&lt;e&gt; next"
+        );
     }
 
     #[test]
