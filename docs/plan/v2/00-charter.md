@@ -14,6 +14,13 @@
 
 **It is not:** a harness, an agent framework, an orchestrator, a model router, a GUI, a daemon, or a process-enforcement engine. Claude Code's native primitives (subagents, workflows, worktrees, tasks, memory, sandbox, permissions) are consumed, never reimplemented.
 
+> **Superseding scope note (2026-08-01):** ADR-0049 may authorize the bounded
+> `cf-present` review document from SPC-004: one explicit, loopback-only,
+> per-session browser surface and self-terminating service. This narrow utility
+> does not make CodeFlow a general GUI, application shell, remote server,
+> persistent daemon, harness, or model router. The current product boundary in
+> `docs/product.md` controls.
+
 **Why v2 (one paragraph):** v1 was built when models needed every step supervised. Its substrate (PathFlow phases, sentinels, checkpoints, 8-agent role teams, CRDT claims, custom autorun, worktree manager — ~100K+ LOC) was absorbed by native harness features during the four months it was being built, and its own telemetry showed maintenance consuming all capacity (17 of the last 21 epics were fixes to itself). Fable-class models invert the design center: the scarce resources are **clear inputs** and **verified outputs**, not supervised middles.
 
 ---
