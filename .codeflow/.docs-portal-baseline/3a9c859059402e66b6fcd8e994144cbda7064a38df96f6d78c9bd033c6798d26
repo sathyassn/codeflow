@@ -137,7 +137,7 @@ body { text-wrap: pretty; }
 .portal-journey span { color: var(--sl-color-accent); font-variant-numeric: tabular-nums; }
 .portal-journey strong { color: var(--sl-color-white); font-size: var(--sl-text-lg); }
 .portal-journey small { color: var(--sl-color-gray-2); line-height: 1.5; }
-.portal-journey em { color: var(--sl-color-gray-3); font-size: var(--sl-text-xs); font-style: normal; white-space: nowrap; }
+.portal-journey em { color: var(--sl-color-gray-2); font-size: var(--sl-text-xs); font-style: normal; white-space: nowrap; }
 .portal-journey a:hover strong { color: var(--sl-color-accent-high); }
 @media (max-width: 42rem) {
   .portal-journey a { grid-template-columns: 2.5rem 1fr; }
