@@ -432,7 +432,8 @@ bounded Git blobs, while current runtime/configuration bytes must match their
 committed blobs even when index flags hide worktree changes. It parses GFM
 through a syntax tree and publishes all generated roots transactionally under
 one workflow lease with locale-independent ordering. Commit inventory and blob
-reads are batched and bounded; Git prompts, lazy fetching, fsmonitor, pagers,
+reads are batched and bounded; Git receives only a small non-secret environment
+allowlist, and prompts, lazy fetching, replacement objects, fsmonitor, pagers,
 optional locks, and inherited redirection are disabled. A broken current source
 gets only a bounded visible error page at its stable route, outside the active
 graph, search, previews, and current-content indexes; history is never walked

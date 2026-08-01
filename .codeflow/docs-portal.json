@@ -41,7 +41,7 @@
     },
     "scripts/git-snapshot.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "27059fc769e5e414260dba06312748ff550b0d01ead9100102cc2c4912565492"
+      "pristine_sha256": "1bc2c02d30a6f2e847b3b6ef05eb3ed32a17ebd18916dc4d77c05381c2f6ae7a"
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
@@ -65,7 +65,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "c5fbc817d7d4796b61bddccf46a996d21c9f99cecb436c26bfb3f2b78604585e"
+      "pristine_sha256": "361166d90f2288be7ed13768f44381beeb2bac1faff434d51dde3273f8a6618f"
     },
     "tsconfig.json": {
       "ownership": "managed",

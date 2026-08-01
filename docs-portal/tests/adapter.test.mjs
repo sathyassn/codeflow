@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePortalConfig, validatePrimitiveTokens, withBase } from "../scripts/lib.mjs";
 import { collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
-import { GitSnapshot } from "../scripts/git-snapshot.mjs";
+import { GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
@@ -362,6 +362,25 @@ test("Git snapshot reads scale by corpus phase and disable configured fsmonitor 
     assert.deepEqual(commands, ["rev-parse", "ls-tree", "cat-file", "status"]);
     await assert.rejects(readFile(sentinel), /ENOENT/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Git snapshot child environments exclude inherited credentials and injection controls", () => {
+  const environment = hardenedGitEnvironment({
+    PATH: "/safe/bin",
+    TMPDIR: "/safe/tmp",
+    AWS_SECRET_ACCESS_KEY: "aws-canary",
+    OPENAI_API_KEY: "openai-canary",
+    ANTHROPIC_API_KEY: "anthropic-canary",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.fsmonitor",
+    GIT_CONFIG_VALUE_0: "/tmp/attacker",
+    LD_PRELOAD: "/tmp/inject.so",
+  });
+  assert.equal(environment.PATH, "/safe/bin");
+  assert.equal(environment.TMPDIR, "/safe/tmp");
+  for (const key of ["AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "LD_PRELOAD"]) {
+    assert.equal(key in environment, false, `${key} escaped the child-environment allowlist`);
+  }
 });
 
 test("the adapter emits one bounded non-searchable current-source stub without ancestor content", async () => {

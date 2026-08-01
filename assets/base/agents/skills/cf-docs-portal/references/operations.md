@@ -64,8 +64,11 @@ owned, long-running session: run only one task-owned dev server per portal,
 stop it before a locked check/build, and verify process and port teardown.
 
 Repository reads use a bounded commit inventory plus batched blob reads rather
-than one process per source. Git runs without fsmonitor, prompts, lazy fetching,
-optional locks, pagers, or inherited repository/config redirection. Missing
-local objects, output overflow, and timeouts fail closed. Unknown public files
+than one process per source. Git receives only an explicit process-environment
+allowlist; model, cloud, credential, loader-injection, and Git configuration
+variables are never inherited. It runs without fsmonitor, prompts, lazy
+fetching, replacement objects, optional locks, pagers, or inherited
+repository/config redirection. Missing local objects, output overflow, and
+timeouts fail closed. Unknown public files
 are preserved only through stable no-follow handles with actual-byte accounting;
 a file that grows or changes identity during the copy aborts publication.

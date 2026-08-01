@@ -45,7 +45,10 @@ recoverable single-writer transaction. Git pathspecs are top-anchored and
 literal, and blob comparison defeats index flags that hide worktree changes.
 The adapter inventories the commit once and reads source/media objects in
 bounded batches with prompts, lazy fetching, fsmonitor, pagers, optional locks,
-and inherited Git redirection disabled. If one current source cannot parse, its
+replacement objects, and inherited Git redirection disabled. Git subprocesses
+receive only a small non-secret process-environment allowlist; model, cloud,
+credential, loader-injection, and Git configuration variables are excluded. If
+one current source cannot parse, its
 route contains only a small visible error page for that current blob. It has no
 active identities or relationships and is absent from search, previews, and
 normal current-content indexes. The adapter never walks history or republishes

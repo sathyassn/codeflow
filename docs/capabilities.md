@@ -752,7 +752,9 @@ clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
 literal Git pathspecs, committed-blob authority, locale-independent ordering,
 workflow lease, and recoverable publication transaction fail closed before
 mixed or active content can be claimed. Index flags cannot hide changed
-runtime or configuration bytes. A broken current Markdown blob yields only a
+runtime or configuration bytes. Git subprocesses receive only a small
+non-secret environment allowlist; inherited credential, loader, and Git
+configuration variables never cross the boundary. A broken current Markdown blob yields only a
 bounded, visible, non-searchable current-source error page; Git history and
 previous generated data are never republished.
 `codeflow validate --portal <directory>` executes no project code and writes

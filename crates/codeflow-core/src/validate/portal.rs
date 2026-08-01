@@ -1,6 +1,7 @@
 //! Read-only verification of documentation-portal evidence claims.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1622,7 +1623,10 @@ fn hardened_git(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_clear()
+        .envs(allowed_git_environment(std::env::vars_os()))
         .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -1633,22 +1637,32 @@ fn hardened_git(
         .env("GIT_PAGER", "cat")
         .env("PAGER", "cat")
         .env("LC_ALL", "C");
-    for name in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_KEY_0",
-        "GIT_CONFIG_VALUE_0",
-        "GIT_EXTERNAL_DIFF",
-        "GIT_DIFF_OPTS",
-    ] {
-        command.env_remove(name);
-    }
     command.spawn()
+}
+
+fn allowed_git_environment(
+    source: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    const ALLOWED: [&str; 7] = [
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "PATHEXT",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+    ];
+    source
+        .into_iter()
+        .filter(|(name, value)| {
+            !value.is_empty()
+                && name.to_str().is_some_and(|name| {
+                    ALLOWED
+                        .iter()
+                        .any(|allowed| name.eq_ignore_ascii_case(allowed))
+                })
+        })
+        .collect()
 }
 
 fn drain_bounded(
@@ -2198,6 +2212,46 @@ mod tests {
         assert_eq!(
             escape_markdown_inline("docs/a.b_[c]:d&<e>\t\nnext"),
             r"docs/a\.b\_\[c\]&#58;d&amp;&lt;e&gt; next"
+        );
+    }
+
+    #[test]
+    fn git_child_environment_excludes_credentials_and_injection_controls() {
+        let environment = allowed_git_environment([
+            (OsString::from("PATH"), OsString::from("/safe/bin")),
+            (OsString::from("TMPDIR"), OsString::from("/safe/tmp")),
+            (
+                OsString::from("AWS_SECRET_ACCESS_KEY"),
+                OsString::from("aws-canary"),
+            ),
+            (
+                OsString::from("OPENAI_API_KEY"),
+                OsString::from("openai-canary"),
+            ),
+            (
+                OsString::from("ANTHROPIC_API_KEY"),
+                OsString::from("anthropic-canary"),
+            ),
+            (OsString::from("GIT_CONFIG_COUNT"), OsString::from("1")),
+            (
+                OsString::from("GIT_CONFIG_KEY_0"),
+                OsString::from("core.fsmonitor"),
+            ),
+            (
+                OsString::from("GIT_CONFIG_VALUE_0"),
+                OsString::from("/tmp/attacker"),
+            ),
+            (
+                OsString::from("LD_PRELOAD"),
+                OsString::from("/tmp/inject.so"),
+            ),
+        ]);
+        assert_eq!(
+            environment,
+            vec![
+                (OsString::from("PATH"), OsString::from("/safe/bin")),
+                (OsString::from("TMPDIR"), OsString::from("/safe/tmp")),
+            ]
         );
     }
 

@@ -179,16 +179,19 @@ function statusPath(value) {
   return safeRelative(stripped, "Git status path");
 }
 
-function hardenedGitEnvironment() {
-  const environment = { ...process.env };
-  for (const key of Object.keys(environment)) {
-    if (key === "GIT_DIR" || key === "GIT_WORK_TREE" || key === "GIT_INDEX_FILE" || key === "GIT_OBJECT_DIRECTORY" || key === "GIT_ALTERNATE_OBJECT_DIRECTORIES" || key === "GIT_CONFIG_PARAMETERS" || key === "GIT_CONFIG_COUNT" || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete environment[key];
+export function hardenedGitEnvironment(source = process.env) {
+  const executablePath = source.PATH ?? source.Path;
+  if (typeof executablePath !== "string" || executablePath.length === 0) throw new Error("Git snapshot requires PATH");
+  const environment = { PATH: executablePath };
+  for (const key of ["SystemRoot", "WINDIR", "PATHEXT", "TMPDIR", "TMP", "TEMP"]) {
+    if (typeof source[key] === "string" && source[key].length > 0) environment[key] = source[key];
   }
   return {
     ...environment,
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_NO_LAZY_FETCH: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_PAGER: "cat",
     GIT_TERMINAL_PROMPT: "0",
