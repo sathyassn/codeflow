@@ -35,14 +35,27 @@ All three use representative CodeFlow content and include concept,
 architecture, and technical detail. The full comparison and provisional Codex
 recommendation are in
 [`../documentation-portal-research-2026-08-01.md`](../documentation-portal-research-2026-08-01.md).
+The later Claude-led cross-model decision is retained in
+[`../documentation-portal-settlement-2026-08-01.md`](../documentation-portal-settlement-2026-08-01.md).
 
 ## Retained evidence
 
 The `rendered/` directory contains desktop and mobile captures in light and
 dark modes. Additional captures preserve the Guided Path mobile navigation and
-the System Atlas code-level state. Browser checks exercised theme switching,
-mobile navigation, search filtering, architecture-level switching, and the
-component inspector.
+implementation state and the System Atlas code-level state. `SHA256SUMS`
+identifies the exact 14 retained captures. Browser checks exercised pre-paint
+theme selection and persistence, mobile navigation, labeled search and result
+status, architecture-level switching, and the component inspector.
+
+Run the source-integrity checks from the repository root:
+
+```sh
+node docs/verification/tsk-008-portal-prototypes/verify.mjs
+```
+
+The verifier checks the real delegate excerpt and state filenames, capability
+count, stable prototype base, pre-paint theme order, search landmarks, and all
+repository source-link targets.
 
 The captures demonstrate the exact prototype state only. They do not establish
 production accessibility, cross-browser support, generated-content accuracy,

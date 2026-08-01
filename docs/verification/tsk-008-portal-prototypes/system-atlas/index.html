@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-prototype="system-atlas">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>CodeFlow system atlas prototype</title>
+  <script src="../shared/theme-init.js"></script>
   <link rel="stylesheet" href="../shared/base.css">
   <link rel="stylesheet" href="./style.css?v=4">
 </head>
-<body data-prototype="system-atlas">
+<body>
   <a class="skip-link" href="#content">Skip to content</a>
   <header class="topbar">
     <button type="button" class="nav-toggle icon-button" data-navigation-toggle aria-label="Open navigation" aria-expanded="false">Menu</button>
@@ -32,12 +33,12 @@
       <details open><summary>Build</summary><a href="#workspace">Rust workspace</a><a href="#scaffold">Scaffold assets</a><a href="#delegation">Delegation lifecycle</a></details>
       <details><summary>Operate</summary><a href="#commands">CLI commands</a><a href="#policy">Policy boundary</a><a href="#release">Release path</a></details>
       <details><summary>Evidence</summary><a href="#sources">Source map</a><a href="#verification">Verification</a><a href="#decisions">Decisions</a></details>
-      <div class="explorer-footer"><span>Indexed sources</span><strong>47 decisions · 13 capabilities</strong></div>
+      <div class="explorer-footer"><span>Indexed sources</span><strong>47 decisions · 13 shipped capabilities · 1 building</strong></div>
     </nav>
 
     <main id="content">
       <section class="atlas-head" id="context" data-search-item data-search-title="System context" data-search-context="Concept · docs/product.md">
-        <div><p class="breadcrumb">CodeFlow / Architecture / Context</p><h1>A map from intent to verified change</h1><p>Explore the system by abstraction level. Every named surface links back to repository evidence.</p></div>
+        <div><p class="breadcrumb">CodeFlow / Architecture / Explorer</p><h1>A map from intent to verified change</h1><p>Explore the system by abstraction level. Every named surface links back to repository evidence.</p></div>
         <div class="head-meta"><span>Version</span><strong>Scaffold 2.1.0</strong><a class="source-link" href="/docs/product.md">docs/product.md</a></div>
       </section>
 
@@ -72,19 +73,25 @@
           </div>
         </div>
         <div class="map-canvas code-view" data-level="code" hidden>
-          <p class="file-path">crates/codeflow-core/src/delegate.rs</p>
-          <pre><code><span>pub enum</span> RunPhase {
-    Initialized,
-    Armed,
+          <p class="file-path">crates/codeflow-core/src/delegate.rs · lines 24–42</p>
+          <pre><code>/// State requested by `delegate wait`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+<span>pub enum</span> WaitUntil {
+    /// The delegated harness reported a startup event.
+    Ready,
+    /// The armed prompt was accepted by the harness.
     Accepted,
+    /// The accepted turn completed or failed.
     Terminal,
-    Poisoned,
 }
 
-<span>pub struct</span> DelegateRun {
-    run_id: RunId,
-    prompt_digest: Digest,
-    phase: RunPhase,
+/// A successfully observed wait state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+<span>pub struct</span> WaitResult {
+    /// Canonical JSON record to print for the caller.
+    pub json: String,
+    /// Whether the terminal record represents failure.
+    pub failed: bool,
 }</code></pre>
           <a class="source-link" href="/crates/codeflow-core/src/delegate.rs">Open source file</a>
         </div>
@@ -122,7 +129,16 @@
     </main>
   </div>
 
-  <dialog class="search-dialog" data-search-dialog aria-label="Search the system atlas"><div class="search-head"><input type="search" placeholder="Find a capability, decision, command, or file" aria-label="Search query"><button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button></div><div class="search-results" data-search-results></div></dialog>
+  <dialog class="search-dialog" data-search-dialog aria-label="Search the system atlas">
+    <form class="search-head" role="search" data-search-form>
+      <label class="visually-hidden" for="atlas-search">Find a capability, decision, command, or file</label>
+      <input id="atlas-search" type="search" placeholder="Find a capability, decision, command, or file" aria-controls="atlas-results" autocomplete="off">
+      <button type="submit" class="icon-button search-submit">Go</button>
+      <button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button>
+    </form>
+    <p class="search-status visually-hidden" data-search-status aria-live="polite"></p>
+    <section id="atlas-results" class="search-results" data-search-results aria-label="Search results"></section>
+  </dialog>
   <script type="module" src="../shared/prototype.js"></script>
 </body>
 </html>

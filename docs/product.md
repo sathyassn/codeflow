@@ -53,7 +53,9 @@ multi-user coordination remains deferred.
 - **Not a process-enforcement engine.** No phase ordering, role boundaries, or
   review-before-X sequencing in code; gates exist only where a mistake is
   irreversible or invisible (charter §6.6).
-- **Not a GUI or TUI.** Command-line and harness-native surfaces only.
+- **Not a GUI or TUI.** Command-line and harness-native surfaces only. The
+  opt-in documentation portal is a generated static documentation artifact,
+  not an operated CodeFlow interface.
 - **No bespoke memory infrastructure.** No embeddings, vector DBs, GraphRAG, or
   database-as-authority; markdown + JSONL truth with an FTS5 cache (D17).
 - **Not a substitute for an OS or harness security boundary.** CodeFlow ships

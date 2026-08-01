@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-prototype="evidence-notebook">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>CodeFlow evidence notebook prototype</title>
+  <script src="../shared/theme-init.js"></script>
   <link rel="stylesheet" href="../shared/base.css">
   <link rel="stylesheet" href="./style.css?v=2">
 </head>
-<body data-prototype="evidence-notebook">
+<body>
   <a class="skip-link" href="#content">Skip to content</a>
   <header class="masthead">
     <div class="masthead-top">
@@ -120,7 +121,16 @@
     </article>
   </main>
 
-  <dialog class="search-dialog" data-search-dialog aria-label="Search the evidence notebook"><div class="search-head"><input type="search" placeholder="Search chapters and source trails" aria-label="Search query"><button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button></div><div class="search-results" data-search-results></div></dialog>
+  <dialog class="search-dialog" data-search-dialog aria-label="Search the evidence notebook">
+    <form class="search-head" role="search" data-search-form>
+      <label class="visually-hidden" for="notebook-search">Search chapters and source trails</label>
+      <input id="notebook-search" type="search" placeholder="Search chapters and source trails" aria-controls="notebook-results" autocomplete="off">
+      <button type="submit" class="icon-button search-submit">Go</button>
+      <button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button>
+    </form>
+    <p class="search-status visually-hidden" data-search-status aria-live="polite"></p>
+    <section id="notebook-results" class="search-results" data-search-results aria-label="Search results"></section>
+  </dialog>
   <script type="module" src="../shared/prototype.js"></script>
 </body>
 </html>

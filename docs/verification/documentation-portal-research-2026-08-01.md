@@ -3,6 +3,9 @@
 This record contains the independent Codex research and prototype lane for
 TSK-008. It is an input to the required Claude-led settlement, not a final
 design approval. Codex completed this pass without reading Claude's conclusion.
+The later cross-model decision is recorded separately in
+[`documentation-portal-settlement-2026-08-01.md`](documentation-portal-settlement-2026-08-01.md);
+that record and SPC-005 supersede this lane's provisional recommendation.
 
 ## What the portal has to explain
 
@@ -121,10 +124,10 @@ replace its generic surface composition with the settled CodeFlow utility
 design. Keep interactive architecture views as isolated components so most
 pages remain plain, portable content.
 
-Claude must independently critique this recommendation and lead the final
-design settlement. If that comparison produces an experience-changing choice
-that evidence cannot resolve, the operator receives the concrete alternatives
-and consequences.
+Claude subsequently critiqued this recommendation independently and led the
+final settlement. The lanes converged on this hybrid structure and expanded
+its exact records, traceability, theme, version, and agent-output contracts in
+the durable settlement record.
 
 ## Source and version contract proposed for settlement
 
@@ -175,7 +178,6 @@ because the browser harness could not establish the required focused target.
 
 ## Risks and decisions still open
 
-- Claude's independent comparison and the joint exact direction are pending.
 - Starlight is pre-1.0; custom overrides and dependency posture need a locked,
   maintained boundary and repeatable upgrade test.
 - A source adapter is necessary, but an elaborate content graph before real

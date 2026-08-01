@@ -1,25 +1,31 @@
 const root = document.documentElement;
-const themeKey = `codeflow-prototype-theme:${document.body.dataset.prototype}`;
+const themeKey = `codeflow-prototype-theme:${root.dataset.prototype}`;
 const themeButton = document.querySelector('[data-theme-toggle]');
 const searchDialog = document.querySelector('[data-search-dialog]');
 const searchInput = searchDialog?.querySelector('input');
 const searchResults = searchDialog?.querySelector('[data-search-results]');
+const searchStatus = searchDialog?.querySelector('[data-search-status]');
 const searchItems = [...document.querySelectorAll('[data-search-item]')];
 
 function applyTheme(theme) {
   root.dataset.theme = theme;
   themeButton?.setAttribute('aria-label', `Use ${theme === 'dark' ? 'light' : 'dark'} mode`);
-  themeButton?.setAttribute('aria-pressed', String(theme === 'dark'));
 }
 
-const storedTheme = localStorage.getItem(themeKey);
-const preferredTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-applyTheme(storedTheme || preferredTheme);
+function storeTheme(theme) {
+  try {
+    localStorage.setItem(themeKey, theme);
+  } catch {
+    // The selected mode still applies for this page view when storage is blocked.
+  }
+}
+
+applyTheme(root.dataset.theme);
 
 themeButton?.addEventListener('click', () => {
   const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(next);
-  localStorage.setItem(themeKey, next);
+  storeTheme(next);
 });
 
 function searchableText(item) {
@@ -39,6 +45,7 @@ function renderResults(query = '') {
     empty.className = 'search-empty';
     empty.textContent = `No documented surface matches “${query.trim()}”.`;
     searchResults.append(empty);
+    if (searchStatus) searchStatus.textContent = 'No results';
     return;
   }
 
@@ -54,12 +61,15 @@ function renderResults(query = '') {
     link.addEventListener('click', () => searchDialog.close());
     searchResults.append(link);
   }
+  if (searchStatus) {
+    searchStatus.textContent = `${matches.length} ${matches.length === 1 ? 'result' : 'results'}`;
+  }
 }
 
 function openSearch() {
   if (!searchDialog) return;
   renderResults('');
-  searchDialog.showModal();
+  if (!searchDialog.open) searchDialog.showModal();
   searchInput?.focus();
 }
 
@@ -67,8 +77,13 @@ document.querySelectorAll('[data-open-search]').forEach((button) => {
   button.addEventListener('click', openSearch);
 });
 
+searchDialog?.querySelector('[data-search-form]')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+});
 searchInput?.addEventListener('input', (event) => renderResults(event.currentTarget.value));
-searchDialog?.querySelector('[data-close-search]')?.addEventListener('click', () => searchDialog.close());
+searchDialog?.querySelector('[data-close-search]')?.addEventListener('click', () => {
+  if (searchDialog.open) searchDialog.close();
+});
 searchDialog?.addEventListener('click', (event) => {
   if (event.target === searchDialog) searchDialog.close();
 });
@@ -85,6 +100,7 @@ const navigationButton = document.querySelector('[data-navigation-toggle]');
 navigationButton?.addEventListener('click', () => {
   const open = navigation?.toggleAttribute('data-open');
   navigationButton.setAttribute('aria-expanded', String(Boolean(open)));
+  navigationButton.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
 });
 
 document.querySelectorAll('[data-level-target]').forEach((button) => {

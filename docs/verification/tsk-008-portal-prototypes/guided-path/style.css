@@ -39,7 +39,7 @@ kbd { font-size: .72rem; }
 .journey-nav ol { display: grid; gap: .35rem; margin: 0; padding: 0; list-style: none; }
 .journey-nav a { display: flex; gap: .75rem; padding: .7rem .75rem; border-radius: .5rem; color: var(--muted); font-size: .84rem; line-height: 1.35; text-decoration: none; }
 .journey-nav a span { color: var(--coral); font-family: ui-monospace, monospace; font-size: .68rem; }
-.journey-nav a:hover, .journey-nav .active { color: var(--ink); background: var(--surface); }
+.journey-nav a:hover { color: var(--ink); background: var(--surface); }
 .nav-note { position: absolute; inset: auto 1.5rem 2rem; padding-top: 1.25rem; border-top: 1px solid var(--line); font-size: .78rem; }
 .nav-note p { color: var(--muted); }
 .nav-note a { display: inline; padding: 0; color: var(--indigo); text-decoration: underline; }

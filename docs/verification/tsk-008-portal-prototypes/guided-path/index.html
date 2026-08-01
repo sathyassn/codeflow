@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-prototype="guided-path">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>CodeFlow guided path prototype</title>
+  <script src="../shared/theme-init.js"></script>
   <link rel="stylesheet" href="../shared/base.css">
   <link rel="stylesheet" href="./style.css">
 </head>
-<body data-prototype="guided-path">
+<body>
   <a class="skip-link" href="#content">Skip to content</a>
   <header class="topbar">
     <button type="button" class="nav-toggle icon-button" data-navigation-toggle aria-label="Open navigation" aria-expanded="false">Menu</button>
@@ -24,7 +25,7 @@
     <nav class="journey-nav" data-site-navigation aria-label="Documentation">
       <p class="eyebrow">Reader path</p>
       <ol>
-        <li><a class="active" href="#purpose"><span>01</span> Understand the promise</a></li>
+        <li><a href="#purpose"><span>01</span> Understand the promise</a></li>
         <li><a href="#model"><span>02</span> See the operating model</a></li>
         <li><a href="#architecture"><span>03</span> Inspect the architecture</a></li>
         <li><a href="#implementation"><span>04</span> Follow it into code</a></li>
@@ -123,9 +124,12 @@
 <span>$</span> codeflow delegate wait
 
 state/
-├── launch.json
-├── accepted.json
-└── terminal.json</code></pre>
+├── settings.json
+├── ready.json
+└── turns/&lt;turn-id&gt;/
+    ├── request.json
+    ├── accepted.json
+    └── result.json</code></pre>
         </div>
         <div class="source-strip" role="group" aria-label="Implementation sources">
           <span>Source trail</span>
@@ -150,13 +154,19 @@ state/
     <aside class="page-context" aria-label="On this path">
       <p class="eyebrow">On this path</p>
       <a href="#purpose">Promise</a><a href="#model">Operating model</a><a href="#architecture">Architecture</a><a href="#implementation">Technical drill-down</a>
-      <div class="context-source"><span>Current evidence</span><strong>4 source documents</strong><small>Repository at d1f3e074</small></div>
+      <div class="context-source"><span>Current evidence</span><strong>4 source documents</strong><small>Prototype base e96db64b</small></div>
     </aside>
   </div>
 
   <dialog class="search-dialog" data-search-dialog aria-label="Search CodeFlow documentation">
-    <div class="search-head"><input type="search" placeholder="Search concepts, commands, or code" aria-label="Search query"><button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button></div>
-    <div class="search-results" data-search-results></div>
+    <form class="search-head" role="search" data-search-form>
+      <label class="visually-hidden" for="guided-search">Search concepts, commands, or code</label>
+      <input id="guided-search" type="search" placeholder="Search concepts, commands, or code" aria-controls="guided-results" autocomplete="off">
+      <button type="submit" class="icon-button search-submit">Go</button>
+      <button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button>
+    </form>
+    <p class="search-status visually-hidden" data-search-status aria-live="polite"></p>
+    <section id="guided-results" class="search-results" data-search-results aria-label="Search results"></section>
   </dialog>
   <script type="module" src="../shared/prototype.js"></script>
 </body>
