@@ -42,12 +42,18 @@
         "ids": ["TSK-101"],
         "relationships": [["depends_on", "TSK-100"], ["related", "ADR-0001"]]
       },
-      {
-        "source_path": "project-management/tasks/TSK-101.md",
-        "yaml": "title: Inferred task",
-        "ids": ["TSK-101"],
-        "relationships": []
-      }
+    {
+      "source_path": "project-management/tasks/TSK-101.md",
+      "yaml": "title: Inferred task",
+      "ids": ["TSK-101"],
+      "relationships": []
+    },
+    {
+      "source_path": "project-management/tasks/TSK-101.md",
+      "yaml": "id: TSK-101\nepic_id: null\ndepends_on: []\nrelated: null",
+      "ids": ["TSK-101"],
+      "relationships": []
+    }
     ],
     "rejected": [
       { "yaml": "id: invalid", "error": "invalid" },

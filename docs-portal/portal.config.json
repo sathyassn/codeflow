@@ -8,7 +8,7 @@
   "primitive_tokens": null,
   "repository_root": "..",
   "source_roots": ["docs", "project-management"],
-  "exclude": ["docs/verification", "project-management/templates"],
+  "exclude": ["docs/verification", "docs/decisions/template.md", "project-management/templates"],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md"] },
     { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/decisions"] },

@@ -49,7 +49,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0ff454dc95c5de18fa1ff1ea8d10b91f4f3dd4226e93293b11d79dcb5f11fecc"
+      "pristine_sha256": "0584576990598dd0065e4590d7e8e86e79f60a488a04c4705930c3cd16154c59"
     },
     "scripts/publication.mjs": {
       "ownership": "managed",
@@ -73,7 +73,7 @@
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
-      "pristine_sha256": "721cc7a8dded9d355ee12683556a6b567bea78af77c6364c7ec507363315b043"
+      "pristine_sha256": "2075f6ebdd4ee9b520b7fa396234236bd80be4467a22911b9f409bca4b88204c"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",

@@ -285,6 +285,7 @@ export function extractRelationships(frontmatter, sourcePath = "frontmatter") {
   return relationshipFields.flatMap(([field, kind]) => {
     if (!Object.hasOwn(frontmatter, field)) return [];
     const value = frontmatter[field];
+    if (value === null) return [];
     const values = Array.isArray(value) ? value : [value];
     if (values.some((item) => typeof item !== "string" || !strictId(item))) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
     return values.map((target) => ({ type: kind, target }));

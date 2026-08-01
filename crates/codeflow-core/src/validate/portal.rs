@@ -2995,6 +2995,7 @@ fn relationships_from_mapping(
             continue;
         };
         let targets: Vec<&str> = match value {
+            serde_yaml::Value::Null => Vec::new(),
             serde_yaml::Value::String(target) => vec![target],
             serde_yaml::Value::Sequence(targets) => {
                 let parsed: Option<Vec<&str>> =
