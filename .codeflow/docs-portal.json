@@ -33,7 +33,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "7f145ca67f92a2bab55b0f3139c2a209649a33b967eed50f1fdd6929001e8bce"
+      "pristine_sha256": "113c920d9b333179d1d52e326700964e37d772d08ce64361217f43dfd44fd6e9"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
@@ -65,7 +65,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "361166d90f2288be7ed13768f44381beeb2bac1faff434d51dde3273f8a6618f"
+      "pristine_sha256": "200a0ce63fb1612903c1f485deb646006dce9cc716e4f97416e9ea9568f8e6b2"
     },
     "tsconfig.json": {
       "ownership": "managed",

@@ -590,6 +590,9 @@ test("generated strict-ID previews are source-grounded and keyboard-native", asy
     await writeFile(path.join(root, "docs/decisions/ADR-0001.md"), "---\nid: ADR-0001\ntitle: Keep source truth\nstatus: accepted\n---\n\n# Decision\n");
     commitFixture(root, "add linked records");
     runAdapter(root);
+    const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
+    assert.match(landing, /^title: "Reference"$/m);
+    assert.doesNotMatch(landing, /^# Reference$/m);
     const rendered = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
     assert.match(rendered, /<span class="portal-id-preview"><a href="\/system\/decisions\/ADR-0001\/" aria-describedby="portal-preview-[^"]+">ADR-0001<\/a>/);
     assert.match(rendered, /role="tooltip"><strong>Keep source truth<\/strong><span>Status: accepted<\/span><span>Source: <code>docs\/decisions\/ADR-0001.md<\/code><\/span>/);

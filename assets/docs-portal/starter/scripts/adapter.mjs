@@ -270,7 +270,7 @@ function provenanceMarker(page) {
 }
 
 function renderLayerLanding(layer, layerPages) {
-  const preface = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\n---\n\n# ${escapeMarkdownInline(layer.label)}\n\n${escapeMarkdownInline(layer.description)}\n`;
+  const preface = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\n---\n\n${escapeMarkdownInline(layer.description)}\n`;
   if (layer.id === "records") {
     const groups = [["Epics", "EPC-"], ["Specifications", "SPC-"], ["Tasks", "TSK-"]];
     const sections = groups.map(([label, prefix]) => {
