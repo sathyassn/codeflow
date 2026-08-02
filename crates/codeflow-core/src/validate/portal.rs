@@ -3305,6 +3305,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One valid public fixture and its bounded tamper table must share an exact Git/evidence identity.
     fn public_validator_accepts_a_complete_commit_anchored_portal() {
         let temp = tempfile::tempdir().unwrap();
         for directory in [
