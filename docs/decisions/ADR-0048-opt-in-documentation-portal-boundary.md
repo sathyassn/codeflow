@@ -85,8 +85,8 @@ The starter source is capped at 2 MiB unpacked, its archive-equivalent content
 at 1 MiB, and its measured release-binary increase at 1 MiB. `SKILL.md` remains
 within the existing 300-line skill limit. The integrated macOS arm64 release
 baseline at commit `afd0898e2b24c97b06814b3a3194c6799068c896` is 16,475,216
-bytes; the hardened task candidate is 17,340,800 bytes, an 865,584-byte
-increase. The starter is 513,241 tracked bytes and 116,985 deterministic gzip
+bytes; the hardened task candidate is 17,387,072 bytes, a 911,856-byte
+increase. The starter is 557,655 tracked bytes and 124,157 deterministic gzip
 archive-equivalent bytes. All measurements remain below their limits. Release
 builds use `rust-embed`'s upstream compression support so the offline starter
 does not consume its unpacked size in every binary; debug builds retain the
