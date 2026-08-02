@@ -9,6 +9,25 @@ export async function withSignalAwareChildLifecycle(action) {
   interruption.catch(() => {});
   const children = new Set();
   const cleanups = new Set();
+  let shutdownPromise = null;
+
+  const cleanupRecord = (cleanup) => ({ cleanup, promise: null });
+  const runCleanup = (record) => {
+    record.promise ??= Promise.resolve().then(record.cleanup);
+    return record.promise;
+  };
+  const beginShutdown = (signal) => {
+    shutdownPromise ??= (async () => {
+      for (const child of children) child.kill(signal);
+      while (true) {
+        const pending = [...cleanups];
+        await Promise.allSettled(pending.map(runCleanup));
+        if (pending.length === cleanups.size && [...cleanups].every((record) => record.promise !== null)) break;
+      }
+      await Promise.all([...children].map((child) => stopChild(child, signal)));
+    })();
+    return shutdownPromise;
+  };
 
   const lifecycle = {
     get interruptedBy() { return interruptedBy; },
@@ -20,9 +39,10 @@ export async function withSignalAwareChildLifecycle(action) {
     },
     addCleanup(cleanup) {
       if (typeof cleanup !== "function") throw new Error("child lifecycle cleanup must be a function");
-      cleanups.add(cleanup);
-      if (interruptedBy !== null) Promise.resolve().then(cleanup).catch(() => {});
-      return () => cleanups.delete(cleanup);
+      const record = cleanupRecord(cleanup);
+      cleanups.add(record);
+      if (shutdownPromise !== null) runCleanup(record).catch(() => {});
+      return () => cleanups.delete(record);
     },
     async wait(value) {
       return Promise.race([Promise.resolve(value), interruption]);
@@ -32,7 +52,14 @@ export async function withSignalAwareChildLifecycle(action) {
       const pending = Promise.resolve(value);
       try { return await Promise.race([pending, interruption]); }
       catch (error) {
-        if (interruptedBy !== null) pending.then(cleanup, () => {}).catch(() => {});
+        if (interruptedBy !== null) {
+          const record = cleanupRecord(async () => {
+            const resource = await pending;
+            await cleanup(resource);
+          });
+          cleanups.add(record);
+          runCleanup(record).catch(() => {});
+        }
         throw error;
       }
     },
@@ -42,22 +69,21 @@ export async function withSignalAwareChildLifecycle(action) {
   };
 
   const handlers = new Map(SIGNALS.map((signal) => [signal, () => {
-    if (interruptedBy !== null) return;
-    interruptedBy = signal;
-    for (const child of children) child.kill(signal);
-    for (const cleanup of cleanups) Promise.resolve().then(cleanup).catch(() => {});
-    rejectInterruption(interruptedError(signal));
+    if (interruptedBy === null) {
+      interruptedBy = signal;
+      rejectInterruption(interruptedError(signal));
+    }
+    beginShutdown(interruptedBy).catch(() => {});
   }]));
-  for (const [signal, handler] of handlers) process.once(signal, handler);
+  for (const [signal, handler] of handlers) process.on(signal, handler);
 
   let result;
   let actionError = null;
   try { result = await action(lifecycle); }
   catch (error) { actionError = error; }
   finally {
+    await beginShutdown(interruptedBy ?? "SIGTERM");
     for (const [signal, handler] of handlers) process.off(signal, handler);
-    await Promise.allSettled([...cleanups].map((cleanup) => Promise.resolve().then(cleanup)));
-    await Promise.all([...children].map((child) => stopChild(child, interruptedBy ?? "SIGTERM")));
   }
   if (interruptedBy !== null) {
     process.kill(process.pid, interruptedBy);

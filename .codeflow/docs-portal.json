@@ -45,7 +45,7 @@
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f39265d730f6022c4368d29da47bc2f86da5e4358e588262b136063c8af67175"
+      "pristine_sha256": "260d8da0ab820d6d9ad072329e4233d289fba39578b584055220ec6daa9d19c8"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
@@ -65,7 +65,7 @@
     },
     "scripts/publication.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "50d3ccdd217b1bda049bd1ef4dd287908c2354f5959f080a8b58bbdaaf7ee259"
+      "pristine_sha256": "380e475c615c665f76761398f25990d721cb207d9ebd462fc7d18e25834c8b4f"
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
@@ -81,7 +81,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1b938abb643fe7b38a2c8f8e425f6c5ef07c66b4470fe69444dc7d1254000894"
+      "pristine_sha256": "f493e428b6dcdd227bfbb153588fdfbb19a685981fa35497b63a19d05fe95057"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

@@ -578,6 +578,75 @@ test("a stalled workflow candidate cannot delete the atomic winner", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("recovery revalidates a candidate published after its active-claim snapshot", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-recovery-snapshot-race-"));
+  try {
+    let candidateReady;
+    const candidateIsReady = new Promise((resolve) => { candidateReady = resolve; });
+    let publishCandidate;
+    const publish = new Promise((resolve) => { publishCandidate = resolve; });
+    let snapshotReady;
+    const snapshotIsReady = new Promise((resolve) => { snapshotReady = resolve; });
+    let resumeRecovery;
+    const recover = new Promise((resolve) => { resumeRecovery = resolve; });
+    let releaseWinner;
+    const winnerHeld = new Promise((resolve) => { releaseWinner = resolve; });
+    let winnerToken;
+    const winner = withWorkflowLease(root, async () => {
+      winnerToken = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token;
+      await winnerHeld;
+      return "winner";
+    }, {
+      afterCandidateReady: async (candidate, lease) => {
+        const stale = Date.now() - 10_000;
+        await writeFile(path.join(candidate, "owner.json"), JSON.stringify({ ...lease, created_at_ms: stale, heartbeat_at_ms: stale }));
+        candidateReady();
+        await publish;
+      },
+    });
+    await candidateIsReady;
+    const reclaimer = withWorkflowLease(root, async () => "unexpected", {
+      afterRecoverySnapshot: async ({ activeToken }) => {
+        assert.equal(activeToken, null);
+        snapshotReady();
+        await recover;
+      },
+    }).catch((error) => error);
+    await snapshotIsReady;
+    publishCandidate();
+    await waitUntil(() => winnerToken !== undefined);
+    resumeRecovery();
+    assert.match(String(await reclaimer), /already in progress/);
+    const candidate = path.join(root, `.portal/.workflow-lock-candidate-${winnerToken}`);
+    assert.equal(JSON.parse(await readFile(path.join(candidate, "owner.json"), "utf8")).token, winnerToken);
+    assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, winnerToken);
+    releaseWinner();
+    assert.equal(await winner, "winner");
+    assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("failed creator verification repairs only its identity-bound claim and candidate", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-failed-creator-"));
+  try {
+    const unrelatedToken = "b".repeat(48);
+    const unrelated = path.join(root, `.portal/.workflow-lock-candidate-${unrelatedToken}`);
+    const result = await withWorkflowLease(root, async () => "unexpected", {
+      afterClaimPublished: async (candidate, lease) => {
+        const unrelatedLease = { schema_version: 1, token: unrelatedToken, created_at_ms: Date.now(), heartbeat_at_ms: Date.now() };
+        await mkdir(unrelated);
+        await writeFile(path.join(unrelated, "owner.json"), JSON.stringify(unrelatedLease));
+        await rename(candidate, path.join(root, `.portal/.workflow-lock-recovery-${lease.token}`));
+      },
+    }).catch((error) => error);
+    assert.match(String(result), /could not acquire/);
+    await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
+    assert.equal(JSON.parse(await readFile(path.join(unrelated, "owner.json"), "utf8")).token, unrelatedToken);
+    assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+    assert.equal(JSON.parse(await readFile(path.join(unrelated, "owner.json"), "utf8")).token, unrelatedToken);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("a stalled stale-lease reclaimer cannot remove a later winner", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-reclaimer-race-"));
   try {
@@ -651,7 +720,7 @@ test("direct browser lifecycle interruption closes resources and releases its le
     const runner = path.join(root, "browser-lifecycle-fixture.mjs");
     await writeFile(runner, `
       import { spawn } from "node:child_process";
-      import { writeFile } from "node:fs/promises";
+      import { appendFile, writeFile } from "node:fs/promises";
       import path from "node:path";
       import { withSignalAwareChildLifecycle } from "./scripts/child-lifecycle.mjs";
       import { withWorkflowLease } from "./scripts/publication.mjs";
@@ -659,7 +728,14 @@ test("direct browser lifecycle interruption closes resources and releases its le
       await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, async () => {
         const preview = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)"], { stdio: "ignore" });
         lifecycle.trackChild(preview);
-        lifecycle.addCleanup(() => writeFile(path.join(root, ".browser-closed"), "closed\\n"));
+        let cleanupRuns = 0;
+        lifecycle.addCleanup(async () => {
+          cleanupRuns += 1;
+          await writeFile(path.join(root, ".browser-cleanup-count"), String(cleanupRuns) + "\\n");
+          await appendFile(path.join(root, ".browser-cleanup-order"), "cleanup-start\\n");
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          await appendFile(path.join(root, ".browser-cleanup-order"), "cleanup-end\\n");
+        });
         await writeFile(path.join(root, ".browser-ready"), "ready\\n");
         await lifecycle.wait(new Promise(() => {}));
       }));
@@ -670,12 +746,14 @@ test("direct browser lifecycle interruption closes resources and releases its le
       readFile(path.join(root, ".browser-ready")),
     ]).then(() => true, () => false));
     child.kill("SIGTERM");
+    setTimeout(() => child.kill("SIGINT"), 25);
     const outcome = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("exit", (code, signal) => resolve({ code, signal }));
     });
     assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
-    assert.equal(await readFile(path.join(root, ".browser-closed"), "utf8"), "closed\n");
+    assert.equal(await readFile(path.join(root, ".browser-cleanup-count"), "utf8"), "1\n");
+    assert.equal(await readFile(path.join(root, ".browser-cleanup-order"), "utf8"), "cleanup-start\ncleanup-end\n");
     await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
