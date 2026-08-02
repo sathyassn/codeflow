@@ -109,6 +109,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   localization honesty, preference/persistence verification, and the boundary
   that prevents CodeFlow utility defaults from becoming product design
   authority.
+- **Design refinement and asset sourcing now stay bounded and attributable.**
+  After a direction is selected, `cf-design` varies only a named unresolved
+  material choice and stops when it is settled. An on-demand reference keeps
+  inspiration distinct from user evidence, records proportionate rights,
+  consent, transformation, and product-use provenance, refuses unauthorized
+  private-data uploads, and binds material revision feedback to the exact
+  reviewed version without adding a provider catalog or design database.
 - **Durable work now has one explicit, adaptable authority and a stable start
   boundary (ADR-0046).** Full-tier scaffolds write independent `EPC-NNN`,
   `SPC-NNN`, and `TSK-NNN` records in one flat Git Markdown workgraph. Tasks

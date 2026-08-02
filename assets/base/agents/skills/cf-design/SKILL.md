@@ -125,6 +125,20 @@ meaningful structure or experience, not colour swaps. For each, state:
 When the brief fixes the direction or an established system governs it, record
 that constraint and why alternatives were waived.
 
+After the operator selects a direction, offer another bounded comparison only
+while one named typography, colour, imagery, interaction, composition, motion,
+or comparable choice remains materially unresolved. Compare two or three
+contextual variants that could change the accepted outcome, recommend one, and
+stop when the choice is settled. Do not turn refinement into palette swaps, a
+generic tweak panel, or open-ended generation.
+
+When external inspiration, sourced or generated assets, or material
+transformations affect the direction or its implementation, read
+[references/design-sourcing-and-revision.md](references/design-sourcing-and-revision.md)
+before accepting them. The reference governs evidence, authority, provenance,
+privacy, and revision handling; it does not prescribe providers or require an
+asset ledger for low-risk work.
+
 ## 5. Settle `DESIGN_INTENT`
 
 Record the result in the existing versioned plan contract, not in a mandatory
@@ -151,6 +165,13 @@ Collapse irrelevant dimensions rather than filling them mechanically. A
 one-line `conform` or `N/A` record is valid. A durable design specification or
 ADR is created only when the project needs a long-lived design-system or
 product decision; normal project documentation conventions own it.
+
+When material feedback changes a settled direction, identify the exact design
+version the operator reviewed and retain the feedback authority plus accepted
+and rejected rationale in the new Plan vN+1. Do not overwrite the reviewed
+state or create a parallel design database. Bounded conformance feedback may
+stay in the normal task record without a new plan version when it changes no
+accepted direction, interface, or safety boundary.
 
 The directly invoked Claude judgment primary proposes the design intent and
 direction. Codex challenges the choice. Both approve the exact Plan vN before

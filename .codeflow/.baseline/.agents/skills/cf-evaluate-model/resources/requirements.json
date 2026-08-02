@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-02-presentation-docs-portal-v2",
+  "requirements_version": "2026-08-02-design-sourcing-v1",
   "requirements": [
     {
       "id": "CF-DES-001",
@@ -116,6 +116,54 @@
             "applicable appearance modes",
             "localized variants and relevant language review",
             "without an incorrect-mode flash"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-006",
+      "level": "hard",
+      "statement": "After an operator selects a design direction, further variation is optional and bounded to a named unresolved choice that can materially change the outcome; meaningful contextual variants and a recommendation stop when settled, while material feedback retains the exact reviewed version, feedback authority, and accepted/rejected rationale through Plan vN+1 without a generic tweak ritual or parallel design database.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "while one named typography, colour, imagery",
+            "stop when the choice is settled",
+            "exact design version the operator reviewed",
+            "accepted and rejected rationale in the new Plan vN+1"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/design-sourcing-and-revision.md",
+          "markers": [
+            "name the unresolved choice before producing more options",
+            "exact reviewed version or content digest",
+            "do not produce a generic control panel"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-007",
+      "level": "hard",
+      "statement": "Inspiration is not treated as user evidence; material references and sourced, generated, or transformed assets retain proportionate source, rights/consent, transformation, restriction, and actual product-use provenance; unknown rights block use, and private or sensitive material is not sent to an external service without explicit authority.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/references/design-sourcing-and-revision.md",
+          "markers": [
+            "It is not evidence of user need",
+            "Public availability is not permission",
+            "Unknown rights or consent blocks use",
+            "Never upload private material",
+            "Inspect it in the actual product context"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "source/rights/consent/transformation and product-use evidence",
+            "never send private material to an external service without explicit authority"
           ]
         }
       ]

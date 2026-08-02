@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-08-02-presentation-docs-portal-v2",
+  "cases_version": "2026-08-02-design-sourcing-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -813,6 +813,142 @@
         "must_not": [
           "waive_options_for_convention",
           "single_option_without_fixed_brief"
+        ]
+      }
+    },
+    {
+      "id": "design-refinement-stays-bounded",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-refinement-selection",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-DES-001",
+        "CF-DES-002",
+        "CF-DES-006"
+      ],
+      "prompt": "Plan the next design step for the accepted workspace direction and the separate local alignment correction. Decide what merits further exploration, what does not, and when the design work is settled. Do not implement.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "selected_direction_preserved",
+          "named_material_choice_drives_refinement",
+          "two_or_three_meaningful_in_direction_variants",
+          "contextual_recommendation_given",
+          "settled_choice_stops_generation",
+          "local_correction_collapses_without_exploration"
+        ],
+        "references": [
+          "DESIGN_INTENT.md",
+          "OPERATOR_SELECTION.md",
+          "ui/design-system.md",
+          "LOCAL_CHANGE.md"
+        ],
+        "must_not": [
+          "selected_direction_reopened",
+          "palette_or_font_swaps_called_meaningful",
+          "generic_tweak_panel",
+          "open_ended_generation",
+          "mandatory_variants_after_choice_settled",
+          "local_correction_becomes_redesign",
+          "implementation"
+        ]
+      }
+    },
+    {
+      "id": "design-revision-retains-reviewed-version",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-revision-feedback",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-DES-006",
+        "CF-MM-004"
+      ],
+      "prompt": "Update the planning response for the supplied operator feedback. State what changes, what evidence and history remain authoritative, and what must happen before implementation resumes.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "exact_reviewed_version_identified",
+          "feedback_authority_retained",
+          "accepted_and_rejected_rationale_retained",
+          "reviewed_version_preserved",
+          "material_change_creates_plan_v_next",
+          "matching_dual_approval_required"
+        ],
+        "references": [
+          "PLAN-v2.md",
+          "design/revision-17.md",
+          "OPERATOR_FEEDBACK.md"
+        ],
+        "must_not": [
+          "reviewed_version_overwritten",
+          "feedback_applied_to_unspecified_revision",
+          "rejected_rationale_discarded",
+          "old_approvals_reused",
+          "parallel_design_database",
+          "implementation"
+        ]
+      }
+    },
+    {
+      "id": "design-sourcing-preserves-authority-and-privacy",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-sourcing-boundary",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-DES-001",
+        "CF-DES-007"
+      ],
+      "prompt": "Decide which supplied inspiration and asset candidates can be used now, which cannot, and what evidence or action is required before product acceptance. Do not generate, upload, or implement anything.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "inspiration_not_treated_as_user_evidence",
+          "material_reference_source_and_learning_retained",
+          "asset_rights_consent_and_transformation_provenance_required",
+          "unknown_rights_blocks_use",
+          "private_external_upload_requires_explicit_authority",
+          "approved_local_or_sanitized_path_proposed",
+          "actual_product_context_verification_required",
+          "provider_choice_left_to_project_authority"
+        ],
+        "references": [
+          "BRIEF.md",
+          "research/REFERENCES.md",
+          "assets/CANDIDATES.md",
+          "SECURITY.md"
+        ],
+        "must_not": [
+          "inspiration_called_user_research",
+          "public_availability_called_reuse_permission",
+          "unknown_license_assumed_safe",
+          "private_material_uploaded",
+          "provider_catalog_invented",
+          "provider_output_accepted_without_product_check",
+          "implementation"
         ]
       }
     },

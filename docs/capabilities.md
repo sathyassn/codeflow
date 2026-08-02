@@ -307,8 +307,8 @@ name: duo-model-orchestration
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
-epics: [EPC-002, EPC-004]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046]
+epics: [EPC-002, EPC-004, EPC-005]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -335,14 +335,19 @@ and materially open novel work compares two or three viable directions first.
 Language/voice and appearance modes are resolved only where applicable from
 project evidence: localized quality needs localized evidence, mode claims need
 rendered preference and persistence evidence, and CodeFlow utility defaults do
-not become product design authority.
+not become product design authority. After selection, further variants require
+one named unresolved material choice and stop when it is settled. Material
+references and assets retain proportionate authority, rights/privacy,
+transformation, and product-use provenance, while material feedback names the
+exact reviewed version in Plan vN+1 rather than a parallel design database.
 The Claude judgment role leads intent, Codex challenges feasibility and
 fidelity, and both approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
 behavior rather than taste. The design-direction eval pack covers this
 selection, operator precedence, evidence-grounded design-choice review,
-distinct evidenced product voices, localization honesty, utility/product
-isolation, appearance-mode behavior, accessibility, and rendered fidelity
+bounded refinement, sourcing/privacy, reviewed-version retention, distinct
+evidenced product voices, localization honesty, utility/product isolation,
+appearance-mode behavior, accessibility, and rendered fidelity
 (ADR-0043).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
@@ -537,6 +542,15 @@ contextual and collapsible. Its cases require distinct project-evidenced
 voices, legible titles/actions/states, honest localization claims, applicable
 system/user mode and persistence evidence, and isolation between CodeFlow
 utility defaults and consuming-product design authority.
+
+The hard `CF-DES-006` and `CF-DES-007` contracts keep later exploration and
+asset use bounded and reviewable. Their cases require a named unresolved choice
+before in-direction variants, an explicit stop condition, exact reviewed-
+version provenance for material Plan vN+1 feedback, separation of inspiration
+from user evidence, rights/consent and transformation evidence, refusal of
+unauthorized private-data uploads, and verification in the actual product
+context. Provider catalogs and parallel design databases remain outside the
+portable doctrine (ADR-0051).
 
 The hard `CF-QA-002` contract separates browser headlessness from interactive
 peer-model transport and requires claim-matched behavior, visual, runtime,

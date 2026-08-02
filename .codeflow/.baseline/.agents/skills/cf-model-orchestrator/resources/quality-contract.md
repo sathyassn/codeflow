@@ -60,6 +60,13 @@ Collapse irrelevant dimensions instead of filling a template. Do not create a
 separate design document unless the project needs a durable product or
 design-system decision at its normal spec/ADR altitude.
 
+Design exploration remains bounded after direction selection: vary only a
+named unresolved choice that can materially change the outcome, retain
+proportionate source/rights/consent/transformation and product-use evidence for
+material references or assets, never send private material to an external
+service without explicit authority, and bind material feedback to the exact
+reviewed version plus accepted/rejected rationale in Plan vN+1.
+
 ## Design and implementation quality
 
 Approve the smallest coherent solution that fully satisfies the accepted

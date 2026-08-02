@@ -294,7 +294,11 @@ collapsible intent dimensions governed by project evidence; utility defaults
 cannot become consuming-product authority. Rendered review grades
 evidence-backed drift from the brief, intent, accessibility target, or observed
 behavior; taste alone is not a blocking finding. Concrete model releases stay
-in qualified bindings (ADR-0043).
+in qualified bindings. After direction selection, refinement stays bounded to
+a named unresolved material choice; external references and assets retain
+proportionate authority, rights/privacy, transformation, and product-use
+evidence; and material feedback binds Plan vN+1 to the exact reviewed version
+without creating a second design database (ADR-0043, ADR-0051).
 Multi-task plans additionally settle one acyclic task graph whose evidence
 guards represent genuine decisions, not repeated quality gates. Durable task
 metadata preserves its structural candidate predecessors, while Plan evidence
