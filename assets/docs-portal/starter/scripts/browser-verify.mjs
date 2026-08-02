@@ -1,72 +1,123 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, firefox, webkit } from "@playwright/test";
-import { assertNoSymlink, assertToolOutputRoots } from "./publication.mjs";
-import { safeRelative } from "./lib.mjs";
+import { GitSnapshot } from "./git-snapshot.mjs";
+import { safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { assertNoSymlink, assertToolOutputRoots, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
 const root = process.cwd();
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
-const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
-const output = path.join(root, outputRelative);
-const outputParentRelative = ".portal/browser-evidence";
-await assertNoSymlink(root, ".portal");
-await mkdir(path.join(root, outputParentRelative), { recursive: true });
-await assertNoSymlink(root, ".portal/browser-evidence");
-await assertNoSymlink(root, outputRelative);
-await mkdir(output);
-await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
 
-const port = await availablePort();
-const origin = `http://127.0.0.1:${port}`;
-const server = spawn(process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), "preview", "--host", "127.0.0.1", "--port", String(port)], {
-  cwd: root,
-  env: { ...process.env, BROWSER: "none" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let serverOutput = "";
-server.stdout.on("data", (chunk) => { serverOutput += chunk; });
-server.stderr.on("data", (chunk) => { serverOutput += chunk; });
+await withWorkflowLease(root, verifyPortal);
 
-const results = [];
-try {
-  await waitForServer(origin, server);
-  for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
-    results.push(await verifyEngine(name, engine, origin, output));
+async function verifyPortal() {
+  const configBytes = await readBoundedRegularFile(path.join(root, "portal.config.json"), 64 * 1024, "portal configuration");
+  const config = validatePortalConfig(JSON.parse(configBytes));
+  await assertNoSymlink(root, ".portal/generated/evidence.json");
+  const evidenceBytes = await readBoundedRegularFile(path.join(root, ".portal/generated/evidence.json"), 8 * 1024 * 1024, "portal evidence manifest");
+  const generated = JSON.parse(evidenceBytes);
+  const repository = path.resolve(root, config.repository_root);
+  const head = new GitSnapshot(repository).resolveHead();
+  const configSha256 = digest(configBytes);
+  if (generated?.schema_version !== 1 || generated?.repository?.commit !== head || generated?.config_sha256 !== configSha256 || !Array.isArray(generated?.pages) || !Array.isArray(generated?.artifacts)) {
+    throw new Error("browser verification requires current commit-bound portal evidence");
   }
-} finally {
-  server.kill("SIGTERM");
-  await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
-  if (server.exitCode === null) server.kill("SIGKILL");
+
+  const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
+  const output = path.join(root, outputRelative);
+  await assertNoSymlink(root, ".portal");
+  await mkdir(path.join(root, ".portal/browser-evidence"), { recursive: true });
+  await assertNoSymlink(root, ".portal/browser-evidence");
+  await assertNoSymlink(root, outputRelative);
+  await mkdir(output);
+  await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
+
+  const port = await availablePort();
+  const origin = `http://127.0.0.1:${port}`;
+  const siteRoot = new URL(config.base, origin).toString();
+  const server = spawn(process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), "preview", "--host", "127.0.0.1", "--port", String(port)], {
+    cwd: root,
+    env: { ...process.env, BROWSER: "none" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let serverOutput = "";
+  server.stdout.on("data", (chunk) => { serverOutput += chunk; });
+  server.stderr.on("data", (chunk) => { serverOutput += chunk; });
+
+  const results = [];
+  try {
+    await waitForServer(siteRoot, server, () => serverOutput);
+    for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated }));
+    }
+  } catch (error) {
+    results.push({ engine: "preview", status: "failed", error: String(error?.stack ?? error) });
+  } finally {
+    server.kill("SIGTERM");
+    await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+    if (server.exitCode === null) {
+      const exited = new Promise((resolve) => server.once("exit", resolve));
+      server.kill("SIGKILL");
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5_000))]);
+    }
+  }
+
+  const teardownVerified = await fetch(siteRoot).then(() => false, () => true);
+  const artifacts = await evidenceInventory(output);
+  const evidence = {
+    schema_version: 1,
+    run_id: runId,
+    build: {
+      repository_commit: head,
+      config_sha256: configSha256,
+      evidence_sha256: digest(evidenceBytes),
+      generator: generated.generator,
+      artifact_claims_sha256: digest(Buffer.from(JSON.stringify(generated.artifacts))),
+      base: config.base,
+    },
+    origin: "task-owned-loopback",
+    port,
+    headless: true,
+    results,
+    artifacts,
+    teardown_verified: teardownVerified,
+  };
+  await writeFile(path.join(output, "results.json"), `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
+  if (!teardownVerified || results.some((result) => result.status !== "passed")) {
+    throw new Error(`portal browser verification failed: ${JSON.stringify(evidence)}`);
+  }
+  console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-const teardownVerified = await fetch(origin).then(() => false, () => true);
-const evidence = { schema_version: 1, run_id: runId, origin: "task-owned-loopback", port, headless: true, results, teardown_verified: teardownVerified };
-const evidenceBytes = results.flatMap((result) => [...(result.screenshots ?? []), ...(result.trace ? [result.trace] : [])]).reduce((total, item) => total + item.bytes, 0);
-if (evidenceBytes > 64 * 1024 * 1024) throw new Error(`browser evidence exceeds 67108864 bytes: ${evidenceBytes}`);
-await writeFile(path.join(output, "results.json"), `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
-if (!teardownVerified || results.some((result) => result.status !== "passed")) {
-  throw new Error(`portal browser verification failed: ${JSON.stringify(evidence)}`);
-}
-console.log(`portal browser verification passed: ${outputRelative}/results.json`);
-
-async function verifyEngine(name, engine, base, outputRoot) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
-  const trace = path.join(outputRoot, `${name}-trace.zip`);
-  const screenshots = [];
+  const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
   let context;
+  let traceStarted = false;
   try {
-    context = await engine.launchPersistentContext(profile, { headless: true, colorScheme: "dark", reducedMotion: "reduce", viewport: { width: 1440, height: 900 } });
+    context = await engine.launchPersistentContext(profile, {
+      headless: true,
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+      hasTouch: true,
+      viewport: { width: 1440, height: 900 },
+    });
+    await context.addInitScript(() => {
+      window.__codeflowThemeBeforePaint = null;
+      requestAnimationFrame(() => { window.__codeflowThemeBeforePaint = document.documentElement.dataset.theme ?? null; });
+    });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+    traceStarted = true;
     await context.route("**/*", async (route) => {
       const url = new URL(route.request().url());
-      if (!["http:", "https:"].includes(url.protocol) || url.origin === base) return route.continue();
+      if (["http:", "https:"].includes(url.protocol) && url.origin === origin) return route.continue();
       runtime.remote.push(route.request().url());
       return route.abort("blockedbyclient");
     });
@@ -76,61 +127,57 @@ async function verifyEngine(name, engine, base, outputRoot) {
     page.on("requestfailed", (request) => {
       if (!runtime.remote.includes(request.url())) runtime.request.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`);
     });
-    await visit(page, `${base}/`);
+
+    await visit(page, siteRoot);
+    if (await page.locator("html").getAttribute("data-portal-theme") !== config.theme) throw new Error(`${name}: configured utility theme was not applied`);
+    await assertBeforePaintTheme(page, name, "dark");
     await assertSemantics(page, name);
     await assertLayout(page, name);
     await assertA11y(page, name, "/");
-    const desktop = path.join(outputRoot, `${name}-desktop.png`);
-    await page.screenshot({ path: desktop, fullPage: true });
-    screenshots.push(await artifact(desktop));
-
-    const search = page.getByRole("button", { name: "Search" }).first();
-    await search.waitFor({ state: "visible" });
-    await page.waitForFunction(() => !document.querySelector("button[data-open-modal]")?.disabled);
-    await search.click();
-    const dialog = page.getByRole("dialog", { name: "Search" });
-    await dialog.locator("input").fill("documentation portal");
-    await page.waitForFunction(() => document.querySelectorAll("dialog[open] a").length > 0);
-    await page.keyboard.press("Escape");
+    await assertScreenReaderStructure(page, name);
+    await assertKeyboardPath(page, name);
+    await searchForResult(page, name, config, generated.pages);
 
     await page.getByLabel("Select theme").first().selectOption("light");
     await page.reload({ waitUntil: "networkidle" });
     if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${name}: light preference did not persist`);
-    await assertA11y(page, name, "light mode");
+    await assertBeforePaintTheme(page, name, "light");
 
-    for (const [route, heading] of [["/orient/", "Orient"], ["/system/", "System"], ["/records/", "Records"]]) {
-      await visit(page, `${base}${route}`);
-      if ((await page.locator("h1").first().textContent())?.trim() !== heading) throw new Error(`${name}: ${route} heading mismatch`);
-      await assertA11y(page, name, route);
+    for (const layer of config.layers) {
+      await visit(page, routeUrl(origin, config.base, layer.id));
+      if ((await page.locator("h1").first().textContent())?.trim() !== layer.label) throw new Error(`${name}: ${layer.id} layer heading mismatch`);
+      await assertA11y(page, name, `${layer.id} layer`);
     }
 
-    await visit(page, `${base}/system/architecture/`);
-    const target = page.locator(".sl-markdown-content h2[id], .sl-markdown-content h3[id]").first();
-    const targetId = await target.getAttribute("id");
-    if (!targetId) throw new Error(`${name}: deep-link target fixture is absent`);
-    await visit(page, `${base}/system/architecture/#${encodeURIComponent(targetId)}`);
-    if (await page.evaluate((id) => location.hash.slice(1) === encodeURIComponent(id) || decodeURIComponent(location.hash.slice(1)) === id, targetId) !== true) throw new Error(`${name}: deep-link fragment did not persist`);
-    if (!await target.isVisible()) throw new Error(`${name}: deep-link target is not visible`);
+    const activePages = generated.pages.filter((item) => item && item.stale === false && typeof item.route === "string");
+    await assertDeepLink(page, name, origin, config.base, activePages);
+    const previewResult = await assertStrictIdPreview(page, name, origin, config, activePages);
+    await assertSourceLink(page, name, config);
+    await assertThemeMatrix(page, name, output);
+    await assertKeyboardPath(page, name);
 
-    await assertFocusIsVisible(page, name);
     await page.setViewportSize({ width: 375, height: 812 });
-    await visit(page, `${base}/`);
+    await visit(page, siteRoot);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (overflow > 1) throw new Error(`${name}: mobile page overflows by ${overflow}px`);
     const targets = await page.locator(".portal-journey a, button, summary").evaluateAll((items) => items.map((item) => ({ text: item.textContent?.trim().slice(0, 80), width: item.getBoundingClientRect().width, height: item.getBoundingClientRect().height })).filter((target) => target.width > 0 && target.height > 0));
     const undersized = targets.filter((target) => target.width < 24 || target.height < 24);
     if (undersized.length) throw new Error(`${name}: primary target smaller than 24 CSS pixels: ${JSON.stringify(undersized)}`);
-    const mobile = path.join(outputRoot, `${name}-mobile.png`);
-    await page.screenshot({ path: mobile, fullPage: true });
-    screenshots.push(await artifact(mobile));
+    await page.screenshot({ path: path.join(output, `${name}-mobile.png`), fullPage: true });
     if (Object.values(runtime).some((items) => items.length)) throw new Error(`${name}: runtime/network isolation failure: ${JSON.stringify(runtime)}`);
+
     await context.tracing.stop({ path: trace });
+    traceStarted = false;
     await context.close();
     context = null;
-    return { engine: name, status: "passed", checks: ["landmarks-and-names", "axe-wcag22-aa", "layout", "search", "mode-persistence", "deep-link", "focus-not-obscured", "target-size", "responsive", "console", "network-isolation"], screenshots, trace: await artifact(trace) };
+    return {
+      engine: name,
+      status: "passed",
+      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search", "system-and-mode-persistence-before-paint", "layer-journey", "deep-link", previewResult, "source-link", "keyboard-traversal-and-focus", "signal-and-folio-light-dark", "target-size", "responsive", "console", "network-isolation"],
+    };
   } catch (error) {
-    if (context) await context.tracing.stop({ path: trace }).catch(() => {});
-    return { engine: name, status: "failed", error: String(error?.stack ?? error), screenshots };
+    if (context && traceStarted) await context.tracing.stop({ path: trace }).catch(() => {});
+    return { engine: name, status: "failed", error: String(error?.stack ?? error) };
   } finally {
     if (context) await context.close().catch(() => {});
     await rm(profile, { recursive: true, force: true });
@@ -145,11 +192,16 @@ async function assertSemantics(page, engine) {
   if (unnamed) throw new Error(`${engine}: ${unnamed} controls lack an accessible name`);
 }
 
+async function assertScreenReaderStructure(page, engine) {
+  const snapshot = await page.locator("body").ariaSnapshot();
+  if (!snapshot.includes("heading") || !snapshot.includes("navigation") || !snapshot.includes("main")) throw new Error(`${engine}: accessibility tree lacks the expected document structure`);
+}
+
 async function assertLayout(page, engine) {
   const geometry = await page.evaluate(() => {
     const main = document.querySelector("main")?.getBoundingClientRect();
     const header = document.querySelector("header")?.getBoundingClientRect();
-    return { viewport: [innerWidth, innerHeight], main: main && [main.left, main.top, main.right, main.bottom], header: header && [header.left, header.top, header.right, header.bottom], overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+    return { main: main && [main.left, main.top, main.right, main.bottom], header: header && [header.left, header.top, header.right, header.bottom], overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
   });
   if (!geometry.main || !geometry.header || geometry.overflow > 1 || geometry.main[2] <= geometry.main[0] || geometry.main[3] <= geometry.main[1]) throw new Error(`${engine}: invalid desktop layout ${JSON.stringify(geometry)}`);
 }
@@ -159,36 +211,172 @@ async function assertA11y(page, engine, surface) {
   if (result.violations.length) throw new Error(`${engine}: ${surface} accessibility violations: ${JSON.stringify(result.violations.map((item) => ({ id: item.id, impact: item.impact, nodes: item.nodes.length })))}`);
 }
 
-async function assertFocusIsVisible(page, engine) {
-  const focusable = page.locator('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])');
-  const count = Math.min(await focusable.count(), 16);
-  if (!count) throw new Error(`${engine}: no keyboard-focusable controls found`);
-  for (let index = 0; index < count; index += 1) {
-    const candidate = focusable.nth(index);
-    if (!await candidate.isVisible()) continue;
-    await candidate.focus();
-    const result = await page.evaluate(() => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLElement)) return { ok: false, reason: "no active element" };
-      const rect = active.getBoundingClientRect();
-      const x = Math.max(0, Math.min(innerWidth - 1, rect.left + rect.width / 2));
-      const y = Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2));
-      const top = document.elementFromPoint(x, y);
-      return { ok: rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight && !!top && (top === active || active.contains(top) || top.contains(active)), tag: active.tagName, text: active.textContent?.trim().slice(0, 80) };
-    });
-    if (!result.ok) throw new Error(`${engine}: focused control is hidden or obscured: ${JSON.stringify(result)}`);
+async function assertBeforePaintTheme(page, engine, expected) {
+  await page.waitForFunction(() => window.__codeflowThemeBeforePaint !== null);
+  const actual = await page.evaluate(() => window.__codeflowThemeBeforePaint);
+  if (actual !== expected) throw new Error(`${engine}: expected ${expected} before first paint, received ${actual}`);
+}
+
+async function searchForResult(page, engine, config, pages) {
+  const search = page.getByRole("button", { name: "Search" }).first();
+  await search.waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.querySelector("button[data-open-modal]")?.disabled);
+  await search.click();
+  const input = page.getByRole("dialog", { name: "Search" }).locator("input");
+  const corpus = [config.title, config.description, ...pages.slice(0, 16).flatMap((item) => [item?.title, item?.source_path])].filter((value) => typeof value === "string").join(" ");
+  const candidates = [...new Set(corpus.split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}]/gu, "")).filter((word) => word.length >= 2))].slice(0, 12);
+  if (!candidates.length) candidates.push(config.title);
+  for (const candidate of candidates) {
+    await input.fill(candidate);
+    if (await page.locator("dialog[open] a").first().waitFor({ state: "visible", timeout: 2_000 }).then(() => true, () => false)) {
+      await page.keyboard.press("Escape");
+      return;
+    }
   }
+  throw new Error(`${engine}: search returned no result for portal-owned terms`);
+}
+
+async function assertDeepLink(page, engine, origin, base, pages) {
+  const found = await findSurface(page, origin, base, pages, ".sl-markdown-content h2[id], .sl-markdown-content h3[id]");
+  if (!found) throw new Error(`${engine}: no generated page exposes a deep-link heading`);
+  const target = page.locator(".sl-markdown-content h2[id], .sl-markdown-content h3[id]").first();
+  const targetId = await target.getAttribute("id");
+  await visit(page, `${routeUrl(origin, base, found.route)}#${encodeURIComponent(targetId)}`);
+  if (!await target.isVisible()) throw new Error(`${engine}: deep-link target is not visible`);
+  if (!await page.evaluate((id) => decodeURIComponent(location.hash.slice(1)) === id, targetId)) throw new Error(`${engine}: deep-link fragment did not persist`);
+}
+
+async function assertStrictIdPreview(page, engine, origin, config, pages) {
+  const found = await findSurface(page, origin, config.base, pages, ".portal-id-preview > a");
+  if (!found) return "strict-id-preview-not-applicable";
+  const trigger = page.locator(".portal-id-preview > a").first();
+  const tooltip = trigger.locator("xpath=following-sibling::*[@role='tooltip']");
+  await trigger.hover();
+  await tooltip.waitFor({ state: "visible" });
+  await focusTargetByKeyboard(page, trigger, engine);
+  await tooltip.waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await tooltip.waitFor({ state: "hidden" });
+  await trigger.tap();
+  await tooltip.waitFor({ state: "visible" });
+  const href = await trigger.getAttribute("href");
+  if (!href || new URL(href, page.url()).origin !== origin) throw new Error(`${engine}: strict-ID trigger is not an ordinary local link`);
+  return "strict-id-hover-keyboard-touch-escape-link";
+}
+
+async function assertSourceLink(page, engine, config) {
+  if (config.repository_url === null) return;
+  const link = page.locator(`a[href^="${config.repository_url}/blob/"]`).first();
+  if (!await link.count()) throw new Error(`${engine}: committed source link is absent`);
+}
+
+async function assertThemeMatrix(page, engine, output) {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  for (const utilityTheme of ["signal", "folio"]) {
+    for (const mode of ["light", "dark"]) {
+      await page.evaluate(({ utilityTheme, mode }) => {
+        document.documentElement.dataset.portalTheme = utilityTheme;
+        document.documentElement.dataset.theme = mode;
+      }, { utilityTheme, mode });
+      const tokens = await page.evaluate(() => ({ font: getComputedStyle(document.documentElement).getPropertyValue("--sl-font").trim(), accent: getComputedStyle(document.documentElement).getPropertyValue("--sl-color-accent").trim() }));
+      if (!tokens.font || !tokens.accent) throw new Error(`${engine}: ${utilityTheme}/${mode} utility tokens are absent`);
+      if (utilityTheme === "folio" && !tokens.font.includes("Georgia")) throw new Error(`${engine}: folio typography was not applied`);
+      if (utilityTheme === "signal" && !tokens.font.includes("Inter")) throw new Error(`${engine}: signal typography was not applied`);
+      await assertA11y(page, engine, `${utilityTheme}/${mode}`);
+      await page.screenshot({ path: path.join(output, `${engine}-${utilityTheme}-${mode}.png`), fullPage: true });
+    }
+  }
+}
+
+async function assertKeyboardPath(page, engine) {
+  const sequence = await keyboardSequence(page, "Tab");
+  const effective = sequence.length >= 3 ? sequence : await keyboardSequence(page, "Alt+Tab");
+  if (effective.length < 3) throw new Error(`${engine}: keyboard traversal did not reach three distinct controls`);
+  for (const item of effective.slice(0, 16)) {
+    if (!item.visible) throw new Error(`${engine}: keyboard-focused control is hidden or obscured: ${JSON.stringify(item)}`);
+  }
+}
+
+async function keyboardSequence(page, key) {
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  const sequence = [];
+  for (let index = 0; index < 32; index += 1) {
+    await page.keyboard.press(key);
+    const item = await activeGeometry(page);
+    if (item.signature && !sequence.some((prior) => prior.signature === item.signature)) sequence.push(item);
+    if (sequence.length >= 8) break;
+  }
+  return sequence;
+}
+
+async function focusTargetByKeyboard(page, target, engine) {
+  for (const key of ["Tab", "Alt+Tab"]) {
+    await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+    for (let index = 0; index < 160; index += 1) {
+      await page.keyboard.press(key);
+      if (await target.evaluate((element) => document.activeElement === element)) return;
+    }
+  }
+  throw new Error(`${engine}: strict-ID trigger is not keyboard reachable`);
+}
+
+async function activeGeometry(page) {
+  return page.evaluate(() => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || active === document.body) return { signature: null, visible: false };
+    const rect = active.getBoundingClientRect();
+    const x = Math.max(0, Math.min(innerWidth - 1, rect.left + rect.width / 2));
+    const y = Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2));
+    const top = document.elementFromPoint(x, y);
+    return {
+      signature: `${active.tagName}:${active.getAttribute("href") ?? active.getAttribute("aria-label") ?? active.textContent?.trim().slice(0, 80)}`,
+      visible: rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight && !!top && (top === active || active.contains(top) || top.contains(active)),
+    };
+  });
+}
+
+async function findSurface(page, origin, base, pages, selector) {
+  for (const candidate of pages.slice(0, 64)) {
+    await visit(page, routeUrl(origin, base, candidate.route));
+    if (await page.locator(selector).count()) return candidate;
+  }
+  return null;
+}
+
+function routeUrl(origin, base, route) {
+  return new URL(withBase(base, route), origin).toString();
 }
 
 async function visit(page, url) {
   const response = await page.goto(url, { waitUntil: "networkidle" });
-  if (response?.status() >= 400 || !response && page.url() !== url) throw new Error(`${url} returned ${response?.status()}`);
+  if (!response || response.status() >= 400) throw new Error(`${url} returned ${response?.status()}`);
 }
 
-async function artifact(file) {
+async function evidenceInventory(directory) {
+  const entries = (await readdir(directory)).sort();
+  if (entries.length > 64) throw new Error("browser evidence contains more than 64 artifacts");
+  const artifacts = [];
+  let total = 0;
+  for (const entry of entries) {
+    const file = path.join(directory, entry);
+    const metadata = await lstat(file);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`browser evidence contains a non-regular artifact: ${entry}`);
+    const artifact = await artifactFor(file);
+    total += artifact.bytes;
+    if (total > 64 * 1024 * 1024) throw new Error(`browser evidence exceeds 67108864 bytes: ${total}`);
+    artifacts.push(artifact);
+  }
+  return artifacts;
+}
+
+async function artifactFor(file) {
   const bytes = await readFile(file);
   if (bytes.length > 32 * 1024 * 1024) throw new Error(`browser artifact exceeds 33554432 bytes: ${file}`);
-  return { file: path.basename(file), bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  return { file: path.basename(file), bytes: bytes.length, sha256: digest(bytes) };
+}
+
+function digest(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function availablePort() {
@@ -202,11 +390,11 @@ function availablePort() {
   });
 }
 
-async function waitForServer(base, processHandle) {
+async function waitForServer(base, processHandle, output) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (processHandle.exitCode !== null) throw new Error(`portal preview exited before readiness: ${serverOutput}`);
+    if (processHandle.exitCode !== null) throw new Error(`portal preview exited before readiness: ${output()}`);
     if (await fetch(base).then((response) => response.ok, () => false)) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`portal preview did not become ready: ${serverOutput}`);
+  throw new Error(`portal preview did not become ready: ${output()}`);
 }

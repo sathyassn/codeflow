@@ -122,11 +122,17 @@ material portal change, verify:
   by verified resource cleanup.
 
 `npm run browser:verify` is the reusable headless default. It starts a
-task-owned loopback preview on an ephemeral port; runs Chromium, Firefox, and
-WebKit sequentially with separate temporary profiles; checks landmarks and
-names, WCAG 2.2 AA axe rules, layout, search, appearance persistence, deep
-links, focus obscuration, target size, responsive overflow, console failures,
-and remote requests; then records screenshot/trace digests and verifies server
+task-owned loopback preview on an ephemeral port under the workflow lease;
+derives its base path, layers, routes, and search terms from validated project
+configuration and generated evidence; and binds the result to the exact Git,
+configuration, generator, and artifact-claim identity. Chromium, Firefox, and
+WebKit run sequentially with separate temporary profiles. The suite checks
+landmarks, accessible names/tree structure, WCAG 2.2 AA axe rules, layout,
+search, system/persisted appearance before first paint, configured layer
+journeys, deep links, applicable strict-ID and source-link behavior, real
+keyboard traversal and unobscured focus, both fallback themes in both modes,
+target size, responsive overflow, console failures, and remote requests. It
+bounds and hashes success and failure screenshots/traces and verifies server
 and profile teardown. Set a unique `PORTAL_BROWSER_RUN` for concurrent tasks.
 Use a headed task-owned browser only for a finding the headless run cannot
 settle, never the operator's profile or view.

@@ -63,9 +63,13 @@ Before Astro starts, the workflow rejects symlinks and non-regular entries in
 tool-controlled `dist`, `.astro`, and Node cache roots; it never follows an
 output link while cleaning. Run only one task-owned dev server per portal, stop
 it before another locked workflow, and verify process and port teardown. The
-tracked `browser:verify` harness uses separate temporary profiles and an
-ephemeral loopback port, emits bounded evidence under
-`.portal/browser-evidence/<run>/`, and removes profiles and server resources.
+tracked `browser:verify` harness holds the same workflow lease, refuses a stale
+or mismatched generated manifest, and records the exact repository commit,
+configuration, generator, evidence, and artifact-claim identity it exercised.
+It derives base paths and layer journeys from project configuration, uses
+separate temporary profiles and an ephemeral loopback port, emits bounded
+success and failure evidence under `.portal/browser-evidence/<run>/`, and
+removes profiles and server resources.
 
 Portal-owned Markdown fragments are verified against renderer-produced heading
 anchors in both the producer and the independent Rust validator. Fragments on
