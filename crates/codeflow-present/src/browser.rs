@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(any(windows, test))]
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -608,6 +611,8 @@ fn process_group_is_absent(pid: i32) -> Result<bool> {
     let error = std::io::Error::last_os_error();
     if error.raw_os_error() == Some(libc::ESRCH) {
         Ok(true)
+    } else if error.raw_os_error() == Some(libc::EPERM) {
+        Ok(false)
     } else {
         Err(PresentError::io("browser process group probe", error))
     }
@@ -959,25 +964,65 @@ fn windows_command_line_arguments(command: &str) -> Result<Vec<String>> {
 
 #[cfg(windows)]
 fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<()> {
-    match process_identity(pid, instance_id, profile_dir)? {
-        ProcessIdentity::Owned => {}
-        ProcessIdentity::Absent | ProcessIdentity::Reused => {
-            let candidates = owned_process_candidates(instance_id, profile_dir)?;
-            if candidates.is_empty() {
-                return if profile_resources_released(profile_dir)? {
-                    Ok(())
-                } else {
-                    Err(PresentError::BrowserUnavailable(orphan_recovery_message(
-                        "the recorded Windows browser PID is absent or reused, but the profile retains an open resource",
-                    )))
-                };
+    terminate_windows_processes_with(
+        pid,
+        |candidate| process_identity(candidate, instance_id, profile_dir),
+        || owned_process_candidates(instance_id, profile_dir),
+        |candidate| terminate_owned_windows_process(candidate, instance_id, profile_dir),
+        || profile_resources_released(profile_dir),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn terminate_windows_processes_with<Identity, Candidates, Terminate, Released>(
+    pid: u32,
+    mut identity: Identity,
+    mut candidates: Candidates,
+    mut terminate_owned: Terminate,
+    mut resources_released: Released,
+) -> Result<()>
+where
+    Identity: FnMut(u32) -> Result<ProcessIdentity>,
+    Candidates: FnMut() -> Result<Vec<u32>>,
+    Terminate: FnMut(u32) -> Result<()>,
+    Released: FnMut() -> Result<bool>,
+{
+    const MAX_VISITED_PROCESSES: usize = 64;
+
+    let mut pending = vec![pid];
+    let mut scheduled = BTreeSet::from([pid]);
+    let mut visited = BTreeSet::new();
+    while let Some(candidate) = pending.pop() {
+        if !visited.insert(candidate) {
+            continue;
+        }
+        match identity(candidate)? {
+            ProcessIdentity::Owned => terminate_owned(candidate)?,
+            ProcessIdentity::Absent | ProcessIdentity::Reused => {
+                for discovered in candidates()? {
+                    if visited.contains(&discovered) || !scheduled.insert(discovered) {
+                        continue;
+                    }
+                    if scheduled.len() > MAX_VISITED_PROCESSES {
+                        return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+                            "Windows browser recovery exceeded its bounded process worklist",
+                        )));
+                    }
+                    pending.push(discovered);
+                }
             }
-            for candidate in candidates {
-                terminate_qualified_process(candidate, instance_id, profile_dir)?;
-            }
-            return Ok(());
         }
     }
+    if !candidates()?.is_empty() || !resources_released()? {
+        return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+            "the owned Windows presentation browser tree still has an exact process or open profile resource",
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_owned_windows_process(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<()> {
     let taskkill = crate::platform::trusted_system_path("taskkill.exe")?;
     let output = windows_terminate_command(&taskkill, pid)
         .output()
@@ -989,15 +1034,13 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
     }
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        if owned_process_candidates(instance_id, profile_dir)?.is_empty()
-            && profile_resources_released(profile_dir)?
-        {
-            return Ok(());
+        match process_identity(pid, instance_id, profile_dir)? {
+            ProcessIdentity::Absent | ProcessIdentity::Reused => return Ok(()),
+            ProcessIdentity::Owned => thread::sleep(Duration::from_millis(50)),
         }
-        thread::sleep(Duration::from_millis(50));
     }
     Err(PresentError::BrowserUnavailable(orphan_recovery_message(
-        "the owned Windows presentation browser tree did not release every exact process and profile resource",
+        "the exactly owned Windows presentation browser process did not terminate",
     )))
 }
 
@@ -1189,6 +1232,20 @@ mod tests {
 
         recover_incomplete_launch(&store, session_id, &profile).unwrap();
         assert!(!recovery.exists());
+        assert!(!profile.exists());
+
+        create_private_dir_all(&profile).unwrap();
+        write_launch_recovery(
+            &store,
+            session_id,
+            &second_recovery,
+            second_instance,
+            None,
+            &profile,
+        )
+        .unwrap();
+        assert!(second_recovery.exists());
+        recover_incomplete_launch(&store, session_id, &profile).unwrap();
         assert!(!second_recovery.exists());
         assert!(!profile.exists());
     }
@@ -1304,6 +1361,71 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn windows_recovery_rejects_a_repeated_contradictory_candidate() {
+        let identity_calls = std::cell::Cell::new(0_usize);
+        let inventory_calls = std::cell::Cell::new(0_usize);
+        let termination_calls = std::cell::Cell::new(0_usize);
+        let error = terminate_windows_processes_with(
+            7,
+            |_| {
+                identity_calls.set(identity_calls.get() + 1);
+                Ok(ProcessIdentity::Reused)
+            },
+            || {
+                inventory_calls.set(inventory_calls.get() + 1);
+                Ok(vec![7])
+            },
+            |_| {
+                termination_calls.set(termination_calls.get() + 1);
+                Ok(())
+            },
+            || Ok(true),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("still has an exact process"));
+        assert_eq!(identity_calls.get(), 1);
+        assert_eq!(inventory_calls.get(), 2);
+        assert_eq!(termination_calls.get(), 0);
+    }
+
+    #[test]
+    fn windows_recovery_deduplicates_candidate_cycles() {
+        use std::{cell::RefCell, collections::VecDeque};
+
+        let identity_calls = RefCell::new(Vec::new());
+        let inventories = RefCell::new(VecDeque::from([vec![1, 2, 2], vec![2, 1], Vec::new()]));
+        terminate_windows_processes_with(
+            1,
+            |pid| {
+                identity_calls.borrow_mut().push(pid);
+                Ok(ProcessIdentity::Reused)
+            },
+            || Ok(inventories.borrow_mut().pop_front().unwrap()),
+            |_| panic!("a reused candidate must never be terminated"),
+            || Ok(true),
+        )
+        .unwrap();
+
+        assert_eq!(*identity_calls.borrow(), vec![1, 2]);
+        assert!(inventories.borrow().is_empty());
+    }
+
+    #[test]
+    fn windows_recovery_fails_closed_when_the_worklist_limit_is_exhausted() {
+        let error = terminate_windows_processes_with(
+            1,
+            |_| Ok(ProcessIdentity::Reused),
+            || Ok((2..=65).collect()),
+            |_| panic!("a reused candidate must never be terminated"),
+            || panic!("resource proof must not run after worklist exhaustion"),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("bounded process worklist"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn orphan_process_group_retains_recovery_state_when_leader_is_absent() {
@@ -1387,16 +1509,17 @@ mod tests {
         command
             .args([
                 "-c",
-                "trap 'exit 0' TERM; while :; do sleep 1; done",
+                "trap 'exit 0' TERM; read value",
                 "cf-present-browser",
                 &format!("--user-data-dir={}", profile.display()),
                 &format!("--cf-present-instance={instance}"),
             ])
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
         let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
         let pid = child.id();
         let waiter = thread::spawn(move || child.wait().unwrap());
 
@@ -1417,11 +1540,12 @@ mod tests {
             ProcessIdentity::Reused
         );
         terminate_qualified_process(pid, instance, &profile).unwrap();
-        let _status = waiter.join().unwrap();
-        assert_eq!(
-            process_identity(pid, instance, &profile).unwrap(),
-            ProcessIdentity::Absent
-        );
+        let status = waiter.join().unwrap();
+        drop(stdin);
+        assert!(status.success());
+        assert!(owned_process_candidates(instance, &profile)
+            .unwrap()
+            .is_empty());
     }
 
     #[cfg(target_os = "macos")]
@@ -1442,12 +1566,12 @@ mod tests {
         command
             .args([
                 "-c",
-                "trap '' TERM; while :; do sleep 1; done",
+                "trap '' TERM; read value",
                 "cf-present-browser",
                 &format!("--user-data-dir={}", profile.display()),
                 &format!("--cf-present-instance={instance}"),
             ])
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
@@ -1462,7 +1586,9 @@ mod tests {
         terminate_qualified_process(pid, instance, &profile).unwrap();
         let status = child.wait().unwrap();
         assert!(!status.success());
-        assert!(process_group_is_absent(i32::try_from(pid).unwrap()).unwrap());
+        assert!(owned_process_candidates(instance, &profile)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

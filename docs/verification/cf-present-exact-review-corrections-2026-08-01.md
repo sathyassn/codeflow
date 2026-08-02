@@ -11,7 +11,7 @@
 | Boundary | Deterministic evidence | Result |
 |---|---|---|
 | Launch crash and retry | Per-attempt record, launch lease, unregistered and committed-record recovery tests | Pass |
-| PID absence/reuse | Exact marker inventory; reused current PID is not signalled and recovery converges | Pass on macOS; Windows adapter cross-compiles, native qualification remains TSK-007 |
+| PID absence/reuse | Exact marker inventory; reused current PID is not signalled; Windows candidate chasing uses a bounded duplicate-aware worklist | Pass on macOS; Windows adapter cross-compiles, native qualification remains TSK-007 |
 | Profile/resource proof | Unix exact candidate/process-group checks; Windows bounded exclusive-handle tree walk | Pass on macOS; native Windows pending TSK-007 |
 | Crash cleanup | Exact UUID/nonce directory plus matching create/delete transaction marker | Pass; markerless exact names remain untouched and fail closed |
 | Selected clear | Unrelated corrupt session and malformed staging state are not loaded or mutated | Pass; retained selected state is an explicit failure |
@@ -22,12 +22,11 @@
 ## Local verification
 
 - `cargo fmt --all -- --check` and `git diff --check`: passed.
-- `cargo test -p codeflow-present --all-targets`: 87 passed, including a
-  30-run standalone stress. Full mode runs workspace and coverage test
-  processes concurrently, so the three macOS process-group fixtures share a
-  test-only cross-process lease; the previously intermittent full-mode case
-  passed after this correction. Production ownership checks remain fail
-  closed.
+- `cargo test -p codeflow-present --all-targets`: 90 passed in five
+  consecutive final runs. Full mode runs workspace and coverage test processes
+  concurrently, so the three macOS process-group fixtures share a test-only
+  cross-process lease; the previously intermittent full-mode case passed after
+  this correction. Production ownership checks remain fail closed.
 - `cargo test -p codeflow-cli --test present_cli`: 2 passed, including service
   crash → close → selected clear.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
@@ -45,9 +44,11 @@
   passed, including the 90% line-coverage floor, gate parity, and model-eval
   kit.
 - `cargo test --workspace --all-targets`: passed, including 1,458 core tests,
-  87 presentation tests, and all CLI/integration contract suites.
+  90 presentation tests, and all CLI/integration contract suites.
 
 - `gitleaks protect --staged --redact`: approximately 53 KB exact staged range;
+  no leaks found.
+- Final bounded-worklist and test-integrity delta: approximately 6.7 KB staged;
   no leaks found.
 
 Cross-compilation is not represented as native Windows runtime evidence;
