@@ -317,7 +317,7 @@ test("the AST rewrite permits external links but refuses remote images and ambig
   assert.match(rewriteRepositoryMarkdown("[unused]: asset.png", options), /\[unused\]: asset\.png/);
   assert.throws(() => rewriteRepositoryMarkdown("[Binary](secret.key)", options), /unsupported local media type/);
   const mediaReferences = new Map();
-  assert.match(rewriteRepositoryMarkdown("![Local](media/Mixed Case + café.png)", {
+  assert.match(rewriteRepositoryMarkdown("![Local](<media/Mixed Case + café.png>)", {
     ...options, base: "/guide/", mediaReferences,
   }), /\/guide\/media\/[a-f0-9]{16}-Mixed%20Case%20%2B%20caf%C3%A9\.png/);
   assert.equal(mediaReferences.get("docs/media/Mixed Case + café.png")?.endsWith("-Mixed Case + café.png"), true);
