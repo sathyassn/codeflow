@@ -733,25 +733,45 @@ mod tests {
 
     #[test]
     fn presentation_children_have_one_restricted_command_constructor() {
-        let platform = include_str!("platform.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production platform source");
+        // Defense-in-depth source tripwire: executable child canaries remain
+        // the authority for the environment actually crossing this boundary.
+        let platform = compact_rust(
+            include_str!("platform.rs")
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production platform source"),
+        );
         assert_eq!(platform.matches("Command::new(").count(), 1);
+        assert_eq!(
+            compact_rust("std::process::Command \n :: new(tool)")
+                .matches("Command::new(")
+                .count(),
+            1,
+            "whitespace must not bypass the source tripwire"
+        );
         for (name, source) in [
             ("browser", include_str!("browser.rs")),
             ("service", include_str!("service.rs")),
             ("state", include_str!("state.rs")),
         ] {
-            let production = source
-                .split("#[cfg(test)]")
-                .next()
-                .expect("production presentation source");
+            let production = compact_rust(
+                source
+                    .split("#[cfg(test)]")
+                    .next()
+                    .expect("production presentation source"),
+            );
             assert!(
                 !production.contains("Command::new("),
                 "{name} added a raw external child route"
             );
         }
+    }
+
+    fn compact_rust(source: &str) -> String {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
     }
 
     #[test]

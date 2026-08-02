@@ -31,9 +31,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.18.0
+          node-version: 26.4.0
           cache: npm
-          cache-dependency-path: docs-portal/package-lock.json
+          cache-dependency-path: |
+            docs-portal/package-lock.json
+            crates/codeflow-present/web/package-lock.json
+
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
 
       - name: Build codeflow from source
         run: |

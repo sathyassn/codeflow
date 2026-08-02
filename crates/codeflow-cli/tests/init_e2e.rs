@@ -151,11 +151,9 @@ fn assert_present_artifact_parity(root: &Path) {
         for installed in [
             root.join(".agents/skills/cf-present").join(relative),
             root.join(".claude/skills/cf-present").join(relative),
-            repository
-                .join(".codeflow/.baseline/.agents/skills/cf-present")
+            root.join(".codeflow/.baseline/.agents/skills/cf-present")
                 .join(relative),
-            repository
-                .join(".codeflow/.baseline/.claude/skills/cf-present")
+            root.join(".codeflow/.baseline/.claude/skills/cf-present")
                 .join(relative),
         ] {
             assert_eq!(
@@ -173,9 +171,7 @@ fn assert_present_artifact_parity(root: &Path) {
             .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
         for installed in [
             root.join(".codeflow/schemas/present").join(schema),
-            repository.join(".codeflow/schemas/present").join(schema),
-            repository
-                .join(".codeflow/.baseline/.codeflow/schemas/present")
+            root.join(".codeflow/.baseline/.codeflow/schemas/present")
                 .join(schema),
         ] {
             assert_eq!(

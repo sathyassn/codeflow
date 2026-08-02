@@ -799,13 +799,31 @@ mod tests {
 
     #[test]
     fn service_launch_has_one_minimal_command_constructor() {
-        let production = include_str!("present.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production present command source");
+        // Defense-in-depth source tripwire: executable child canaries remain
+        // the authority for the environment actually crossing this boundary.
+        let production = compact_rust(
+            include_str!("present.rs")
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production present command source"),
+        );
         assert_eq!(production.matches("Command::new(").count(), 1);
         assert!(production.contains(
-            "let mut command = Command::new(executable);\n    apply_minimal_service_environment(&mut command);"
+            "letmutcommand=Command::new(executable);apply_minimal_service_environment(&mutcommand);"
         ));
+        assert_eq!(
+            compact_rust("std::process::Command \n :: new(tool)")
+                .matches("Command::new(")
+                .count(),
+            1,
+            "whitespace must not bypass the source tripwire"
+        );
+    }
+
+    fn compact_rust(source: &str) -> String {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
     }
 }

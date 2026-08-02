@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import axe from "axe-core";
+import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -14,7 +15,7 @@ await access(codeflow);
 
 const functionalEnvironmentNames = [
   "APPDATA", "CARGO_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
-  "LOCALAPPDATA", "PATHEXT", "PATH", "RUSTUP_HOME", "SYSTEMROOT", "TEMP", "TERM",
+  "LOCALAPPDATA", "PATHEXT", "PATH", "RUSTUP_HOME", "SystemRoot", "SYSTEMROOT", "TEMP", "TERM",
   "TMP", "TMPDIR", "USERPROFILE", "WINDIR", "XDG_RUNTIME_DIR",
 ];
 const runPrefix = process.env.CF_PRESENT_RUN_PREFIX ?? "tsk007";
@@ -23,10 +24,16 @@ if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(runPrefix)) {
 }
 const injectCleanupFailure = process.argv.includes("--inject-cleanup-failure");
 const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
+const windowsProfileConfinement = qualifyWindowsEnvironment();
 const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
 const marker = join(runRoot, ".cf-present-qualification-root");
 const project = join(runRoot, "project");
 const home = join(runRoot, "home");
+const userProfile = join(runRoot, "user-profile");
+const localAppData = join(runRoot, "local-app-data");
+const appData = join(runRoot, "app-data");
+const xdgState = join(runRoot, "xdg-state");
+const taskTemp = join(runRoot, "tmp");
 const browserProfileV1 = join(runRoot, "browser-profile-v1");
 const browserProfileV2 = join(runRoot, "browser-profile-v2");
 const output = join(runRoot, "output");
@@ -38,8 +45,13 @@ const evidenceDestination = process.env.CF_PRESENT_EVIDENCE_DIR
 const childEnvironment = {
   ...allowedEnvironment(functionalEnvironmentNames),
   HOME: home,
-  XDG_STATE_HOME: join(home, "state"),
-  TMPDIR: join(runRoot, "tmp"),
+  USERPROFILE: userProfile,
+  LOCALAPPDATA: localAppData,
+  APPDATA: appData,
+  XDG_STATE_HOME: xdgState,
+  TMPDIR: taskTemp,
+  TMP: taskTemp,
+  TEMP: taskTemp,
   NODE_DISABLE_COMPILE_CACHE: "1",
   AWS_SECRET_ACCESS_KEY: "aws-real-browser-canary",
   AWS_SESSION_TOKEN: "aws-session-real-browser-canary",
@@ -52,9 +64,12 @@ const browserEnvironment = allowedEnvironment([
   "TEMP", "TMP", "TMPDIR", "USERPROFILE", "WINDIR", "XDG_RUNTIME_DIR",
 ]);
 browserEnvironment.HOME = home;
-browserEnvironment.TMPDIR = childEnvironment.TMPDIR;
-browserEnvironment.TMP = childEnvironment.TMPDIR;
-browserEnvironment.TEMP = childEnvironment.TMPDIR;
+browserEnvironment.USERPROFILE = userProfile;
+browserEnvironment.LOCALAPPDATA = localAppData;
+browserEnvironment.APPDATA = appData;
+browserEnvironment.TMPDIR = taskTemp;
+browserEnvironment.TMP = taskTemp;
+browserEnvironment.TEMP = taskTemp;
 
 assertChildEnvironmentDoesNotInheritUnrelatedHostValues();
 
@@ -76,11 +91,15 @@ try {
   await Promise.all([
     mkdir(project),
     mkdir(home),
+    mkdir(userProfile),
+    mkdir(localAppData),
+    mkdir(appData),
+    mkdir(xdgState),
     mkdir(browserProfileV1),
     mkdir(browserProfileV2),
     mkdir(output),
     mkdir(trace),
-    mkdir(childEnvironment.TMPDIR),
+    mkdir(taskTemp),
   ]);
   run("git", ["init", "--quiet"], project);
 
@@ -234,6 +253,8 @@ try {
       service_pid: servicePid,
       service_instance: serviceInstance,
       data_namespace: runId,
+      environment_roots: { home, userProfile, localAppData, appData, xdgState, taskTemp },
+      windows_profile_confinement: windowsProfileConfinement,
       output,
       trace,
     },
@@ -251,6 +272,10 @@ try {
       service_process_identity_teardown: "pass",
       browser_process_and_profile_teardown: "pass",
       session_clear: "pass",
+      windows_profile_confinement: windowsProfileConfinement ? "pass" : "not applicable",
+      windows_profile_or_vm_teardown: windowsProfileConfinement
+        ? "not evaluated; outer native-Windows lane required"
+        : "not applicable",
     },
   };
   await writeFile(join(output, "results.json"), `${JSON.stringify(result, null, 2)}\n`);
@@ -648,6 +673,31 @@ function allowedEnvironment(names, source = process.env) {
   )));
 }
 
+function qualifyWindowsEnvironment() {
+  if (process.platform !== "win32") return null;
+  const disposableProfileRoot = process.env.CF_PRESENT_WINDOWS_DISPOSABLE_PROFILE_ROOT;
+  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+  const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const knownLocalAppData = execFileSync(powershell, [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
+  ], {
+    env: allowedEnvironment(functionalEnvironmentNames),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10_000,
+  }).trim();
+  return validateWindowsQualificationConfinement({
+    disposableProfileRoot,
+    userProfile: process.env.USERPROFILE,
+    localAppData: process.env.LOCALAPPDATA,
+    appData: process.env.APPDATA,
+    temp: process.env.TEMP,
+    tmp: process.env.TMP,
+    knownLocalAppData,
+  });
+}
+
 function assertChildEnvironmentDoesNotInheritUnrelatedHostValues() {
   const simulatedHost = {
     ...process.env,
@@ -655,11 +705,26 @@ function assertChildEnvironmentDoesNotInheritUnrelatedHostValues() {
     NODE_OPTIONS: "--throw-deprecation",
   };
   const environment = allowedEnvironment(functionalEnvironmentNames, simulatedHost);
+  Object.assign(environment, {
+    HOME: home,
+    USERPROFILE: userProfile,
+    LOCALAPPDATA: localAppData,
+    APPDATA: appData,
+    XDG_STATE_HOME: xdgState,
+    TMPDIR: taskTemp,
+    TMP: taskTemp,
+    TEMP: taskTemp,
+  });
+  const expected = { home, userProfile, localAppData, appData, xdgState, taskTemp };
   execFileSync(process.execPath, ["-e", [
     "for (const name of ['NPM_TOKEN', 'NODE_OPTIONS']) {",
     "  if (process.env[name] !== undefined) throw new Error(`${name} crossed the runner boundary`);",
     "}",
-  ].join("\n")], {
+    "const expected = JSON.parse(process.argv[1]);",
+    "for (const [name, value] of Object.entries({ HOME: expected.home, USERPROFILE: expected.userProfile, LOCALAPPDATA: expected.localAppData, APPDATA: expected.appData, XDG_STATE_HOME: expected.xdgState, TMPDIR: expected.taskTemp, TMP: expected.taskTemp, TEMP: expected.taskTemp })) {",
+    "  if (process.env[name] !== value) throw new Error(`${name} did not use its task-owned root`);",
+    "}",
+  ].join("\n"), JSON.stringify(expected)], {
     env: environment,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

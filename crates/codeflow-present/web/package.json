@@ -14,6 +14,7 @@
     "check:browser": "node scripts/browser-check.mjs",
     "check:real-browser-cleanup": "node scripts/real-browser-cleanup-check.mjs",
     "check:real-browser": "node scripts/real-browser-check.mjs",
+    "check:windows-profile-confinement": "node scripts/windows-qualification-scope-check.mjs",
     "supply-chain": "node scripts/supply-chain.mjs"
   },
   "dependencies": {

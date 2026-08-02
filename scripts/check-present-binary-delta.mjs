@@ -13,7 +13,7 @@ const runId = `cf-present-binary-delta-${process.pid}-${randomUUID()}`;
 const sandbox = await mkdtemp(join(tmpdir(), `${runId}-`));
 const marker = join(sandbox, ".owned-binary-delta-root");
 const sourceRoot = join(sandbox, "source");
-const targetRoot = join(repoRoot, "target", "cf-present-binary-delta");
+const targetRoot = join(sandbox, "target");
 const savedAssets = join(sandbox, "production-assets");
 const childEnvironment = allowedEnvironment([
   "CARGO_HOME", "HOME", "LANG", "LC_ALL", "PATH", "RUSTUP_HOME", "SYSTEMROOT",

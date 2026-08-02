@@ -30,9 +30,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exact-owned cleanup, and runner children start from an explicit functional
   environment rather than inheriting unrelated host values. Executable child
   canaries cover the complete provider-secret deny set without leaking coverage
-  profiles; greenfield/brownfield parity, idempotent update, narrow cleanup,
-  reproducible locked assets, binary Git attributes, and deterministic release
-  payload-size deltas now have owning checks.
+  profiles. Windows qualification now fails closed unless an externally
+  provisioned disposable profile confines the actual Local AppData Known
+  Folder; the outer native lane still owns profile or VM teardown proof.
+  Greenfield/brownfield initialized-baseline parity, idempotent update, narrow
+  cleanup, reproducible locked assets, exact CI Node/npm tooling, binary Git
+  attributes, and isolated deterministic release payload-size deltas now have
+  owning checks.
 - **Claude's OS sandbox now keeps installed plugin code executable without
   exposing mutable plugin or private Claude state.** The broad `~/.claude`
   subprocess-read denial remains, while the higher-precedence filesystem
