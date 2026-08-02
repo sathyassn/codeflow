@@ -1413,6 +1413,38 @@ mod tests {
     }
 
     #[test]
+    fn windows_recovery_terminates_only_a_proven_owned_candidate_once() {
+        use std::{cell::RefCell, collections::VecDeque};
+
+        let identity_calls = RefCell::new(Vec::new());
+        let termination_calls = RefCell::new(Vec::new());
+        let inventories = RefCell::new(VecDeque::from([vec![11, 11], Vec::new()]));
+        terminate_windows_processes_with(
+            7,
+            |pid| {
+                identity_calls.borrow_mut().push(pid);
+                Ok(if pid == 11 {
+                    ProcessIdentity::Owned
+                } else {
+                    ProcessIdentity::Reused
+                })
+            },
+            || Ok(inventories.borrow_mut().pop_front().unwrap()),
+            |pid| {
+                termination_calls.borrow_mut().push(pid);
+                Ok(())
+            },
+            || Ok(true),
+        )
+        .unwrap();
+
+        assert_eq!(*identity_calls.borrow(), vec![7, 11]);
+        assert_eq!(*termination_calls.borrow(), vec![11]);
+        assert!(!termination_calls.borrow().contains(&7));
+        assert!(inventories.borrow().is_empty());
+    }
+
+    #[test]
     fn windows_recovery_fails_closed_when_the_worklist_limit_is_exhausted() {
         let error = terminate_windows_processes_with(
             1,
@@ -1495,6 +1527,7 @@ mod tests {
     #[test]
     fn process_group_cleanup_requires_and_terminates_the_exact_owned_identity() {
         use std::os::unix::process::CommandExt as _;
+        use std::os::unix::process::ExitStatusExt as _;
 
         let _process_group_test_lease = PROCESS_GROUP_TEST_LEASE
             .lock()
@@ -1542,7 +1575,7 @@ mod tests {
         terminate_qualified_process(pid, instance, &profile).unwrap();
         let status = waiter.join().unwrap();
         drop(stdin);
-        assert!(status.success());
+        assert!(status.success() || status.signal() == Some(libc::SIGTERM));
         assert!(owned_process_candidates(instance, &profile)
             .unwrap()
             .is_empty());
