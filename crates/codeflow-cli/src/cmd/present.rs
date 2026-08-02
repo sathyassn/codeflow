@@ -749,9 +749,17 @@ mod tests {
             }
             Ok("outer") => {
                 let executable = std::env::current_exe().expect("current test executable");
+                let temporary = tempfile::tempdir().expect("service child temporary directory");
+                let temporary_root = temporary.path().to_path_buf();
+                let profile = temporary.path().join("service-%p.profraw");
                 let mut command = Command::new(executable);
                 apply_minimal_service_environment(&mut command);
                 let output = command
+                    .current_dir(temporary.path())
+                    // Test instrumentation still needs a task-owned sink. This
+                    // is deliberately added after the production environment
+                    // restriction and is never part of that allowlist.
+                    .env("LLVM_PROFILE_FILE", &profile)
                     .args(["--exact", TEST, "--nocapture"])
                     .env(STAGE, "inner")
                     .output()
@@ -764,6 +772,11 @@ mod tests {
                 );
                 assert!(String::from_utf8_lossy(&output.stdout)
                     .contains("service child received no provider canary"));
+                drop(temporary);
+                assert!(
+                    !temporary_root.exists(),
+                    "service child temporary directory remained"
+                );
             }
             _ => {
                 let executable = std::env::current_exe().expect("current test executable");

@@ -4,6 +4,7 @@
 __pycache__/
 *.lcov
 lcov.info
+*.profraw
 
 # codeflow:managed:begin
 # secrets — never tracked

@@ -12,6 +12,7 @@
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
     "check:browser": "node scripts/browser-check.mjs",
+    "check:real-browser-cleanup": "node scripts/real-browser-cleanup-check.mjs",
     "check:real-browser": "node scripts/real-browser-check.mjs",
     "supply-chain": "node scripts/supply-chain.mjs"
   },

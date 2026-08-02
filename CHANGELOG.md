@@ -26,8 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   enhanced export, accessibility, network/console state, and exact bounded
   teardown. The real journey corrected strict-cookie bootstrap handoff and
   template payload extraction defects that raw HTTP and synthetic browser tests
-  had missed. Executable child canaries cover the complete provider-secret deny
-  set; greenfield/brownfield parity, idempotent update, narrow cleanup,
+  had missed. An injected failure proves the primary error survives exhaustive
+  exact-owned cleanup, and runner children start from an explicit functional
+  environment rather than inheriting unrelated host values. Executable child
+  canaries cover the complete provider-secret deny set without leaking coverage
+  profiles; greenfield/brownfield parity, idempotent update, narrow cleanup,
   reproducible locked assets, binary Git attributes, and deterministic release
   payload-size deltas now have owning checks.
 - **Claude's OS sandbox now keeps installed plugin code executable without

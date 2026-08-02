@@ -12,7 +12,17 @@ const repoRoot = resolve(webRoot, "../../..");
 const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
 await access(codeflow);
 
-const runId = `tsk007-${process.pid}-${randomUUID()}`;
+const functionalEnvironmentNames = [
+  "APPDATA", "CARGO_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
+  "LOCALAPPDATA", "PATHEXT", "PATH", "RUSTUP_HOME", "SYSTEMROOT", "TEMP", "TERM",
+  "TMP", "TMPDIR", "USERPROFILE", "WINDIR", "XDG_RUNTIME_DIR",
+];
+const runPrefix = process.env.CF_PRESENT_RUN_PREFIX ?? "tsk007";
+if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(runPrefix)) {
+  throw new Error(`Invalid qualification run prefix: ${runPrefix}`);
+}
+const injectCleanupFailure = process.argv.includes("--inject-cleanup-failure");
+const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
 const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
 const marker = join(runRoot, ".cf-present-qualification-root");
 const project = join(runRoot, "project");
@@ -26,7 +36,7 @@ const evidenceDestination = process.env.CF_PRESENT_EVIDENCE_DIR
   ? resolve(process.env.CF_PRESENT_EVIDENCE_DIR)
   : null;
 const childEnvironment = {
-  ...process.env,
+  ...allowedEnvironment(functionalEnvironmentNames),
   HOME: home,
   XDG_STATE_HOME: join(home, "state"),
   TMPDIR: join(runRoot, "tmp"),
@@ -46,6 +56,8 @@ browserEnvironment.TMPDIR = childEnvironment.TMPDIR;
 browserEnvironment.TMP = childEnvironment.TMPDIR;
 browserEnvironment.TEMP = childEnvironment.TMPDIR;
 
+assertChildEnvironmentDoesNotInheritUnrelatedHostValues();
+
 let context;
 let sessionId;
 let port;
@@ -53,6 +65,8 @@ let servicePid;
 let serviceInstance;
 let serviceFingerprint;
 let result;
+let primaryError;
+let tracingStarted = false;
 const requests = [];
 const responses = [];
 const consoleErrors = [];
@@ -93,6 +107,7 @@ try {
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV1 = await waitForProfileProcess(browserProfileV1);
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  tracingStarted = true;
   const page = context.pages()[0] ?? await context.newPage();
   await page.goto(pathToFileURL(bootstrapPath).href);
   await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"));
@@ -107,6 +122,9 @@ try {
   await page.waitForFunction(() => document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") === "ready");
   await page.locator("code[data-cf-language='rust']").scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
+  if (injectCleanupFailure) {
+    throw new Error("injected real-browser cleanup failure");
+  }
 
   for (const mode of ["light", "dark"]) {
     await page.getByLabel("Mode").selectOption(mode);
@@ -145,6 +163,7 @@ try {
     15_000,
     "stop revision-one trace",
   );
+  tracingStarted = false;
   await closeBrowser(context, browserProfileV1, browserProcessesV1);
   context = undefined;
   const shown = run(codeflow, ["present", "show", sessionId, "--no-launch"], project);
@@ -155,6 +174,7 @@ try {
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
   await revisedPage.goto(pathToFileURL(secondBootstrapPath).href);
   await revisedPage.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"));
@@ -191,6 +211,7 @@ try {
     15_000,
     "stop revision-two trace",
   );
+  tracingStarted = false;
   await closeBrowser(context, browserProfileV2, browserProcessesV2);
   context = undefined;
   run(codeflow, ["present", "close", sessionId], project);
@@ -238,60 +259,110 @@ try {
     await cp(output, join(evidenceDestination, "output"), { recursive: true, force: true });
     await cp(trace, join(evidenceDestination, "trace"), { recursive: true, force: true });
   }
+} catch (error) {
+  primaryError = error;
 } finally {
-  if (context) {
-    let ownedBrowserProcesses = mergeProcesses(
+  const cleanupErrors = [];
+  const attempt = async (phase, operation) => {
+    try {
+      await operation();
+    } catch (error) {
+      cleanupErrors.push(new Error(`Cleanup failed during ${phase}: ${error.message}`, { cause: error }));
+    }
+  };
+  let ownedBrowserProcesses = [];
+  await attempt("capture owned browser identities", async () => {
+    ownedBrowserProcesses = mergeProcesses(
       browserProcessTree(browserProfileV1),
       browserProcessTree(browserProfileV2),
     );
-    try {
+  });
+  if (context && tracingStarted) {
+    await attempt("stop failed browser trace", async () => {
       await bounded(
         context.tracing.stop({ path: join(trace, "failure.zip") }),
         15_000,
         "stop failed browser trace",
       );
-    } catch {
-      // The context may have failed before tracing started.
-    }
-    await bounded(context.close(), 15_000, "close failed browser context").catch(() => {});
+      tracingStarted = false;
+    });
+  }
+  if (context) {
+    await attempt("close failed browser context", async () => {
+      await bounded(context.close(), 15_000, "close failed browser context");
+      context = undefined;
+    });
+  }
+  await attempt("capture late owned browser identities", async () => {
     ownedBrowserProcesses = mergeProcesses(
       ownedBrowserProcesses,
       browserProcessTree(browserProfileV1),
       browserProcessTree(browserProfileV2),
     );
+  });
+  await attempt("wait for owned browser identities", async () => {
     await waitForProcessIdentitiesToDisappear(ownedBrowserProcesses, "failed browser run");
+  });
+  for (const profile of [browserProfileV1, browserProfileV2]) {
+    await attempt(`wait for profile processes using ${profile}`, async () => {
+      await waitForNoProfileProcesses(profile);
+    });
   }
-  if (!result && evidenceDestination && await pathExists(output)) {
-    await mkdir(evidenceDestination, { recursive: true });
-    await cp(output, join(evidenceDestination, "failure-output"), { recursive: true, force: true });
-    if (await pathExists(trace)) {
-      await cp(trace, join(evidenceDestination, "failure-trace"), { recursive: true, force: true });
+  if (!result && evidenceDestination) {
+    await attempt("copy failure evidence", async () => {
+      if (!await pathExists(output)) return;
+      await mkdir(evidenceDestination, { recursive: true });
+      await cp(output, join(evidenceDestination, "failure-output"), { recursive: true, force: true });
+      if (await pathExists(trace)) {
+        await cp(trace, join(evidenceDestination, "failure-trace"), { recursive: true, force: true });
+      }
+    });
+  }
+  if (sessionId && !result) {
+    await attempt("close presentation session", async () => {
+      run(codeflow, ["present", "close", sessionId], project, false);
+    });
+    if (port) {
+      await attempt("wait for presentation port", async () => assertPortClosed(port));
     }
-  }
-  if (sessionId) {
-    tryRun(codeflow, ["present", "close", sessionId], project);
-    if (port) await assertPortClosed(port);
     if (servicePid && serviceFingerprint) {
-      await waitForProcessIdentityToDisappear(servicePid, serviceFingerprint);
+      await attempt("wait for presentation service identity", async () => {
+        await waitForProcessIdentityToDisappear(servicePid, serviceFingerprint);
+      });
     }
-    tryRun(codeflow, ["present", "clear", sessionId, "--older-than", "0h"], project);
+    await attempt("clear presentation session", async () => {
+      run(codeflow, ["present", "clear", sessionId, "--older-than", "0h"], project, false);
+    });
   }
-  const markerValue = await readFile(marker, "utf8").catch(() => "");
-  if (markerValue === `${runId}\n`) {
-    await rm(runRoot, { recursive: true, force: false });
-  } else if (markerValue === "" && (await readdir(runRoot)).length === 0) {
-    // mkdtemp can succeed immediately before marker creation fails. Only an
-    // empty, task-namespaced root is safe to remove without the marker.
-    await rmdir(runRoot);
-  } else {
-    throw new Error(`Refusing to clean unmarked or foreign qualification root ${runRoot}`);
-  }
-  if (await pathExists(runRoot)) throw new Error(`Qualification root remained after cleanup: ${runRoot}`);
-  await delay(2_000);
-  if (await pathExists(runRoot)) {
-    throw new Error(`Qualification root was recreated during post-close quiescence: ${runRoot}`);
+  await attempt("remove marked qualification root", async () => {
+    const markerValue = await readFile(marker, "utf8").catch(() => "");
+    if (markerValue === `${runId}\n`) {
+      await rm(runRoot, { recursive: true, force: false });
+    } else if (markerValue === "" && await pathExists(runRoot) && (await readdir(runRoot)).length === 0) {
+      // mkdtemp can succeed immediately before marker creation fails. Only an
+      // empty, task-namespaced root is safe to remove without the marker.
+      await rmdir(runRoot);
+    } else if (await pathExists(runRoot)) {
+      throw new Error(`Refusing to clean unmarked or foreign qualification root ${runRoot}`);
+    }
+    if (await pathExists(runRoot)) throw new Error(`Qualification root remained after cleanup: ${runRoot}`);
+  });
+  await attempt("post-close qualification quiescence", async () => {
+    await delay(2_000);
+    if (await pathExists(runRoot)) {
+      throw new Error(`Qualification root was recreated during post-close quiescence: ${runRoot}`);
+    }
+  });
+  if (cleanupErrors.length > 0) {
+    const failures = primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors;
+    throw new AggregateError(
+      failures,
+      "cf-present qualification failed; every exact-owned cleanup phase was attempted",
+      primaryError ? { cause: primaryError } : undefined,
+    );
   }
 }
+if (primaryError) throw primaryError;
 if (result) {
   result.checks.task_owned_temp_and_artifact_cleanup = "pass";
   if (evidenceDestination) {
@@ -331,14 +402,6 @@ function run(executable, args, cwd, enforceDeadline = true) {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 30_000,
   });
-}
-
-function tryRun(executable, args, cwd) {
-  try {
-    run(executable, args, cwd, false);
-  } catch {
-    // The primary failure remains authoritative; cleanup stays bounded.
-  }
 }
 
 async function assertPortClosed(candidatePort) {
@@ -579,10 +642,29 @@ function isRemoteRequest(request) {
     && !["127.0.0.1", "localhost", "::1"].includes(url.hostname);
 }
 
-function allowedEnvironment(names) {
+function allowedEnvironment(names, source = process.env) {
   return Object.fromEntries(names.flatMap((name) => (
-    process.env[name] === undefined ? [] : [[name, process.env[name]]]
+    source[name] === undefined ? [] : [[name, source[name]]]
   )));
+}
+
+function assertChildEnvironmentDoesNotInheritUnrelatedHostValues() {
+  const simulatedHost = {
+    ...process.env,
+    NPM_TOKEN: "npm-token-must-not-cross",
+    NODE_OPTIONS: "--throw-deprecation",
+  };
+  const environment = allowedEnvironment(functionalEnvironmentNames, simulatedHost);
+  execFileSync(process.execPath, ["-e", [
+    "for (const name of ['NPM_TOKEN', 'NODE_OPTIONS']) {",
+    "  if (process.env[name] !== undefined) throw new Error(`${name} crossed the runner boundary`);",
+    "}",
+  ].join("\n")], {
+    env: environment,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5_000,
+  });
 }
 
 function assertWithinDeadline(phase) {
