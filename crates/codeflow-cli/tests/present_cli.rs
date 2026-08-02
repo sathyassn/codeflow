@@ -253,7 +253,9 @@ fn open_recover_and_bootstrap(fixture: &TestProject) -> RunningPresentation {
             form.len()
         ),
     );
-    assert!(bootstrapped.starts_with("HTTP/1.1 303 "));
+    assert!(bootstrapped.starts_with("HTTP/1.1 200 "));
+    assert!(bootstrapped.contains("location.replace('/app/')"));
+    assert!(!bootstrapped.contains(capability));
     let cookie = bootstrapped
         .lines()
         .find_map(|line| {
@@ -304,7 +306,9 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
             rotated_form.len()
         ),
     );
-    assert!(rotated_response.starts_with("HTTP/1.1 303 "));
+    assert!(rotated_response.starts_with("HTTP/1.1 200 "));
+    assert!(rotated_response.contains("location.replace('/app/')"));
+    assert!(!rotated_response.contains(rotated_capability));
     assert!(!running.bootstrap_path.exists());
     let wrong_host = http(
         running.port,

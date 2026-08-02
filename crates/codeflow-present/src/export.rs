@@ -12,6 +12,8 @@ use crate::{
     state::{discard_new_file, open_private_create_new, RevisionContent, SessionStore},
 };
 
+const EXPORT_BOOTSTRAP: &str = "(async()=>{const e=document.getElementById('cf-present-export-payload').content.textContent.trim();const b=Uint8Array.from(atob(e),c=>c.charCodeAt(0));if(!globalThis.DecompressionStream)return;const s=new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'));const j=await new Response(s).text();const u=URL.createObjectURL(new Blob([j],{type:'text/javascript'}));try{await import(u)}finally{URL.revokeObjectURL(u)}})()";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportTheme {
     Editorial,
@@ -115,10 +117,10 @@ fn enhance_export(
         ));
     }
     let encoded = STANDARD.encode(&bytes.data);
-    let bootstrap = "(async()=>{const e=document.getElementById('cf-present-export-payload').textContent.trim();const b=Uint8Array.from(atob(e),c=>c.charCodeAt(0));if(!globalThis.DecompressionStream)return;const s=new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'));const j=await new Response(s).text();const u=URL.createObjectURL(new Blob([j],{type:'text/javascript'}));try{await import(u)}finally{URL.revokeObjectURL(u)}})()";
+    let bootstrap = EXPORT_BOOTSTRAP;
     let bootstrap_hash = STANDARD.encode(Sha256::digest(bootstrap.as_bytes()));
     let csp = format!(
-        "default-src 'none'; script-src 'sha256-{bootstrap_hash}' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'none'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        "default-src 'none'; script-src 'sha256-{bootstrap_hash}' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'none'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
     );
     let marker = "</head>";
     let theme = match theme {
@@ -177,14 +179,14 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::write_new_private;
+    use super::{write_new_private, EXPORT_BOOTSTRAP};
 
     #[test]
     fn export_bootstrap_never_contains_network_endpoint_or_auth_name() {
-        let source = "(async()=>{const e=document.getElementById('cf-present-export-payload').textContent.trim();const b=Uint8Array.from(atob(e),c=>c.charCodeAt(0));if(!globalThis.DecompressionStream)return;const s=new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'));const j=await new Response(s).text();const u=URL.createObjectURL(new Blob([j],{type:'text/javascript'}));try{await import(u)}finally{URL.revokeObjectURL(u)}})()";
-        assert!(!source.contains("http:"));
-        assert!(!source.contains("cookie"));
-        assert!(!source.contains("feedback"));
+        assert!(!EXPORT_BOOTSTRAP.contains("http:"));
+        assert!(!EXPORT_BOOTSTRAP.contains("cookie"));
+        assert!(!EXPORT_BOOTSTRAP.contains("feedback"));
+        assert!(EXPORT_BOOTSTRAP.contains(".content.textContent"));
     }
 
     #[test]

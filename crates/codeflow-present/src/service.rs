@@ -47,6 +47,9 @@ use crate::{
 #[folder = "assets/"]
 pub(crate) struct EmbeddedAssets;
 
+const BOOTSTRAP_HANDOFF: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><title>Opening presentation</title><script>location.replace('/app/')</script>";
+const BOOTSTRAP_HANDOFF_CSP: &str = "default-src 'none'; script-src 'sha256-4MyoobivIq6Xw46Dc5S5dlGeU1Me98yo/zmVu3ed3zg='; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct AssetManifest {
     pub(crate) schema_version: u32,
@@ -389,13 +392,20 @@ async fn bootstrap(
         "{}={}; Path=/app; HttpOnly; SameSite=Strict",
         state.cookie_name, state.cookie_value
     );
+    // A cross-site `file:` form submission cannot carry a SameSite=Strict
+    // cookie through an HTTP redirect chain. Finish the POST at the loopback
+    // origin, set the cookie, then replace from that same-origin document.
+    // The bootstrap response contains no capability or session value.
     response_with_headers(
-        StatusCode::SEE_OTHER,
-        Body::empty(),
+        StatusCode::OK,
+        Body::from(BOOTSTRAP_HANDOFF),
         &[
-            (header::LOCATION, "/app/"),
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::SET_COOKIE, &cookie),
             (header::CACHE_CONTROL, "no-store"),
+            (header::CONTENT_SECURITY_POLICY, BOOTSTRAP_HANDOFF_CSP),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
     )
 }
@@ -1412,7 +1422,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+        assert_eq!(accepted.status(), StatusCode::OK);
         assert!(accepted.headers().get(header::SET_COOKIE).is_some());
         assert!(!state.bootstrap_path.exists());
 
@@ -1443,7 +1453,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(consumed.status(), StatusCode::SEE_OTHER);
+        assert_eq!(consumed.status(), StatusCode::OK);
 
         let rejected = rebootstrap(
             State(state.clone()),
@@ -1480,7 +1490,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+        assert_eq!(accepted.status(), StatusCode::OK);
     }
 
     #[tokio::test]

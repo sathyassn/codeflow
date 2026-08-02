@@ -8,9 +8,11 @@ import { buildAssets } from "./build.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const crateRoot = resolve(webRoot, "..");
+const repoRoot = resolve(crateRoot, "../..");
 const committedAssets = join(crateRoot, "assets");
 
 run("npx", ["tsc", "--noEmit"]);
+checkBinaryAttributes();
 await checkSelectorOffsets();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));
@@ -72,6 +74,33 @@ function checkManifest(manifest) {
   }
   if (!manifest.service.inline["present.prepaint"]?.csp_sha256?.startsWith("sha256-")) {
     throw new Error("Pre-paint script is missing its CSP hash");
+  }
+}
+
+function checkBinaryAttributes() {
+  const paths = [
+    "crates/codeflow-present/assets/service/qualification.js.br",
+    "crates/codeflow-present/assets/export/qualification.js.gz",
+  ];
+  const result = spawnSync("git", ["check-attr", "-z", "diff", "merge", "text", "--", ...paths], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (result.status !== 0) {
+    throw new Error(`git check-attr failed\n${result.stdout}\n${result.stderr}`);
+  }
+  const fields = result.stdout.split("\0").filter(Boolean);
+  const attributes = new Map();
+  for (let index = 0; index < fields.length; index += 3) {
+    attributes.set(`${fields[index]}:${fields[index + 1]}`, fields[index + 2]);
+  }
+  for (const path of paths) {
+    for (const attribute of ["diff", "merge", "text"]) {
+      if (attributes.get(`${path}:${attribute}`) !== "unset") {
+        throw new Error(`${path} must declare the binary ${attribute} attribute`);
+      }
+    }
   }
 }
 

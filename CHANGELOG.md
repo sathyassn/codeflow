@@ -20,6 +20,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Presentation qualification now exercises the real owned runtime and offline
+  export boundary.** A full-only gate drives the CLI, authenticated loopback
+  service, isolated headless browser profiles, feedback/update/reopen flow,
+  enhanced export, accessibility, network/console state, and exact bounded
+  teardown. The real journey corrected strict-cookie bootstrap handoff and
+  template payload extraction defects that raw HTTP and synthetic browser tests
+  had missed. Executable child canaries cover the complete provider-secret deny
+  set; greenfield/brownfield parity, idempotent update, narrow cleanup,
+  reproducible locked assets, binary Git attributes, and deterministic release
+  payload-size deltas now have owning checks.
 - **Claude's OS sandbox now keeps installed plugin code executable without
   exposing mutable plugin or private Claude state.** The broad `~/.claude`
   subprocess-read denial remains, while the higher-precedence filesystem

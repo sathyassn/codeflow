@@ -664,6 +664,83 @@ mod tests {
     }
 
     #[test]
+    fn restricted_child_execution_drops_provider_canaries() {
+        const STAGE: &str = "CF_PRESENT_SECRET_CANARY_STAGE";
+        const TEST: &str = "platform::tests::restricted_child_execution_drops_provider_canaries";
+        const CANARIES: &[(&str, &str)] = &[
+            ("ANTHROPIC_API_KEY", "anthropic-provider-canary"),
+            ("ANTHROPIC_AUTH_TOKEN", "anthropic-auth-provider-canary"),
+            ("OPENAI_API_KEY", "openai-provider-canary"),
+            ("AWS_SECRET_ACCESS_KEY", "aws-provider-canary"),
+            ("AWS_SESSION_TOKEN", "aws-session-provider-canary"),
+        ];
+
+        match std::env::var(STAGE).as_deref() {
+            Ok("inner") => {
+                for (name, value) in CANARIES {
+                    assert_ne!(std::env::var(name).as_deref(), Ok(*value));
+                }
+                println!("restricted child received no provider canary");
+            }
+            Ok("outer") => {
+                let executable = std::env::current_exe().expect("current test executable");
+                let output = restricted_command(executable)
+                    .args(["--exact", TEST, "--nocapture"])
+                    .env(STAGE, "inner")
+                    .output()
+                    .expect("execute restricted child canary");
+                assert!(
+                    output.status.success(),
+                    "restricted child failed\nstdout: {}\nstderr: {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(String::from_utf8_lossy(&output.stdout)
+                    .contains("restricted child received no provider canary"));
+            }
+            _ => {
+                let executable = std::env::current_exe().expect("current test executable");
+                let mut command = Command::new(executable);
+                command.args(["--exact", TEST, "--nocapture"]);
+                command.env(STAGE, "outer");
+                for (name, value) in CANARIES {
+                    command.env(name, value);
+                }
+                let output = command.output().expect("execute outer provider canary");
+                assert!(
+                    output.status.success(),
+                    "outer canary failed\nstdout: {}\nstderr: {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn presentation_children_have_one_restricted_command_constructor() {
+        let platform = include_str!("platform.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production platform source");
+        assert_eq!(platform.matches("Command::new(").count(), 1);
+        for (name, source) in [
+            ("browser", include_str!("browser.rs")),
+            ("service", include_str!("service.rs")),
+            ("state", include_str!("state.rs")),
+        ] {
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production presentation source");
+            assert!(
+                !production.contains("Command::new("),
+                "{name} added a raw external child route"
+            );
+        }
+    }
+
+    #[test]
     fn private_acl_policy_rejects_weak_owners_inheritance_and_other_trustees() {
         const FULL: u32 = 0x001f_01ff;
         const GENERIC_ALL: u32 = 0x1000_0000;

@@ -1642,9 +1642,11 @@ mod tests {
                 "test host has no allowed runtime environment"
             );
             for secret in [
-                "AWS_SECRET_ACCESS_KEY",
-                "OPENAI_API_KEY",
                 "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "OPENAI_API_KEY",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
             ] {
                 assert!(environment.iter().all(|(name, _)| *name != secret));
             }

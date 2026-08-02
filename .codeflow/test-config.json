@@ -98,6 +98,17 @@
       }
     },
     {
+      "name": "cf-present-qualification",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "npm ci --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web && npm run supply-chain --prefix crates/codeflow-present/web && npm run check --prefix crates/codeflow-present/web && npm run check:browser --prefix crates/codeflow-present/web && cargo test -p codeflow-present -- --test-threads=1 && cargo test -p codeflow-cli --test present_cli --test init_e2e -- --test-threads=1 && node scripts/check-present-binary-delta.mjs && cargo build -p codeflow-cli && npm run check:real-browser --prefix crates/codeflow-present/web"
+        }
+      },
+      "timeout_seconds": 900
+    },
+    {
       "name": "docs-portal",
       "enabled": true,
       "runner": "custom",

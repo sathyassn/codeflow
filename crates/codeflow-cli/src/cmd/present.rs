@@ -704,14 +704,95 @@ mod tests {
     #[test]
     fn service_environment_excludes_provider_secrets() {
         let mut command = Command::new("service");
-        command.env("AWS_SECRET_ACCESS_KEY", "sentinel");
-        command.env("ANTHROPIC_API_KEY", "sentinel");
+        for secret in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ] {
+            command.env(secret, "sentinel");
+        }
         apply_minimal_service_environment(&mut command);
         let environment = command.get_envs().collect::<Vec<_>>();
-        for secret in ["AWS_SECRET_ACCESS_KEY", "ANTHROPIC_API_KEY"] {
+        for secret in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ] {
             assert!(!environment.iter().any(|(name, value)| {
                 *name == secret && value.and_then(|value| value.to_str()) == Some("sentinel")
             }));
         }
+    }
+
+    #[test]
+    fn service_child_execution_drops_provider_canaries() {
+        const STAGE: &str = "CF_PRESENT_SERVICE_CANARY_STAGE";
+        const TEST: &str = "cmd::present::tests::service_child_execution_drops_provider_canaries";
+        const CANARIES: &[(&str, &str)] = &[
+            ("ANTHROPIC_API_KEY", "anthropic-service-canary"),
+            ("ANTHROPIC_AUTH_TOKEN", "anthropic-auth-service-canary"),
+            ("OPENAI_API_KEY", "openai-service-canary"),
+            ("AWS_SECRET_ACCESS_KEY", "aws-service-canary"),
+            ("AWS_SESSION_TOKEN", "aws-session-service-canary"),
+        ];
+
+        match std::env::var(STAGE).as_deref() {
+            Ok("inner") => {
+                for (name, value) in CANARIES {
+                    assert_ne!(std::env::var(name).as_deref(), Ok(*value));
+                }
+                println!("service child received no provider canary");
+            }
+            Ok("outer") => {
+                let executable = std::env::current_exe().expect("current test executable");
+                let mut command = Command::new(executable);
+                apply_minimal_service_environment(&mut command);
+                let output = command
+                    .args(["--exact", TEST, "--nocapture"])
+                    .env(STAGE, "inner")
+                    .output()
+                    .expect("execute restricted service child canary");
+                assert!(
+                    output.status.success(),
+                    "service child failed\nstdout: {}\nstderr: {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(String::from_utf8_lossy(&output.stdout)
+                    .contains("service child received no provider canary"));
+            }
+            _ => {
+                let executable = std::env::current_exe().expect("current test executable");
+                let mut command = Command::new(executable);
+                command.args(["--exact", TEST, "--nocapture"]);
+                command.env(STAGE, "outer");
+                for (name, value) in CANARIES {
+                    command.env(name, value);
+                }
+                let output = command.output().expect("execute outer service canary");
+                assert!(
+                    output.status.success(),
+                    "outer service canary failed\nstdout: {}\nstderr: {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn service_launch_has_one_minimal_command_constructor() {
+        let production = include_str!("present.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production present command source");
+        assert_eq!(production.matches("Command::new(").count(), 1);
+        assert!(production.contains(
+            "let mut command = Command::new(executable);\n    apply_minimal_service_environment(&mut command);"
+        ));
     }
 }

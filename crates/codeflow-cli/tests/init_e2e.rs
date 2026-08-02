@@ -10,6 +10,20 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+const PRESENT_SKILL_FILES: &[&str] = &[
+    "SKILL.md",
+    "references/document-authoring.md",
+    "assets/review-document.example.json",
+    "assets/config.example.toml",
+    "assets/primitive-tokens.example.json",
+    "agents/openai.yaml",
+];
+const PRESENT_SCHEMAS: &[&str] = &[
+    "document-v1.schema.json",
+    "session-history-v1.schema.json",
+    "utility-tokens-v1.schema.json",
+];
+
 /// Shared isolated `CODEFLOW_HOME` so the suite never writes the developer's
 /// real `~/.codeflow/registry.json` (per the `recall_remote_cli.rs` pattern).
 fn isolated_home() -> &'static Path {
@@ -77,6 +91,102 @@ fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn read(root: &Path, rel: &str) -> String {
     std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn write_user_owned_present_files(root: &Path) {
+    for directory in [
+        ".agents/skills/cf-present",
+        ".claude/skills/cf-present",
+        ".codeflow/present",
+    ] {
+        std::fs::create_dir_all(root.join(directory)).expect("create user-owned directory");
+    }
+    std::fs::write(
+        root.join(".agents/skills/cf-present/LOCAL-NOTES.md"),
+        "project-owned agent sidecar\n",
+    )
+    .expect("write agent sidecar");
+    std::fs::write(
+        root.join(".claude/skills/cf-present/LOCAL-NOTES.md"),
+        "project-owned Claude sidecar\n",
+    )
+    .expect("write Claude sidecar");
+    std::fs::write(
+        root.join(".codeflow/present/config.toml"),
+        "retention_days = 14\n",
+    )
+    .expect("write project-owned presentation config");
+    std::fs::write(root.join("UNRELATED.txt"), "unrelated project file\n")
+        .expect("write unrelated file");
+}
+
+fn assert_user_owned_present_files(root: &Path) {
+    assert_eq!(
+        read(root, ".agents/skills/cf-present/LOCAL-NOTES.md"),
+        "project-owned agent sidecar\n"
+    );
+    assert_eq!(
+        read(root, ".claude/skills/cf-present/LOCAL-NOTES.md"),
+        "project-owned Claude sidecar\n"
+    );
+    assert_eq!(
+        read(root, ".codeflow/present/config.toml"),
+        "retention_days = 14\n"
+    );
+    assert_eq!(read(root, "UNRELATED.txt"), "unrelated project file\n");
+}
+
+fn assert_present_artifact_parity(root: &Path) {
+    let repository = repo_root();
+    for relative in PRESENT_SKILL_FILES {
+        let source = repository
+            .join("assets/base/agents/skills/cf-present")
+            .join(relative);
+        let canonical = std::fs::read(&source)
+            .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+        for installed in [
+            root.join(".agents/skills/cf-present").join(relative),
+            root.join(".claude/skills/cf-present").join(relative),
+            repository
+                .join(".codeflow/.baseline/.agents/skills/cf-present")
+                .join(relative),
+            repository
+                .join(".codeflow/.baseline/.claude/skills/cf-present")
+                .join(relative),
+        ] {
+            assert_eq!(
+                std::fs::read(&installed)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", installed.display())),
+                canonical,
+                "cf-present artifact drifted at {}",
+                installed.display()
+            );
+        }
+    }
+    for schema in PRESENT_SCHEMAS {
+        let source = repository.join("assets/base/present/schemas").join(schema);
+        let canonical = std::fs::read(&source)
+            .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+        for installed in [
+            root.join(".codeflow/schemas/present").join(schema),
+            repository.join(".codeflow/schemas/present").join(schema),
+            repository
+                .join(".codeflow/.baseline/.codeflow/schemas/present")
+                .join(schema),
+        ] {
+            assert_eq!(
+                std::fs::read(&installed)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", installed.display())),
+                canonical,
+                "cf-present schema drifted at {}",
+                installed.display()
+            );
+        }
+    }
 }
 
 /// Placeholders: everything the engine substitutes must be gone. Scoped to
@@ -155,17 +265,20 @@ fn assert_update_round_trips(root: &Path) {
         selected_binding,
     )
     .expect("write user-owned model selection");
-    let out = codeflow(root, &["update"]);
-    let report = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(
-        out.status.success(),
-        "update after fresh init failed: {report}\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        !report.contains("CONFLICT"),
-        "no-op update conflicted:\n{report}"
-    );
+    write_user_owned_present_files(root);
+    for attempt in 1..=2 {
+        let out = codeflow(root, &["update"]);
+        let report = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            out.status.success(),
+            "update attempt {attempt} after init failed: {report}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !report.contains("CONFLICT"),
+            "no-op update attempt {attempt} conflicted:\n{report}"
+        );
+    }
     assert_eq!(
         read(root, "AGENTS.md"),
         agents_before,
@@ -181,6 +294,7 @@ fn assert_update_round_trips(root: &Path) {
         selected_binding,
         "update changed the user-owned model selection"
     );
+    assert_user_owned_present_files(root);
     let mut after = Vec::new();
     walk_files(root, &mut after);
     assert!(
@@ -189,6 +303,36 @@ fn assert_update_round_trips(root: &Path) {
             .any(|p| p.extension().and_then(|e| e.to_str()) == Some("new")),
         "no-op update left .new conflict files"
     );
+}
+
+fn assert_present_cleanup_inventory_is_narrow(root: &Path) {
+    let manifest = codeflow_core::scaffold::ScaffoldManifest::load(
+        &codeflow_core::scaffold::DirSource::new(repo_root().join("assets")),
+    )
+    .expect("shipped manifest loads");
+    let mut managed = manifest
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.src.starts_with("agents/skills/cf-present/")
+                || entry.src.starts_with("present/schemas/")
+        })
+        .map(|entry| entry.dest.as_str())
+        .collect::<Vec<_>>();
+    managed.sort_unstable();
+    managed.dedup();
+    assert_eq!(
+        managed.len(),
+        PRESENT_SKILL_FILES.len() * 2 + PRESENT_SCHEMAS.len()
+    );
+    for destination in &managed {
+        std::fs::remove_file(root.join(destination))
+            .unwrap_or_else(|error| panic!("remove managed {destination}: {error}"));
+    }
+    assert!(managed
+        .iter()
+        .all(|destination| !root.join(destination).exists()));
+    assert_user_owned_present_files(root);
 }
 
 #[test]
@@ -285,5 +429,35 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     assert!(codex.contains("web_search = \"live\""));
 
     assert_engine_placeholders_rendered(&root);
+    assert_present_artifact_parity(&root);
     assert_update_round_trips(&root);
+    assert_present_artifact_parity(&root);
+    assert_present_cleanup_inventory_is_narrow(&root);
+}
+
+#[test]
+fn init_full_tier_preserves_representative_brownfield_present_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("brownfield");
+    std::fs::create_dir(&root).unwrap();
+    let init = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .output()
+        .expect("git init runs");
+    assert!(init.status.success());
+    write_user_owned_present_files(&root);
+
+    let out = codeflow(&root, &["init", "--yes", "--full"]);
+    assert!(
+        out.status.success(),
+        "brownfield init failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("CONFLICT"));
+    assert_user_owned_present_files(&root);
+    assert_present_artifact_parity(&root);
+    assert_update_round_trips(&root);
+    assert_present_artifact_parity(&root);
 }
