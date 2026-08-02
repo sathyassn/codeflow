@@ -349,7 +349,14 @@ function routeUrl(origin, base, route) {
 
 async function visit(page, url) {
   const response = await page.goto(url, { waitUntil: "networkidle" });
-  if (!response || response.status() >= 400) throw new Error(`${url} returned ${response?.status()}`);
+  if (response?.status() >= 400) throw new Error(`${url} returned ${response.status()}`);
+  // Playwright returns null for same-document navigations such as adding a
+  // fragment to the page already under test. Treat that as success only when
+  // the browser reached the requested URL and retained a live document.
+  if (!response) {
+    const reached = await page.evaluate((target) => location.href === target && document.readyState !== "loading", url);
+    if (!reached) throw new Error(`${url} did not produce a document response or same-document navigation`);
+  }
 }
 
 async function evidenceInventory(directory) {
