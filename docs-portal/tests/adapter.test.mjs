@@ -93,6 +93,21 @@ test("attribute-breaking base paths fail before generated output", async () => {
   }
 });
 
+test("Astro independently rejects remote and encoded base paths", { timeout: 120_000 }, async () => {
+  for (const base of ["//attacker.invalid/", "/%2e/", "/%252e/", "/\" onfocus=\"alert(1)\"/"]) {
+    const root = await selfContainedPortalFixture();
+    try {
+      const configPath = path.join(root, "portal.config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      config.base = base;
+      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
+      assert.notEqual(result.status, 0, base);
+      assert.match(`${result.stderr}\n${result.stdout}`, /base:/, base);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test("repository URLs and bounded page metadata use the portable contract", () => {
   for (const value of ["https://github.com/example/repository", "https://xn--bcher-kva.example/repo", "https://127.0.0.1:8443/repo", "https://[2001:db8::1]:443/repo"]) assert.equal(validRepositoryUrl(value), true, value);
   for (const value of ["http://example.com/repo", "https://user:secret@example.com/repo", "https://bücher.example/repo", "https://bad_host.example/repo", "https://example.com:/repo", "https://[2001:db8::1/repo", "https://example.com/repo?token=x"]) assert.equal(validRepositoryUrl(value), false, value);
@@ -107,6 +122,26 @@ test("derived titles use the same UTF-16 boundary as declared titles", () => {
   assert.throws(() => titleFor({}, `# ${"a".repeat(255)}${astral}\n`, "docs/page.md"), /derived title is invalid/);
   assert.equal(titleFor({}, "Body only\n", `docs/${"a".repeat(256)}.md`).length, 256);
   assert.throws(() => titleFor({}, "Body only\n", `docs/${"a".repeat(257)}.md`), /derived title is invalid/);
+});
+
+test("the adapter accepts 256-unit derived titles and stubs 257-unit titles", async () => {
+  const root = await portalFixture();
+  try {
+    const source = path.join(root, "docs/page.md");
+    await writeFile(source, `# ${"a".repeat(254)}🚀\n`);
+    commitFixture(root, "add bounded derived title");
+    runAdapter(root);
+    let page = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8")).pages[0];
+    assert.equal(page.stale, false);
+    assert.equal(page.title.length, 256);
+
+    await writeFile(source, `# ${"a".repeat(255)}🚀\n`);
+    commitFixture(root, "exceed derived title boundary");
+    runAdapter(root);
+    page = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8")).pages[0];
+    assert.equal(page.stale, true);
+    assert.match(page.stale_reason, /derived title is invalid/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("shared authority contract is enforced by the JavaScript producer", async () => {

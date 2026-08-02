@@ -14,9 +14,12 @@ const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
 const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
 const output = path.join(root, outputRelative);
+const outputParentRelative = ".portal/browser-evidence";
+await assertNoSymlink(root, ".portal");
+await mkdir(path.join(root, outputParentRelative), { recursive: true });
 await assertNoSymlink(root, ".portal/browser-evidence");
-await rm(output, { recursive: true, force: true });
-await mkdir(output, { recursive: true });
+await assertNoSymlink(root, outputRelative);
+await mkdir(output);
 await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
 
 const port = await availablePort();
@@ -44,6 +47,8 @@ try {
 
 const teardownVerified = await fetch(origin).then(() => false, () => true);
 const evidence = { schema_version: 1, run_id: runId, origin: "task-owned-loopback", port, headless: true, results, teardown_verified: teardownVerified };
+const evidenceBytes = results.flatMap((result) => [...(result.screenshots ?? []), ...(result.trace ? [result.trace] : [])]).reduce((total, item) => total + item.bytes, 0);
+if (evidenceBytes > 64 * 1024 * 1024) throw new Error(`browser evidence exceeds 67108864 bytes: ${evidenceBytes}`);
 await writeFile(path.join(output, "results.json"), `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
 if (!teardownVerified || results.some((result) => result.status !== "passed")) {
   throw new Error(`portal browser verification failed: ${JSON.stringify(evidence)}`);
@@ -182,6 +187,7 @@ async function visit(page, url) {
 
 async function artifact(file) {
   const bytes = await readFile(file);
+  if (bytes.length > 32 * 1024 * 1024) throw new Error(`browser artifact exceeds 33554432 bytes: ${file}`);
   return { file: path.basename(file), bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
