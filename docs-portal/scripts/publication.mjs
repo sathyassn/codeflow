@@ -186,24 +186,32 @@ async function retireWorkflowClaim(portalDirectory, claim, expected, reason, tes
   let moved;
   try { moved = await readWorkflowClaimIdentity(retired, "portal workflow retired claim"); }
   catch (error) {
-    await restoreDisplacedWorkflowClaim(portalDirectory, claim, retired);
-    throw error;
+    throw await quarantineSuspectWorkflowClaim(portalDirectory, retired, expected.lease.token, error);
   }
   if (moved.lease.token === expected.lease.token && sameFile(moved.stat, expected.stat)) return retired;
+  if (moved.lease.token === expected.lease.token) {
+    throw await quarantineSuspectWorkflowClaim(portalDirectory, retired, expected.lease.token,
+      new Error("portal workflow retired claim inode does not match the expected owner"));
+  }
   await restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved);
   return null;
 }
 
-async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved = null) {
-  if (moved === null) {
-    try {
-      await link(retired, claim);
-      await syncDirectory(portalDirectory);
-      await rm(retired);
-      await syncDirectory(portalDirectory);
-    } catch (error) { if (error?.code !== "EEXIST") throw error; }
-    return false;
-  }
+async function quarantineSuspectWorkflowClaim(portalDirectory, retired, expectedToken, cause) {
+  const suspect = path.join(portalDirectory, `.workflow-lock-suspect-${expectedToken}-${randomBytes(12).toString("hex")}`);
+  let quarantined = false;
+  try {
+    await rename(retired, suspect);
+    await syncDirectory(portalDirectory);
+    quarantined = true;
+  } catch (error) { if (error?.code !== "ENOENT") throw error; }
+  const detail = quarantined ? `quarantined as ${path.basename(suspect)}` : "disappeared before quarantine";
+  const error = new Error(`portal workflow retired claim failed identity verification and was not restored; ${detail}`, { cause });
+  error.code = "CODEFLOW_WORKFLOW_CLAIM_QUARANTINED";
+  return error;
+}
+
+async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved) {
   const candidateBefore = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token);
   if (candidateBefore === null) {
     await removeMovedWorkflowClaim(retired, moved);
@@ -297,6 +305,12 @@ async function recoverWorkflowLeaseDebris(portalDirectory, testHooks = {}) {
   const activeToken = await currentWorkflowClaimToken(portalDirectory);
   if (testHooks.afterRecoverySnapshot) await testHooks.afterRecoverySnapshot({ activeToken, entries: entries.map((entry) => entry.name) });
   for (const entry of entries) {
+    const suspect = entry.name.match(/^\.workflow-lock-suspect-([a-f0-9]{48})-([a-f0-9]{24})$/);
+    if (suspect) {
+      candidates += 1;
+      if (candidates > 64) throw new Error("portal workflow lease recovery contains too many candidates");
+      continue;
+    }
     const match = entry.name.match(/^\.workflow-lock-(candidate|recovery|failed|reclaim|release)-([a-f0-9]{48})(?:-([a-f0-9]{24}))?(\.json)?$/);
     if (!match) continue;
     candidates += 1;
@@ -312,8 +326,14 @@ async function recoverWorkflowLeaseDebris(portalDirectory, testHooks = {}) {
       if (match[3] || match[4] || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
       await recoverQuarantinedWorkflowCandidate(portalDirectory, match[2]);
     } else {
-      if (match[4] !== ".json" || entry.isSymbolicLink() || !entry.isFile()) throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
-      const retired = await readWorkflowClaimIdentity(target, "portal workflow recovery claim");
+      if (match[4] !== ".json") throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
+      if (entry.isSymbolicLink() || !entry.isFile()) {
+        throw await quarantineSuspectWorkflowClaim(portalDirectory, target, match[2],
+          new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`));
+      }
+      let retired;
+      try { retired = await readWorkflowClaimIdentity(target, "portal workflow recovery claim"); }
+      catch (error) { throw await quarantineSuspectWorkflowClaim(portalDirectory, target, match[2], error); }
       if (retired.lease.token !== match[2]) {
         await restoreDisplacedWorkflowClaim(portalDirectory, path.join(portalDirectory, "workflow.lock"), target, retired);
         continue;

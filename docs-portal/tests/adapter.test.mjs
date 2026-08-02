@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -824,6 +824,56 @@ test("recovery honors displaced-claim liveness at both restoration crash boundar
       assert.deepEqual((await readdir(portal)).filter((name) => name.includes(token)), []);
     } finally { await rm(root, { recursive: true, force: true }); }
   }
+});
+
+test("unverified retired claims are quarantined without regaining authority", { skip: process.platform === "win32" }, async () => {
+  for (const mutation of ["corrupt", "swap", "symlink"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-workflow-retired-${mutation}-`));
+    try {
+      const result = await withWorkflowLease(root, async () => "released", {
+        afterClaimMoved: async ({ retired, expected }) => {
+          if (mutation === "corrupt") await writeFile(retired, "{not-json");
+          if (mutation === "swap") {
+            await rm(retired);
+            await writeFile(retired, JSON.stringify(expected));
+          }
+          if (mutation === "symlink") {
+            const outside = path.join(root, "outside-claim.json");
+            await writeFile(outside, JSON.stringify(expected));
+            await rm(retired);
+            await symlink(outside, retired);
+          }
+        },
+      }).catch((error) => error);
+      assert.equal(result?.code, "CODEFLOW_WORKFLOW_CLAIM_QUARANTINED");
+      assert.match(String(result), /failed identity verification and was not restored; quarantined/);
+      await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
+      const entries = await readdir(path.join(root, ".portal"));
+      assert.equal(entries.filter((name) => name.startsWith(".workflow-lock-suspect-")).length, 1);
+      assert.equal(entries.some((name) => /^\.workflow-lock-(?:failed|reclaim|release)-/.test(name)), false);
+      assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+      await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("recovery quarantines invalid retired debris once and bounds diagnostics", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-suspect-recovery-"));
+  try {
+    const portal = path.join(root, ".portal");
+    await mkdir(portal);
+    const token = "a".repeat(48);
+    await writeFile(path.join(portal, `.workflow-lock-release-${token}-${"b".repeat(24)}.json`), "{invalid");
+    const first = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.equal(first?.code, "CODEFLOW_WORKFLOW_CLAIM_QUARANTINED");
+    assert.equal(await withWorkflowLease(root, async () => "recovered"), "recovered");
+    for (let index = 1; index < 64; index += 1) {
+      await writeFile(path.join(portal, `.workflow-lock-suspect-${token}-${index.toString(16).padStart(24, "0")}`), "diagnostic");
+    }
+    assert.equal(await withWorkflowLease(root, async () => "at-budget"), "at-budget");
+    await writeFile(path.join(portal, `.workflow-lock-suspect-${token}-${"f".repeat(24)}`), "over-budget");
+    await assert.rejects(withWorkflowLease(root, async () => "unexpected"), /too many candidates/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("workflow interruption reaches the child and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
