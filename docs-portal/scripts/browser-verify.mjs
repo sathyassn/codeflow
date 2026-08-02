@@ -113,7 +113,9 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
       window.__codeflowThemeBeforePaint = null;
       requestAnimationFrame(() => { window.__codeflowThemeBeforePaint = document.documentElement.dataset.theme ?? null; });
     });
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+    // Screenshot-backed traces retain the interaction timeline without copying
+    // every traversed document snapshot into the bounded evidence envelope.
+    await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
     traceStarted = true;
     await context.route("**/*", async (route) => {
       const url = new URL(route.request().url());
@@ -153,6 +155,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     await assertDeepLink(page, name, origin, config.base, activePages);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, activePages);
     await assertSourceLink(page, name, config);
+    await visit(page, siteRoot);
     await assertThemeMatrix(page, name, output);
     await assertKeyboardPath(page, name);
 
