@@ -84,11 +84,15 @@ named human release decision.
       resolution and concurrent identical/conflicting terminal retries;
       client/server review-limit parity; relative and Unicode owner-private
       export creation; derived-runtime separation during live browser-profile
-      writes; exact-name atomic-temp/trash recovery; multi-eviction size
-      recomputation; selected cleanup isolation and structured bulk partial
-      failure; and leader-loss cleanup that retains recovery state unless exact
-      marker/process and resource absence is proven. Qualified forced cleanup
-      re-proves the exact identity after its graceful-stop window.
+      writes; exact-name create/trash recovery with matching transaction proof;
+      multi-eviction size recomputation; selected cleanup isolation and an
+      actionable retained-session result; structured bulk partial failure;
+      service crash → close → clear convergence; and leader-loss cleanup through
+      one serialized, consumed record per launch attempt. PID-reuse cases never
+      signal the reused PID and retain state unless bounded exact marker/process
+      and native resource absence is proven. Windows resource proof walks real
+      profile handles without assuming a POSIX lock file. Qualified forced
+      cleanup re-proves the exact identity after its graceful-stop window.
 - [ ] The shell installer selects the correct macOS/Linux artifact, the
       PowerShell installer selects `codeflow.exe` on native Windows, and WSL2
       selects the Linux artifact. Each installed binary reports the release

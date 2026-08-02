@@ -441,12 +441,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   project-to-session-to-runtime-control lock order, while exact retries and
   cleanup remain usable for legacy over-quota state. Exact accepted and terminal
   feedback retries converge without growth; retention recomputes after each
-  eviction; selected and bulk cleanup isolate corrupt state; interrupted atomic
-  temporaries/trash recover by exact names; and relative Unicode export remains
+  eviction; selected cleanup reports a retained named session while remaining
+  isolated from unrelated state; interrupted creates, atomic temporaries, and
+  trash recover only from exact names plus matching transaction proof; and relative Unicode export remains
   create-new and owner-private. One strict feedback ledger rejects impossible
   transitions; browser cleanup re-qualifies identity before forced escalation;
   exports are owner-private from creation; and browser limits mirror the
-  server's note, text, selector, and payload bounds.
+  server's note, text, selector, and payload bounds. Browser launch is serialized
+  around one consumed record per attempt, reused PIDs take bounded exact-marker
+  recovery, Windows proves real profile-resource release without assuming a
+  POSIX lock file, every Windows append/lease file is private at creation, and
+  Unix state-root environment paths cannot resolve into the worktree.
 
 - **Transport-neutral durable delegate lifecycle (ADR-0036).** New
   `codeflow delegate init|arm|wait` commands and a schema-v2

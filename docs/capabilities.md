@@ -687,8 +687,10 @@ capped per diagram and per document; browser enhancement is serialized, yields
 between diagrams, and fails remaining items to escaped source when the eager
 fallback exhausts its cumulative budget. Browser and auxiliary system-tool
 children share one allowlist-only environment. Windows ACL mutation is confined
-to creation; existing state uses native read-only owner/protected-DACL/trustee/
-inheritance verification. Static export remains self-contained and excludes
+to creation for every private file, including append and lease files; existing
+state uses native read-only owner/protected-DACL/trustee/inheritance
+verification. Unix ignores a relative XDG state override and rejects a relative
+home rather than placing state in the worktree. Static export remains self-contained and excludes
 review/authentication/runtime state.
 
 Native-path repository identity, per-block and whole-document collection
@@ -703,12 +705,18 @@ addressed/dismissed state. Exact accepted receipt and identical terminal retries
 are zero-growth operations; conflicting reuse and unrelated stale versions fail
 closed. Retention recomputes bounded durable size after every eviction, selected
 cleanup loads only its named session, and bulk cleanup reports isolated partial
-failures without deleting ambiguous state.
+failures without deleting ambiguous state. A selected session that cannot be
+removed reports its exact retained outcome instead of succeeding silently.
 Verified Unix process groups receive bounded graceful shutdown and then an
 identity recheck before forced termination. Unverifiable orphan process
 groups/trees retain recovery state rather than killing an unproven process or
-deleting its profile; after the group/tree exits or an operator verifies and
-terminates it, retrying close completes cleanup. Review input controls expose
+deleting its profile. Launches are serialized under a session lease and publish
+one exact record per attempt; close, show, and retry consume it. Reused PIDs are
+never signalled: bounded exact-marker discovery and native profile-resource
+proof either complete cleanup or retain an actionable error. Windows checks
+exclusive handles across the actual profile tree rather than assuming a
+POSIX-style lock file. After a retained group/tree exits or an operator verifies
+and terminates it, retrying close completes cleanup. Review input controls expose
 the Rust-owned note, text, selection, and payload bounds before submission.
 
 The capability remains `building` until TSK-007 records the full native

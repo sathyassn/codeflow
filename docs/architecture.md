@@ -202,20 +202,26 @@ diagram, so TSK-007 must qualify a dense adversarial corpus in real browsers.
 Platform boundaries are native and fail closed: Windows discovers trusted
 system and known-folder paths without `PATH` lookup, rejects reparse traversal,
 parses process identity with Windows command-line rules, emits UTF-8 from
-Windows PowerShell, passes a protected owner-only descriptor at file creation,
-and verifies owner, protected DACL, trustees, and inheritance whenever existing
-state is opened. Every browser or auxiliary system-tool child starts from one
+Windows PowerShell, passes a protected owner-only descriptor at creation for
+every private file including append/lease files, and verifies owner, protected
+DACL, trustees, and inheritance whenever existing state is opened. Every browser or auxiliary system-tool child starts from one
 allowlist-only environment, so provider-secret environment variables are not
 inherited.
 Linux/WSL2 reads bounded, no-follow `/proc` identity and terminates only the
 proven process group; macOS uses delimiter-aware identity and the same ownership
-rule. If a leader disappears, Windows searches for the exact instance/profile
-marker and corroborates absence with the profile resource; Unix rechecks the
-exact process group. Failed enumeration, unreadable identity, a remaining
+rule, and Unix state-root inputs must be absolute. A session lease serializes
+each browser launch from exact per-attempt recovery publication through durable
+registration; close, show, and later launch consume interrupted evidence. If a
+recorded PID disappears or is reused, the native adapter searches for the exact
+instance/profile marker. Windows corroborates absence with bounded exclusive
+handle checks over the real profile tree rather than a POSIX-style lock-file
+assumption; Unix rechecks exact candidates and the process group. Failed enumeration, unreadable identity, a remaining
 candidate, or an inconclusive resource probe retains recovery evidence rather
 than signalling or deleting. Durable clear/retention reaps derived runtime only
 after the same absence boundary; independently corrupt bulk items are retained
-and reported without blocking an explicitly selected safe item.
+and reported without blocking an explicitly selected safe item. A selected
+session that is active or still owns a proven runtime is reported as retained,
+never represented by an empty successful clear.
 Cross-target compilation checks adapter shape only. Native runtime, Unicode
 path, ACL, process-tree, browser, and cleanup evidence remains a release gate.
 

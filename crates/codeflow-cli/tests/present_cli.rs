@@ -88,6 +88,47 @@ fn present_cli_runs_the_local_service_revision_export_and_cleanup_flow() {
     writer.join().unwrap();
 }
 
+#[test]
+fn crashed_service_close_then_selected_clear_converges() {
+    let fixture = setup_project();
+    let opened = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+    ));
+    let session_id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_ne!(unsafe { libc::kill(pid, 0) }, 0);
+
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "close", &session_id],
+    ));
+    let cleared = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", &session_id, "--older-than", "0h"],
+    ));
+    assert!(cleared.contains(&format!("removed {session_id}")));
+}
+
 fn start_profile_writer(
     fixture: &TestProject,
     running: &RunningPresentation,

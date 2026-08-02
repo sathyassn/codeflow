@@ -182,9 +182,11 @@ fn resolve_feedback(
 
 fn close(store: &SessionStore, session_id: &str) -> codeflow_present::Result<()> {
     let id = parse_id(session_id)?;
-    let session = store.close(id)?;
+    store.close(id)?;
+    let profile = store.runtime_dir(id)?.join("browser-profile");
+    browser::recover_incomplete_launch(store, id, &profile)?;
+    let session = store.load(id)?;
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
-        let profile = store.runtime_dir(id)?.join("browser-profile");
         browser::terminate_isolated(store, id, pid, instance_id, &profile)?;
     }
     store.enforce_retention()?;
@@ -297,6 +299,7 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
         .expect("healthy service has a recorded port");
     let authority = format!("127.0.0.1:{port}");
     let profile = store.runtime_dir(id)?.join("browser-profile");
+    browser::recover_incomplete_launch(store, id, &profile)?;
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         if browser::is_isolated_running(pid, instance_id, &profile)? {
             if no_launch {
@@ -332,6 +335,7 @@ fn launch_or_focus_guard(
     authority: Option<&str>,
     profile: &Path,
 ) -> codeflow_present::Result<()> {
+    browser::recover_incomplete_launch(store, id, profile)?;
     let session = store.load(id)?;
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         if browser::is_isolated_running(pid, instance_id, profile)? {

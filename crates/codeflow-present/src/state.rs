@@ -25,6 +25,9 @@ use crate::platform::harden_private_file;
 const STATE_SCHEMA_VERSION: u32 = 1;
 const UPDATE_MARKER: &str = ".updating.json";
 const PROJECT_MUTATION_LOCK: &str = ".create.lock";
+const CREATE_TRANSACTION_MARKER: &str = ".creating.json";
+const DELETE_TRANSACTION_MARKER: &str = ".deleting";
+pub(crate) const LAUNCH_RECOVERY_PREFIX: &str = "launch-recovery-";
 const CONTROL_MUTATION_RESERVE_BYTES: u64 = limits::MAX_SESSION_STATE_BYTES;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +35,27 @@ const CONTROL_MUTATION_RESERVE_BYTES: u64 = limits::MAX_SESSION_STATE_BYTES;
 struct UpdateMarker {
     from_revision: u64,
     to_revision: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CreateTransactionMarker {
+    schema_version: u32,
+    session_id: Uuid,
+    nonce: Uuid,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct DeleteTransactionMarker {
+    schema_version: u32,
+    session_id: Uuid,
+    nonce: Uuid,
+}
+
+enum ClearOutcome {
+    Removed,
+    Retained(&'static str),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -507,7 +531,8 @@ impl SessionStore {
         self.migrate_legacy_runtime_unlocked(&sessions_root)?;
         self.enforce_retention_unlocked()?;
         let final_session = self.session_dir(id);
-        let staging = sessions_root.join(format!(".creating-{id}-{}", Uuid::new_v4().simple()));
+        let create_nonce = Uuid::new_v4();
+        let staging = sessions_root.join(format!(".creating-{id}-{}", create_nonce.simple()));
         let now = now_unix()?;
         let (title, provenance, content) = match parsed {
             ParsedDocument::Supported(document) => (
@@ -559,6 +584,14 @@ impl SessionStore {
             })?;
         self.ensure_project_capacity_unlocked(minimum_bytes, true)?;
         create_private_dir_all(&staging)?;
+        write_json_atomic(
+            &staging.join(CREATE_TRANSACTION_MARKER),
+            &CreateTransactionMarker {
+                schema_version: 1,
+                session_id: id,
+                nonce: create_nonce,
+            },
+        )?;
         create_private_dir_all(&staging.join("revisions"))?;
         let result = (|| {
             write_json_atomic(
@@ -665,15 +698,42 @@ impl SessionStore {
             fs::read_dir(sessions_dir).map_err(|error| PresentError::io(sessions_dir, error))?
         {
             let entry = entry.map_err(|error| PresentError::io(sessions_dir, error))?;
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with(".creating-") {
-                let metadata = fs::symlink_metadata(entry.path())
-                    .map_err(|error| PresentError::io(entry.path(), error))?;
-                if !metadata.is_dir() || is_link_like(&metadata) {
-                    return Err(PresentError::UnsafePath(entry.path()));
-                }
-                remove_dir_confined(sessions_dir, &entry.path())?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Some((session_id, nonce)) =
+                parse_transaction_directory(&name, ".creating-", &entry.path())?
+            else {
+                continue;
+            };
+            let metadata = fs::symlink_metadata(entry.path())
+                .map_err(|error| PresentError::io(entry.path(), error))?;
+            if !metadata.is_dir() || is_link_like(&metadata) {
+                return Err(PresentError::UnsafePath(entry.path()));
             }
+            if sessions_dir.join(session_id.to_string()).exists() {
+                return Err(PresentError::CorruptState(format!(
+                    "staged create {} collides with its published session",
+                    entry.path().display()
+                )));
+            }
+            let marker: CreateTransactionMarker = read_json(
+                &entry.path().join(CREATE_TRANSACTION_MARKER),
+                limits::MAX_SESSION_STATE_BYTES,
+            )?;
+            if marker
+                != (CreateTransactionMarker {
+                    schema_version: 1,
+                    session_id,
+                    nonce,
+                })
+            {
+                return Err(PresentError::CorruptState(format!(
+                    "staged create {} lacks matching transaction proof",
+                    entry.path().display()
+                )));
+            }
+            remove_dir_confined(sessions_dir, &entry.path())?;
         }
         Ok(())
     }
@@ -687,22 +747,37 @@ impl SessionStore {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let Some(rest) = name.strip_prefix(".trash-") else {
+            let Some((session_id, nonce)) =
+                parse_transaction_directory(name, ".trash-", &entry.path())?
+            else {
                 continue;
             };
-            let Some((session, nonce)) = rest.rsplit_once('-') else {
-                return Err(PresentError::UnsafePath(entry.path()));
-            };
-            if Uuid::parse_str(session).is_err()
-                || nonce.len() != 32
-                || !nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(PresentError::UnsafePath(entry.path()));
-            }
             let metadata = fs::symlink_metadata(entry.path())
                 .map_err(|error| PresentError::io(entry.path(), error))?;
             if !metadata.is_dir() || is_link_like(&metadata) {
                 return Err(PresentError::UnsafePath(entry.path()));
+            }
+            if sessions_dir.join(session_id.to_string()).exists() {
+                return Err(PresentError::CorruptState(format!(
+                    "interrupted removal {} collides with a live session",
+                    entry.path().display()
+                )));
+            }
+            let marker: DeleteTransactionMarker = read_json(
+                &entry.path().join(DELETE_TRANSACTION_MARKER),
+                limits::MAX_SESSION_STATE_BYTES,
+            )?;
+            if marker
+                != (DeleteTransactionMarker {
+                    schema_version: 1,
+                    session_id,
+                    nonce,
+                })
+            {
+                return Err(PresentError::CorruptState(format!(
+                    "interrupted removal {} lacks matching tombstone proof",
+                    entry.path().display()
+                )));
             }
             remove_dir_confined(sessions_dir, &entry.path())?;
         }
@@ -1099,7 +1174,10 @@ impl SessionStore {
             {
                 continue;
             }
-            if self.clear_one(&session, Duration::ZERO, false, true)? {
+            if matches!(
+                self.clear_one(&session, Duration::ZERO, false, true)?,
+                ClearOutcome::Removed
+            ) {
                 closed_count = closed_count.saturating_sub(1);
                 total_bytes = directory_size_bounded(&self.root, self.retention.max_project_bytes)?;
                 removed.push(session.id);
@@ -1311,18 +1389,20 @@ impl SessionStore {
     ) -> Result<Vec<Uuid>> {
         let _project_lease = self.lock_project_mutation()?;
         let sessions = self.root.join("sessions");
+        if let Some(id) = selected {
+            let session = self.load(id)?;
+            return match self.clear_one(&session, older_than, dry_run, true)? {
+                ClearOutcome::Removed => Ok(vec![id]),
+                ClearOutcome::Retained(reason) => Err(PresentError::PartialCleanup {
+                    removed: Vec::new(),
+                    failures: vec![format!("{id}: {reason}")],
+                }),
+            };
+        }
         Self::cleanup_staged_creates_unlocked(&sessions)?;
         Self::cleanup_interrupted_removals_unlocked(&sessions)?;
         Self::cleanup_atomic_temps_unlocked(&sessions)?;
         self.migrate_legacy_runtime_unlocked(&sessions)?;
-        if let Some(id) = selected {
-            let session = self.load(id)?;
-            return Ok(if self.clear_one(&session, older_than, dry_run, true)? {
-                vec![id]
-            } else {
-                Vec::new()
-            });
-        }
         let mut removed = Vec::new();
         let mut failures = Vec::new();
         for entry in fs::read_dir(&sessions).map_err(|error| PresentError::io(&sessions, error))? {
@@ -1337,8 +1417,8 @@ impl SessionStore {
                 .load(id)
                 .and_then(|session| self.clear_one(&session, older_than, dry_run, false))
             {
-                Ok(true) => removed.push(id),
-                Ok(false) => {}
+                Ok(ClearOutcome::Removed) => removed.push(id),
+                Ok(ClearOutcome::Retained(_)) => {}
                 Err(error) => failures.push(format!("{id}: {error}")),
             }
         }
@@ -1357,43 +1437,72 @@ impl SessionStore {
         older_than: Duration,
         dry_run: bool,
         explicitly_selected: bool,
-    ) -> Result<bool> {
-        let Some(closed_at) = session.closed_at_unix else {
-            return Ok(false);
-        };
-        if session.service_instance.is_some() || session.browser_instance.is_some() {
-            return Ok(false);
-        }
-        if now_unix()?.saturating_sub(closed_at) < older_than.as_secs() && !explicitly_selected {
-            return Ok(false);
-        }
+    ) -> Result<ClearOutcome> {
         let Some(lock) = self.lock_session_nonblocking_raw(session.id)? else {
-            return Ok(false);
+            return Ok(ClearOutcome::Retained(
+                "session state is currently locked by another operation",
+            ));
         };
+        let mut session = self.load(session.id)?;
+        let Some(closed_at) = session.closed_at_unix else {
+            return Ok(ClearOutcome::Retained("session is still active"));
+        };
+        if now_unix()?.saturating_sub(closed_at) < older_than.as_secs() && !explicitly_selected {
+            return Ok(ClearOutcome::Retained(
+                "closed session has not reached the requested retention age",
+            ));
+        }
+        let service_lease = if session.service_instance.is_some() {
+            let Some(lease) =
+                self.try_acquire_runtime_lease(session.id, ".service.lock", "running service")?
+            else {
+                return Ok(ClearOutcome::Retained("session service is still running"));
+            };
+            Some(lease)
+        } else {
+            None
+        };
+        if session.browser_instance.is_some() {
+            return Ok(ClearOutcome::Retained(
+                "session browser identity has not been reconciled; retry `codeflow present close`",
+            ));
+        }
         let path = self.session_dir(session.id);
         ensure_confined_child(&self.root.join("sessions"), &path)?;
         if dry_run {
-            return Ok(true);
+            return Ok(ClearOutcome::Removed);
+        }
+        if session.service_instance.is_some() {
+            session.service_port = None;
+            session.service_pid = None;
+            session.service_instance = None;
+            session.updated_at_unix = now_unix()?;
+            self.write_session_unlocked(session.id, &session, false)?;
         }
         let runtime = self.runtime_root.join(session.id.to_string());
-        if runtime.exists() {
-            let recovery = runtime.join("control").join("launch-recovery.json");
-            if recovery.exists() {
-                return Err(PresentError::ServiceUnavailable(format!(
-                    "presentation runtime for {} retains launch-recovery evidence; close/recover it before clearing durable state",
-                    session.id
-                )));
-            }
+        if runtime.exists() && has_launch_recovery_evidence(&runtime.join("control"))? {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "presentation runtime for {} retains launch-recovery evidence; retry `codeflow present close` before clearing durable state",
+                session.id
+            )));
         }
-        let tombstone = path.join(".deleting");
-        create_private_file(&tombstone)?;
+        let nonce = Uuid::new_v4();
+        let tombstone = path.join(DELETE_TRANSACTION_MARKER);
+        write_json_atomic(
+            &tombstone,
+            &DeleteTransactionMarker {
+                schema_version: 1,
+                session_id: session.id,
+                nonce,
+            },
+        )?;
         sync_directory(&path)?;
+        drop(service_lease);
         drop(lock);
-        let trash = self.root.join("sessions").join(format!(
-            ".trash-{}-{}",
-            session.id,
-            Uuid::new_v4().simple()
-        ));
+        let trash =
+            self.root
+                .join("sessions")
+                .join(format!(".trash-{}-{}", session.id, nonce.simple()));
         if let Err(error) = fs::rename(&path, &trash) {
             let rollback = self.lock_session_nonblocking_raw(session.id)?;
             if let Some(rollback) = rollback {
@@ -1408,7 +1517,7 @@ impl SessionStore {
         if runtime.exists() {
             remove_dir_confined(&self.runtime_root, &runtime)?;
         }
-        Ok(true)
+        Ok(ClearOutcome::Removed)
     }
 
     fn validate_session(&self, session: &SessionRecord) -> Result<()> {
@@ -1624,6 +1733,10 @@ impl SessionStore {
         self.acquire_runtime_lease(id, ".startup.lock", "service startup")
     }
 
+    pub fn acquire_browser_launch_lease(&self, id: Uuid) -> Result<File> {
+        self.acquire_runtime_lease(id, ".browser-launch.lock", "browser launch")
+    }
+
     fn acquire_runtime_lease(&self, id: Uuid, file_name: &str, owner: &str) -> Result<File> {
         self.load(id)?;
         let path = self.session_dir(id).join(file_name);
@@ -1636,6 +1749,23 @@ impl SessionStore {
                 )))
             }
             Err(error) => Err(PresentError::io(path, error)),
+        }
+    }
+
+    fn try_acquire_runtime_lease(
+        &self,
+        id: Uuid,
+        file_name: &str,
+        owner: &str,
+    ) -> Result<Option<File>> {
+        let path = self.session_dir(id).join(file_name);
+        let lease = open_private_append(&path)?;
+        match lease.try_lock_exclusive() {
+            Ok(()) => Ok(Some(lease)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(PresentError::ServiceUnavailable(format!(
+                "failed to prove absence of {owner} for session {id}: {error}"
+            ))),
         }
     }
 
@@ -1711,6 +1841,69 @@ impl SessionStore {
         file.sync_data()
             .map_err(|error| PresentError::io(&path, error))
     }
+}
+
+fn parse_transaction_directory(
+    name: &str,
+    prefix: &str,
+    path: &Path,
+) -> Result<Option<(Uuid, Uuid)>> {
+    let Some(rest) = name.strip_prefix(prefix) else {
+        return Ok(None);
+    };
+    let Some((session_text, nonce_text)) = rest.rsplit_once('-') else {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    };
+    let session_id =
+        Uuid::parse_str(session_text).map_err(|_| PresentError::UnsafePath(path.to_path_buf()))?;
+    let nonce =
+        Uuid::parse_str(nonce_text).map_err(|_| PresentError::UnsafePath(path.to_path_buf()))?;
+    if session_id.to_string() != session_text
+        || nonce.simple().to_string() != nonce_text
+        || name != format!("{prefix}{session_id}-{}", nonce.simple())
+    {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    }
+    Ok(Some((session_id, nonce)))
+}
+
+fn has_launch_recovery_evidence(control: &Path) -> Result<bool> {
+    let entries = match fs::read_dir(control) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(PresentError::io(control, error)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| PresentError::io(control, error))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(_) = parse_launch_recovery_name(&name, &entry.path())? else {
+            continue;
+        };
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| PresentError::io(entry.path(), error))?;
+        if !metadata.is_file() || is_link_like(&metadata) {
+            return Err(PresentError::UnsafePath(entry.path()));
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub(crate) fn parse_launch_recovery_name(name: &str, path: &Path) -> Result<Option<Uuid>> {
+    let Some(instance) = name
+        .strip_prefix(LAUNCH_RECOVERY_PREFIX)
+        .and_then(|name| name.strip_suffix(".json"))
+    else {
+        return Ok(None);
+    };
+    let instance =
+        Uuid::parse_str(instance).map_err(|_| PresentError::UnsafePath(path.to_path_buf()))?;
+    if name != format!("{LAUNCH_RECOVERY_PREFIX}{}.json", instance.simple()) {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    }
+    Ok(Some(instance))
 }
 
 fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<FeedbackEvent>> {
@@ -2065,18 +2258,32 @@ fn platform_state_root() -> Result<PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        if let Some(root) = std::env::var_os("XDG_STATE_HOME") {
-            return Ok(PathBuf::from(root).join("codeflow").join("present"));
+        if let Some(root) = absolute_xdg_state_home(std::env::var_os("XDG_STATE_HOME")) {
+            return Ok(root.join("codeflow").join("present"));
         }
         Ok(home_dir()?.join(".local/state/codeflow/present"))
     }
 }
 
+#[cfg(all(unix, any(not(target_os = "macos"), test)))]
+fn absolute_xdg_state_home(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|root| root.is_absolute())
+}
+
 #[cfg(unix)]
 fn home_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
+    validated_home(std::env::var_os("HOME"))
+}
+
+#[cfg(unix)]
+fn validated_home(home: Option<std::ffi::OsString>) -> Result<PathBuf> {
+    let home = home
         .map(PathBuf::from)
-        .ok_or_else(|| PresentError::UnsafePath(PathBuf::from("$HOME")))
+        .ok_or_else(|| PresentError::UnsafePath(PathBuf::from("$HOME")))?;
+    if !home.is_absolute() {
+        return Err(PresentError::UnsafePath(home));
+    }
+    Ok(home)
 }
 
 fn now_unix() -> Result<u64> {
@@ -2291,32 +2498,63 @@ fn add_no_follow(options: &mut OpenOptions) {
 fn add_no_follow(_options: &mut OpenOptions) {}
 
 fn open_private_append(path: &Path) -> Result<File> {
-    let mut create = OpenOptions::new();
-    create.create_new(true).append(true).read(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        create.mode(0o600);
+        let file = match crate::platform::open_private_create_new(path) {
+            Ok(mut file) => {
+                file.seek(SeekFrom::End(0))
+                    .map_err(|error| PresentError::io(path, error))?;
+                file
+            }
+            Err(error)
+                if matches!(
+                    &error,
+                    PresentError::Io { source, .. }
+                        if source.kind() == std::io::ErrorKind::AlreadyExists
+                ) =>
+            {
+                let mut existing = OpenOptions::new();
+                existing.append(true).read(true);
+                add_no_follow(&mut existing);
+                existing
+                    .open(path)
+                    .map_err(|error| PresentError::io(path, error))?
+            }
+            Err(error) => return Err(error),
+        };
+        validate_private_file(path, &file)?;
+        return Ok(file);
     }
-    add_no_follow(&mut create);
-    let file = match create.open(path) {
-        Ok(file) => {
-            harden_private_path(path, false)?;
-            file
+
+    #[cfg(not(windows))]
+    {
+        let mut create = OpenOptions::new();
+        create.create_new(true).append(true).read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            create.mode(0o600);
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let mut existing = OpenOptions::new();
-            existing.append(true).read(true);
-            add_no_follow(&mut existing);
-            existing
-                .open(path)
-                .map_err(|error| PresentError::io(path, error))?
-        }
-        Err(error) => return Err(PresentError::io(path, error)),
-    };
-    #[cfg(any(unix, windows))]
-    validate_private_file(path, &file)?;
-    Ok(file)
+        add_no_follow(&mut create);
+        let file = match create.open(path) {
+            Ok(file) => {
+                harden_private_path(path, false)?;
+                file
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let mut existing = OpenOptions::new();
+                existing.append(true).read(true);
+                add_no_follow(&mut existing);
+                existing
+                    .open(path)
+                    .map_err(|error| PresentError::io(path, error))?
+            }
+            Err(error) => return Err(PresentError::io(path, error)),
+        };
+        #[cfg(any(unix, windows))]
+        validate_private_file(path, &file)?;
+        Ok(file)
+    }
 }
 
 fn open_private_read(path: &Path) -> Result<File> {
@@ -2962,8 +3200,22 @@ mod tests {
     fn stale_unpublished_create_is_removed_without_affecting_sessions() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
-        let staged = store.root.join("sessions/.creating-interrupted");
+        let staged_id = Uuid::new_v4();
+        let nonce = Uuid::new_v4();
+        let staged = store
+            .root
+            .join("sessions")
+            .join(format!(".creating-{staged_id}-{}", nonce.simple()));
         create_private_dir_all(&staged).unwrap();
+        write_json_atomic(
+            &staged.join(CREATE_TRANSACTION_MARKER),
+            &CreateTransactionMarker {
+                schema_version: 1,
+                session_id: staged_id,
+                nonce,
+            },
+        )
+        .unwrap();
         fs::write(staged.join("partial"), b"partial").unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
         assert!(!staged.exists());
@@ -2976,7 +3228,19 @@ mod tests {
         let kept = store.create(parsed()).unwrap();
         let removed = store.create(parsed()).unwrap();
         let sessions = store.root.join("sessions");
-        let trash = sessions.join(format!(".trash-{}-{}", removed.id, Uuid::new_v4().simple()));
+        let nonce = Uuid::new_v4();
+        write_json_atomic(
+            &store
+                .session_dir(removed.id)
+                .join(DELETE_TRANSACTION_MARKER),
+            &DeleteTransactionMarker {
+                schema_version: 1,
+                session_id: removed.id,
+                nonce,
+            },
+        )
+        .unwrap();
+        let trash = sessions.join(format!(".trash-{}-{}", removed.id, nonce.simple()));
         fs::rename(store.session_dir(removed.id), &trash).unwrap();
 
         let session_temp = store
@@ -2994,6 +3258,26 @@ mod tests {
         assert!(!session_temp.exists());
         assert!(!revision_temp.exists());
         assert!(store.load(kept.id).is_ok());
+    }
+
+    #[test]
+    fn recovery_rejects_exact_transaction_names_without_matching_proof() {
+        let (_temp, store) = store();
+        let sessions = store.root.join("sessions");
+        let staged_id = Uuid::new_v4();
+        let staged_nonce = Uuid::new_v4();
+        let staged = sessions.join(format!(".creating-{staged_id}-{}", staged_nonce.simple()));
+        create_private_dir_all(&staged).unwrap();
+        assert!(store.list().is_err());
+        assert!(staged.exists());
+        fs::remove_dir_all(&staged).unwrap();
+
+        let session = store.create(parsed()).unwrap();
+        let trash_nonce = Uuid::new_v4();
+        let trash = sessions.join(format!(".trash-{}-{}", session.id, trash_nonce.simple()));
+        fs::rename(store.session_dir(session.id), &trash).unwrap();
+        assert!(store.list().is_err());
+        assert!(trash.exists());
     }
 
     #[test]
@@ -3548,6 +3832,8 @@ mod tests {
         store.close(selected.id).unwrap();
         store.close(corrupt.id).unwrap();
         fs::write(store.session_path(corrupt.id), b"not-json").unwrap();
+        let unrelated_staging = store.root.join("sessions/.creating-unrelated");
+        create_private_dir_all(&unrelated_staging).unwrap();
 
         assert_eq!(
             store
@@ -3555,35 +3841,72 @@ mod tests {
                 .unwrap(),
             vec![selected.id]
         );
+        assert!(unrelated_staging.exists());
+        fs::remove_dir_all(&unrelated_staging).unwrap();
         let error = store.clear(None, Duration::ZERO, false).unwrap_err();
         assert!(matches!(error, PresentError::PartialCleanup { .. }));
         assert!(store.session_dir(corrupt.id).exists());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn clear_never_removes_closed_state_with_a_live_runtime_identity() {
+    fn unix_home_root_must_be_absolute() {
+        assert!(absolute_xdg_state_home(Some("relative/state".into())).is_none());
+        assert_eq!(
+            absolute_xdg_state_home(Some("/private/state".into())),
+            Some(PathBuf::from("/private/state"))
+        );
+        assert!(validated_home(Some("relative/home".into())).is_err());
+        assert!(validated_home(None).is_err());
+        assert_eq!(
+            validated_home(Some("/private/home".into())).unwrap(),
+            PathBuf::from("/private/home")
+        );
+    }
+
+    #[test]
+    fn selected_clear_reports_live_runtime_and_stale_service_state_converges() {
         let (_temp, store) = store();
         let browser = store.create(parsed()).unwrap();
-        let service = store.create(parsed()).unwrap();
+        let live_service = store.create(parsed()).unwrap();
+        let crashed_service = store.create(parsed()).unwrap();
         let browser_instance = Uuid::new_v4();
-        let service_instance = Uuid::new_v4();
+        let live_service_instance = Uuid::new_v4();
+        let crashed_service_instance = Uuid::new_v4();
         store.set_browser(browser.id, 42, browser_instance).unwrap();
+        let live_lease = store.acquire_service_lease(live_service.id).unwrap();
         store
-            .set_service(service.id, 43123, 43, service_instance)
+            .set_service(live_service.id, 43123, 43, live_service_instance)
+            .unwrap();
+        store
+            .set_service(crashed_service.id, 43124, 44, crashed_service_instance)
             .unwrap();
         store.close(browser.id).unwrap();
-        store.close(service.id).unwrap();
+        store.close(live_service.id).unwrap();
+        store.close(crashed_service.id).unwrap();
 
-        assert!(store
-            .clear(Some(browser.id), Duration::ZERO, false)
-            .unwrap()
-            .is_empty());
-        assert!(store
-            .clear(Some(service.id), Duration::ZERO, false)
-            .unwrap()
-            .is_empty());
+        assert!(matches!(
+            store.clear(Some(browser.id), Duration::ZERO, false),
+            Err(PresentError::PartialCleanup { .. })
+        ));
+        assert!(matches!(
+            store.clear(Some(live_service.id), Duration::ZERO, false),
+            Err(PresentError::PartialCleanup { .. })
+        ));
         assert!(store.load(browser.id).is_ok());
-        assert!(store.load(service.id).is_ok());
+        assert!(store.load(live_service.id).is_ok());
+
+        assert_eq!(
+            store
+                .clear(Some(crashed_service.id), Duration::ZERO, false)
+                .unwrap(),
+            vec![crashed_service.id]
+        );
+        assert!(matches!(
+            store.load(crashed_service.id),
+            Err(PresentError::SessionNotFound(_))
+        ));
+        drop(live_lease);
     }
 
     #[test]
