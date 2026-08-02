@@ -41,7 +41,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1539d293a2d1fb49a56c96304b2d6bbd36ad55d30ecddc3d742fbd759dff663b"
+      "pristine_sha256": "d50f0fd1460892610cc6f872a25fcea0cbc91d59321beac7423140201de68767"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",

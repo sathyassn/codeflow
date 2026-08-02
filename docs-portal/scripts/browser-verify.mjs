@@ -100,7 +100,7 @@ async function verifyEngine(name, engine, base, outputRoot) {
     }
 
     await visit(page, `${base}/system/architecture/`);
-    const target = page.locator("h2[id], h3[id]").first();
+    const target = page.locator(".sl-markdown-content h2[id], .sl-markdown-content h3[id]").first();
     const targetId = await target.getAttribute("id");
     if (!targetId) throw new Error(`${name}: deep-link target fixture is absent`);
     await visit(page, `${base}/system/architecture/#${encodeURIComponent(targetId)}`);
@@ -171,7 +171,7 @@ async function assertFocusIsVisible(page, engine) {
 
 async function visit(page, url) {
   const response = await page.goto(url, { waitUntil: "networkidle" });
-  if (!response || response.status() >= 400) throw new Error(`${url} returned ${response?.status()}`);
+  if (response?.status() >= 400 || !response && page.url() !== url) throw new Error(`${url} returned ${response?.status()}`);
 }
 
 async function artifact(file) {
