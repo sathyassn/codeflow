@@ -683,6 +683,64 @@ test("a stalled stale-lease reclaimer cannot remove a later winner", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("claim retirement preserves a replacement published after the expected claim leaves", async () => {
+  for (const reason of ["reclaim", "release", "failed"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-workflow-retire-${reason}-`));
+    try {
+      let retirementReady;
+      const retirementIsReady = new Promise((resolve) => { retirementReady = resolve; });
+      let resumeRetirement;
+      const resume = new Promise((resolve) => { resumeRetirement = resolve; });
+      const hooks = {
+        beforeClaimRetirement: async ({ reason: actual }) => {
+          assert.equal(actual, reason);
+          retirementReady();
+          await resume;
+        },
+      };
+      let operation;
+      if (reason === "reclaim") {
+        const stale = Date.now() - 5 * 60 * 60 * 1000;
+        const lease = { schema_version: 1, token: "a".repeat(48), created_at_ms: stale, heartbeat_at_ms: stale };
+        const candidate = path.join(root, `.portal/.workflow-lock-candidate-${lease.token}`);
+        await mkdir(candidate, { recursive: true });
+        await writeFile(path.join(candidate, "owner.json"), JSON.stringify(lease));
+        await writeFile(path.join(root, ".portal/workflow.lock"), JSON.stringify(lease));
+        operation = withWorkflowLease(root, async () => "unexpected", hooks).catch((error) => error);
+      } else if (reason === "release") {
+        operation = withWorkflowLease(root, async () => "released", hooks);
+      } else {
+        hooks.afterClaimPublished = async (candidate, lease) => {
+          await rename(candidate, path.join(root, `.portal/.workflow-lock-recovery-${lease.token}`));
+        };
+        operation = withWorkflowLease(root, async () => "unexpected", hooks).catch((error) => error);
+      }
+      await retirementIsReady;
+      await rm(path.join(root, ".portal/workflow.lock"));
+      let replacementToken;
+      let replacementReady;
+      const replacementIsReady = new Promise((resolve) => { replacementReady = resolve; });
+      let releaseReplacement;
+      const replacementHeld = new Promise((resolve) => { releaseReplacement = resolve; });
+      const replacement = withWorkflowLease(root, async () => {
+        replacementToken = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token;
+        replacementReady();
+        await replacementHeld;
+        return "replacement";
+      });
+      await replacementIsReady;
+      resumeRetirement();
+      const result = await operation;
+      if (reason === "release") assert.equal(result, "released");
+      else assert.match(String(result), reason === "reclaim" ? /already in progress/ : /could not acquire/);
+      assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, replacementToken);
+      releaseReplacement();
+      assert.equal(await replacement, "replacement");
+      assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test("workflow interruption reaches the child and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
   const root = await selfContainedPortalFixture();
   try {
@@ -755,6 +813,42 @@ test("direct browser lifecycle interruption closes resources and releases its le
     assert.equal(await readFile(path.join(root, ".browser-cleanup-count"), "utf8"), "1\n");
     assert.equal(await readFile(path.join(root, ".browser-cleanup-order"), "utf8"), "cleanup-start\ncleanup-end\n");
     await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("lifecycle drains a delayed acquisition before re-signalling", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-delayed-acquire-"));
+  try {
+    const runner = path.join(root, "delayed-acquire.mjs");
+    await writeFile(runner, `
+      import { appendFile, writeFile } from "node:fs/promises";
+      import path from "node:path";
+      import { withSignalAwareChildLifecycle } from ${JSON.stringify(new URL("../scripts/child-lifecycle.mjs", import.meta.url).href)};
+      const root = process.cwd();
+      let cleanupRuns = 0;
+      await withSignalAwareChildLifecycle(async (lifecycle) => {
+        const resource = new Promise((resolve) => setTimeout(async () => {
+          await appendFile(path.join(root, ".acquire-order"), "acquired\\n");
+          resolve({ id: "resource" });
+        }, 150));
+        await writeFile(path.join(root, ".acquire-ready"), "ready\\n");
+        await lifecycle.acquire(resource, async ({ id }) => {
+          cleanupRuns += 1;
+          await appendFile(path.join(root, ".acquire-order"), "cleanup-" + id + "\\n");
+          await writeFile(path.join(root, ".acquire-cleanup-count"), String(cleanupRuns) + "\\n");
+        });
+      });
+    `);
+    const child = spawn(process.execPath, [runner], { cwd: root, stdio: "ignore" });
+    await waitUntil(() => readFile(path.join(root, ".acquire-ready")).then(() => true, () => false));
+    child.kill("SIGTERM");
+    const outcome = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
+    assert.equal(await readFile(path.join(root, ".acquire-cleanup-count"), "utf8"), "1\n");
+    assert.equal(await readFile(path.join(root, ".acquire-order"), "utf8"), "acquired\ncleanup-resource\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

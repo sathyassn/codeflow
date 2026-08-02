@@ -9,6 +9,8 @@ export async function withSignalAwareChildLifecycle(action) {
   interruption.catch(() => {});
   const children = new Set();
   const cleanups = new Set();
+  const acquisitions = new Set();
+  let state = "open";
   let shutdownPromise = null;
 
   const cleanupRecord = (cleanup) => ({ cleanup, promise: null });
@@ -17,14 +19,19 @@ export async function withSignalAwareChildLifecycle(action) {
     return record.promise;
   };
   const beginShutdown = (signal) => {
+    if (state === "open") state = "closing";
     shutdownPromise ??= (async () => {
       for (const child of children) child.kill(signal);
+      while (acquisitions.size > 0) {
+        await Promise.allSettled([...acquisitions].map((record) => record.promise));
+      }
       while (true) {
         const pending = [...cleanups];
         await Promise.allSettled(pending.map(runCleanup));
         if (pending.length === cleanups.size && [...cleanups].every((record) => record.promise !== null)) break;
       }
       await Promise.all([...children].map((child) => stopChild(child, signal)));
+      state = "closed";
     })();
     return shutdownPromise;
   };
@@ -49,19 +56,17 @@ export async function withSignalAwareChildLifecycle(action) {
     },
     async acquire(value, cleanup) {
       if (typeof cleanup !== "function") throw new Error("acquired resource cleanup must be a function");
-      const pending = Promise.resolve(value);
-      try { return await Promise.race([pending, interruption]); }
-      catch (error) {
-        if (interruptedBy !== null) {
-          const record = cleanupRecord(async () => {
-            const resource = await pending;
-            await cleanup(resource);
-          });
-          cleanups.add(record);
-          runCleanup(record).catch(() => {});
+      if (state !== "open") throw interruptedError(interruptedBy ?? "SIGTERM");
+      const record = { promise: null, cleanupPromise: null };
+      acquisitions.add(record);
+      record.promise = Promise.resolve(value).then(async (resource) => {
+        if (state !== "open") {
+          record.cleanupPromise ??= Promise.resolve().then(() => cleanup(resource));
+          await record.cleanupPromise;
         }
-        throw error;
-      }
+        return resource;
+      }).finally(() => { acquisitions.delete(record); });
+      return Promise.race([record.promise, interruption]);
     },
     throwIfInterrupted() {
       if (interruptedBy !== null) throw interruptedError(interruptedBy);
