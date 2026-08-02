@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, cp, lstat, mkdtemp, mkdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -737,6 +737,91 @@ test("claim retirement preserves a replacement published after the expected clai
       releaseReplacement();
       assert.equal(await replacement, "replacement");
       assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("a replacement released while displaced cannot be resurrected", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-release-"));
+  try {
+    const stale = Date.now() - 5 * 60 * 60 * 1000;
+    const staleLease = { schema_version: 1, token: "a".repeat(48), created_at_ms: stale, heartbeat_at_ms: stale };
+    const staleCandidate = path.join(root, `.portal/.workflow-lock-candidate-${staleLease.token}`);
+    await mkdir(staleCandidate, { recursive: true });
+    await writeFile(path.join(staleCandidate, "owner.json"), JSON.stringify(staleLease));
+    await writeFile(path.join(root, ".portal/workflow.lock"), JSON.stringify(staleLease));
+    let retirementReady;
+    const retirementIsReady = new Promise((resolve) => { retirementReady = resolve; });
+    let moveClaim;
+    const move = new Promise((resolve) => { moveClaim = resolve; });
+    let claimMoved;
+    const claimIsMoved = new Promise((resolve) => { claimMoved = resolve; });
+    let inspectMovedClaim;
+    const inspect = new Promise((resolve) => { inspectMovedClaim = resolve; });
+    const reclaimer = withWorkflowLease(root, async () => "reclaimer", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim") return;
+        retirementReady();
+        await move;
+      },
+      afterClaimMoved: async ({ reason }) => {
+        if (reason !== "reclaim") return;
+        claimMoved();
+        await inspect;
+      },
+    });
+    await retirementIsReady;
+    await rm(path.join(root, ".portal/workflow.lock"));
+    let replacementToken;
+    let replacementReady;
+    const replacementIsReady = new Promise((resolve) => { replacementReady = resolve; });
+    let releaseReplacement;
+    const replacementHeld = new Promise((resolve) => { releaseReplacement = resolve; });
+    const replacement = withWorkflowLease(root, async () => {
+      replacementToken = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token;
+      replacementReady();
+      await replacementHeld;
+      return "replacement";
+    });
+    await replacementIsReady;
+    moveClaim();
+    await claimIsMoved;
+    releaseReplacement();
+    assert.equal(await replacement, "replacement");
+    await assert.rejects(readFile(path.join(root, `.portal/.workflow-lock-candidate-${replacementToken}/owner.json`)), /ENOENT/);
+    inspectMovedClaim();
+    assert.equal(await reclaimer, "reclaimer");
+    const debris = (await readdir(path.join(root, ".portal"))).filter((name) => name.includes(replacementToken));
+    assert.deepEqual(debris, []);
+    await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
+    assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("recovery honors displaced-claim liveness at both restoration crash boundaries", async () => {
+  for (const boundary of ["before-restore", "after-relink"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-workflow-displaced-crash-${boundary}-`));
+    try {
+      const portal = path.join(root, ".portal");
+      const token = "b".repeat(48);
+      const lease = { schema_version: 1, token, created_at_ms: Date.now(), heartbeat_at_ms: Date.now() };
+      const candidate = path.join(portal, `.workflow-lock-candidate-${token}`);
+      const retired = path.join(portal, `.workflow-lock-reclaim-${"a".repeat(48)}-${"c".repeat(24)}.json`);
+      await mkdir(candidate, { recursive: true });
+      const owner = path.join(candidate, "owner.json");
+      await writeFile(owner, JSON.stringify(lease));
+      await link(owner, retired);
+      if (boundary === "after-relink") {
+        await link(owner, path.join(portal, "workflow.lock"));
+        await rm(candidate, { recursive: true });
+      } else {
+        const blocked = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+        assert.match(String(blocked), /already in progress/);
+        assert.equal(JSON.parse(await readFile(path.join(portal, "workflow.lock"), "utf8")).token, token);
+        await rm(candidate, { recursive: true });
+      }
+      assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+      assert.deepEqual((await readdir(portal)).filter((name) => name.includes(token)), []);
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 });

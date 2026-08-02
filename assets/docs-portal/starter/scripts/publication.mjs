@@ -18,7 +18,7 @@ const INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS = 5_000;
 export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
   if (typeof action !== "function") throw new Error("workflow lease action must be a function");
   if (!testHooks || typeof testHooks !== "object" || Array.isArray(testHooks)
-    || Object.keys(testHooks).some((key) => !["afterCandidateReady", "afterClaimPublished", "afterRecoverySnapshot", "afterStaleRename", "beforeClaimRetirement"].includes(key))
+    || Object.keys(testHooks).some((key) => !["afterCandidateReady", "afterClaimMoved", "afterClaimPublished", "afterRecoverySnapshot", "afterStaleRename", "beforeClaimRetirement"].includes(key))
     || Object.values(testHooks).some((hook) => hook !== undefined && typeof hook !== "function")) {
     throw new Error("workflow lease testHooks are invalid");
   }
@@ -83,6 +83,10 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
 }
 
 async function readWorkflowLeaseDirectory(directory) {
+  return (await readWorkflowLeaseDirectoryIdentity(directory)).lease;
+}
+
+async function readWorkflowLeaseDirectoryIdentity(directory) {
   const before = await lstat(directory, { bigint: true });
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error("unsafe portal workflow lease");
   const owner = path.join(directory, "owner.json");
@@ -90,7 +94,7 @@ async function readWorkflowLeaseDirectory(directory) {
   validatePublicationLease(value);
   const after = await lstat(directory, { bigint: true });
   if (after.isSymbolicLink() || !after.isDirectory() || !sameFile(before, after)) throw new Error("portal workflow lease directory changed while it was being verified");
-  return value;
+  return { lease: value, stat: after };
 }
 
 async function readWorkflowLeaseClaim(portalDirectory, claim) {
@@ -125,17 +129,14 @@ async function currentWorkflowClaimToken(portalDirectory) {
 }
 
 async function releaseWorkflowLease(portalDirectory, claim, lease, testHooks) {
+  await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, lease.token), lease.token);
   let current;
-  try { current = await readWorkflowLeaseClaimIdentity(portalDirectory, claim); }
+  try { current = await readWorkflowClaimIdentity(claim, "portal workflow lease release claim"); }
   catch (error) { if (error?.code === "ENOENT") return; throw error; }
   if (current.lease.token !== lease.token) return;
-  const released = await retireWorkflowClaim(portalDirectory, claim, current.claim, "release", testHooks);
-  if (released === null) {
-    await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, lease.token), lease.token);
-    return;
-  }
+  const released = await retireWorkflowClaim(portalDirectory, claim, current, "release", testHooks);
+  if (released === null) return;
   await removeVerifiedWorkflowClaim(released, lease.token);
-  await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, lease.token), lease.token);
 }
 
 async function removeVerifiedWorkflowDirectory(directory, expectedToken) {
@@ -181,6 +182,7 @@ async function retireWorkflowClaim(portalDirectory, claim, expected, reason, tes
   try { await rename(claim, retired); }
   catch (error) { if (error?.code === "ENOENT") return null; throw error; }
   await syncDirectory(portalDirectory);
+  if (testHooks.afterClaimMoved) await testHooks.afterClaimMoved({ reason, retired, expected: structuredClone(expected.lease) });
   let moved;
   try { moved = await readWorkflowClaimIdentity(retired, "portal workflow retired claim"); }
   catch (error) {
@@ -193,22 +195,66 @@ async function retireWorkflowClaim(portalDirectory, claim, expected, reason, tes
 }
 
 async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved = null) {
+  if (moved === null) {
+    try {
+      await link(retired, claim);
+      await syncDirectory(portalDirectory);
+      await rm(retired);
+      await syncDirectory(portalDirectory);
+    } catch (error) { if (error?.code !== "EEXIST") throw error; }
+    return false;
+  }
+  const candidateBefore = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token);
+  if (candidateBefore === null) {
+    await removeMovedWorkflowClaim(retired, moved);
+    return false;
+  }
   try {
     await link(retired, claim);
     await syncDirectory(portalDirectory);
-    await rm(retired);
-    await syncDirectory(portalDirectory);
-    return;
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
-  }
-  if (moved !== null) {
     const current = await readWorkflowClaimIdentity(claim, "portal workflow replacement claim");
-    if (current.lease.token === moved.lease.token && sameFile(current.stat, moved.stat)) {
-      await rm(retired);
-      await syncDirectory(portalDirectory);
-    }
+    if (current.lease.token !== moved.lease.token || !sameFile(current.stat, moved.stat)) return false;
   }
+  const candidateAfter = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token);
+  if (candidateAfter !== null && sameFile(candidateBefore.stat, candidateAfter.stat)) {
+    await removeMovedWorkflowClaim(retired, moved);
+    return true;
+  }
+  await removeLiveWorkflowClaimIdentity(portalDirectory, claim, moved);
+  await removeMovedWorkflowClaim(retired, moved);
+  return false;
+}
+
+async function liveWorkflowCandidateIdentity(portalDirectory, token) {
+  try {
+    const candidate = await readWorkflowLeaseDirectoryIdentity(workflowCandidate(portalDirectory, token));
+    if (candidate.lease.token !== token || Date.now() - candidate.lease.heartbeat_at_ms > WORKFLOW_LEASE_MAX_AGE_MS) return null;
+    return candidate;
+  } catch (error) { if (error?.code === "ENOENT") return null; throw error; }
+}
+
+async function removeLiveWorkflowClaimIdentity(portalDirectory, claim, expected) {
+  const cleanup = path.join(portalDirectory, `.workflow-lock-release-${expected.lease.token}-${randomBytes(12).toString("hex")}.json`);
+  try { await rename(claim, cleanup); }
+  catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  await syncDirectory(portalDirectory);
+  const moved = await readWorkflowClaimIdentity(cleanup, "portal workflow restored-claim cleanup");
+  if (moved.lease.token === expected.lease.token && sameFile(moved.stat, expected.stat)) {
+    await removeMovedWorkflowClaim(cleanup, moved);
+    return;
+  }
+  await restoreDisplacedWorkflowClaim(portalDirectory, claim, cleanup, moved);
+}
+
+async function removeMovedWorkflowClaim(file, expected) {
+  let current;
+  try { current = await readWorkflowClaimIdentity(file, "portal workflow moved-claim cleanup"); }
+  catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  if (current.lease.token !== expected.lease.token || !sameFile(current.stat, expected.stat)) throw new Error("portal workflow moved claim identity changed before cleanup");
+  await rm(file);
+  await syncDirectory(path.dirname(file));
 }
 
 async function quarantineStaleWorkflowCandidate(portalDirectory, candidate, token) {
@@ -276,6 +322,21 @@ async function recoverWorkflowLeaseDebris(portalDirectory, testHooks = {}) {
       await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, match[2]), match[2]);
     }
   }
+  await removeOrphanedWorkflowClaim(portalDirectory, testHooks);
+}
+
+async function removeOrphanedWorkflowClaim(portalDirectory, testHooks = {}) {
+  const claim = path.join(portalDirectory, "workflow.lock");
+  let current;
+  try { current = await readWorkflowClaimIdentity(claim, "portal workflow orphan check claim"); }
+  catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  try {
+    const candidate = await readWorkflowLeaseDirectory(workflowCandidate(portalDirectory, current.lease.token));
+    if (candidate.token !== current.lease.token) throw new Error("portal workflow orphan candidate identity does not match");
+    return;
+  } catch (error) { if (error?.code !== "ENOENT") throw error; }
+  const orphan = await retireWorkflowClaim(portalDirectory, claim, current, "release", testHooks);
+  if (orphan !== null) await removeVerifiedWorkflowClaim(orphan, current.lease.token);
 }
 
 async function acquirePublicationLease(portalRoot) {
