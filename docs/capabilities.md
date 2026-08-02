@@ -736,7 +736,7 @@ support.
 id: CAP-015
 name: opt-in-documentation-portal
 area: scaffold
-status: shipped
+status: building
 verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/"]
 epics: [EPC-005]
 adrs: [ADR-0048]
