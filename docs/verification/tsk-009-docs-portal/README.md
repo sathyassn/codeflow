@@ -25,8 +25,8 @@ browser evidence are disposable task-owned artifacts and were not published.
   WSL2, when used, is Linux evidence.
 - `cargo audit` found no advisory among 233 locked Rust dependencies. The
   locked npm audit found zero vulnerabilities. Gitleaks scanned the exact
-  52-commit range from the integration base through the candidate, about
-  3.83 MiB, without a finding.
+  52-commit range from the integration base through the candidate: 3,828,690
+  bytes (`3.83 MB` in the scanner output), without a finding.
 - The starter contains 557,655 tracked bytes and produces a 124,157-byte
   deterministic gzip archive-equivalent. The macOS arm64 release binary is
   17,387,072 bytes against the 16,475,216-byte integration baseline: a
