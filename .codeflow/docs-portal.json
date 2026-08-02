@@ -41,11 +41,11 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "15c909a45e98d941175fe6f14815a450648fcdec4d4178e885299eb06c2e7741"
+      "pristine_sha256": "04f99eadc94cda6adaca42a2e7abfa8706da9669c5303fedea19b49f28365461"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "d9131ce487493736226de512ca61aed14747e538ce733eecc41083dc102a3eac"
+      "pristine_sha256": "7418bd09144e0a0a5f7d08ae140cb5244bdf0c1344e88c6df899fb95951d42f7"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
@@ -89,7 +89,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5da5e18d212d28fa8521db55af9afe7e4efa1efc5aeb10063a0f314543790009"
+      "pristine_sha256": "1d7d9399e756b9d28d3ca40a691f74bde95c44aece35b6b01b22497aa7b920ff"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

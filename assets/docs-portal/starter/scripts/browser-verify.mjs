@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
-import { withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
+import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
@@ -76,13 +76,7 @@ async function verifyPortal(lifecycle) {
     lifecycle.throwIfInterrupted();
     results.push({ engine: "preview", status: "failed", error: boundedError(error) });
   } finally {
-    server.kill("SIGTERM");
-    await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
-    if (server.exitCode === null) {
-      const exited = new Promise((resolve) => server.once("exit", resolve));
-      server.kill("SIGKILL");
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5_000))]);
-    }
+    await stopChild(server, "SIGTERM");
     untrackServer();
   }
 

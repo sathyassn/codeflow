@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,7 @@ import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
 import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics } from "../scripts/browser-verify.mjs";
 import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from "../scripts/install-dependencies.mjs";
+import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
@@ -951,6 +953,59 @@ test("direct browser lifecycle interruption closes resources and releases its le
     assert.equal(await readFile(path.join(root, ".browser-cleanup-order"), "utf8"), "cleanup-start\ncleanup-end\n");
     await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("child cleanup forces a stubborn process after its listener closes", { skip: process.platform === "win32", timeout: 5_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-stubborn-child-"));
+  const child = spawn(process.execPath, ["-e", `
+    const { writeFileSync } = require("node:fs");
+    const net = require("node:net");
+    const path = require("node:path");
+    const root = process.cwd();
+    const server = net.createServer(() => {});
+    server.listen(0, "127.0.0.1", () => writeFileSync(path.join(root, ".stubborn-ready"), "ready\\n"));
+    process.on("SIGTERM", () => server.close(() => writeFileSync(path.join(root, ".listener-closed"), "closed\\n")));
+    setInterval(() => {}, 1_000);
+  `], { cwd: root, stdio: "ignore" });
+  try {
+    await waitUntil(() => readFile(path.join(root, ".stubborn-ready")).then(() => true, () => false));
+    await stopChild(child, "SIGTERM", { graceMs: 250 });
+    assert.equal(child.signalCode, "SIGKILL");
+    assert.equal(await readFile(path.join(root, ".listener-closed"), "utf8"), "closed\n");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await new Promise((resolve) => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once("exit", resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("child cleanup rejects kill failure without exit proof", async () => {
+  class FailedKillChild extends EventEmitter {
+    pid = 42;
+    exitCode = null;
+    signalCode = null;
+    kill() { return false; }
+  }
+  await assert.rejects(
+    stopChild(new FailedKillChild(), "SIGTERM", { graceMs: 10 }),
+    /SIGTERM returned false; SIGKILL returned false/,
+  );
+});
+
+test("child cleanup rejects an ambiguous exit event", async () => {
+  class AmbiguousExitChild extends EventEmitter {
+    pid = 43;
+    exitCode = null;
+    signalCode = null;
+    kill() {
+      queueMicrotask(() => this.emit("exit", null, null));
+      return true;
+    }
+  }
+  await assert.rejects(
+    stopChild(new AmbiguousExitChild(), "SIGTERM", { graceMs: 10 }),
+    /exit event without a code or signal was not accepted as proof/,
+  );
 });
 
 test("lifecycle drains a delayed acquisition before re-signalling", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
