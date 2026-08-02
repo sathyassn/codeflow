@@ -55,7 +55,7 @@ struct PortalTransactionJournal {
     mutations: Vec<PortalJournalMutation>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PortalJournalMutation {
     path: String,
@@ -1815,6 +1815,123 @@ mod tests {
         assert!(error.to_string().contains("already in progress"));
         drop(first);
         acquire_portal_transaction_lease(temp.path()).unwrap();
+
+        std::fs::remove_file(temp.path().join(TRANSACTION_LOCK_PATH)).unwrap();
+        std::fs::create_dir(temp.path().join(TRANSACTION_LOCK_PATH)).unwrap();
+        let error = acquire_portal_transaction_lease(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("not a regular file"));
+    }
+
+    #[test]
+    fn transaction_recovery_rejects_tampered_staged_output() {
+        let temp = initialized_root();
+        let mut plan = PortalMutationPlan::default();
+        plan.write(
+            temp.path(),
+            "guide/value.txt",
+            b"after\n".to_vec(),
+            32,
+            "fixture",
+        )
+        .unwrap();
+        assert!(plan.commit_with_abrupt_fault_after(temp.path(), 0).is_err());
+        std::fs::remove_file(temp.path().join("guide/value.txt")).unwrap();
+        std::fs::write(
+            temp.path().join(TRANSACTION_PATH).join("after/0000"),
+            b"other\n",
+        )
+        .unwrap();
+
+        let error = recover_portal_transaction(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("does not match its journal"));
+        assert!(!temp.path().join("guide/value.txt").exists());
+        assert!(temp.path().join(TRANSACTION_PATH).is_dir());
+    }
+
+    #[test]
+    fn transaction_journal_validation_is_closed_and_bounded() {
+        let temp = initialized_root();
+        let valid = PortalJournalMutation {
+            path: "guide/value.txt".into(),
+            before_sha256: None,
+            before_bytes: None,
+            after_sha256: Some("a".repeat(64)),
+            after_bytes: Some(1),
+            staged_file: Some("after/0000".into()),
+        };
+        let validate = |mutation: &PortalJournalMutation,
+                        paths: &mut BTreeSet<String>,
+                        remaining: &mut u64| {
+            validate_journal_mutation(temp.path(), mutation, paths, remaining)
+        };
+
+        let mut paths = BTreeSet::new();
+        let mut remaining = 2;
+        validate(&valid, &mut paths, &mut remaining).unwrap();
+        assert_eq!(remaining, 1);
+        let error = validate(&valid, &mut paths, &mut remaining).unwrap_err();
+        assert!(error.to_string().contains("repeats a destination"));
+
+        let mut unsafe_path = valid.clone();
+        unsafe_path.path = "guide\\value.txt".into();
+        let error = validate(&unsafe_path, &mut BTreeSet::new(), &mut 2).unwrap_err();
+        assert!(error.to_string().contains("unsafe destination"));
+
+        let mut invalid_hash = valid.clone();
+        invalid_hash.after_sha256 = Some("A".repeat(64));
+        let error = validate(&invalid_hash, &mut BTreeSet::new(), &mut 2).unwrap_err();
+        assert!(error.to_string().contains("invalid snapshot claim"));
+
+        let mut oversized = valid.clone();
+        oversized.after_bytes = Some(3);
+        let error = validate(&oversized, &mut BTreeSet::new(), &mut 2).unwrap_err();
+        assert!(error.to_string().contains("aggregate byte limit"));
+
+        let mut invalid_stage = valid;
+        invalid_stage.staged_file = Some("elsewhere/0000".into());
+        let error = validate(&invalid_stage, &mut BTreeSet::new(), &mut 2).unwrap_err();
+        assert!(error.to_string().contains("invalid staged output"));
+    }
+
+    #[test]
+    fn recovery_refuses_malformed_journal_shapes_and_cleans_abandoned_stages() {
+        let temp = initialized_root();
+        let transaction = temp.path().join(TRANSACTION_PATH);
+        std::fs::write(&transaction, b"not a directory").unwrap();
+        assert!(recover_portal_transaction(temp.path())
+            .unwrap_err()
+            .to_string()
+            .contains("not a regular directory"));
+        std::fs::remove_file(&transaction).unwrap();
+
+        std::fs::create_dir(&transaction).unwrap();
+        assert!(recover_portal_transaction(temp.path())
+            .unwrap_err()
+            .to_string()
+            .contains("journal is unreadable"));
+        std::fs::write(
+            transaction.join("manifest.json"),
+            br#"{"schema_version":2,"mutations":[]}"#,
+        )
+        .unwrap();
+        assert!(recover_portal_transaction(temp.path())
+            .unwrap_err()
+            .to_string()
+            .contains("invalid envelope"));
+        std::fs::remove_dir_all(&transaction).unwrap();
+
+        let abandoned = temp
+            .path()
+            .join(".codeflow/.docs-portal-transaction-stage-fixture");
+        std::fs::create_dir(&abandoned).unwrap();
+        recover_portal_transaction(temp.path()).unwrap();
+        assert!(!abandoned.exists());
+
+        std::fs::write(&abandoned, b"wrong type").unwrap();
+        assert!(recover_portal_transaction(temp.path())
+            .unwrap_err()
+            .to_string()
+            .contains("not a regular directory"));
     }
 
     #[test]
