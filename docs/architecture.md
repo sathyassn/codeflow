@@ -146,7 +146,7 @@ Rationale, the full invariant set, and the canonical prompt-boundary amendment:
 ADR-0036 and ADR-0037.
 
 Interactive presentation is a separate bounded engine surface
-(`codeflow-present`, ADR-0049 and ADR-0050). Its closed versioned document,
+(`codeflow-present`, ADR-0049, ADR-0050, and ADR-0052). Its closed versioned document,
 primitive-token, and public-history contracts are represented by matching Rust
 types and managed JSON Schemas installed under `.codeflow/schemas/present/`.
 Rust owns validation, immutable revisions, append-only feedback, retention,
@@ -166,9 +166,16 @@ state is already over its configured bound. Block, diagram, per-collection,
 and whole-document collection cardinalities bound renderer amplification in
 addition to encoded byte limits.
 
-Each active review has one project-keyed owner-private state authority, one
-loopback service, one single-use file bootstrap, and one CodeFlow-owned isolated
-browser profile. Host/Origin/cookie/CSP checks protect the review chrome;
+Each active review has one project-keyed owner-private durable authority and a
+separate derived owner-private runtime root (ADR-0052). Immutable revisions and
+feedback are the only quota-governed history. Browser-owned profile/cache data
+never becomes durable authority; CodeFlow-owned bootstrap, ready, and launch-
+recovery controls have a separate exact budget and the canonical lock order is
+project mutation → session → runtime control. Conservative cache flags, bounded
+idle lifetime, and identity-scoped cleanup mitigate browser growth without
+misrepresenting it as a hard CodeFlow quota. Each session has one loopback
+service, one single-use file bootstrap, and one isolated browser profile.
+Host/Origin/cookie/CSP checks protect the review chrome;
 untrusted static HTML is served from a revision-qualified sandbox without
 scripts, same-origin, forms, navigation, or network. Full-fidelity export is a
 self-contained read-only HTML artifact with no credentials, review controls,
@@ -181,8 +188,9 @@ portal.
 
 Every state read and recovery path is self-bounded. A single feedback ledger
 replay rejects duplicate receipts/deliveries, delivery before receipt,
-resolution before delivery, and every post-terminal transition; exact receipt
-and delivery retries append nothing. Event tails are read from the same opened
+resolution before delivery, and every post-terminal transition; exact receipt,
+delivery, and identical terminal retries append nothing, while conflicts remain
+loud. Event tails are read from the same opened
 handle used for size and repair decisions; aggregate history,
 records, revisions, media, and state entries have explicit limits. A document
 may contain at most 24 Mermaid diagrams of at most 64 KiB each. The browser pins
@@ -194,16 +202,20 @@ diagram, so TSK-007 must qualify a dense adversarial corpus in real browsers.
 Platform boundaries are native and fail closed: Windows discovers trusted
 system and known-folder paths without `PATH` lookup, rejects reparse traversal,
 parses process identity with Windows command-line rules, emits UTF-8 from
-Windows PowerShell, hardens private ACLs only when state is created, and verifies
-owner, protected DACL, trustees, and inheritance read-only whenever existing
+Windows PowerShell, passes a protected owner-only descriptor at file creation,
+and verifies owner, protected DACL, trustees, and inheritance whenever existing
 state is opened. Every browser or auxiliary system-tool child starts from one
 allowlist-only environment, so provider-secret environment variables are not
 inherited.
 Linux/WSL2 reads bounded, no-follow `/proc` identity and terminates only the
 proven process group; macOS uses delimiter-aware identity and the same ownership
-rule. If a leader disappears while its process group/tree cannot be proven
-absent, cleanup retains the profile and durable identity for recovery rather
-than declaring success.
+rule. If a leader disappears, Windows searches for the exact instance/profile
+marker and corroborates absence with the profile resource; Unix rechecks the
+exact process group. Failed enumeration, unreadable identity, a remaining
+candidate, or an inconclusive resource probe retains recovery evidence rather
+than signalling or deleting. Durable clear/retention reaps derived runtime only
+after the same absence boundary; independently corrupt bulk items are retained
+and reported without blocking an explicitly selected safe item.
 Cross-target compilation checks adapter shape only. Native runtime, Unicode
 path, ACL, process-tree, browser, and cleanup evidence remains a release gate.
 

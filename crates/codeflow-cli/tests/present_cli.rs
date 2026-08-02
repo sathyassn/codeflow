@@ -6,6 +6,10 @@ use std::{
     net::{Ipv4Addr, SocketAddrV4, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -77,8 +81,46 @@ struct RunningPresentation {
 fn present_cli_runs_the_local_service_revision_export_and_cleanup_flow() {
     let fixture = setup_project();
     let running = open_recover_and_bootstrap(&fixture);
+    let (runtime_session, stop_writer, writer) = start_profile_writer(&fixture, &running);
     verify_runtime_boundaries(&fixture, &running);
-    update_export_close_and_clear(&fixture, &running);
+    update_export_close_and_clear(&fixture, &running, &runtime_session);
+    stop_writer.store(true, Ordering::Release);
+    writer.join().unwrap();
+}
+
+fn start_profile_writer(
+    fixture: &TestProject,
+    running: &RunningPresentation,
+) -> (PathBuf, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    #[cfg(target_os = "macos")]
+    let runtime_projects = fixture
+        .home
+        .join("Library/Application Support/codeflow/present/runtime/projects");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let runtime_projects = fixture.home.join("state/codeflow/present/runtime/projects");
+    let project = fs::read_dir(runtime_projects)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let runtime_session = project.join(&running.session_id);
+    let profile = runtime_session.join("browser-profile");
+    let cache = profile.join("live-cache.bin");
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(cache)
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let worker = thread::spawn(move || {
+        while !worker_stop.load(Ordering::Acquire) {
+            file.write_all(b"browser-owned-cache\n").unwrap();
+            thread::yield_now();
+        }
+    });
+    (runtime_session, stop, worker)
 }
 
 fn setup_project() -> TestProject {
@@ -296,7 +338,11 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
     assert!(history.contains("\"event\": \"addressed\""));
 }
 
-fn update_export_close_and_clear(fixture: &TestProject, running: &RunningPresentation) {
+fn update_export_close_and_clear(
+    fixture: &TestProject,
+    running: &RunningPresentation,
+    runtime_session: &Path,
+) {
     require_success(&codeflow(
         &fixture.project,
         &fixture.home,
@@ -384,6 +430,7 @@ fn update_export_close_and_clear(fixture: &TestProject, running: &RunningPresent
         ],
     ));
     assert!(cleared.contains(&format!("removed {}", running.session_id)));
+    assert!(!runtime_session.exists());
     let sessions = require_success(&codeflow(
         &fixture.project,
         &fixture.home,

@@ -309,7 +309,7 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
         }
         let _ = store.clear_browser(id, instance_id)?;
     }
-    let ready_path = store.runtime_dir(id)?.join("ready.json");
+    let ready_path = store.runtime_dir(id)?.join("control").join("ready.json");
     let ready = read_ready_record(&ready_path, id)?;
     request_rebootstrap(&ready)?;
     if no_launch {
@@ -352,8 +352,9 @@ fn start_service(store: &SessionStore, id: Uuid) -> codeflow_present::Result<Rea
     let executable = std::env::current_exe()
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()))?;
     let runtime = store.runtime_dir(id)?;
-    let ready_path = runtime.join("ready.json");
-    let bootstrap_path = runtime.join("bootstrap.html");
+    let control = runtime.join("control");
+    let ready_path = control.join("ready.json");
+    let bootstrap_path = control.join("bootstrap.html");
     remove_regular_if_present(&ready_path)?;
     remove_regular_if_present(&bootstrap_path)?;
     let mut command = Command::new(executable);
@@ -675,7 +676,9 @@ fn exit_code(error: &PresentError) -> i32 {
         PresentError::SessionNotFound(_) => 3,
         PresentError::BrowserUnavailable(_) | PresentError::ServiceUnavailable(_) => 4,
         PresentError::UnsafePath(_) | PresentError::CorruptState(_) => 5,
-        PresentError::SessionClosed(_) | PresentError::Io { .. } => 1,
+        PresentError::SessionClosed(_)
+        | PresentError::PartialCleanup { .. }
+        | PresentError::Io { .. } => 1,
     }
 }
 

@@ -23,6 +23,11 @@ pub enum PresentError {
     BrowserUnavailable(String),
     #[error("presentation service did not become ready: {0}")]
     ServiceUnavailable(String),
+    #[error("presentation cleanup was partial; removed {removed:?}; retained {failures:?}")]
+    PartialCleanup {
+        removed: Vec<String>,
+        failures: Vec<String>,
+    },
     #[error("I/O error at {path}: {source}")]
     Io {
         path: PathBuf,

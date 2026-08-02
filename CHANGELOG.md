@@ -416,7 +416,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Bounded interactive review documents (ADR-0049, ADR-0050).** Standard/full
+- **Bounded interactive review documents (ADR-0049, ADR-0050, ADR-0052).** Standard/full
   scaffolds gain the cross-harness `cf-present` skill and managed public
   document, primitive-token, and history schemas. The new `codeflow present`
   surface opens, updates, lists, resumes, exports, closes, and clears immutable
@@ -424,8 +424,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   One loopback-only authenticated service and a CodeFlow-owned isolated browser
   profile render a closed accessible block catalog with light/dark utility
   modes, inert HTML sandboxing, strict optional project primitive tokens, and
-  self-contained read-only export. State is owner-private, project-keyed,
-  bounded, and cleanup is identity-scoped; event recovery uses one bounded
+  self-contained read-only export. Versioned state is owner-private, project-
+  keyed, and quota bounded; browser-owned profile/cache and small runtime
+  controls use a separate derived owner-private root. Cleanup is identity-
+  scoped; event recovery uses one bounded
   opened handle, diagram count/source/enhancement are capped, and native
   adapters use trusted platform paths, exact process identity, a shared
   allowlist-only child environment, creation-only Windows ACL hardening, and
@@ -436,8 +438,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process recovery keep the bounded contract explicit. Native platform and
   browser qualification remains the explicit CAP-016/TSK-007 release boundary.
   All durable growth now reserves capacity before publication under one
-  project-to-session lock order, while exact retries and cleanup remain usable
-  for legacy over-quota state. One strict feedback ledger rejects impossible
+  project-to-session-to-runtime-control lock order, while exact retries and
+  cleanup remain usable for legacy over-quota state. Exact accepted and terminal
+  feedback retries converge without growth; retention recomputes after each
+  eviction; selected and bulk cleanup isolate corrupt state; interrupted atomic
+  temporaries/trash recover by exact names; and relative Unicode export remains
+  create-new and owner-private. One strict feedback ledger rejects impossible
   transitions; browser cleanup re-qualifies identity before forced escalation;
   exports are owner-private from creation; and browser limits mirror the
   server's note, text, selector, and payload bounds.

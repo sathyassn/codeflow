@@ -35,7 +35,7 @@ use crate::{
     document::Block,
     error::{PresentError, Result},
     limits,
-    platform::{harden_private_path, is_link_like},
+    platform::is_link_like,
     render::{render_document, render_unsupported, sandbox_id, RenderIdentity, RenderOptions},
     state::{
         create_private_dir_all, write_json_atomic, FeedbackEnvelope, FeedbackKind, FeedbackNote,
@@ -202,14 +202,13 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     }
     let assets = Arc::new(load_manifest()?);
     let tokens = Arc::new(store.utility_tokens()?);
-    let runtime_dir = store.runtime_dir(session_id)?;
-    let profile_dir = runtime_dir.join("browser-profile");
-    create_private_dir_all(&profile_dir)?;
-    let bootstrap_path = runtime_dir.join("bootstrap.html");
-    let ready_path = runtime_dir.join("ready.json");
-    remove_if_regular(&bootstrap_path)?;
-    remove_if_regular(&ready_path)?;
-    let _runtime_cleanup = RuntimeCleanup::new(bootstrap_path.clone(), ready_path.clone());
+    let (bootstrap_path, ready_path) = prepare_runtime_paths(&store, session_id)?;
+    let _runtime_cleanup = RuntimeCleanup::new(
+        store.clone(),
+        session_id,
+        bootstrap_path.clone(),
+        ready_path.clone(),
+    );
 
     let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
@@ -224,20 +223,24 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     let recovery_capability = random_hex(32)?;
     let cookie_value = random_hex(32)?;
     let cookie_name = format!("cf_present_{}", session_id.simple());
-    write_bootstrap(&bootstrap_path, &authority, &capability)?;
+    let bootstrap_html = render_bootstrap(&authority, &capability);
+    {
+        let bootstrap_bytes = u64::try_from(bootstrap_html.len())
+            .map_err(|_| PresentError::ServiceUnavailable("bootstrap size overflow".to_string()))?;
+        let _runtime_lease = store.prepare_runtime_control_mutation(session_id, bootstrap_bytes)?;
+        write_bootstrap(&bootstrap_path, &bootstrap_html)?;
+    }
     store.set_service(session_id, port, std::process::id(), instance_id)?;
     let _service_registration = ServiceRegistration::new(store.clone(), session_id, instance_id);
-    write_json_atomic(
-        &ready_path,
-        &ReadyRecord {
-            schema_version: 1,
-            session_id,
-            port,
-            instance_id,
-            bootstrap_path: bootstrap_path.clone(),
-            recovery_capability: recovery_capability.clone(),
-        },
-    )?;
+    let ready = ReadyRecord {
+        schema_version: 1,
+        session_id,
+        port,
+        instance_id,
+        bootstrap_path: bootstrap_path.clone(),
+        recovery_capability: recovery_capability.clone(),
+    };
+    write_ready_record(&store, session_id, &ready_path, &ready)?;
 
     let now = now_unix();
     let state = AppState {
@@ -282,6 +285,32 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .map_err(|error| PresentError::ServiceUnavailable(error.to_string()));
     monitor.abort();
     serve_result
+}
+
+fn prepare_runtime_paths(store: &SessionStore, session_id: Uuid) -> Result<(PathBuf, PathBuf)> {
+    let runtime_dir = store.runtime_dir(session_id)?;
+    let profile_dir = runtime_dir.join("browser-profile");
+    create_private_dir_all(&profile_dir)?;
+    let control_dir = runtime_dir.join("control");
+    create_private_dir_all(&control_dir)?;
+    let bootstrap_path = control_dir.join("bootstrap.html");
+    let ready_path = control_dir.join("ready.json");
+    let _runtime_lease = store.prepare_runtime_control_mutation(session_id, 0)?;
+    remove_if_regular(&bootstrap_path)?;
+    remove_if_regular(&ready_path)?;
+    Ok((bootstrap_path, ready_path))
+}
+
+fn write_ready_record(
+    store: &SessionStore,
+    session_id: Uuid,
+    ready_path: &std::path::Path,
+    ready: &ReadyRecord,
+) -> Result<()> {
+    let bytes = u64::try_from(serde_json::to_vec_pretty(ready)?.len() + 1)
+        .map_err(|_| PresentError::ServiceUnavailable("ready record size overflow".to_string()))?;
+    let _runtime_lease = store.prepare_runtime_control_mutation(session_id, bytes)?;
+    write_json_atomic(ready_path, ready)
 }
 
 async fn health(
@@ -354,7 +383,7 @@ async fn bootstrap(
     }
     bootstrap_state.used = true;
     drop(bootstrap_state);
-    let _ = remove_if_regular(&state.bootstrap_path);
+    let _ = remove_runtime_control(&state.store, state.session_id, &state.bootstrap_path);
     state.last_activity.store(now_unix(), Ordering::Release);
     let cookie = format!(
         "{}={}; Path=/app; HttpOnly; SameSite=Strict",
@@ -394,9 +423,20 @@ async fn rebootstrap(
             "bootstrap rotation failed",
         );
     };
-    if remove_if_regular(&state.bootstrap_path).is_err()
-        || write_bootstrap(&state.bootstrap_path, &state.authority, &capability).is_err()
-    {
+    let bootstrap_html = render_bootstrap(&state.authority, &capability);
+    let bootstrap_bytes = u64::try_from(bootstrap_html.len()).map_err(|_| ());
+    let rotated = bootstrap_bytes
+        .map_err(|()| PresentError::ServiceUnavailable("bootstrap size overflow".to_string()))
+        .and_then(|bytes| {
+            state
+                .store
+                .prepare_runtime_control_mutation(state.session_id, bytes)
+        })
+        .and_then(|_lease| {
+            remove_if_regular(&state.bootstrap_path)?;
+            write_bootstrap(&state.bootstrap_path, &bootstrap_html)
+        });
+    if rotated.is_err() {
         return plain(
             StatusCode::INTERNAL_SERVER_ERROR,
             "bootstrap rotation failed",
@@ -987,26 +1027,19 @@ fn collect_sandbox(session_id: Uuid, blocks: &[Block], output: &mut HashMap<Stri
     }
 }
 
-fn write_bootstrap(path: &std::path::Path, authority: &str, capability: &str) -> Result<()> {
+fn render_bootstrap(authority: &str, capability: &str) -> String {
     let endpoint = format!("http://{authority}/bootstrap");
-    let html = format!(
+    format!(
         "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><title>Opening presentation</title><form id=\"bootstrap\" method=\"post\" action=\"{endpoint}\"><input type=\"hidden\" name=\"capability\" value=\"{capability}\"><noscript><button type=\"submit\">Open presentation</button></noscript></form><script>document.getElementById('bootstrap').submit()</script>"
-    );
+    )
+}
+
+fn write_bootstrap(path: &std::path::Path, html: &str) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| PresentError::UnsafePath(path.to_path_buf()))?;
     create_private_dir_all(parent)?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|error| PresentError::io(path, error))?;
-    harden_private_path(path, false)?;
+    let mut file = crate::state::open_private_create_new(path)?;
     file.write_all(html.as_bytes())
         .and_then(|()| file.sync_all())
         .map_err(|error| PresentError::io(path, error))
@@ -1048,7 +1081,7 @@ async fn monitor_session(state: AppState) {
 }
 
 fn expire_unbootstrapped_session(state: &AppState) {
-    let _ = remove_if_regular(&state.bootstrap_path);
+    let _ = remove_runtime_control(&state.store, state.session_id, &state.bootstrap_path);
     let _ = state.store.close(state.session_id);
     cleanup_owned_browser(state);
     state.shutdown.notify_waiters();
@@ -1078,6 +1111,8 @@ fn cleanup_owned_browser(state: &AppState) {
 }
 
 struct RuntimeCleanup {
+    store: SessionStore,
+    session_id: Uuid,
     bootstrap_path: PathBuf,
     ready_path: PathBuf,
 }
@@ -1111,8 +1146,15 @@ impl Drop for ServiceRegistration {
 }
 
 impl RuntimeCleanup {
-    fn new(bootstrap_path: PathBuf, ready_path: PathBuf) -> Self {
+    fn new(
+        store: SessionStore,
+        session_id: Uuid,
+        bootstrap_path: PathBuf,
+        ready_path: PathBuf,
+    ) -> Self {
         Self {
+            store,
+            session_id,
             bootstrap_path,
             ready_path,
         }
@@ -1121,9 +1163,18 @@ impl RuntimeCleanup {
 
 impl Drop for RuntimeCleanup {
     fn drop(&mut self) {
-        let _ = remove_if_regular(&self.bootstrap_path);
-        let _ = remove_if_regular(&self.ready_path);
+        let _ = remove_runtime_control(&self.store, self.session_id, &self.bootstrap_path);
+        let _ = remove_runtime_control(&self.store, self.session_id, &self.ready_path);
     }
+}
+
+fn remove_runtime_control(
+    store: &SessionStore,
+    session_id: Uuid,
+    path: &std::path::Path,
+) -> Result<()> {
+    let _runtime_lease = store.prepare_runtime_control_mutation(session_id, 0)?;
+    remove_if_regular(path)
 }
 
 fn remove_if_regular(path: &std::path::Path) -> Result<()> {
@@ -1546,12 +1597,16 @@ mod tests {
 
     #[test]
     fn runtime_cleanup_removes_regular_capability_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let bootstrap = temp.path().join("bootstrap.html");
-        let ready = temp.path().join("ready.json");
-        fs::write(&bootstrap, b"secret").unwrap();
+        let (_temp, state) = app_state();
+        let bootstrap = (*state.bootstrap_path).clone();
+        let ready = bootstrap.with_file_name("ready.json");
         fs::write(&ready, b"identity").unwrap();
-        drop(RuntimeCleanup::new(bootstrap.clone(), ready.clone()));
+        drop(RuntimeCleanup::new(
+            state.store,
+            state.session_id,
+            bootstrap.clone(),
+            ready.clone(),
+        ));
         assert!(!bootstrap.exists());
         assert!(!ready.exists());
     }

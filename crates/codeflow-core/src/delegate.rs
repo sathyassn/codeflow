@@ -1606,6 +1606,8 @@ mod tests {
     #[test]
     fn insecure_mode_fails_closed() {
         let (_temp, path) = state();
+        #[cfg(not(unix))]
+        let _ = path;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

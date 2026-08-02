@@ -28,6 +28,7 @@ pub const MAX_EVENTS_PER_RESPONSE: usize = 100;
 pub const MAX_EVENT_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const MAX_EVENT_RECORD_BYTES: u64 = 128 * 1024;
 pub const MAX_EVENT_LOG_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_RUNTIME_CONTROL_BYTES: u64 = 64 * 1024;
 pub const MAX_FEEDBACK_EVENTS: usize = 100_000;
 pub const MAX_REVISIONS: u64 = 10_000;
 pub const MAX_STATE_ENTRIES: usize = 200_000;

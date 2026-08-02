@@ -1064,7 +1064,10 @@ fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
 }
 
 fn create_private_roundtrip_root(root: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
     let mut root_builder = std::fs::DirBuilder::new();
+    #[cfg(not(unix))]
+    let root_builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

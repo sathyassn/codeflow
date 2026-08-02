@@ -11,9 +11,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{error::PresentError, state::SessionStore, Result};
+use crate::{
+    error::PresentError,
+    state::{create_private_dir_all, write_json_atomic, SessionStore},
+    Result,
+};
+
+#[derive(Serialize)]
+struct LaunchRecoveryRecord<'a> {
+    schema_version: u32,
+    instance_id: Uuid,
+    pid: Option<u32>,
+    profile_dir: &'a Path,
+}
 
 /// Launch the one currently qualified native route without touching the
 /// operator's browser profile or active window.
@@ -23,7 +36,7 @@ pub fn launch_isolated(
     bootstrap_path: &Path,
     profile_dir: &Path,
 ) -> Result<()> {
-    verify_owned_child(store.root(), bootstrap_path)?;
+    verify_runtime_descendant(store.runtime_root(), bootstrap_path)?;
     let app_url = file_url(bootstrap_path)?;
     launch_url(store, session_id, &app_url, profile_dir)
 }
@@ -57,10 +70,19 @@ fn launch_url(
     app_url: &str,
     profile_dir: &Path,
 ) -> Result<()> {
-    verify_owned_child(store.root(), profile_dir)?;
+    verify_runtime_descendant(store.runtime_root(), profile_dir)?;
     let executable = qualified_browser()?;
 
     let instance_id = Uuid::new_v4();
+    let recovery_path = launch_recovery_path(profile_dir)?;
+    write_launch_recovery(
+        store,
+        session_id,
+        &recovery_path,
+        instance_id,
+        None,
+        profile_dir,
+    )?;
     let mut command = browser_launch_command(&executable);
     command
         .arg(format!("--user-data-dir={}", profile_dir.display()))
@@ -70,6 +92,8 @@ fn launch_url(
         .arg("--disable-sync")
         .arg("--disable-default-apps")
         .arg("--disable-extensions")
+        .arg("--disk-cache-size=33554432")
+        .arg("--media-cache-size=8388608")
         .arg(format!("--app={app_url}"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -85,15 +109,101 @@ fn launch_url(
         use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
         command.creation_flags(CREATE_NEW_PROCESS_GROUP);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|error| PresentError::io(executable, error))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = remove_launch_recovery(store, session_id, &recovery_path);
+            return Err(PresentError::io(executable, error));
+        }
+    };
+    if let Err(error) = write_launch_recovery(
+        store,
+        session_id,
+        &recovery_path,
+        instance_id,
+        Some(child.id()),
+        profile_dir,
+    ) {
+        return match terminate_qualified_process(child.id(), instance_id, profile_dir) {
+            Ok(()) => {
+                let _ = child.wait();
+                let _ = remove_launch_recovery(store, session_id, &recovery_path);
+                Err(error)
+            }
+            Err(cleanup) => Err(PresentError::BrowserUnavailable(format!(
+                "browser launch recovery could not record pid {}: {error}; rollback was not proven: {cleanup}. Marker-bound recovery evidence remains at {}",
+                child.id(),
+                recovery_path.display()
+            ))),
+        };
+    }
     if let Err(error) = store.set_browser(session_id, child.id(), instance_id) {
-        let _ = child.kill();
-        let _ = child.wait();
+        match terminate_qualified_process(child.id(), instance_id, profile_dir) {
+            Ok(()) => {
+                let _ = child.wait();
+                if profile_dir.exists() {
+                    fs::remove_dir_all(profile_dir)
+                        .map_err(|cleanup| PresentError::io(profile_dir, cleanup))?;
+                }
+                remove_launch_recovery(store, session_id, &recovery_path)?;
+            }
+            Err(cleanup) => {
+                return Err(PresentError::BrowserUnavailable(format!(
+                    "browser registration failed: {error}; launch rollback could not prove cleanup for pid {}, instance {instance_id}, profile {}: {cleanup}. Recovery evidence was retained at {}",
+                    child.id(),
+                    profile_dir.display(),
+                    recovery_path.display()
+                )));
+            }
+        }
         return Err(error);
     }
+    remove_launch_recovery(store, session_id, &recovery_path)?;
     Ok(())
+}
+
+fn launch_recovery_path(profile_dir: &Path) -> Result<PathBuf> {
+    let session = profile_dir
+        .parent()
+        .ok_or_else(|| PresentError::UnsafePath(profile_dir.to_path_buf()))?;
+    let control = session.join("control");
+    create_private_dir_all(&control)?;
+    Ok(control.join("launch-recovery.json"))
+}
+
+fn write_launch_recovery(
+    store: &SessionStore,
+    session_id: Uuid,
+    path: &Path,
+    instance_id: Uuid,
+    pid: Option<u32>,
+    profile_dir: &Path,
+) -> Result<()> {
+    let record = LaunchRecoveryRecord {
+        schema_version: 1,
+        instance_id,
+        pid,
+        profile_dir,
+    };
+    let bytes = serde_json::to_vec_pretty(&record)?
+        .len()
+        .checked_add(1)
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| PresentError::CorruptState("runtime recovery size overflow".to_string()))?;
+    let _lease = store.prepare_runtime_control_mutation(session_id, bytes)?;
+    write_json_atomic(path, &record)
+}
+
+fn remove_launch_recovery(store: &SessionStore, session_id: Uuid, path: &Path) -> Result<()> {
+    let _lease = store.prepare_runtime_control_mutation(session_id, 0)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !crate::platform::is_link_like(&metadata) => {
+            fs::remove_file(path).map_err(|error| PresentError::io(path, error))
+        }
+        Ok(_) => Err(PresentError::UnsafePath(path.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(PresentError::io(path, error)),
+    }
 }
 
 fn browser_launch_command(executable: &Path) -> Command {
@@ -111,7 +221,7 @@ pub fn terminate_isolated(
     instance_id: Uuid,
     profile_dir: &Path,
 ) -> Result<()> {
-    verify_owned_child(store.root(), profile_dir)?;
+    verify_runtime_descendant(store.runtime_root(), profile_dir)?;
     if profile_dir.file_name().and_then(|name| name.to_str()) != Some("browser-profile") {
         return Err(PresentError::UnsafePath(profile_dir.to_path_buf()));
     }
@@ -121,6 +231,10 @@ pub fn terminate_isolated(
     }
     let _ = store.clear_browser(session_id, instance_id)?;
     Ok(())
+}
+
+fn verify_runtime_descendant(root: &Path, path: &Path) -> Result<()> {
+    verify_owned_child(root, path)
 }
 
 #[cfg(unix)]
@@ -287,8 +401,12 @@ fn process_group_is_absent(pid: i32) -> Result<bool> {
 
 #[cfg(windows)]
 fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<bool> {
+    let marker = format!("--cf-present-instance={instance_id}");
+    let profile = format!("--user-data-dir={}", profile_dir.display());
+    let ps_marker = marker.replace('\'', "''");
+    let ps_profile = profile.replace('\'', "''");
     let script = format!(
-        "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $p=Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' -ErrorAction SilentlyContinue; if($null -eq $p){{exit 3}}; [Console]::Out.Write($p.CommandLine)"
+        "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $p=Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' -ErrorAction Stop; if($null -eq $p){{$all=@(Get-CimInstance Win32_Process -ErrorAction Stop); if(@($all | Where-Object {{($_.Name -in @('chrome.exe','msedge.exe','chromium.exe')) -and $null -eq $_.CommandLine}}).Count -gt 0){{exit 5}}; $owned=@($all | Where-Object {{$null -ne $_.CommandLine -and $_.CommandLine.Contains('{ps_marker}') -and $_.CommandLine.Contains('{ps_profile}')}}); if($owned.Count -gt 0){{exit 3}}; exit 4}}; [Console]::Out.Write($p.CommandLine)"
     );
     let powershell = crate::platform::trusted_system_path("WindowsPowerShell/v1.0/powershell.exe")?;
     let output = windows_identity_command(&powershell, &script)
@@ -297,6 +415,14 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
     if output.status.code() == Some(3) {
         return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
             "browser leader is absent, so Windows process-tree cleanup cannot be proven",
+        )));
+    }
+    if output.status.code() == Some(4) {
+        if windows_profile_lock_released(profile_dir)? {
+            return Ok(false);
+        }
+        return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+            "browser leader and marker-matched processes are absent, but the profile remains locked",
         )));
     }
     if !output.status.success() || output.stdout.len() > 64 * 1024 {
@@ -315,6 +441,43 @@ fn qualified_process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -
         ));
     }
     Ok(true)
+}
+
+#[cfg(windows)]
+fn windows_profile_lock_released(profile_dir: &Path) -> Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::{
+        Foundation::ERROR_SHARING_VIOLATION, Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    let lock = profile_dir.join("SingletonLock");
+    let metadata = match fs::symlink_metadata(&lock) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(PresentError::io(&lock, error)),
+    };
+    if !metadata.is_file() || crate::platform::is_link_like(&metadata) {
+        return Err(PresentError::UnsafePath(lock));
+    }
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    match options.open(&lock) {
+        Ok(_) => Ok(true),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error()
+                    == Some(
+                        i32::try_from(ERROR_SHARING_VIOLATION).expect("error code fits i32"),
+                    ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(PresentError::io(&lock, error)),
+    }
 }
 
 fn orphan_recovery_message(reason: &str) -> String {

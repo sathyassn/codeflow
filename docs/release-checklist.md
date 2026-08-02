@@ -81,10 +81,14 @@ named human release decision.
       mutations; zero-growth retries and cleanup in legacy over-quota state;
       malformed, duplicate, post-terminal, and concurrent feedback transitions;
       exact/ambiguous/missing feedback re-anchoring; stale/cross-session
-      resolution; client/server review-limit parity; owner-private export
-      creation; and leader-loss cleanup that retains recovery state unless
-      group/tree absence is proven. Qualified forced cleanup re-proves the exact
-      identity after its graceful-stop window.
+      resolution and concurrent identical/conflicting terminal retries;
+      client/server review-limit parity; relative and Unicode owner-private
+      export creation; derived-runtime separation during live browser-profile
+      writes; exact-name atomic-temp/trash recovery; multi-eviction size
+      recomputation; selected cleanup isolation and structured bulk partial
+      failure; and leader-loss cleanup that retains recovery state unless exact
+      marker/process and resource absence is proven. Qualified forced cleanup
+      re-proves the exact identity after its graceful-stop window.
 - [ ] The shell installer selects the correct macOS/Linux artifact, the
       PowerShell installer selects `codeflow.exe` on native Windows, and WSL2
       selects the Linux artifact. Each installed binary reports the release

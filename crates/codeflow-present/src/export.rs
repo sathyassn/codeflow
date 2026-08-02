@@ -152,13 +152,17 @@ fn enhance_export(
 fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| PresentError::UnsafePath(path.to_path_buf()))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let metadata = parent
         .canonicalize()
         .map_err(|error| PresentError::io(parent, error))?;
     if !metadata.is_dir() {
         return Err(PresentError::UnsafePath(parent.to_path_buf()));
     }
+    let _ = path
+        .file_name()
+        .ok_or_else(|| PresentError::UnsafePath(path.to_path_buf()))?;
     let mut file = open_private_create_new(path)?;
     if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
         discard_new_file(&file, path);
@@ -169,7 +173,7 @@ fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
 
     use tempfile::tempdir;
 
@@ -186,13 +190,13 @@ mod tests {
     #[test]
     fn export_writer_is_private_and_refuses_an_existing_destination() {
         let temporary = tempdir().expect("temporary directory");
-        let output = temporary.path().join("review.html");
+        let output = temporary.path().join("review-レビュー.html");
 
         write_new_private(&output, b"first").expect("create private export");
         let error = write_new_private(&output, b"second").expect_err("refuse overwrite");
 
         assert_eq!(fs::read(&output).expect("read export"), b"first");
-        assert!(error.to_string().contains("review.html"));
+        assert!(error.to_string().contains("review-レビュー.html"));
 
         #[cfg(unix)]
         {
@@ -205,5 +209,14 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    #[test]
+    fn export_writer_accepts_relative_leaf_parent_shapes() {
+        assert!(Path::new("review.html")
+            .parent()
+            .is_some_and(|parent| parent.as_os_str().is_empty()));
+        assert_eq!(Path::new("./review.html").parent(), Some(Path::new(".")));
+        assert!(Path::new(".").canonicalize().unwrap().is_dir());
     }
 }

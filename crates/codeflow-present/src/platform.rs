@@ -38,51 +38,72 @@ pub(crate) fn harden_private_file(path: &Path, file: &fs::File) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub(crate) fn harden_private_file(path: &Path, file: &fs::File) -> Result<()> {
-    use std::os::windows::io::AsRawHandle as _;
-    use windows_sys::Win32::Security::Authorization::{SetSecurityInfo, SE_FILE_OBJECT};
+pub(crate) fn open_private_create_new(path: &Path) -> Result<fs::File> {
+    use std::os::windows::{ffi::OsStrExt as _, io::FromRawHandle as _};
     use windows_sys::Win32::{
-        Foundation::{LocalFree, GENERIC_ALL},
+        Foundation::{LocalFree, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE},
         Security::{
             Authorization::{
-                SetEntriesInAclW, EXPLICIT_ACCESS_W, SET_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+                ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
             },
-            DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
+            PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+        },
+        Storage::FileSystem::{
+            CreateFileW, CREATE_NEW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
         },
     };
 
     let current = current_user_sid()?;
-    let mut access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: GENERIC_ALL,
-        grfAccessMode: SET_ACCESS,
-        grfInheritance: NO_INHERITANCE,
-        Trustee: Default::default(),
-    };
-    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    access.Trustee.TrusteeType = TRUSTEE_IS_USER;
-    access.Trustee.ptstrName = current.as_ptr().cast();
-    let mut acl = std::ptr::null_mut();
-    if unsafe { SetEntriesInAclW(1, &raw const access, std::ptr::null(), &raw mut acl) } != 0
-        || acl.is_null()
+    let sddl = format!("O:{sid}G:{sid}D:P(A;;GA;;;{sid})", sid = current.text);
+    let sddl = sddl
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &raw mut descriptor,
+            std::ptr::null_mut(),
+        )
+    } == 0
+        || descriptor.is_null()
     {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
-    let status = unsafe {
-        SetSecurityInfo(
-            file.as_raw_handle().cast(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            acl,
+    let security = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
+            .expect("security attributes size fits u32"),
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &raw const security,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
             std::ptr::null_mut(),
         )
     };
-    unsafe { LocalFree(acl.cast()) };
-    if status != 0 {
-        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    unsafe { LocalFree(descriptor.cast()) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(PresentError::io(path, std::io::Error::last_os_error()));
     }
-    verify_private_file(path, file)
+    let file = unsafe { fs::File::from_raw_handle(handle.cast()) };
+    if let Err(error) = verify_private_file(path, &file) {
+        return Err(error);
+    }
+    Ok(file)
 }
 
 #[cfg(not(any(unix, windows)))]

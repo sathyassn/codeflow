@@ -662,7 +662,7 @@ area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
 epics: [EPC-005]
-adrs: [ADR-0049, ADR-0050]
+adrs: [ADR-0049, ADR-0050, ADR-0052]
 ```
 
 `codeflow present` turns a closed versioned JSON+Markdown document into one
@@ -675,7 +675,8 @@ feedback materially helps.
 
 The runtime validates the declarative block tree, embeds its deterministic
 renderer, stores immutable revisions and append-only feedback in owner-private
-project-keyed state, and exposes open/update/list/show/history/feedback/resolve/
+project-keyed durable state, keeps browser-owned profile/cache and bounded
+runtime controls in a separate derived root, and exposes open/update/list/show/history/feedback/resolve/
 export/close/clear through the CLI. A one-time tokenless file bootstrap opens a
 CodeFlow-owned isolated browser profile against an authenticated loopback-only
 service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
@@ -691,14 +692,18 @@ inheritance verification. Static export remains self-contained and excludes
 review/authentication/runtime state.
 
 Native-path repository identity, per-block and whole-document collection
-cardinality, one project-before-session mutation lease, pre-publication
+cardinality, a project→session→runtime-control lock order, pre-publication
 capacity admission for every durable growth route, and an over-quota-safe
 control path keep quota boundaries deterministic under concurrent creation,
 revision, feedback, and runtime registration. The browser loads a bounded recent
 feedback snapshot, uniquely re-anchors exact selectors across revisions, leaves
 missing/ambiguous selectors visibly orphaned, and exposes the current lifecycle
 version. Resolve accepts only a current delivered event and appends
-addressed/dismissed state.
+addressed/dismissed state. Exact accepted receipt and identical terminal retries
+are zero-growth operations; conflicting reuse and unrelated stale versions fail
+closed. Retention recomputes bounded durable size after every eviction, selected
+cleanup loads only its named session, and bulk cleanup reports isolated partial
+failures without deleting ambiguous state.
 Verified Unix process groups receive bounded graceful shutdown and then an
 identity recheck before forced termination. Unverifiable orphan process
 groups/trees retain recovery state rather than killing an unproven process or
