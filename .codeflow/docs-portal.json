@@ -37,7 +37,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "e36a42b6fb81a11ff52071a43a66d62a0bab607a90ce4a648d3fc7fb4fb77d1a"
+      "pristine_sha256": "3499c2a50393da6c573b65ceb3b5487a19fc85b5c89bdf43c20c1f3839e3b36c"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",

@@ -325,7 +325,7 @@ function escapeMarkdownInline(value) {
 
 function renderIndex(definitions, allPages) {
   const steps = definitions.map((layer, index) => `<li><a href="${withBase(base, layer.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(layer.label)}</strong><small>${escapeHtml(layer.description)}</small><em>${allPages.filter((page) => page.route.startsWith(`${layer.id}/`) && !page.stale).length} sources</em></a></li>`).join("\n");
-  return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\nslug: "index"\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<ul class="portal-journey">\n${steps}\n</ul>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
+  return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\nslug: "index"\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<nav aria-label="Guide journey">\n<ul class="portal-journey">\n${steps}\n</ul>\n</nav>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
 }
 
 function staleStubPage(sourcePath, sourceHash, error) {
