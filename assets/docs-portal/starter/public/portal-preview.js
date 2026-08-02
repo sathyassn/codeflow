@@ -1,4 +1,10 @@
 const selector = ".portal-id-preview";
+const touchLinks = new WeakSet();
+
+document.addEventListener("touchstart", (event) => {
+  const link = event.target?.closest?.(`${selector} > a`);
+  if (link) touchLinks.add(link);
+}, { passive: true });
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -15,8 +21,9 @@ document.addEventListener("focusout", (event) => {
 
 document.addEventListener("click", (event) => {
   const link = event.target?.closest?.(`${selector} > a`);
+  const touched = link ? touchLinks.delete(link) : false;
   const coarsePointerClick = !event.pointerType && matchMedia("(hover: none) and (pointer: coarse)").matches;
-  if (!link || (!["touch", "pen"].includes(event.pointerType) && !coarsePointerClick)) return;
+  if (!link || (!["touch", "pen"].includes(event.pointerType) && !coarsePointerClick && !touched)) return;
   const preview = link.closest(selector);
   if (preview.classList.contains("portal-preview-open")) return;
   event.preventDefault();
