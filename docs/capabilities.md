@@ -348,7 +348,7 @@ selection, operator precedence, evidence-grounded design-choice review,
 bounded refinement, sourcing/privacy, reviewed-version retention, distinct
 evidenced product voices, localization honesty, utility/product isolation,
 appearance-mode behavior, accessibility, and rendered fidelity
-(ADR-0043).
+(ADR-0043, ADR-0051).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
 CLI reaches Claude through an interactive task-scoped tmux session. Another
