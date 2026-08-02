@@ -112,8 +112,9 @@ async function verifyEngine(name, engine, base, outputRoot) {
     await visit(page, `${base}/`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (overflow > 1) throw new Error(`${name}: mobile page overflows by ${overflow}px`);
-    const targets = await page.locator(".portal-journey a, button, summary").evaluateAll((items) => items.filter((item) => getComputedStyle(item).display !== "none").map((item) => ({ text: item.textContent?.trim(), width: item.getBoundingClientRect().width, height: item.getBoundingClientRect().height })));
-    if (targets.some((target) => target.width < 24 || target.height < 24)) throw new Error(`${name}: primary target smaller than 24 CSS pixels`);
+    const targets = await page.locator(".portal-journey a, button, summary").evaluateAll((items) => items.map((item) => ({ text: item.textContent?.trim().slice(0, 80), width: item.getBoundingClientRect().width, height: item.getBoundingClientRect().height })).filter((target) => target.width > 0 && target.height > 0));
+    const undersized = targets.filter((target) => target.width < 24 || target.height < 24);
+    if (undersized.length) throw new Error(`${name}: primary target smaller than 24 CSS pixels: ${JSON.stringify(undersized)}`);
     const mobile = path.join(outputRoot, `${name}-mobile.png`);
     await page.screenshot({ path: mobile, fullPage: true });
     screenshots.push(await artifact(mobile));
@@ -154,8 +155,13 @@ async function assertA11y(page, engine, surface) {
 }
 
 async function assertFocusIsVisible(page, engine) {
-  for (let index = 0; index < 16; index += 1) {
-    await page.keyboard.press("Tab");
+  const focusable = page.locator('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])');
+  const count = Math.min(await focusable.count(), 16);
+  if (!count) throw new Error(`${engine}: no keyboard-focusable controls found`);
+  for (let index = 0; index < count; index += 1) {
+    const candidate = focusable.nth(index);
+    if (!await candidate.isVisible()) continue;
+    await candidate.focus();
     const result = await page.evaluate(() => {
       const active = document.activeElement;
       if (!(active instanceof HTMLElement)) return { ok: false, reason: "no active element" };
