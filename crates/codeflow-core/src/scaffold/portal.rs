@@ -23,6 +23,7 @@ const MAX_BASELINE_ENTRIES: usize = 1_024;
 const MAX_MANAGED_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RECONCILIATION_READ_BYTES: u64 = 64 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
 struct ReadBudget {
     remaining: u64,
 }
@@ -34,9 +35,20 @@ struct PortalMutation {
     after: Option<Vec<u8>>,
 }
 
-#[derive(Default)]
 struct PortalMutationPlan {
     mutations: BTreeMap<String, PortalMutation>,
+    snapshot_budget: ReadBudget,
+    output_budget: ReadBudget,
+}
+
+impl Default for PortalMutationPlan {
+    fn default() -> Self {
+        Self {
+            mutations: BTreeMap::new(),
+            snapshot_budget: ReadBudget::new(),
+            output_budget: ReadBudget::new(),
+        }
+    }
 }
 
 struct PortalReconciliation<'a> {
@@ -47,6 +59,15 @@ struct PortalReconciliation<'a> {
 }
 
 impl PortalMutationPlan {
+    #[cfg(test)]
+    fn with_limits(snapshot_limit: u64, output_limit: u64) -> Self {
+        Self {
+            mutations: BTreeMap::new(),
+            snapshot_budget: ReadBudget::with_limit(snapshot_limit),
+            output_budget: ReadBudget::with_limit(output_limit),
+        }
+    }
+
     fn write(
         &mut self,
         root: &Path,
@@ -86,6 +107,30 @@ impl PortalMutationPlan {
                 detail: "portal transaction planned conflicting mutations".into(),
             }),
             None => {
+                let mut snapshot_budget = self.snapshot_budget;
+                let mut output_budget = self.output_budget;
+                if let Some(before) = &mutation.before {
+                    snapshot_budget.charge(before.len()).map_err(|error| {
+                        ScaffoldError::InvalidState {
+                            what: mutation.path.clone(),
+                            detail: format!(
+                                "portal transaction snapshots exceed their aggregate byte limit: {error}"
+                            ),
+                        }
+                    })?;
+                }
+                if let Some(after) = &mutation.after {
+                    output_budget.charge(after.len()).map_err(|error| {
+                        ScaffoldError::InvalidState {
+                            what: mutation.path.clone(),
+                            detail: format!(
+                                "portal transaction outputs exceed their aggregate byte limit: {error}"
+                            ),
+                        }
+                    })?;
+                }
+                self.snapshot_budget = snapshot_budget;
+                self.output_budget = output_budget;
                 self.mutations.insert(mutation.path.clone(), mutation);
                 Ok(())
             }
@@ -106,9 +151,26 @@ impl PortalMutationPlan {
     }
 
     fn commit_inner(self, root: &Path, fault_after: Option<usize>) -> Result<(), ScaffoldError> {
+        for mutation in self.mutations.values() {
+            ensure_snapshot_unchanged(
+                root,
+                &mutation.path,
+                mutation.before.as_deref(),
+                "pre-commit",
+            )?;
+        }
         let missing_directories = missing_parent_directories(root, self.mutations.values())?;
         let mut applied = Vec::new();
         for (index, mutation) in self.mutations.values().enumerate() {
+            if let Err(error) = ensure_snapshot_unchanged(
+                root,
+                &mutation.path,
+                mutation.before.as_deref(),
+                "pre-apply",
+            ) {
+                rollback_mutations(root, &applied, &missing_directories)?;
+                return Err(error);
+            }
             // Atomic writes may report a durability-sync failure after rename;
             // include the in-flight path in rollback even when apply returns Err.
             applied.push(mutation);
@@ -144,9 +206,11 @@ impl PortalMutationPlan {
 
 impl ReadBudget {
     fn new() -> Self {
-        Self {
-            remaining: MAX_RECONCILIATION_READ_BYTES,
-        }
+        Self::with_limit(MAX_RECONCILIATION_READ_BYTES)
+    }
+
+    fn with_limit(limit: u64) -> Self {
+        Self { remaining: limit }
     }
 
     fn charge(&mut self, bytes: usize) -> std::io::Result<()> {
@@ -161,6 +225,23 @@ impl ReadBudget {
         })?;
         Ok(())
     }
+}
+
+fn charge_bundle_asset(
+    budget: &mut ReadBudget,
+    path: &str,
+    asset: &[u8],
+) -> Result<(), ScaffoldError> {
+    if asset.len() as u64 > MAX_MANAGED_FILE_BYTES {
+        return Err(ScaffoldError::ManifestInvalid(format!(
+            "{path} exceeds the managed portal file byte limit"
+        )));
+    }
+    budget.charge(asset.len()).map_err(|error| {
+        ScaffoldError::ManifestInvalid(format!(
+            "docs portal bundle exceeds its aggregate byte limit: {error}"
+        ))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -346,6 +427,7 @@ pub fn setup_portal(
         relative_root.display()
     ));
     let mut read_budget = ReadBudget::new();
+    let mut bundle_budget = ReadBudget::new();
     let mut mutations = PortalMutationPlan::default();
     let mut next_files = BTreeMap::new();
     for file in &manifest.files {
@@ -354,6 +436,7 @@ pub fn setup_portal(
             .ok_or_else(|| {
                 ScaffoldError::ManifestMissing(format!("{ASSET_PREFIX}{}", file.path))
             })?;
+        charge_bundle_asset(&mut bundle_budget, &file.path, &asset)?;
         let mut pristine = String::from_utf8(asset).map_err(|e| {
             ScaffoldError::ManifestInvalid(format!("{} is not UTF-8: {e}", file.path))
         })?;
@@ -776,6 +859,33 @@ fn snapshot_project_file(
     }
 }
 
+fn ensure_snapshot_unchanged(
+    root: &Path,
+    relative: &str,
+    expected: Option<&[u8]>,
+    phase: &str,
+) -> Result<(), ScaffoldError> {
+    let maximum = expected.map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    let current = snapshot_project_file(root, relative, maximum, phase).map_err(|error| {
+        ScaffoldError::InvalidState {
+            what: relative.into(),
+            detail: format!(
+                "portal transaction {phase} snapshot changed; refusing to overwrite concurrent edits: {error}"
+            ),
+        }
+    })?;
+    if current.as_deref() == expected {
+        Ok(())
+    } else {
+        Err(ScaffoldError::InvalidState {
+            what: relative.into(),
+            detail: format!(
+                "portal transaction {phase} snapshot changed; refusing to overwrite concurrent edits"
+            ),
+        })
+    }
+}
+
 fn missing_parent_directories<'a>(
     root: &Path,
     mutations: impl Iterator<Item = &'a PortalMutation>,
@@ -814,6 +924,25 @@ fn rollback_mutations(
     missing_directories: &[String],
 ) -> Result<(), ScaffoldError> {
     for mutation in applied.iter().rev() {
+        let maximum = mutation
+            .before
+            .as_ref()
+            .into_iter()
+            .chain(mutation.after.as_ref())
+            .map(Vec::len)
+            .max()
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .unwrap_or(0);
+        let current = snapshot_project_file(root, &mutation.path, maximum, "rollback")?;
+        if current == mutation.before {
+            continue;
+        }
+        if current != mutation.after {
+            return Err(ScaffoldError::InvalidState {
+                what: mutation.path.clone(),
+                detail: "portal transaction rollback found a concurrent edit; preserving it".into(),
+            });
+        }
         match &mutation.before {
             Some(bytes) => write_beneath_root(root, &mutation.path, bytes)?,
             None => remove_beneath_root(root, &mutation.path)?,
@@ -1131,6 +1260,85 @@ mod tests {
         assert!(!temp.path().join("guide/a.txt").exists());
         assert!(!temp.path().join("guide/b.txt").exists());
         assert!(!temp.path().join("guide").exists());
+    }
+
+    #[test]
+    fn aggregate_bundle_and_snapshot_budgets_fail_before_mutation() {
+        let mut bundle_budget = ReadBudget::with_limit(5);
+        charge_bundle_asset(&mut bundle_budget, "a.txt", b"123").unwrap();
+        let error = charge_bundle_asset(&mut bundle_budget, "b.txt", b"456").unwrap_err();
+        assert!(error.to_string().contains("aggregate byte limit"));
+
+        let temp = initialized_root();
+        std::fs::write(temp.path().join("first.txt"), b"123").unwrap();
+        std::fs::write(temp.path().join("second.txt"), b"456").unwrap();
+        let mut plan = PortalMutationPlan::with_limits(5, 64);
+        plan.write(temp.path(), "first.txt", b"one".to_vec(), 8, "fixture")
+            .unwrap();
+        let error = plan
+            .write(temp.path(), "second.txt", b"two".to_vec(), 8, "fixture")
+            .unwrap_err();
+        assert!(error.to_string().contains("aggregate byte limit"));
+        assert_eq!(
+            std::fs::read(temp.path().join("first.txt")).unwrap(),
+            b"123"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("second.txt")).unwrap(),
+            b"456"
+        );
+
+        let mut plan = PortalMutationPlan::with_limits(64, 5);
+        plan.write(temp.path(), "first.txt", b"123".to_vec(), 8, "fixture")
+            .unwrap();
+        let error = plan
+            .write(temp.path(), "second.txt", b"456".to_vec(), 8, "fixture")
+            .unwrap_err();
+        assert!(error.to_string().contains("outputs exceed"));
+        assert_eq!(
+            std::fs::read(temp.path().join("first.txt")).unwrap(),
+            b"123"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("second.txt")).unwrap(),
+            b"456"
+        );
+    }
+
+    #[test]
+    fn transaction_refuses_stale_snapshots_before_writing() {
+        let temp = initialized_root();
+        std::fs::write(temp.path().join("first.txt"), b"before one").unwrap();
+        std::fs::write(temp.path().join("second.txt"), b"before two").unwrap();
+        let mut plan = PortalMutationPlan::default();
+        plan.write(
+            temp.path(),
+            "first.txt",
+            b"after one".to_vec(),
+            32,
+            "fixture",
+        )
+        .unwrap();
+        plan.write(
+            temp.path(),
+            "second.txt",
+            b"after two".to_vec(),
+            32,
+            "fixture",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("second.txt"), b"concurrent edit").unwrap();
+
+        let error = plan.commit(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("snapshot changed"));
+        assert_eq!(
+            std::fs::read(temp.path().join("first.txt")).unwrap(),
+            b"before one"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("second.txt")).unwrap(),
+            b"concurrent edit"
+        );
     }
 
     #[test]
