@@ -134,41 +134,71 @@ Tier is recorded in `project.toml`; re-running init at a higher tier is an **ide
 2. **Managed-region** (AGENTS.md markers; settings.json keys identified by `codeflow` command prefix): only the region/keys are touched; everything else is yours.
 3. **User-owned, schema-versioned** (policy.json, project.toml, product.md, all docs/): updates may *add* new keys with defaults and report them; never mutate user values.
 
-### 4.4 Claude-artifact minimalism (counts, caps, formats)
+### 4.4 Managed-artifact effectiveness (semantic duties + byte ratchets)
 
-v1's corpus (8 agents, 14 commands, 7 skills, 1,790-line CLAUDE.md ≈ 135K tokens) is the anti-pattern. v2 ships the minimum that earns its tokens, in current-standard formats, with hard size caps — and the standing rule: **an artifact is added only when usage proves the need, never speculatively.**
+v1's instruction corpus is the anti-pattern: duplicated, always loaded, and
+expensive to maintain. v2 keeps only artifacts that have an evidenced job and
+moves justified depth behind on-demand references. That principle does not make
+shortness the objective. **A smaller artifact is not a better artifact when it
+has lost behavior, context, safety, review, or verification duties.**
 
-| Artifact | Count | What & why it survives | Cap |
-|---|---|---|---|
-| Agent defs | **1** — `cf-reviewer` | The independent evaluator: verifies against stated acceptance criteria with file:line evidence, runs `codeflow test`/`validate`. The only role split with consistent evidence of value. The lead session IS the developer (Fable-class); parallel builders are spawned with workflow prompts, needing no agent file. QA-as-agent is absorbed: the test gate is mechanical (binary), acceptance verification belongs to the reviewer. | ≤80 lines |
-| Skills | **1 core** — `cf-method` (+1 standards skill per installed stack profile) | Carries the mental model: how to plan an epic, when an ADR is warranted, capability-entry discipline, worked examples, anti-patterns. On-demand, SKILL.md standard, portable to other harnesses. | ≤300 lines + resources |
-| Commands | **3** — `/cf-plan`, `/cf-develop`, `/cf-ship` | Entry points that gather input clarity then invoke the workflow/skill. No `/cf-status` (the binary + orient cover it), no help/doctor/resume commands (binary or native features). | ≤40 lines each |
-| Workflows | **1** — `develop` (ship logic starts inside `/cf-ship` + binary gates; promoted to a workflow only if usage demands) | The build→review→verify pipeline with bounded rework. | — |
-| AGENTS.md | 1 | The operating contract. | ≤250 lines (aim ~150); 32KiB hard cap |
-| CLAUDE.md | 1 | `@AGENTS.md` + Claude addenda. | ≤15 lines |
+Bytes are the deterministic gate because they are stable across formatting and
+platforms and approximate loaded context without pretending to measure model
+tokens. Line counts are diagnostic only: they may expose unreadable density or
+fragmentation, but they never pass or fail an artifact. A budget failure never
+authorizes deleting or compressing doctrine merely to make the number green.
+First remove true duplication, then move independently loadable detail into a
+linked resource. If neither preserves the full contract, use a narrow,
+evidence-backed exception naming the exact skill and durable rationale.
 
-Always-loaded budget: AGENTS.md + orient digest ≈ **≤3K tokens** (v1: ~15.5K).
+The repository architecture-fitness test owns these ratchets. Measurements are
+from integration base `e9a872f2`; headroom is ratchet minus measured bytes.
 
-> **Superseding note (2026-07-18) — caps updated to shipped reality.** The table
-> above is the original plan of record; the caps below supersede it, updated to
-> what the corpus actually ships after the later decisions that grew it. Lines
-> remain a readability diagnostic, while bytes are the enforceable context-cost
-> proxy; neither may be gamed by dense formatting. Current measurements are
-> honest, not aspirations, and every artifact must still earn its tokens.
->
-> | Artifact | Original cap | Superseding cap | Shipped now | Why it grew |
-> |---|---|---|---|---|
-> | Agent defs | 1 — `cf-reviewer` ≤80 lines | 2 — reviewer ≤6KiB; security reviewer ≤16KiB | 90 / 187 lines; 4.5 / 10.6KiB | ADR-0016 added the security/red-team reviewer; later duo and context-proportionate durability duties made both verdict contracts explicit. |
-> | AGENTS.md (standard) | ≤250 lines; 32KiB hard | ≤24KiB; 32KiB hard | 290 lines; 18.7KiB | ADR-0019 through ADR-0030 added the enforcement floor, commit standard, host-neutral duo, evidence routing, and balanced context-proportionate quality gate. |
-> | AGENTS.md (minimal) | — | ≤12KiB | 153 lines; 9.1KiB | The minimal tier retains the same hard behavioral floor with fewer operating details. |
-> | CLAUDE.md (standard) | ≤15 lines | ≤6KiB | 55 lines; 3.4KiB | Carries only Claude-specific routing, effort, native-peer, and sandbox-retry addenda beyond `@AGENTS.md`. |
-> | CLAUDE.md (minimal) | — | ≤3KiB | 25 lines; 1.5KiB | The lean minimal-tier Claude addendum. |
-> | Commands | 3 — `/cf-plan` etc. ≤40 | superseded — commands merged into skills (v2.1.0); see §4.4 skills row | — | Claude merged custom commands into skills; codeflow ships `cf-*` skills only. |
->
-> The `cf-method` skill remains within its original cap. These replacement caps
-> are the ones to enforce; the original values remain historical context. The
-> standard always-loaded pair is about 22KiB (roughly 5–6K tokens), not the
-> original 3K estimate.
+| Governed artifact | Current | Ratchet | Headroom | Why this boundary exists |
+|---|---:|---:|---:|---|
+| Dogfood root `AGENTS.md` | 32,595 B | 32 KiB hard | 173 B | Includes the shipped standard contract plus CodeFlow-owned operating detail while remaining within common harness instruction limits. |
+| Shipped standard/full `AGENTS.md` | 29,906 B | 30 KiB | 814 B | The always-loaded portable operating contract. |
+| Shipped minimal `AGENTS.md` | 15,441 B | 16 KiB | 943 B | The behavioral and safety floor without absent method machinery. |
+| Dogfood root `CLAUDE.md` | 3,758 B | 6 KiB | 2,386 B | Standard-tier Claude routing and sandbox addenda only. |
+| Shipped standard/full `CLAUDE.md` | 3,681 B | 6 KiB | 2,463 B | `@AGENTS.md` plus Claude-specific routing and autonomy differences. |
+| Shipped minimal `CLAUDE.md` | 1,486 B | 3 KiB | 1,586 B | Minimal-tier session and enforcement wiring only. |
+| `cf-reviewer` agent definition | 8,161 B | 9 KiB | 1,055 B | Independent acceptance, implementation-quality, and verification duties without absorbing security review. |
+| `cf-security-reviewer` agent definition | 11,390 B | 12 KiB | 898 B | The deterministic-plus-agentic, cross-vendor security contract with structured evidence and blocking rules intact. |
+
+Skills have two different limits. The **reviewed per-source ratchet** is the
+normal gate and must be deliberately updated when justified content grows. The
+**absolute class ceiling** is only a backstop: 28 KiB for the two
+routing/orchestration skills and 24 KiB for every other skill. A newly
+manifested `SKILL.md` fails until it receives one explicit ratchet; stale or
+duplicate ratchets also fail.
+
+| Manifest skill source | Current | Reviewed ratchet | Headroom | Absolute class ceiling |
+|---|---:|---:|---:|---:|
+| `agents/skills/cf-model-orchestrator/SKILL.md` | 26,321 B | 27 KiB | 1,327 B | 28 KiB |
+| `agents/skills/cf-customize/SKILL.md` | 20,903 B | 21 KiB | 601 B | 24 KiB |
+| `claude/skills/cf-delegate/SKILL.md` | 19,318 B | 20 KiB | 1,162 B | 28 KiB |
+| `claude/skills/cf-method/SKILL.md` | 18,626 B | 19 KiB | 830 B | 24 KiB |
+| `agents/skills/cf-design/SKILL.md` | 12,902 B | 14 KiB | 1,434 B | 24 KiB |
+| `agents/skills/cf-evaluate-model/SKILL.md` | 8,598 B | 9 KiB | 618 B | 24 KiB |
+| `agents/skills/cf-docs-portal/SKILL.md` | 7,911 B | 9 KiB | 1,305 B | 24 KiB |
+| `agents/skills/cf-plan/SKILL.md` | 7,402 B | 8 KiB | 790 B | 24 KiB |
+| `agents/skills/cf-present/SKILL.md` | 7,070 B | 8 KiB | 1,122 B | 24 KiB |
+| `agents/skills/cf-editorial-review/SKILL.md` | 5,645 B | 6 KiB | 499 B | 24 KiB |
+| `agents/skills/cf-ship/SKILL.md` | 5,372 B | 6 KiB | 772 B | 24 KiB |
+| `agents/skills/cf-consult/SKILL.md` | 4,965 B | 6 KiB | 1,179 B | 24 KiB |
+| `agents/skills/cf-develop/SKILL.md` | 3,300 B | 4 KiB | 796 B | 24 KiB |
+| `agents/skills/cf-stack/SKILL.md` | 3,251 B | 4 KiB | 845 B | 24 KiB |
+
+The same test resolves AGENTS/CLAUDE sources through the scaffold manifest,
+checks the manifest-selected reviewer agents and every shipped skill source plus
+active Claude/Codex mirrors and managed baselines, and pins the semantic duties
+most vulnerable to token-driven dilution. Crossing an absolute class ceiling
+requires an exception naming one exact manifest source, its reviewed byte
+ratchet, and an existing durable `docs/` evidence file. No exception exists at
+this measurement. On-demand references, eval fixtures, and other resource data
+are not forced under one instruction-file cap; their schemas and runtime purpose
+own their proportional bounds. Stale historical line snapshots are not treated
+as current caps.
 
 ### 4.5 Responsibility split
 

@@ -19,7 +19,10 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] B — records import: 180 tests green, clippy clean (models/ledger/workgraph/validate; SurrealDB NOT imported — `RecordStore` trait + `MarkdownStore` over markdown+frontmatter per D17; format ids simplified to `EPC-NNN`/`TSK-NNN-NNN`)
 - [x] C — guards import: 376 tests green, clippy clean (security scanner ×10 modules, git/conflict + ci, file_lock, error pruned 1178→476 lines, doctor v2 check table, settings structured-merge per §4.3 class 2)
 - [x] D — scaffold engine: 43 tests green, clippy clean (init w/ bootstrap grace + tier system + husky/hooksPath detection; update w/ 3-way merge via .baseline + `.new` conflicts + additive policy key sync; managed-region + structured settings merge; scaffold-manifest.toml spec; rust-embed CLI with disk-loading in debug; version-skew warning). Integrated: **926 tests green**, clippy 0; asset gaps (gitignore, develop.workflow.js) filled at integration
-- [x] E — corpus authoring, all §4.4 caps respected: AGENTS.md.tmpl 116 lines, CLAUDE.md.tmpl 14, cf-reviewer 64, cf-method 131, 3 commands ≤26, policy.json (§6.1 exact), git-hook shims, 3 settings presets, CI template, docs+pm templates; repo's own AGENTS.md/CLAUDE.md instantiated (dogfood)
+- [x] E — initial corpus authored, embedded, and instantiated for dogfood. The
+  current size and semantic contract is §4.4 plus
+  `artifact_budget_contract`; this historical milestone no longer carries a
+  line-count snapshot that later decisions made false.
 - [x] Integration: probe+E+A+B+C merged serially into main; **883 tests green** (exact workstream sum), **clippy 0 warnings workspace-wide**
 
 ## Day 2 — new builds + integration
@@ -145,11 +148,30 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   denies, and no shadowing legacy `sandbox_mode`; every Claude preset is
   fail-closed and sandbox-autonomous, while auto/classifier policy is supplied
   at user or explicit CLI scope because project scope is intentionally ignored.
-- §4.4 caps corrected (2026-07-13): the Day-1 "all §4.4 caps respected" note above
-  recorded that day's counts, but later decisions grew the corpus past the original
-  caps — `AGENTS.md.tmpl` 256 lines (>250), `CLAUDE.md.tmpl` 32 (>15),
-  `CLAUDE.minimal.md.tmpl` 19 (>15), and `cf-security-reviewer` 170, a second agent
-  added by ADR-0016 that the original single-agent count did not cover. The charter
-  §4.4 superseding note (2026-07-13) updates the caps to this shipped reality
-  (`AGENTS.md` ≤270 / 32KiB, `CLAUDE.md` ≤35, minimal ≤160/≤20, `cf-security-reviewer`
-  ≤180); `cf-reviewer` (64) and `cf-method` (231) stay within their unchanged caps.
+- Artifact budgets corrected (2026-08-02): §4.4 now has one current contract,
+  enforced by `crates/codeflow-core/tests/artifact_budget_contract.rs`. Bytes
+  are the ratchet and lines are diagnostic only; the test rejects a smaller
+  artifact that loses pinned orchestration, safety, evidence, review, or
+  verification duties. Exact measurements at integration base `e9a872f2`:
+
+  | Surface | Current | Ratchet | Headroom |
+  |---|---:|---:|---:|
+  | root `AGENTS.md` | 32,595 B | 32 KiB hard | 173 B |
+  | shipped standard/full `AGENTS.md` | 29,906 B | 30 KiB | 814 B |
+  | shipped minimal `AGENTS.md` | 15,441 B | 16 KiB | 943 B |
+  | root / shipped standard `CLAUDE.md` | 3,758 / 3,681 B | 6 KiB each | 2,386 / 2,463 B |
+  | shipped minimal `CLAUDE.md` | 1,486 B | 3 KiB | 1,586 B |
+  | `cf-reviewer` agent definition | 8,161 B | 9 KiB | 1,055 B |
+  | `cf-security-reviewer` agent definition | 11,390 B | 12 KiB | 898 B |
+  | `cf-model-orchestrator` skill | 26,321 B | 27 KiB | 1,327 B |
+  | `cf-customize` skill | 20,903 B | 21 KiB | 601 B |
+
+  Source, active Claude/Codex mirrors, managed baselines, manifest-selected
+  tiers, and reviewer-agent role contracts are checked together. Every skill
+  has one explicit source ratchet (the complete table is in §4.4); the 24 KiB
+  ordinary and 28 KiB routing/orchestration limits are absolute class ceilings,
+  not default growth allowances. There are no skill budget exceptions. Crossing
+  a class ceiling requires an exact manifest source, matching reviewed ratchet,
+  and an existing durable evidence file. On-demand references, eval fixtures,
+  and resource data retain purpose-specific bounds rather than one blunt
+  instruction-file ceiling.
