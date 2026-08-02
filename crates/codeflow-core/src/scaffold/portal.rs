@@ -1,9 +1,12 @@
 //! Opt-in documentation-portal starter materialization and reconciliation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use unicode_normalization::UnicodeNormalization;
@@ -16,6 +19,9 @@ const ASSET_PREFIX: &str = "docs-portal/starter/";
 const MANIFEST_ASSET: &str = "docs-portal/manifest.json";
 const STATE_PATH: &str = ".codeflow/docs-portal.json";
 const BASELINE_ROOT: &str = ".codeflow/.docs-portal-baseline";
+const TRANSACTION_LOCK_PATH: &str = ".codeflow/.docs-portal.lock";
+const TRANSACTION_PATH: &str = ".codeflow/.docs-portal-transaction";
+const TRANSACTION_STAGE_PREFIX: &str = ".docs-portal-transaction-stage-";
 const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BUNDLE_FILES: usize = 256;
 const MAX_STATE_BYTES: u64 = 64 * 1024;
@@ -28,17 +34,47 @@ struct ReadBudget {
     remaining: u64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct PortalMutation {
     path: String,
     before: Option<Vec<u8>>,
     after: Option<Vec<u8>>,
 }
 
+#[derive(Clone)]
 struct PortalMutationPlan {
     mutations: BTreeMap<String, PortalMutation>,
     snapshot_budget: ReadBudget,
     output_budget: ReadBudget,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PortalTransactionJournal {
+    schema_version: u32,
+    mutations: Vec<PortalJournalMutation>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PortalJournalMutation {
+    path: String,
+    before_sha256: Option<String>,
+    before_bytes: Option<u64>,
+    after_sha256: Option<String>,
+    after_bytes: Option<u64>,
+    staged_file: Option<String>,
+}
+
+#[derive(Debug)]
+struct PortalTransactionLease {
+    file: File,
+}
+
+impl Drop for PortalTransactionLease {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 impl Default for PortalMutationPlan {
@@ -159,9 +195,11 @@ impl PortalMutationPlan {
                 "pre-commit",
             )?;
         }
-        let missing_directories = missing_parent_directories(root, self.mutations.values())?;
+        let ordered = ordered_mutations(&self.mutations);
+        let missing_directories = missing_parent_directories(root, ordered.iter().copied())?;
+        prepare_portal_transaction(root, &ordered)?;
         let mut applied = Vec::new();
-        for (index, mutation) in self.mutations.values().enumerate() {
+        for (index, mutation) in ordered.into_iter().enumerate() {
             if let Err(error) = ensure_snapshot_unchanged(
                 root,
                 &mutation.path,
@@ -169,6 +207,7 @@ impl PortalMutationPlan {
                 "pre-apply",
             ) {
                 rollback_mutations(root, &applied, &missing_directories)?;
+                remove_portal_transaction(root)?;
                 return Err(error);
             }
             // Atomic writes may report a durability-sync failure after rename;
@@ -197,10 +236,417 @@ impl PortalMutationPlan {
                         ),
                     },
                 )?;
+                remove_portal_transaction(root)?;
                 return Err(error);
             }
         }
+        remove_portal_transaction(root)?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn commit_with_abrupt_fault_after(
+        self,
+        root: &Path,
+        mutation_index: usize,
+    ) -> Result<(), ScaffoldError> {
+        for mutation in self.mutations.values() {
+            ensure_snapshot_unchanged(
+                root,
+                &mutation.path,
+                mutation.before.as_deref(),
+                "pre-commit",
+            )?;
+        }
+        let ordered = ordered_mutations(&self.mutations);
+        prepare_portal_transaction(root, &ordered)?;
+        for (index, mutation) in ordered.into_iter().enumerate() {
+            match &mutation.after {
+                Some(bytes) => write_beneath_root(root, &mutation.path, bytes)?,
+                None => remove_beneath_root(root, &mutation.path)?,
+            }
+            if index == mutation_index {
+                return Err(ScaffoldError::InvalidState {
+                    what: mutation.path.clone(),
+                    detail: "injected abrupt portal transaction interruption".into(),
+                });
+            }
+        }
+        remove_portal_transaction(root)
+    }
+}
+
+fn ordered_mutations(mutations: &BTreeMap<String, PortalMutation>) -> Vec<&PortalMutation> {
+    let mut ordered: Vec<_> = mutations.values().collect();
+    ordered.sort_by(|left, right| {
+        mutation_rank(left)
+            .cmp(&mutation_rank(right))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    ordered
+}
+
+fn mutation_rank(mutation: &PortalMutation) -> u8 {
+    if mutation.path == STATE_PATH {
+        2
+    } else if mutation.path.starts_with(&format!("{BASELINE_ROOT}/")) {
+        if mutation.after.is_some() {
+            1
+        } else {
+            3
+        }
+    } else {
+        0
+    }
+}
+
+fn acquire_portal_transaction_lease(root: &Path) -> Result<PortalTransactionLease, ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(TRANSACTION_LOCK_PATH))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| ScaffoldError::io(parent, error))?;
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(ScaffoldError::InvalidState {
+                what: TRANSACTION_LOCK_PATH.into(),
+                detail: "portal transaction lock is not a regular file".into(),
+            });
+        }
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(&path)
+        .map_err(|error| ScaffoldError::io(&path, error))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| ScaffoldError::io(&path, error))?;
+    if !metadata.is_file() {
+        return Err(ScaffoldError::InvalidState {
+            what: TRANSACTION_LOCK_PATH.into(),
+            detail: "portal transaction lock is not a regular file".into(),
+        });
+    }
+    file.try_lock_exclusive()
+        .map_err(|error| ScaffoldError::InvalidState {
+            what: TRANSACTION_LOCK_PATH.into(),
+            detail: format!("another portal setup/update is already in progress: {error}"),
+        })?;
+    Ok(PortalTransactionLease { file })
+}
+
+fn prepare_portal_transaction(
+    root: &Path,
+    mutations: &[&PortalMutation],
+) -> Result<(), ScaffoldError> {
+    let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
+    if transaction.exists() {
+        return Err(ScaffoldError::InvalidState {
+            what: TRANSACTION_PATH.into(),
+            detail: "an unrecovered portal transaction already exists".into(),
+        });
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let stage_relative = format!(
+        ".codeflow/{TRANSACTION_STAGE_PREFIX}{}-{nonce}",
+        std::process::id()
+    );
+    let stage = guard_beneath_root(root, Path::new(&stage_relative))?;
+    std::fs::create_dir(&stage).map_err(|error| ScaffoldError::io(&stage, error))?;
+    let prepared = (|| {
+        let mut journal = PortalTransactionJournal {
+            schema_version: 1,
+            mutations: Vec::with_capacity(mutations.len()),
+        };
+        for (index, mutation) in mutations.iter().enumerate() {
+            let staged_file = mutation.after.as_ref().map(|bytes| {
+                let relative = format!("after/{index:04}");
+                (relative, bytes)
+            });
+            if let Some((relative, bytes)) = &staged_file {
+                write_beneath_root(root, &format!("{stage_relative}/{relative}"), bytes)?;
+            }
+            journal.mutations.push(PortalJournalMutation {
+                path: mutation.path.clone(),
+                before_sha256: mutation.before.as_ref().map(|bytes| sha256_hex(bytes)),
+                before_bytes: mutation.before.as_ref().map(|bytes| bytes.len() as u64),
+                after_sha256: mutation.after.as_ref().map(|bytes| sha256_hex(bytes)),
+                after_bytes: mutation.after.as_ref().map(|bytes| bytes.len() as u64),
+                staged_file: staged_file.map(|(relative, _)| relative),
+            });
+        }
+        let manifest = serde_json::to_vec_pretty(&journal)?;
+        write_beneath_root(root, &format!("{stage_relative}/manifest.json"), &manifest)?;
+        std::fs::rename(&stage, &transaction)
+            .map_err(|error| ScaffoldError::io(&transaction, error))?;
+        sync_parent(&transaction)?;
+        Ok(())
+    })();
+    if prepared.is_err() {
+        let _ = std::fs::remove_dir_all(&stage);
+    }
+    prepared
+}
+
+fn recover_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
+    remove_abandoned_transaction_stages(root)?;
+    let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
+    let metadata = match std::fs::symlink_metadata(&transaction) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(ScaffoldError::io(&transaction, error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ScaffoldError::InvalidState {
+            what: TRANSACTION_PATH.into(),
+            detail: "portal transaction journal is not a regular directory".into(),
+        });
+    }
+    let manifest_path = transaction.join("manifest.json");
+    let manifest = read_bounded_regular(&manifest_path, 512 * 1024).map_err(|error| {
+        ScaffoldError::InvalidState {
+            what: TRANSACTION_PATH.into(),
+            detail: format!("portal transaction journal is unreadable: {error}"),
+        }
+    })?;
+    let journal: PortalTransactionJournal = serde_json::from_slice(&manifest)?;
+    if journal.schema_version != 1
+        || journal.mutations.is_empty()
+        || journal.mutations.len() > 2_048
+    {
+        return Err(ScaffoldError::InvalidState {
+            what: TRANSACTION_PATH.into(),
+            detail: "portal transaction journal has an invalid envelope".into(),
+        });
+    }
+    let mut paths = BTreeSet::new();
+    let mut bytes_remaining = MAX_RECONCILIATION_READ_BYTES;
+    for mutation in &journal.mutations {
+        validate_journal_mutation(root, mutation, &mut paths, &mut bytes_remaining)?;
+        let maximum = mutation
+            .before_bytes
+            .into_iter()
+            .chain(mutation.after_bytes)
+            .max()
+            .unwrap_or(0);
+        let current = snapshot_project_file(root, &mutation.path, maximum, "transaction recovery")
+            .map_err(|error| ScaffoldError::InvalidState {
+                what: mutation.path.clone(),
+                detail: format!(
+                    "portal transaction recovery found a concurrent edit; preserving it: {error}"
+                ),
+            })?;
+        if snapshot_matches(
+            current.as_deref(),
+            mutation.after_bytes,
+            mutation.after_sha256.as_deref(),
+        ) {
+            continue;
+        }
+        if !snapshot_matches(
+            current.as_deref(),
+            mutation.before_bytes,
+            mutation.before_sha256.as_deref(),
+        ) {
+            return Err(ScaffoldError::InvalidState {
+                what: mutation.path.clone(),
+                detail: "portal transaction recovery found a concurrent edit; preserving it".into(),
+            });
+        }
+        match (
+            &mutation.staged_file,
+            mutation.after_bytes,
+            mutation.after_sha256.as_deref(),
+        ) {
+            (Some(staged), Some(expected_bytes), Some(expected_hash)) => {
+                let staged_path =
+                    guard_beneath_root(root, &Path::new(TRANSACTION_PATH).join(staged))?;
+                let bytes =
+                    read_bounded_regular(&staged_path, expected_bytes).map_err(|error| {
+                        ScaffoldError::InvalidState {
+                            what: mutation.path.clone(),
+                            detail: format!(
+                                "staged portal transaction output is unreadable: {error}"
+                            ),
+                        }
+                    })?;
+                if bytes.len() as u64 != expected_bytes || sha256_hex(&bytes) != expected_hash {
+                    return Err(ScaffoldError::InvalidState {
+                        what: mutation.path.clone(),
+                        detail: "staged portal transaction output does not match its journal"
+                            .into(),
+                    });
+                }
+                write_beneath_root(root, &mutation.path, &bytes)?;
+            }
+            (None, None, None) => remove_beneath_root(root, &mutation.path)?,
+            _ => {
+                return Err(ScaffoldError::InvalidState {
+                    what: mutation.path.clone(),
+                    detail: "portal transaction journal mutation is inconsistent".into(),
+                });
+            }
+        }
+    }
+    remove_portal_transaction(root)
+}
+
+fn validate_journal_mutation(
+    root: &Path,
+    mutation: &PortalJournalMutation,
+    paths: &mut BTreeSet<String>,
+    bytes_remaining: &mut u64,
+) -> Result<(), ScaffoldError> {
+    if mutation.path.len() > 4_096 || mutation.path.contains('\\') {
+        return Err(ScaffoldError::InvalidState {
+            what: mutation.path.clone(),
+            detail: "portal transaction journal has an unsafe destination".into(),
+        });
+    }
+    guard_beneath_root(root, Path::new(&mutation.path))?;
+    if !paths.insert(portable_key(&mutation.path)) {
+        return Err(ScaffoldError::InvalidState {
+            what: mutation.path.clone(),
+            detail: "portal transaction journal repeats a destination".into(),
+        });
+    }
+    for (size, hash) in [
+        (mutation.before_bytes, mutation.before_sha256.as_deref()),
+        (mutation.after_bytes, mutation.after_sha256.as_deref()),
+    ] {
+        if size.is_some() != hash.is_some()
+            || hash.is_some_and(|value| {
+                value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            })
+        {
+            return Err(ScaffoldError::InvalidState {
+                what: mutation.path.clone(),
+                detail: "portal transaction journal has an invalid snapshot claim".into(),
+            });
+        }
+        if let Some(size) = size {
+            *bytes_remaining =
+                bytes_remaining
+                    .checked_sub(size)
+                    .ok_or_else(|| ScaffoldError::InvalidState {
+                        what: TRANSACTION_PATH.into(),
+                        detail: "portal transaction journal exceeds its aggregate byte limit"
+                            .into(),
+                    })?;
+        }
+    }
+    if mutation.after_bytes.is_some() != mutation.staged_file.is_some()
+        || mutation
+            .staged_file
+            .as_deref()
+            .is_some_and(|path| !path.starts_with("after/") || validate_asset_path(path).is_err())
+    {
+        return Err(ScaffoldError::InvalidState {
+            what: mutation.path.clone(),
+            detail: "portal transaction journal has an invalid staged output".into(),
+        });
+    }
+    Ok(())
+}
+
+fn snapshot_matches(snapshot: Option<&[u8]>, bytes: Option<u64>, hash: Option<&str>) -> bool {
+    match (snapshot, bytes, hash) {
+        (None, None, None) => true,
+        (Some(value), Some(bytes), Some(hash)) => {
+            value.len() as u64 == bytes && sha256_hex(value) == hash
+        }
+        _ => false,
+    }
+}
+
+fn remove_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
+    let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
+    match std::fs::symlink_metadata(&transaction) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(ScaffoldError::InvalidState {
+                what: TRANSACTION_PATH.into(),
+                detail: "portal transaction journal is not a regular directory".into(),
+            })
+        }
+        Ok(_) => {
+            std::fs::remove_dir_all(&transaction)
+                .map_err(|error| ScaffoldError::io(&transaction, error))?;
+            sync_parent(&transaction)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ScaffoldError::io(&transaction, error)),
+    }
+}
+
+fn remove_abandoned_transaction_stages(root: &Path) -> Result<(), ScaffoldError> {
+    let codeflow = guard_beneath_root(root, Path::new(".codeflow"))?;
+    let entries =
+        std::fs::read_dir(&codeflow).map_err(|error| ScaffoldError::io(&codeflow, error))?;
+    let mut seen = 0_usize;
+    for entry in entries {
+        let entry = entry.map_err(|error| ScaffoldError::io(&codeflow, error))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(TRANSACTION_STAGE_PREFIX) {
+            continue;
+        }
+        seen += 1;
+        if seen > 64 {
+            return Err(ScaffoldError::InvalidState {
+                what: ".codeflow".into(),
+                detail: "too many abandoned portal transaction stages".into(),
+            });
+        }
+        let metadata = entry
+            .metadata()
+            .map_err(|error| ScaffoldError::io(entry.path(), error))?;
+        if entry
+            .file_type()
+            .map_err(|error| ScaffoldError::io(entry.path(), error))?
+            .is_symlink()
+            || !metadata.is_dir()
+        {
+            return Err(ScaffoldError::InvalidState {
+                what: path_text(&entry.path()),
+                detail: "abandoned portal transaction stage is not a regular directory".into(),
+            });
+        }
+        std::fs::remove_dir_all(entry.path())
+            .map_err(|error| ScaffoldError::io(entry.path(), error))?;
+    }
+    Ok(())
+}
+
+fn sync_parent(path: &Path) -> Result<(), ScaffoldError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    match File::open(parent).and_then(|directory| directory.sync_all()) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(ScaffoldError::io(parent, error)),
     }
 }
 
@@ -360,11 +806,22 @@ pub fn setup_portal(
     repo_root: &Path,
     portal_root: &Path,
 ) -> Result<Report, ScaffoldError> {
-    let relative_root = validate_portal_root(portal_root)?;
-    guard_beneath_root(repo_root, &relative_root)?;
     if !repo_root.join(".codeflow/project.toml").exists() {
         return Err(ScaffoldError::NotInitialized);
     }
+    let _lease = acquire_portal_transaction_lease(repo_root)?;
+    recover_portal_transaction(repo_root)?;
+    setup_portal_locked(source, repo_root, portal_root)
+}
+
+#[allow(clippy::too_many_lines)]
+fn setup_portal_locked(
+    source: &dyn AssetSource,
+    repo_root: &Path,
+    portal_root: &Path,
+) -> Result<Report, ScaffoldError> {
+    let relative_root = validate_portal_root(portal_root)?;
+    guard_beneath_root(repo_root, &relative_root)?;
     let manifest_bytes = source
         .read(MANIFEST_ASSET)
         .ok_or_else(|| ScaffoldError::ManifestMissing(MANIFEST_ASSET.into()))?;
@@ -577,10 +1034,15 @@ pub fn update_adopted_portal(
     source: &dyn AssetSource,
     repo_root: &Path,
 ) -> Result<Option<Report>, ScaffoldError> {
+    if !repo_root.join(".codeflow/project.toml").exists() {
+        return Ok(None);
+    }
+    let _lease = acquire_portal_transaction_lease(repo_root)?;
+    recover_portal_transaction(repo_root)?;
     let Some(state) = load_state(repo_root)? else {
         return Ok(None);
     };
-    setup_portal(source, repo_root, Path::new(&state.root)).map(Some)
+    setup_portal_locked(source, repo_root, Path::new(&state.root)).map(Some)
 }
 
 fn reconcile_managed(
@@ -1260,6 +1722,99 @@ mod tests {
         assert!(!temp.path().join("guide/a.txt").exists());
         assert!(!temp.path().join("guide/b.txt").exists());
         assert!(!temp.path().join("guide").exists());
+    }
+
+    #[test]
+    fn abrupt_transaction_is_recovered_by_roll_forward_at_every_boundary() {
+        for boundary in 0..3 {
+            let temp = initialized_root();
+            std::fs::write(temp.path().join("old.txt"), b"old\n").unwrap();
+            let mut plan = PortalMutationPlan::default();
+            plan.write(temp.path(), "guide/a.txt", b"a\n".to_vec(), 32, "fixture")
+                .unwrap();
+            plan.remove(temp.path(), "old.txt", 32, "fixture").unwrap();
+            plan.write(
+                temp.path(),
+                STATE_PATH,
+                br#"{"schema_version":1}"#.to_vec(),
+                MAX_STATE_BYTES,
+                "fixture",
+            )
+            .unwrap();
+
+            let error = plan
+                .commit_with_abrupt_fault_after(temp.path(), boundary)
+                .unwrap_err();
+            assert!(error.to_string().contains("abrupt"));
+            assert!(temp.path().join(TRANSACTION_PATH).is_dir());
+
+            recover_portal_transaction(temp.path()).unwrap();
+            assert_eq!(
+                std::fs::read(temp.path().join("guide/a.txt")).unwrap(),
+                b"a\n"
+            );
+            assert!(!temp.path().join("old.txt").exists());
+            assert_eq!(
+                std::fs::read(temp.path().join(STATE_PATH)).unwrap(),
+                br#"{"schema_version":1}"#
+            );
+            assert!(!temp.path().join(TRANSACTION_PATH).exists());
+        }
+    }
+
+    #[test]
+    fn transaction_orders_content_then_state_then_baseline_pruning() {
+        let temp = initialized_root();
+        let retired = format!("{BASELINE_ROOT}/{}", "a".repeat(64));
+        std::fs::create_dir_all(temp.path().join(BASELINE_ROOT)).unwrap();
+        std::fs::write(temp.path().join(&retired), b"old\n").unwrap();
+        let active = format!("{BASELINE_ROOT}/{}", "b".repeat(64));
+        let mut plan = PortalMutationPlan::default();
+        plan.write(temp.path(), STATE_PATH, b"state\n".to_vec(), 32, "fixture")
+            .unwrap();
+        plan.write(temp.path(), "guide/a.txt", b"a\n".to_vec(), 32, "fixture")
+            .unwrap();
+        plan.write(temp.path(), &active, b"new\n".to_vec(), 32, "fixture")
+            .unwrap();
+        plan.remove(temp.path(), &retired, 32, "fixture").unwrap();
+
+        let ordered: Vec<_> = ordered_mutations(&plan.mutations)
+            .into_iter()
+            .map(|mutation| mutation.path.as_str())
+            .collect();
+        assert_eq!(
+            ordered,
+            ["guide/a.txt", active.as_str(), STATE_PATH, retired.as_str()]
+        );
+    }
+
+    #[test]
+    fn transaction_recovery_preserves_unexpected_external_edits() {
+        let temp = initialized_root();
+        std::fs::write(temp.path().join("value.txt"), b"before\n").unwrap();
+        let mut plan = PortalMutationPlan::default();
+        plan.write(temp.path(), "value.txt", b"after\n".to_vec(), 32, "fixture")
+            .unwrap();
+        assert!(plan.commit_with_abrupt_fault_after(temp.path(), 0).is_err());
+        std::fs::write(temp.path().join("value.txt"), b"operator edit\n").unwrap();
+
+        let error = recover_portal_transaction(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("concurrent edit"));
+        assert_eq!(
+            std::fs::read(temp.path().join("value.txt")).unwrap(),
+            b"operator edit\n"
+        );
+        assert!(temp.path().join(TRANSACTION_PATH).is_dir());
+    }
+
+    #[test]
+    fn portal_transaction_lease_excludes_concurrent_reconciliation() {
+        let temp = initialized_root();
+        let first = acquire_portal_transaction_lease(temp.path()).unwrap();
+        let error = acquire_portal_transaction_lease(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("already in progress"));
+        drop(first);
+        acquire_portal_transaction_lease(temp.path()).unwrap();
     }
 
     #[test]

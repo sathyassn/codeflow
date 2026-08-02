@@ -1,5 +1,6 @@
 import path from "node:path";
 import { assertExpectedPageArtifacts, assertNoSymlink, collectBuiltArtifacts, readBoundedRegularFile, withPublicationLease, writeText } from "./publication.mjs";
+import { assertEvidenceEnvelope } from "./limits.mjs";
 
 const root = process.cwd();
 await withPublicationLease(root, async ({ refresh }) => {
@@ -13,7 +14,9 @@ await withPublicationLease(root, async ({ refresh }) => {
   await refresh();
   await assertNoSymlink(root, ".portal/generated/evidence.json");
   evidence.artifacts = artifacts;
-  await writeText(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  const encoded = `${JSON.stringify(evidence, null, 2)}\n`;
+  assertEvidenceEnvelope(evidence.pages, encoded);
+  await writeText(evidencePath, encoded);
   console.log(`portal: recorded ${artifacts.length} built artifact(s)`);
 });
 

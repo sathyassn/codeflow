@@ -65,6 +65,11 @@ const PORTAL_LAYER_KEYS: [&str; 6] = [
     "fallback",
 ];
 
+struct DistArtifactInventory {
+    paths: BTreeSet<String>,
+    total_bytes: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct PortalValidationReport {
     pub checked_pages: usize,
@@ -511,6 +516,9 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             .push(format!("artifact count exceeds {MAX_ARTIFACTS}"));
         return report;
     }
+    if !preflight_page_claims(&evidence.pages, &mut report) {
+        return report;
+    }
     verify_file(
         &portal,
         "portal.config.json",
@@ -931,25 +939,30 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 .issues
                 .push(format!("duplicate built artifact path: {}", artifact.path));
         }
-        verify_file(
-            &portal,
-            &artifact.path,
-            &artifact.sha256,
-            "built artifact",
-            &mut report,
-        );
     }
     let actual_artifacts = collect_dist_artifacts(&portal, &mut report);
-    for actual in actual_artifacts.difference(&artifact_paths) {
+    for actual in actual_artifacts.paths.difference(&artifact_paths) {
         report
             .issues
             .push(format!("built artifact is unclaimed: {actual}"));
     }
-    for claimed in artifact_paths.difference(&actual_artifacts) {
+    for claimed in artifact_paths.difference(&actual_artifacts.paths) {
         report
             .issues
             .push(format!("claimed built artifact is absent: {claimed}"));
     }
+    let page_by_artifact: BTreeMap<_, _> = evidence
+        .pages
+        .iter()
+        .map(|page| {
+            let built = if page.route == "index" {
+                "dist/index.html".to_string()
+            } else {
+                format!("dist/{}/index.html", page.route)
+            };
+            (built, page)
+        })
+        .collect();
     for page in &evidence.pages {
         let built = if page.route == "index" {
             "dist/index.html".to_string()
@@ -961,9 +974,30 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 .issues
                 .push(format!("page is missing its built output: {}", page.route));
         }
-        let built_html = safe_join(&portal, Path::new(&built), "built page", &mut report)
-            .and_then(|path| read_bounded_text(&path, MAX_CLAIMED_FILE_BYTES).ok());
-        if let Some(html) = built_html {
+    }
+    let mut artifact_bytes_remaining = actual_artifacts.total_bytes;
+    for artifact in &evidence.artifacts {
+        let Some(bytes) = verify_file_budgeted(
+            &portal,
+            &artifact.path,
+            &artifact.sha256,
+            "built artifact",
+            &mut artifact_bytes_remaining,
+            &mut report,
+        ) else {
+            continue;
+        };
+        if let Some(page) = page_by_artifact.get(&artifact.path) {
+            let html = match std::str::from_utf8(&bytes) {
+                Ok(html) => html,
+                Err(error) => {
+                    report.issues.push(format!(
+                        "built page is not UTF-8 {}: {error}",
+                        artifact.path
+                    ));
+                    continue;
+                }
+            };
             let search_marker = format!(
                 "data-pagefind-body data-codeflow-search-root=\"{}\"",
                 page.route
@@ -1016,6 +1050,42 @@ fn escape_markdown_inline(value: &str) -> String {
         }
     }
     escaped
+}
+
+fn preflight_page_claims(pages: &[Page], report: &mut PortalValidationReport) -> bool {
+    let mut routes = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    let mut clean = true;
+    for page in pages {
+        if !safe_path_text(&page.route) || !routes.insert(portable_key(&page.route)) {
+            report
+                .issues
+                .push(format!("duplicate or unsafe route {:?}", page.route));
+            clean = false;
+        }
+        if page.output_markdown != format!("src/content/docs/{}.md", page.route)
+            || page.markdown_twin != format!("public/markdown/{}.md", page.route)
+        {
+            report.issues.push(format!(
+                "{} output and Markdown twin do not use their canonical route",
+                page.route
+            ));
+            clean = false;
+        }
+        for claimed in [
+            &page.source_path,
+            &page.output_markdown,
+            &page.markdown_twin,
+        ] {
+            if !safe_path_text(claimed) || !paths.insert(portable_key(claimed)) {
+                report
+                    .issues
+                    .push(format!("duplicate or unsafe page path claim: {claimed}"));
+                clean = false;
+            }
+        }
+    }
+    clean
 }
 
 fn verify_config_contract(
@@ -2123,7 +2193,10 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 #[allow(clippy::too_many_lines)] // Includes the bounded recursive visitor and its top-level invariants.
-fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) -> BTreeSet<String> {
+fn collect_dist_artifacts(
+    portal: &Path,
+    report: &mut PortalValidationReport,
+) -> DistArtifactInventory {
     fn visit(
         root: &Path,
         relative: &Path,
@@ -2242,14 +2315,20 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
                 "built artifact root is not a regular directory: {}",
                 dist.display()
             ));
-            return paths;
+            return DistArtifactInventory {
+                paths,
+                total_bytes: 0,
+            };
         }
         Err(error) => {
             report.issues.push(format!(
                 "built artifact root is unreadable {}: {error}",
                 dist.display()
             ));
-            return paths;
+            return DistArtifactInventory {
+                paths,
+                total_bytes: 0,
+            };
         }
         Ok(_) => {}
     }
@@ -2262,7 +2341,7 @@ fn collect_dist_artifacts(portal: &Path, report: &mut PortalValidationReport) ->
         &mut portable_paths,
         report,
     );
-    paths
+    DistArtifactInventory { paths, total_bytes }
 }
 
 fn verify_snippets(
@@ -2626,6 +2705,43 @@ fn verify_file(
         Err(error) => report
             .issues
             .push(format!("{label} unreadable {relative}: {error}")),
+    }
+}
+
+fn verify_file_budgeted(
+    root: &Path,
+    relative: &str,
+    expected: &str,
+    label: &str,
+    remaining: &mut u64,
+    report: &mut PortalValidationReport,
+) -> Option<Vec<u8>> {
+    if !valid_sha256(expected) {
+        report
+            .issues
+            .push(format!("{label} has an invalid SHA-256 claim: {relative}"));
+        return None;
+    }
+    let path = safe_join(root, Path::new(relative), label, report)?;
+    let maximum = MAX_CLAIMED_FILE_BYTES.min(*remaining);
+    match read_bounded_regular(&path, maximum) {
+        Ok(bytes) => {
+            *remaining = remaining.saturating_sub(bytes.len() as u64);
+            if sha256_hex(&bytes) == expected {
+                Some(bytes)
+            } else {
+                report
+                    .issues
+                    .push(format!("{label} hash mismatch: {relative}"));
+                None
+            }
+        }
+        Err(error) => {
+            report
+                .issues
+                .push(format!("{label} unreadable {relative}: {error}"));
+            None
+        }
     }
 }
 
@@ -3474,6 +3590,36 @@ fn strict_id(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn javascript_producer_limits_match_the_rust_verifier() {
+        let source = include_str!("../../../../assets/docs-portal/starter/scripts/limits.mjs");
+        let expected = [
+            ("manifestBytes", MAX_MANIFEST_BYTES),
+            ("pages", MAX_PAGES as u64),
+            ("idsPerPage", MAX_IDS_PER_PAGE as u64),
+            ("relationshipsPerPage", MAX_RELATIONSHIPS_PER_PAGE as u64),
+            ("backlinksPerPage", MAX_BACKLINKS_PER_PAGE as u64),
+            ("snippetsPerPage", MAX_SNIPPETS_PER_PAGE as u64),
+        ];
+        for (name, value) in expected {
+            let line = source
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("{name}:")))
+                .unwrap_or_else(|| panic!("missing JavaScript producer limit {name}"));
+            let expression = line
+                .split_once(':')
+                .expect("limit has a colon")
+                .1
+                .trim()
+                .trim_end_matches(',');
+            let actual = expression
+                .split('*')
+                .map(|factor| factor.trim().replace('_', "").parse::<u64>().unwrap())
+                .product::<u64>();
+            assert_eq!(actual, value, "producer/verifier limit drift for {name}");
+        }
+    }
+
     #[derive(serde::Deserialize)]
     struct AuthorityContract {
         repository_urls: ContractValues,
@@ -3992,7 +4138,7 @@ mod tests {
 
         let mut candidate = evidence.clone();
         candidate["pages"][0]["output_markdown"] = "src/content/docs/wrong.md".into();
-        assert_rejected("canonical-output", &candidate, "canonical route/content");
+        assert_rejected("canonical-output", &candidate, "canonical route");
 
         let mut candidate = evidence.clone();
         candidate["pages"][0]["source_sha256"] = "0".repeat(64).into();
@@ -4711,12 +4857,13 @@ mod tests {
         std::fs::write(temp.path().join("dist/index.html"), "index").unwrap();
         std::fs::write(temp.path().join("dist/nested/page.html"), "page").unwrap();
         let mut report = PortalValidationReport::default();
-        let paths = collect_dist_artifacts(temp.path(), &mut report);
+        let inventory = collect_dist_artifacts(temp.path(), &mut report);
         assert!(report.is_clean(), "{:?}", report.issues);
         assert_eq!(
-            paths,
+            inventory.paths,
             BTreeSet::from(["dist/index.html".into(), "dist/nested/page.html".into()])
         );
+        assert_eq!(inventory.total_bytes, 9);
 
         #[cfg(unix)]
         {
@@ -4781,7 +4928,9 @@ mod tests {
         let portal = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), portal.path().join("dist")).unwrap();
         let mut report = PortalValidationReport::default();
-        assert!(collect_dist_artifacts(portal.path(), &mut report).is_empty());
+        assert!(collect_dist_artifacts(portal.path(), &mut report)
+            .paths
+            .is_empty());
         assert!(report
             .issues
             .iter()

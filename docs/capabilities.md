@@ -16,7 +16,7 @@
 id: CAP-001
 name: scaffold-init
 area: scaffold
-status: shipped
+status: building
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
 epics: [EPC-001]
 adrs: [ADR-0019, ADR-0025, ADR-0026]
@@ -729,6 +729,7 @@ process-tree identity and file URLs; Linux/WSL2
 bounded `/proc` identity and group signaling; and a dense multi-diagram browser
 corpus with long-task evidence. Cross-builds alone do not claim native runtime
 support.
+
 ## CAP-015 — opt-in-documentation-portal
 
 ```yaml

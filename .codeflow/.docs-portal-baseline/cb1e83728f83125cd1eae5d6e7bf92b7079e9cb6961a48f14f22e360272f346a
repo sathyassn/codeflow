@@ -12,26 +12,49 @@ const MAX_PRESERVED_UNKNOWN_FILES = 10_000;
 const MAX_PRESERVED_UNKNOWN_DEPTH = 32;
 const PUBLICATION_LEASE_MAX_AGE_MS = 30 * 60 * 1000;
 const WORKFLOW_LEASE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+const INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS = 5_000;
 
 export async function withWorkflowLease(portalRoot, action) {
   if (typeof action !== "function") throw new Error("workflow lease action must be a function");
   await assertNoSymlink(portalRoot, ".portal");
   const directory = path.join(portalRoot, ".portal/workflow.lock");
   await mkdir(path.dirname(directory), { recursive: true });
-  const now = Date.now();
-  const lease = { schema_version: 1, token: randomBytes(24).toString("hex"), created_at_ms: now, heartbeat_at_ms: now };
-  try {
-    await mkdir(directory, { mode: 0o700 });
-  } catch (error) {
-    if (error?.code !== "EEXIST") throw error;
-    const existing = await readWorkflowLease(directory);
-    if (Date.now() - existing.heartbeat_at_ms <= WORKFLOW_LEASE_MAX_AGE_MS) throw new Error("portal build/check workflow already in progress");
-    const stale = `${directory}.stale-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;
-    await rename(directory, stale);
-    await rm(stale, { recursive: true, force: true });
-    await mkdir(directory, { mode: 0o700 });
+  let lease;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const now = Date.now();
+    lease = { schema_version: 1, token: randomBytes(24).toString("hex"), created_at_ms: now, heartbeat_at_ms: now };
+    try {
+      await mkdir(directory, { mode: 0o700 });
+      try {
+        await writeDurableJson(path.join(directory, "owner.json"), lease, { exclusive: true });
+        await syncDirectory(path.dirname(directory));
+        break;
+      } catch (error) {
+        await rm(directory, { recursive: true, force: true });
+        throw error;
+      }
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const [existing, metadata] = await Promise.all([readWorkflowLease(directory), lstat(directory)]);
+      const heartbeat = existing?.heartbeat_at_ms ?? metadata.mtimeMs;
+      const maximumAge = existing === null ? INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS : WORKFLOW_LEASE_MAX_AGE_MS;
+      if (Date.now() - heartbeat <= maximumAge) {
+        if (existing === null && attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        throw new Error(existing === null ? "portal build/check workflow lease is still initializing" : "portal build/check workflow already in progress");
+      }
+      const stale = `${directory}.stale-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;
+      try { await rename(directory, stale); }
+      catch (renameError) {
+        if (["ENOENT", "EEXIST", "ENOTEMPTY"].includes(renameError?.code)) continue;
+        throw renameError;
+      }
+      await rm(stale, { recursive: true, force: true });
+    }
   }
-  await writeDurableJson(path.join(directory, "owner.json"), lease, { exclusive: true });
+  if (lease === undefined || !await readWorkflowLease(directory).then((current) => current?.token === lease.token, () => false)) throw new Error("could not acquire portal build/check workflow lease");
   let heartbeatError = null;
   const heartbeat = setInterval(() => {
     lease.heartbeat_at_ms = Date.now();
@@ -53,9 +76,14 @@ async function readWorkflowLease(directory) {
   const metadata = await lstat(directory);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error("unsafe portal workflow lease");
   const owner = path.join(directory, "owner.json");
-  const value = JSON.parse(await readBoundedRegularFile(owner, 4096, "portal workflow lease owner"));
-  validatePublicationLease(value);
-  return value;
+  try {
+    const value = JSON.parse(await readBoundedRegularFile(owner, 4096, "portal workflow lease owner"));
+    validatePublicationLease(value);
+    return value;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 async function acquirePublicationLease(portalRoot) {

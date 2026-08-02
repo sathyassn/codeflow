@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { chmod, cp, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
+import { chmod, cp, mkdtemp, mkdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
+import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
+import { assertArtifactClaims, discoverSurfaceRoutes, pinnedSourceUrl } from "../scripts/browser-verify.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -31,10 +33,60 @@ test("safe paths reject traversal and platform separators", () => {
   assert.equal(safeRelative("docs/guide.md"), "docs/guide.md");
 });
 
+test("producer evidence limits reject every verifier boundary at N plus one", () => {
+  const page = {
+    ids: Array(EVIDENCE_LIMITS.idsPerPage).fill("CAP-001"),
+    relationships: Array(EVIDENCE_LIMITS.relationshipsPerPage).fill({}),
+    backlinks: Array(EVIDENCE_LIMITS.backlinksPerPage).fill({}),
+    snippets: Array(EVIDENCE_LIMITS.snippetsPerPage).fill({}),
+  };
+  assert.doesNotThrow(() => assertEvidencePageLimits(page));
+  for (const field of ["ids", "relationships", "backlinks", "snippets"]) {
+    const over = { ...page, [field]: [...page[field], {}] };
+    assert.throws(() => assertEvidencePageLimits(over), new RegExp(`${field} count exceeds`));
+  }
+  assert.doesNotThrow(() => assertEvidenceEnvelope(Array(EVIDENCE_LIMITS.pages), "{}"));
+  assert.throws(() => assertEvidenceEnvelope(Array(EVIDENCE_LIMITS.pages + 1), "{}"), /page count exceeds/);
+  assert.doesNotThrow(() => assertEvidenceEnvelope([], "x".repeat(EVIDENCE_LIMITS.manifestBytes)));
+  assert.throws(() => assertEvidenceEnvelope([], "x".repeat(EVIDENCE_LIMITS.manifestBytes + 1)), /manifest exceeds/);
+});
+
 test("built page identity is case-sensitive", () => {
   const pages = [{ route: "records/EPC-001" }];
   assert.doesNotThrow(() => assertExpectedPageArtifacts(pages, [{ path: "dist/records/EPC-001/index.html" }]));
   assert.throws(() => assertExpectedPageArtifacts(pages, [{ path: "dist/records/epc-001/index.html" }]), /exact page route/);
+});
+
+test("browser evidence binds actual dist bytes and known source providers", () => {
+  const claim = [{ path: "dist/index.html", sha256: "a".repeat(64) }];
+  assert.doesNotThrow(() => assertArtifactClaims(claim, structuredClone(claim), "fixture"));
+  assert.throws(() => assertArtifactClaims(claim, [{ ...claim[0], sha256: "b".repeat(64) }], "fixture"), /dist bytes/);
+  const commit = "c".repeat(40);
+  const source = "docs/Mixed Case + café.md";
+  assert.equal(pinnedSourceUrl("https://github.com/acme/repo.git", commit, source), `https://github.com/acme/repo/blob/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9.md`);
+  assert.equal(pinnedSourceUrl("https://gitlab.com/acme/repo", commit, source), `https://gitlab.com/acme/repo/-/blob/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9.md`);
+  assert.equal(pinnedSourceUrl("https://bitbucket.org/acme/repo", commit, source), `https://bitbucket.org/acme/repo/src/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9.md`);
+  assert.equal(pinnedSourceUrl("https://git.example.com/acme/repo", commit, source), null);
+});
+
+test("browser surface discovery scans beyond the first 64 pages", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-browser-surfaces-"));
+  try {
+    const pages = [];
+    for (let index = 0; index < 70; index += 1) {
+      const relative = `generated/page-${index}.md`;
+      const text = index === 68 ? "# Page\n\n## Deep target\n" : index === 69 ? "# Page\n\n<span class=\"portal-id-preview\">CAP-001</span>\n" : "# Page\n";
+      await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await writeFile(path.join(root, relative), text);
+      pages.push({ stale: false, route: `reference/page-${index}`, output_markdown: relative, output_markdown_sha256: sha256(text) });
+    }
+    assert.deepEqual(await discoverSurfaceRoutes(pages, root), {
+      deepLink: "reference/page-68",
+      strictPreview: "reference/page-69",
+    });
+    pages[69].output_markdown_sha256 = "0".repeat(64);
+    await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("Astro preserves the explicit canonical route in output and links", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
@@ -42,6 +94,10 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
   try {
     const name = "Mixed Case + café.md";
     await writeFile(path.join(root, "docs", name), "# Exact route\n\n## Deep target\n\n[Jump](#deep-target)\n");
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.base = "/guide/";
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     commitFixture(root, "add exact route source");
     runLocalAdapter(root);
     const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
@@ -49,10 +105,14 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
     const route = "reference/Mixed Case + café";
     assert.equal((await readFile(path.join(root, `src/content/docs/${route}.md`), "utf8")).split("\n").includes(`slug: ${JSON.stringify(route)}`), true);
     assert.match(await readFile(path.join(root, "public/llms.txt"), "utf8"), /\.\/markdown\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\.md/);
-    assert.match(await readFile(path.join(root, "dist/reference/index.html"), "utf8"), /href="\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\/"/);
-    assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /data-codeflow-search-root="reference\/Mixed Case \+ café"/);
-    assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /id="deep-target"/);
-    assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /href="#deep-target"/);
+    const referenceHtml = await readFile(path.join(root, "dist/reference/index.html"), "utf8");
+    assert.match(referenceHtml, /href="\/guide\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\/"/);
+    assert.match(referenceHtml, /href="\/guide\/favicon\.svg"/);
+    assert.doesNotMatch(referenceHtml, /href="\/guide\/guide\/favicon\.svg"/);
+    const routeHtml = await readFile(path.join(root, `dist/${route}/index.html`), "utf8");
+    assert.match(routeHtml, /data-codeflow-search-root="reference\/Mixed Case \+ café"/);
+    assert.match(routeHtml, /id="deep-target"/);
+    assert.match(routeHtml, /href="#deep-target"/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -256,6 +316,11 @@ test("the AST rewrite permits external links but refuses remote images and ambig
   assert.throws(() => rewriteRepositoryMarkdown("[Link][same]\n\n![Image][same]\n\n[same]: asset.png", options), /both a link and an image/);
   assert.match(rewriteRepositoryMarkdown("[unused]: asset.png", options), /\[unused\]: asset\.png/);
   assert.throws(() => rewriteRepositoryMarkdown("[Binary](secret.key)", options), /unsupported local media type/);
+  const mediaReferences = new Map();
+  assert.match(rewriteRepositoryMarkdown("![Local](media/Mixed Case + café.png)", {
+    ...options, base: "/guide/", mediaReferences,
+  }), /\/guide\/media\/[a-f0-9]{16}-Mixed%20Case%20%2B%20caf%C3%A9\.png/);
+  assert.equal(mediaReferences.get("docs/media/Mixed Case + café.png")?.endsWith("-Mixed Case + café.png"), true);
 });
 
 test("portal-owned Markdown fragments must match rendered heading anchors", () => {
@@ -444,6 +509,49 @@ test("one workflow lease covers a complete build or check sequence", async () =>
     assert.match(String(contender), /workflow already in progress/);
     assert.equal(await readFile(path.join(root, "sequence.txt"), "utf8"), "adapter\nastro\nevidence\n");
     assert.equal(await withWorkflowLease(root, async () => "next"), "next");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an abandoned workflow directory without an owner is reclaimed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-incomplete-workflow-"));
+  try {
+    const lock = path.join(root, ".portal/workflow.lock");
+    await mkdir(lock, { recursive: true });
+    const stale = new Date(Date.now() - 10_000);
+    await utimes(lock, stale, stale);
+    assert.equal(await withWorkflowLease(root, async () => "recovered"), "recovered");
+    await assert.rejects(readFile(path.join(lock, "owner.json")), /ENOENT/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("workflow interruption reaches the child and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const astro = path.join(root, "node_modules/astro/bin/astro.mjs");
+    await mkdir(path.dirname(astro), { recursive: true });
+    await writeFile(astro, `
+      import { writeFileSync } from "node:fs";
+      import path from "node:path";
+      writeFileSync(path.join(process.cwd(), ".child-ready"), "ready\\n");
+      process.on("SIGTERM", () => {
+        writeFileSync(path.join(process.cwd(), ".child-signal"), "SIGTERM\\n");
+        setTimeout(() => process.exit(0), 25);
+      });
+      setInterval(() => {}, 1000);
+    `);
+    const child = spawn(process.execPath, [path.join(root, "scripts/workflow.mjs"), "preview"], { cwd: root, stdio: "ignore" });
+    await waitUntil(async () => Promise.all([
+      readFile(path.join(root, ".portal/workflow.lock/owner.json")),
+      readFile(path.join(root, ".child-ready")),
+    ]).then(() => true, () => false));
+    child.kill("SIGTERM");
+    const outcome = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
+    assert.equal(await readFile(path.join(root, ".child-signal"), "utf8"), "SIGTERM\n");
+    await assert.rejects(readFile(path.join(root, ".portal/workflow.lock/owner.json")), /ENOENT/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -1127,6 +1235,15 @@ function runLocalAdapter(root, expectSuccess = true) {
   if (expectSuccess) assert.equal(result.status, 0, result.stderr);
   else assert.notEqual(result.status, 0, result.stdout);
   return result;
+}
+
+async function waitUntil(predicate, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`condition was not met within ${timeoutMs}ms`);
 }
 
 function pngHeader(width, height) {

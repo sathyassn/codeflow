@@ -11,10 +11,10 @@
 A three-crate Cargo workspace that builds one binary with the scaffold and
 presentation renderer embedded. `codeflow-core` owns the discipline engine,
 `codeflow-present` owns bounded local review sessions, and `codeflow-cli`
-is a thin dispatcher: `main.rs` is a clap command surface over 20 subcommands
+is a thin dispatcher: `main.rs` is a clap command surface over 21 subcommands
 (`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
 `status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`,
-`spec`, `work`, `delegate`, `present`) — most a small handler in `cmd/` that
+`spec`, `work`, `delegate`, `present`, `portal`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
 read `assets/` from disk for instant scaffold iteration). The consuming repo is

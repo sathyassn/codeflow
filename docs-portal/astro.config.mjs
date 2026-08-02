@@ -21,7 +21,7 @@ export default defineConfig({
         { tag: "script", attrs: { src: `${base}portal-preview.js`, defer: true } },
       ],
       sidebar: config.layers.map((layer) => ({ label: layer.label, items: [{ autogenerate: { directory: layer.id } }] })),
-      favicon: `${base}favicon.svg`,
+      favicon: "/favicon.svg",
       social: [],
       lastUpdated: true,
       pagination: true,

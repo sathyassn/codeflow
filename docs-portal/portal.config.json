@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "title": "Project guide",
+  "title": "CodeFlow guide",
   "description": "Layered project documentation generated from repository-owned sources.",
   "theme": "signal",
   "repository_url": "https://github.com/sathyassn/codeflow",

@@ -229,7 +229,8 @@ function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles
   }
   const mediaRoute = `media/${sha256(safe).slice(0, 16)}-${path.posix.basename(safe)}`;
   mediaReferences.set(safe, mediaRoute);
-  return { url: `${base === "/" ? `/${mediaRoute}` : `${base}${mediaRoute}`}${suffix}` };
+  const encodedMediaRoute = mediaRoute.split("/").map(strictUrlSegment).join("/");
+  return { url: `${base}${encodedMediaRoute}${suffix}` };
 }
 
 function assertPortalFragment(fragment, targetPath, sourceAnchors) {

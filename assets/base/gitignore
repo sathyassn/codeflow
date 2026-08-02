@@ -15,4 +15,9 @@
 
 # local-only claude settings
 .claude/settings.local.json
+
+# crash-recovery/locking state for opt-in portal reconciliation
+.codeflow/.docs-portal.lock
+.codeflow/.docs-portal-transaction/
+.codeflow/.docs-portal-transaction-stage-*/
 # codeflow:managed:end

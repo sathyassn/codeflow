@@ -617,7 +617,7 @@
     ".gitignore": {
       "src": "gitignore",
       "ownership": "managed-region",
-      "sha256": "283746568d7d3cf5776a05f610f568fca7056fe63717821ad16f6091e15f4555",
+      "sha256": "d796e7ec5d07b4b5aa3c59d63c9b10b889efa2ff1fc8ed41f4c62c6a0ea781b5",
       "exec": false
     },
     "AGENTS.md": {

@@ -4,17 +4,26 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
-import { safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
-import { assertNoSymlink, assertToolOutputRoots, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
+import { safeRelative, strictUrlSegment, validatePortalConfig, withBase } from "./lib.mjs";
+import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
 const root = process.cwd();
+const MAX_SERVER_OUTPUT_BYTES = 64 * 1024;
+const MAX_RESULT_ERROR_BYTES = 16 * 1024;
+const MAX_RESULTS_BYTES = 1024 * 1024;
+const MAX_BROWSER_EVIDENCE_BYTES = 64 * 1024 * 1024;
+const MAX_RUNTIME_DIAGNOSTICS = 128;
+const MAX_RUNTIME_DIAGNOSTIC_BYTES = 4 * 1024;
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
 
-await withWorkflowLease(root, verifyPortal);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await withWorkflowLease(root, verifyPortal);
+}
 
 async function verifyPortal() {
   const configBytes = await readBoundedRegularFile(path.join(root, "portal.config.json"), 64 * 1024, "portal configuration");
@@ -28,6 +37,9 @@ async function verifyPortal() {
   if (generated?.schema_version !== 1 || generated?.repository?.commit !== head || generated?.config_sha256 !== configSha256 || !Array.isArray(generated?.pages) || !Array.isArray(generated?.artifacts)) {
     throw new Error("browser verification requires current commit-bound portal evidence");
   }
+  const beforeArtifacts = await collectBuiltArtifacts(path.join(root, "dist"));
+  assertArtifactClaims(generated.artifacts, beforeArtifacts, "before browser verification");
+  const surfaces = await discoverSurfaceRoutes(generated.pages, root);
 
   const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
   const output = path.join(root, outputRelative);
@@ -46,18 +58,18 @@ async function verifyPortal() {
     env: { ...process.env, BROWSER: "none" },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  let serverOutput = "";
-  server.stdout.on("data", (chunk) => { serverOutput += chunk; });
-  server.stderr.on("data", (chunk) => { serverOutput += chunk; });
+  let serverOutput = Buffer.alloc(0);
+  server.stdout.on("data", (chunk) => { serverOutput = appendBounded(serverOutput, chunk, MAX_SERVER_OUTPUT_BYTES); });
+  server.stderr.on("data", (chunk) => { serverOutput = appendBounded(serverOutput, chunk, MAX_SERVER_OUTPUT_BYTES); });
 
   const results = [];
   try {
-    await waitForServer(siteRoot, server, () => serverOutput);
+    await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
-      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated }));
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces }));
     }
   } catch (error) {
-    results.push({ engine: "preview", status: "failed", error: String(error?.stack ?? error) });
+    results.push({ engine: "preview", status: "failed", error: boundedError(error) });
   } finally {
     server.kill("SIGTERM");
     await Promise.race([new Promise((resolve) => server.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
@@ -69,6 +81,9 @@ async function verifyPortal() {
   }
 
   const teardownVerified = await fetch(siteRoot).then(() => false, () => true);
+  const afterArtifacts = await collectBuiltArtifacts(path.join(root, "dist"));
+  assertArtifactClaims(generated.artifacts, afterArtifacts, "after browser verification");
+  if (JSON.stringify(beforeArtifacts) !== JSON.stringify(afterArtifacts)) throw new Error("built artifacts changed during browser verification");
   const artifacts = await evidenceInventory(output);
   const evidence = {
     schema_version: 1,
@@ -78,7 +93,7 @@ async function verifyPortal() {
       config_sha256: configSha256,
       evidence_sha256: digest(evidenceBytes),
       generator: generated.generator,
-      artifact_claims_sha256: digest(Buffer.from(JSON.stringify(generated.artifacts))),
+      artifact_claims_sha256: digest(Buffer.from(JSON.stringify(afterArtifacts))),
       base: config.base,
     },
     origin: "task-owned-loopback",
@@ -88,14 +103,19 @@ async function verifyPortal() {
     artifacts,
     teardown_verified: teardownVerified,
   };
-  await writeFile(path.join(output, "results.json"), `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
+  const encoded = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`);
+  const artifactBytes = artifacts.reduce((total, artifact) => total + artifact.bytes, 0);
+  if (encoded.length > MAX_RESULTS_BYTES || artifacts.length + 1 > 64 || artifactBytes + encoded.length > MAX_BROWSER_EVIDENCE_BYTES) {
+    throw new Error("browser evidence result envelope exceeds its file, count, or aggregate byte limit");
+  }
+  await writeFile(path.join(output, "results.json"), encoded, { flag: "wx" });
   if (!teardownVerified || results.some((result) => result.status !== "passed")) {
-    throw new Error(`portal browser verification failed: ${JSON.stringify(evidence)}`);
+    throw new Error(`portal browser verification failed; inspect ${outputRelative}/results.json`);
   }
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated }) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
   const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
@@ -120,14 +140,14 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     await context.route("**/*", async (route) => {
       const url = new URL(route.request().url());
       if (["http:", "https:"].includes(url.protocol) && url.origin === origin) return route.continue();
-      runtime.remote.push(route.request().url());
+      pushBoundedDiagnostic(runtime.remote, route.request().url());
       return route.abort("blockedbyclient");
     });
     const page = context.pages()[0] ?? await context.newPage();
-    page.on("console", (message) => { if (message.type() === "error") runtime.console.push(message.text()); });
-    page.on("pageerror", (error) => runtime.page.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error") pushBoundedDiagnostic(runtime.console, message.text()); });
+    page.on("pageerror", (error) => pushBoundedDiagnostic(runtime.page, error.message));
     page.on("requestfailed", (request) => {
-      if (!runtime.remote.includes(request.url())) runtime.request.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`);
+      if (!runtime.remote.includes(request.url())) pushBoundedDiagnostic(runtime.request, `${request.method()} ${request.url()}: ${request.failure()?.errorText}`);
     });
 
     await visit(page, siteRoot);
@@ -151,10 +171,9 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
       await assertA11y(page, name, `${layer.id} layer`);
     }
 
-    const activePages = generated.pages.filter((item) => item && item.stale === false && typeof item.route === "string");
-    await assertDeepLink(page, name, origin, config.base, activePages);
-    const previewResult = await assertStrictIdPreview(page, name, origin, config, activePages);
-    await assertSourceLink(page, name, config);
+    await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
+    const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
+    await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
     await assertThemeMatrix(page, name, output);
     await assertKeyboardPath(page, name);
@@ -180,7 +199,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     };
   } catch (error) {
     if (context && traceStarted) await context.tracing.stop({ path: trace }).catch(() => {});
-    return { engine: name, status: "failed", error: String(error?.stack ?? error) };
+    return { engine: name, status: "failed", error: boundedError(error) };
   } finally {
     if (context) await context.close().catch(() => {});
     await rm(profile, { recursive: true, force: true });
@@ -239,38 +258,59 @@ async function searchForResult(page, engine, config, pages) {
   throw new Error(`${engine}: search returned no result for portal-owned terms`);
 }
 
-async function assertDeepLink(page, engine, origin, base, pages) {
-  const found = await findSurface(page, origin, base, pages, ".sl-markdown-content h2[id], .sl-markdown-content h3[id]");
-  if (!found) throw new Error(`${engine}: no generated page exposes a deep-link heading`);
+async function assertDeepLink(page, engine, origin, base, route) {
+  if (route === null) throw new Error(`${engine}: no generated page exposes a deep-link heading`);
+  await visit(page, routeUrl(origin, base, route));
   const target = page.locator(".sl-markdown-content h2[id], .sl-markdown-content h3[id]").first();
   const targetId = await target.getAttribute("id");
-  await visit(page, `${routeUrl(origin, base, found.route)}#${encodeURIComponent(targetId)}`);
+  await visit(page, `${routeUrl(origin, base, route)}#${encodeURIComponent(targetId)}`);
   if (!await target.isVisible()) throw new Error(`${engine}: deep-link target is not visible`);
   if (!await page.evaluate((id) => decodeURIComponent(location.hash.slice(1)) === id, targetId)) throw new Error(`${engine}: deep-link fragment did not persist`);
 }
 
-async function assertStrictIdPreview(page, engine, origin, config, pages) {
-  const found = await findSurface(page, origin, config.base, pages, ".portal-id-preview > a");
-  if (!found) return "strict-id-preview-not-applicable";
+async function assertStrictIdPreview(page, engine, origin, config, route) {
+  if (route === null) return "strict-id-preview-not-applicable";
+  const sourceUrl = routeUrl(origin, config.base, route);
+  await visit(page, sourceUrl);
   const trigger = page.locator(".portal-id-preview > a").first();
   const tooltip = trigger.locator("xpath=following-sibling::*[@role='tooltip']");
+  const href = await trigger.getAttribute("href");
+  if (!href || new URL(href, page.url()).origin !== origin) throw new Error(`${engine}: strict-ID trigger is not an ordinary local link`);
+  const targetUrl = new URL(href, page.url()).toString();
   await trigger.hover();
   await tooltip.waitFor({ state: "visible" });
   await focusTargetByKeyboard(page, trigger, engine);
   await tooltip.waitFor({ state: "visible" });
+  await page.keyboard.press("Enter");
+  await page.waitForURL(targetUrl);
+  await visit(page, sourceUrl);
+  const touchTrigger = page.locator(".portal-id-preview > a").first();
+  const touchTooltip = touchTrigger.locator("xpath=following-sibling::*[@role='tooltip']");
+  await focusTargetByKeyboard(page, touchTrigger, engine);
   await page.keyboard.press("Escape");
-  await tooltip.waitFor({ state: "hidden" });
-  await trigger.tap();
-  await tooltip.waitFor({ state: "visible" });
-  const href = await trigger.getAttribute("href");
-  if (!href || new URL(href, page.url()).origin !== origin) throw new Error(`${engine}: strict-ID trigger is not an ordinary local link`);
-  return "strict-id-hover-keyboard-touch-escape-link";
+  await touchTooltip.waitFor({ state: "hidden" });
+  await touchTrigger.tap();
+  await touchTooltip.waitFor({ state: "visible" });
+  await touchTrigger.tap();
+  await page.waitForURL(targetUrl);
+  return "strict-id-hover-keyboard-touch-escape-navigation";
 }
 
-async function assertSourceLink(page, engine, config) {
+async function assertSourceLink(page, engine, origin, config, generated) {
   if (config.repository_url === null) return;
-  const link = page.locator(`a[href^="${config.repository_url}/blob/"]`).first();
-  if (!await link.count()) throw new Error(`${engine}: committed source link is absent`);
+  const candidate = generated.pages.find((item) => item && item.stale === false && typeof item.route === "string" && typeof item.source_path === "string");
+  if (!candidate) throw new Error(`${engine}: no active page can prove source provenance`);
+  await visit(page, routeUrl(origin, config.base, candidate.route));
+  const expected = pinnedSourceUrl(config.repository_url, generated.repository.commit, candidate.source_path);
+  if (expected === null) {
+    const provenance = page.locator(".portal-provenance").first();
+    const text = await provenance.textContent();
+    if (!text?.includes(candidate.source_path) || !text.includes(generated.repository.commit)) throw new Error(`${engine}: visible source provenance fallback is absent`);
+    if (await provenance.locator("a").count()) throw new Error(`${engine}: unknown repository provider manufactured a source link`);
+    return;
+  }
+  const links = await page.locator(".portal-provenance a").evaluateAll((items) => items.map((item) => item.href));
+  if (!links.includes(expected)) throw new Error(`${engine}: committed source link is absent or provider-incompatible`);
 }
 
 async function assertThemeMatrix(page, engine, output) {
@@ -340,12 +380,59 @@ async function activeGeometry(page) {
   });
 }
 
-async function findSurface(page, origin, base, pages, selector) {
-  for (const candidate of pages.slice(0, 64)) {
-    await visit(page, routeUrl(origin, base, candidate.route));
-    if (await page.locator(selector).count()) return candidate;
+export async function discoverSurfaceRoutes(pages, portalRoot = root) {
+  const active = pages.filter((item) => item && item.stale === false && typeof item.route === "string" && typeof item.output_markdown === "string" && typeof item.output_markdown_sha256 === "string");
+  let remaining = 256 * 1024 * 1024;
+  let deepLink = null;
+  let strictPreview = null;
+  for (const page of active) {
+    const relative = safeRelative(page.output_markdown, "generated page output");
+    const maximum = Math.min(8 * 1024 * 1024, remaining);
+    const bytes = await readBoundedRegularFile(path.join(portalRoot, relative), maximum, "generated page output");
+    remaining -= bytes.length;
+    if (digest(bytes) !== page.output_markdown_sha256) throw new Error(`generated page output hash mismatch while selecting browser surfaces: ${relative}`);
+    const text = bytes.toString("utf8");
+    if (deepLink === null && /^#{2,3}\s+\S/m.test(text)) deepLink = page.route;
+    if (strictPreview === null && text.includes("portal-id-preview")) strictPreview = page.route;
+    if (deepLink !== null && strictPreview !== null) break;
   }
+  return { deepLink, strictPreview };
+}
+
+export function assertArtifactClaims(claimed, actual, phase) {
+  const normalize = (items) => items.map((item) => ({ path: safeRelative(item?.path, "built artifact"), sha256: item?.sha256 }));
+  const expected = normalize(claimed);
+  const observed = normalize(actual);
+  if (JSON.stringify(expected) !== JSON.stringify(observed)) throw new Error(`current dist bytes do not match commit-bound artifact claims ${phase}`);
+}
+
+export function pinnedSourceUrl(repositoryUrl, commit, sourcePath) {
+  const repository = new URL(repositoryUrl);
+  const base = repositoryUrl.replace(/\/$/, "").replace(/\.git$/, "");
+  const encoded = sourcePath.split("/").map(strictUrlSegment).join("/");
+  const host = repository.hostname.toLowerCase();
+  if (host === "github.com") return `${base}/blob/${commit}/${encoded}`;
+  if (host === "gitlab.com") return `${base}/-/blob/${commit}/${encoded}`;
+  if (host === "bitbucket.org") return `${base}/src/${commit}/${encoded}`;
   return null;
+}
+
+export function appendBounded(current, chunk, maximum) {
+  const next = Buffer.concat([current, Buffer.from(chunk)]);
+  if (next.length <= maximum) return next;
+  return next.subarray(next.length - maximum);
+}
+
+export function boundedError(error) {
+  const bytes = Buffer.from(String(error?.stack ?? error));
+  if (bytes.length <= MAX_RESULT_ERROR_BYTES) return bytes.toString("utf8");
+  return `${bytes.subarray(0, MAX_RESULT_ERROR_BYTES).toString("utf8")}\n[diagnostic truncated]`;
+}
+
+function pushBoundedDiagnostic(target, value) {
+  if (target.length >= MAX_RUNTIME_DIAGNOSTICS) return;
+  const bytes = Buffer.from(String(value));
+  target.push(bytes.subarray(0, MAX_RUNTIME_DIAGNOSTIC_BYTES).toString("utf8"));
 }
 
 function routeUrl(origin, base, route) {

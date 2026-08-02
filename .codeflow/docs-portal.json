@@ -13,7 +13,7 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "eb05a26135e53c78b58645d0c3cd1605687e432e6f2aad99f26fb54b06c81ed5"
+      "pristine_sha256": "d267f011d53c4dc147e6a52f17531e9f225cad4b3064577ec018097a8d81e749"
     },
     "package-lock.json": {
       "ownership": "managed",
@@ -37,15 +37,15 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "3499c2a50393da6c573b65ceb3b5487a19fc85b5c89bdf43c20c1f3839e3b36c"
+      "pristine_sha256": "e489f74568f9cd047b2f0d2bc800dca8f433e57b9d5233cccd7b77120f8c4ae4"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "78fc22e32f9813e889d786ee2bb7400e400334cd65839f6fe88eb6f36f4c095e"
+      "pristine_sha256": "c112fe7f13ee8ef1482f802c495e1bcac71aac405a0e9c60c878a07092d6aea1"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5f020e2805190381b7e976f5453dadb15651fb7b8abefaed018b449c9bc24ea4"
+      "pristine_sha256": "156c4395a250e05c6f0f28d8548248ae518f068f4faaacef70a1507b88d5bf19"
     },
     "scripts/git-snapshot.mjs": {
       "ownership": "managed",
@@ -53,15 +53,19 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0714fd46c585d4b4015d35f1cfb6bcc38849ee9566fc4966ee2eff218deeba59"
+      "pristine_sha256": "f05496573e0432ba3f88b99e0b70bd14809967de58ad4e7e38c7dc5db98a3417"
+    },
+    "scripts/limits.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "0ae68cd2e7ae420f4d18223fd1d62d83c34f5aae2148492aaf67423e9173ed16"
     },
     "scripts/publication.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "34652db31703a52017dfb7c024fb45d4c18948c6d258fc46a0c9c11f106b6ac4"
+      "pristine_sha256": "cb1e83728f83125cd1eae5d6e7bf92b7079e9cb6961a48f14f22e360272f346a"
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "4a1d37cfff087ac26a3e5f2736c6f48e959f4b94fa280eeff8e4b59325022a5b"
+      "pristine_sha256": "32b646a0ba83c333d34c4578da73810ad79386a8a8e9b742ccfe6d6025748dae"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -73,7 +77,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "272f0e81377d415e162cd82bae6330beeb4a37fd7afb45870340adae78c06bf6"
+      "pristine_sha256": "f9becbdd3d27ce466b86bd7936a388103a8eb709c7bae6900f383d79d58209d3"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

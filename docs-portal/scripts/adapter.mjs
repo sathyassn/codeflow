@@ -9,6 +9,7 @@ import {
   strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
+import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
 import { isReservedPublicPath, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
 
 const MAX_CONFIG_BYTES = 64 * 1024;
@@ -105,6 +106,8 @@ for (const sourcePath of sources) {
     const title = titleFor(frontmatter, body, sourcePath);
     const ids = collectPageIds(frontmatter, text, sourcePath);
     const relationships = extractPageRelationships(frontmatter, text, sourcePath);
+    if (ids.length > EVIDENCE_LIMITS.idsPerPage) throw new Error(`${sourcePath}: identity count exceeds ${EVIDENCE_LIMITS.idsPerPage}`);
+    if (relationships.length > EVIDENCE_LIMITS.relationshipsPerPage) throw new Error(`${sourcePath}: relationship count exceeds ${EVIDENCE_LIMITS.relationshipsPerPage}`);
     const excerpt = excerptFor(text);
     pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
   } catch (error) {
@@ -133,11 +136,17 @@ for (const page of pages) {
   }
 }
 for (const page of pages) page.backlinks.sort((a, b) => compareDeterministicText(JSON.stringify(a), JSON.stringify(b)));
+for (const page of pages) if (page.backlinks.length > EVIDENCE_LIMITS.backlinksPerPage) throw new Error(`${page.source_path}: backlink count exceeds ${EVIDENCE_LIMITS.backlinksPerPage}`);
+const previewMetadata = new Map([...ownerById].filter(([, owner]) => !owner.stale).map(([id, owner]) => [id, {
+  route: withBase(base, owner.route), title: owner.title,
+  status: typeof owner.frontmatter?.status === "string" ? owner.frontmatter.status : owner.status,
+  source_path: owner.source_path, stale: owner.stale,
+}]));
 
 const renderedPages = [];
 const mediaReferences = new Map();
 for (const page of pages) {
-  const rendered = page.stale ? renderStaleStub(page) : renderPage(page, ownerById, mediaReferences, sourceAnchors);
+  const rendered = page.stale ? renderStaleStub(page) : renderPage(page, ownerById, previewMetadata, mediaReferences, sourceAnchors);
   const outputMarkdown = `src/content/docs/${page.route}.md`;
   const twin = `public/markdown/${page.route}.md`;
   renderedPages.push({ route: page.route, rendered });
@@ -146,6 +155,7 @@ for (const page of pages) {
   page.markdown_twin = twin;
   page.markdown_twin_sha256 = sha256(rendered);
   page.snippets = page.stale || !page.excerpt ? [] : [{ start_line: page.excerpt.start, end_line: page.excerpt.end, sha256: sha256(page.excerpt.text) }];
+  assertEvidencePageLimits(page, page.source_path);
   page.status = typeof page.frontmatter?.status === "string" ? page.frontmatter.status : null;
   delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer;
 }
@@ -194,10 +204,12 @@ const evidence = {
   llms: { path: "public/llms.txt", sha256: sha256(llms) },
   artifacts: [],
 };
+const evidenceText = `${JSON.stringify(evidence, null, 2)}\n`;
+assertEvidenceEnvelope(pages, evidenceText);
 const contentFiles = new Map([...renderedPages.map((page) => [`${page.route}.md`, page.rendered]), ...renderedLandings.map((landing) => [landing.path, landing.rendered]), ["index.md", renderedIndex]]);
 const publicFiles = new Map([...committedPublicFiles, ...renderedPages.map((page) => [`markdown/${page.route}.md`, page.rendered]), ...mediaFiles, ["llms.txt", llms]]);
 await publishOwnedCorpus(portalRoot, [
-  { live: ".portal/generated", files: new Map([["evidence.json", `${JSON.stringify(evidence, null, 2)}\n`], ["project-tokens.css", primitiveTokenCss]]) },
+  { live: ".portal/generated", files: new Map([["evidence.json", evidenceText], ["project-tokens.css", primitiveTokenCss]]) },
   { live: "src/content/docs", files: contentFiles },
   { live: "public", files: publicFiles, preserveUnknown: false },
 ]);
@@ -234,7 +246,7 @@ function pinnedSourceUrl(sourcePath) {
   return null;
 }
 
-function renderPage(page, routesById, referencedMedia, anchorsBySource) {
+function renderPage(page, routesById, previews, referencedMedia, anchorsBySource) {
   const status = typeof page.frontmatter.status === "string" ? page.frontmatter.status : null;
   const amendments = page.source_path.startsWith("docs/decisions/") ? amendmentHeadings(page.body) : [];
   const relationships = page.relationships.map((relation) => {
@@ -244,11 +256,6 @@ function renderPage(page, routesById, referencedMedia, anchorsBySource) {
   }).join("\n");
   const backlinks = page.backlinks.map((backlink) => `- **${backlink.type.replaceAll("_", " ")}** ← [${backlink.source_id ?? backlink.source_route}](${withBase(base, backlink.source_route)})`).join("\n");
   const referenced = referencedIds(page.body).filter((id) => routesById.has(id) && !page.ids.includes(id));
-  const previews = new Map([...routesById].filter(([, owner]) => !owner.stale).map(([id, owner]) => [id, {
-    route: withBase(base, owner.route), title: owner.title,
-    status: typeof owner.frontmatter?.status === "string" ? owner.frontmatter.status : owner.status,
-    source_path: owner.source_path, stale: owner.stale,
-  }]));
   const safeBody = rewriteRepositoryMarkdown(page.body, {
     sourcePath: page.source_path,
     sourceRoutes,
