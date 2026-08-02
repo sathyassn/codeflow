@@ -1,5 +1,6 @@
 //! Read-only verification of documentation-portal evidence claims.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -9,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pulldown_cmark::{Event, Parser, Tag};
 use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use unicode_normalization::UnicodeNormalization;
@@ -645,6 +647,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             }
         }
     }
+    verify_portal_fragments(&portal, &evidence.pages, &source_blobs, &mut report);
     let mut expected = BTreeMap::<String, Vec<Backlink>>::new();
     let active_routes: BTreeSet<&str> = evidence
         .pages
@@ -724,7 +727,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 format!(
                     "- [{}](./markdown/{}.md) — {}",
                     escape_markdown_inline(&page.route),
-                    page.route,
+                    strict_url_route(&page.route),
                     escape_markdown_inline(&page.source_path)
                 )
             })
@@ -1265,13 +1268,42 @@ fn valid_ipv4(value: &str) -> bool {
 }
 
 fn valid_portal_base(value: &str) -> bool {
-    value.starts_with('/')
-        && value.ends_with('/')
-        && !value.contains(['\\', '?', '#'])
-        && !value
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .any(|part| matches!(part, "." | ".."))
+    if value == "/" {
+        return true;
+    }
+    let Some(inner) = value
+        .strip_prefix('/')
+        .and_then(|path| path.strip_suffix('/'))
+    else {
+        return false;
+    };
+    value.encode_utf16().count() <= 256
+        && !inner.is_empty()
+        && inner.split('/').all(|part| {
+            !matches!(part, "" | "." | "..")
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+                })
+        })
+}
+
+fn strict_url_route(value: &str) -> String {
+    value
+        .split('/')
+        .map(|segment| {
+            let mut encoded = String::with_capacity(segment.len());
+            for byte in segment.bytes() {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                    encoded.push(char::from(byte));
+                } else {
+                    use std::fmt::Write;
+                    write!(encoded, "%{byte:02X}").expect("writing to a String cannot fail");
+                }
+            }
+            encoded
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn expected_portal_pages(
@@ -2098,7 +2130,8 @@ fn verify_snippets(
         ));
         return;
     };
-    let lines: Vec<&str> = text.split('\n').collect();
+    let normalized = normalize_markdown_source(text);
+    let lines: Vec<&str> = normalized.split('\n').collect();
     for snippet in &page.snippets {
         if snippet.start_line == 0
             || snippet.end_line < snippet.start_line
@@ -2129,6 +2162,156 @@ fn verify_snippets(
             )),
         }
     }
+}
+
+fn normalize_markdown_source(value: &str) -> Cow<'_, str> {
+    let without_bom = value.strip_prefix('\u{feff}').unwrap_or(value);
+    if !without_bom.contains('\r') && without_bom.len() == value.len() {
+        Cow::Borrowed(value)
+    } else {
+        Cow::Owned(without_bom.replace("\r\n", "\n").replace('\r', "\n"))
+    }
+}
+
+fn verify_portal_fragments(
+    portal: &Path,
+    pages: &[Page],
+    source_blobs: &BTreeMap<String, Vec<u8>>,
+    report: &mut PortalValidationReport,
+) {
+    let routes: BTreeMap<&str, &str> = pages
+        .iter()
+        .filter(|page| !page.stale)
+        .map(|page| (page.source_path.as_str(), page.route.as_str()))
+        .collect();
+    for page in pages.iter().filter(|page| !page.stale) {
+        let Some(source) = source_blobs
+            .get(&page.source_path)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        else {
+            continue;
+        };
+        let normalized = normalize_markdown_source(source);
+        let body = markdown_body(&normalized);
+        for event in Parser::new(body) {
+            let Event::Start(Tag::Link { dest_url, .. }) = event else {
+                continue;
+            };
+            let destination = dest_url.as_ref();
+            let Some((raw_path, raw_fragment)) = destination.split_once('#') else {
+                continue;
+            };
+            if raw_fragment.is_empty() || destination.starts_with("//") {
+                report.issues.push(format!(
+                    "{} contains an invalid portal Markdown fragment: {destination}",
+                    page.source_path
+                ));
+                continue;
+            }
+            let target_source = if raw_path.is_empty() {
+                Some(page.source_path.clone())
+            } else if raw_path.starts_with('/')
+                || raw_path.contains('?')
+                || raw_path
+                    .split(':')
+                    .next()
+                    .is_some_and(|scheme| destination.starts_with(&format!("{scheme}:")))
+            {
+                None
+            } else {
+                decode_percent(raw_path)
+                    .and_then(|decoded| resolve_source_link(&page.source_path, &decoded))
+            };
+            let Some(target_source) = target_source else {
+                continue;
+            };
+            let Some(target_route) = routes.get(target_source.as_str()) else {
+                // Fragments on repository files outside the published portal are
+                // delegated to the external source host and are not claimed here.
+                continue;
+            };
+            let Some(fragment) = decode_percent(raw_fragment) else {
+                report.issues.push(format!(
+                    "{} contains malformed percent-encoding in fragment: {destination}",
+                    page.source_path
+                ));
+                continue;
+            };
+            let built = portal.join("dist").join(target_route).join("index.html");
+            let expected = format!("id=\"{}\"", escape_html_attribute(&fragment));
+            match read_bounded_text(&built, MAX_CLAIMED_FILE_BYTES) {
+                Ok(html) if html.contains(&expected) => {}
+                _ => report.issues.push(format!(
+                    "{} fragment does not resolve to a built portal anchor: {destination}",
+                    page.source_path
+                )),
+            }
+        }
+    }
+}
+
+fn resolve_source_link(source_path: &str, target: &str) -> Option<String> {
+    if target.contains('\\') || target.chars().any(char::is_control) {
+        return None;
+    }
+    let mut segments: Vec<&str> = source_path.split('/').collect();
+    segments.pop();
+    for segment in target.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            value => segments.push(value),
+        }
+    }
+    let resolved = segments.join("/");
+    safe_path_text(&resolved).then_some(resolved)
+}
+
+fn markdown_body(value: &str) -> &str {
+    if !value.starts_with("---\n") {
+        return value;
+    }
+    value
+        .get(4..)
+        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
+        .unwrap_or(value)
+}
+
+fn decode_percent(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = hex_value(*bytes.get(index + 1)?)?;
+            let low = hex_value(*bytes.get(index + 2)?)?;
+            decoded.push(high << 4 | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn verify_rendered_claims(
@@ -3052,6 +3235,7 @@ mod tests {
     struct AuthorityContract {
         repository_urls: ContractValues,
         release_versions: ContractValues,
+        portal_bases: ContractValues,
         page_titles: ContractValues,
         page_statuses: ContractValues,
         frontmatter: FrontmatterContract,
@@ -3126,6 +3310,12 @@ mod tests {
         }
         for value in fixture.release_versions.rejected {
             assert!(!valid_release_version(&value), "rejected release: {value}");
+        }
+        for value in fixture.portal_bases.accepted {
+            assert!(valid_portal_base(&value), "accepted portal base: {value}");
+        }
+        for value in fixture.portal_bases.rejected {
+            assert!(!valid_portal_base(&value), "rejected portal base: {value}");
         }
         for value in fixture.page_titles.accepted {
             assert!(!value.trim().is_empty() && value.encode_utf16().count() <= 256);
@@ -3312,9 +3502,9 @@ mod tests {
             ".codeflow",
             "docs",
             "portal/.portal/generated",
-            "portal/src/content/docs/orient",
-            "portal/public/markdown/orient",
-            "portal/dist/orient/guide",
+            "portal/src/content/docs/reference",
+            "portal/public/markdown/reference",
+            "portal/dist/reference/Mixed Case + café",
         ] {
             std::fs::create_dir_all(temp.path().join(directory)).unwrap();
         }
@@ -3330,15 +3520,15 @@ mod tests {
           "source_roots": ["docs"],
           "exclude": [],
           "layers": [
-            {"id":"orient","label":"Orient","description":"Start","paths":["docs/guide.md"]},
+            {"id":"orient","label":"Orient","description":"Start","paths":[]},
             {"id":"system","label":"System","description":"Decisions","prefixes":["docs/decisions"]},
             {"id":"reference","label":"Reference","description":"Other","fallback":true}
           ],
           "base": "/"
         }"#;
-        let source = b"# Guide\n\nCommit-anchored source.\n";
+        let source = b"\xef\xbb\xbf# Guide\r\n\r\nCommit-anchored source.\r\n\r\n## Outcome\r\n\r\n[Jump](#outcome)\r\n";
         std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
-        std::fs::write(temp.path().join("docs/guide.md"), source).unwrap();
+        std::fs::write(temp.path().join("docs/Mixed Case + café.md"), source).unwrap();
         for args in [
             &["init", "-q"][..],
             &["config", "user.email", "portal-tests@codeflow.invalid"][..],
@@ -3361,22 +3551,21 @@ mod tests {
         let source_hash = sha256_hex(source);
         let snippet_hash = sha256_hex(b"# Guide");
         let rendered = format!(
-            "---\ntitle: \"Guide\"\n---\n\n<!-- codeflow-page-provenance source_sha256={source_hash} built_from_commit={commit} portal_version=1.0.0 release_version=none -->\n<!-- codeflow-source-snippet sha256={snippet_hash} lines=1-1 -->\n<div class=\"portal-provenance\">Source <code>docs/guide.md</code> at <code>{commit}</code></div>\n<div data-pagefind-body data-codeflow-search-root=\"orient/guide\">\n\n# Guide\n\nCommit-anchored source.\n\n</div>\n"
+            "---\ntitle: \"Guide\"\n---\n\n<!-- codeflow-page-provenance source_sha256={source_hash} built_from_commit={commit} portal_version=1.0.0 release_version=none -->\n<!-- codeflow-source-snippet sha256={snippet_hash} lines=1-1 -->\n<div class=\"portal-provenance\">Source <code>docs/Mixed Case + café.md</code> at <code>{commit}</code></div>\n<div data-pagefind-body data-codeflow-search-root=\"reference/Mixed Case + café\">\n\n# Guide\n\nCommit-anchored source.\n\n## Outcome\n\n[Jump](#outcome)\n\n</div>\n"
         );
         let rendered_hash = sha256_hex(rendered.as_bytes());
         for path in [
-            "portal/src/content/docs/orient/guide.md",
-            "portal/public/markdown/orient/guide.md",
+            "portal/src/content/docs/reference/Mixed Case + café.md",
+            "portal/public/markdown/reference/Mixed Case + café.md",
         ] {
             std::fs::write(temp.path().join(path), &rendered).unwrap();
         }
-        let llms =
-            "# Fixture guide\n\n- [orient/guide](./markdown/orient/guide.md) — docs/guide\\.md\n";
+        let llms = "# Fixture guide\n\n- [reference/Mixed Case \\+ café](./markdown/reference/Mixed%20Case%20%2B%20caf%C3%A9.md) — docs/Mixed Case \\+ café\\.md\n";
         std::fs::write(temp.path().join("portal/public/llms.txt"), llms).unwrap();
-        let built =
-            "<main data-pagefind-body data-codeflow-search-root=\"orient/guide\">Guide</main>\n";
+        let built = "<main data-pagefind-body data-codeflow-search-root=\"reference/Mixed Case + café\"><h1>Guide</h1><h2 id=\"outcome\">Outcome</h2><a href=\"#outcome\">Jump</a></main>\n";
         std::fs::write(
-            temp.path().join("portal/dist/orient/guide/index.html"),
+            temp.path()
+                .join("portal/dist/reference/Mixed Case + café/index.html"),
             built,
         )
         .unwrap();
@@ -3404,15 +3593,15 @@ mod tests {
             "primitive_tokens": null,
             "media": [],
             "pages": [{
-                "source_path": "docs/guide.md",
+                "source_path": "docs/Mixed Case + café.md",
                 "source_sha256": source_hash,
                 "built_from_commit": commit,
-                "route": "orient/guide",
+                "route": "reference/Mixed Case + café",
                 "title": "Guide",
                 "status": null,
-                "output_markdown": "src/content/docs/orient/guide.md",
+                "output_markdown": "src/content/docs/reference/Mixed Case + café.md",
                 "output_markdown_sha256": rendered_hash,
-                "markdown_twin": "public/markdown/orient/guide.md",
+                "markdown_twin": "public/markdown/reference/Mixed Case + café.md",
                 "markdown_twin_sha256": rendered_hash,
                 "stale": false,
                 "searchable": true,
@@ -3424,7 +3613,7 @@ mod tests {
             }],
             "llms": {"path": "public/llms.txt", "sha256": sha256_hex(llms.as_bytes())},
             "artifacts": [{
-                "path": "dist/orient/guide/index.html",
+                "path": "dist/reference/Mixed Case + café/index.html",
                 "sha256": sha256_hex(built.as_bytes())
             }]
         });
@@ -3438,8 +3627,40 @@ mod tests {
         assert!(report.is_clean(), "{:?}", report.issues);
         assert_eq!(report.checked_pages, 1);
 
+        let built_without_anchor = "<main>Guide without the claimed anchor</main>\n";
         std::fs::write(
-            temp.path().join("docs/guide.md"),
+            temp.path()
+                .join("portal/dist/reference/Mixed Case + café/index.html"),
+            built_without_anchor,
+        )
+        .unwrap();
+        let mut missing_anchor = evidence.clone();
+        missing_anchor["artifacts"][0]["sha256"] =
+            sha256_hex(built_without_anchor.as_bytes()).into();
+        std::fs::write(
+            temp.path().join("portal/.portal/generated/evidence.json"),
+            serde_json::to_vec(&missing_anchor).unwrap(),
+        )
+        .unwrap();
+        let rejected = validate_portal(temp.path(), Path::new("portal"));
+        assert!(rejected
+            .issues
+            .iter()
+            .any(|issue| issue.contains("fragment does not resolve")));
+        std::fs::write(
+            temp.path()
+                .join("portal/dist/reference/Mixed Case + café/index.html"),
+            built,
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("portal/.portal/generated/evidence.json"),
+            serde_json::to_vec(&evidence).unwrap(),
+        )
+        .unwrap();
+
+        std::fs::write(
+            temp.path().join("docs/Mixed Case + café.md"),
             "# Uncommitted worktree edit\n",
         )
         .unwrap();
@@ -3582,6 +3803,19 @@ mod tests {
                     .contains(item["error"].as_str().unwrap()),
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn markdown_source_normalization_matches_the_javascript_producer() {
+        for (source, expected) in [
+            ("# Guide\n", "# Guide\n"),
+            ("\u{feff}# Guide\n", "# Guide\n"),
+            ("# Guide\r\nBody\r\n", "# Guide\nBody\n"),
+            ("# Guide\rBody\r", "# Guide\nBody\n"),
+            ("\u{feff}# Guide\r\nBody\r\n", "# Guide\nBody\n"),
+        ] {
+            assert_eq!(normalize_markdown_source(source), expected);
         }
     }
 

@@ -57,11 +57,20 @@ also sync changed directories; native Windows cannot portably make that
 directory-sync guarantee, so power-loss durability there remains a release
 canary claim rather than an inference from Unix tests.
 
-The locked `check` and `build` scripts also hold one top-level workflow lease
-across adapter, Astro, and final evidence steps, so another process cannot bind
-its `dist` tree to the wrong snapshot. `dev` is intentionally a separately
-owned, long-running session: run only one task-owned dev server per portal,
-stop it before a locked check/build, and verify process and port teardown.
+The locked `check`, `build`, `dev`, and `preview` scripts hold one top-level
+workflow lease, so another process cannot bind `dist` to the wrong snapshot.
+Before Astro starts, the workflow rejects symlinks and non-regular entries in
+tool-controlled `dist`, `.astro`, and Node cache roots; it never follows an
+output link while cleaning. Run only one task-owned dev server per portal, stop
+it before another locked workflow, and verify process and port teardown. The
+tracked `browser:verify` harness uses separate temporary profiles and an
+ephemeral loopback port, emits bounded evidence under
+`.portal/browser-evidence/<run>/`, and removes profiles and server resources.
+
+Portal-owned Markdown fragments are verified against renderer-produced heading
+anchors in both the producer and the independent Rust validator. Fragments on
+repository files that are not published into the portal remain under the
+linked source host's authority and are not claimed as portal-verified anchors.
 
 Repository reads use a bounded commit inventory plus batched blob reads rather
 than one process per source. Git receives only an explicit process-environment

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
   amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
-  findRepositoryRoot, localRouteFor, parseMarkdown,
+  findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
   referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
@@ -91,12 +91,14 @@ for (const sourcePath of sources) {
 }
 
 const pages = [];
+const sourceAnchors = new Map();
 for (const sourcePath of sources) {
   const bytes = sourceBlobs.get(sourcePath);
   const sourceHash = sha256(bytes);
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const { frontmatter, body } = parseMarkdown(text, sourcePath);
+    sourceAnchors.set(sourcePath, headingAnchors(body));
     validatePageMetadata(frontmatter, sourcePath);
     const layer = chooseLayer(sourcePath, layers);
     const route = sourceRoutes.get(sourcePath);
@@ -106,6 +108,7 @@ for (const sourcePath of sources) {
     const excerpt = excerptFor(text);
     pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
   } catch (error) {
+    sourceAnchors.delete(sourcePath);
     pages.push(staleStubPage(sourcePath, sourceHash, error));
   }
 }
@@ -134,7 +137,7 @@ for (const page of pages) page.backlinks.sort((a, b) => compareDeterministicText
 const renderedPages = [];
 const mediaReferences = new Map();
 for (const page of pages) {
-  const rendered = page.stale ? renderStaleStub(page) : renderPage(page, ownerById, mediaReferences);
+  const rendered = page.stale ? renderStaleStub(page) : renderPage(page, ownerById, mediaReferences, sourceAnchors);
   const outputMarkdown = `src/content/docs/${page.route}.md`;
   const twin = `public/markdown/${page.route}.md`;
   renderedPages.push({ route: page.route, rendered });
@@ -231,7 +234,7 @@ function pinnedSourceUrl(sourcePath) {
   return null;
 }
 
-function renderPage(page, routesById, referencedMedia) {
+function renderPage(page, routesById, referencedMedia, anchorsBySource) {
   const status = typeof page.frontmatter.status === "string" ? page.frontmatter.status : null;
   const amendments = page.source_path.startsWith("docs/decisions/") ? amendmentHeadings(page.body) : [];
   const relationships = page.relationships.map((relation) => {
@@ -255,6 +258,7 @@ function renderPage(page, routesById, referencedMedia) {
     base,
     strictTargets: previews,
     mediaReferences: referencedMedia,
+    sourceAnchors: anchorsBySource,
   });
   const snippetMarker = page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->` : "";
   const context = [];

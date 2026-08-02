@@ -10,12 +10,16 @@
     "rejected": [
       "http://example.com/repo",
       "https://user:secret@example.com/repo",
+      "https://%67ithub.com/example/repository",
       "https://bücher.example/repo",
       "https://bad_host.example/repo",
       "https://example.com:/repo",
       "https://[2001:db8::1/repo",
       "https://[:1:2:3:4:5:6:7:8]/repo",
       "https://[1:2:3:4:5:6:7:8:]/repo",
+      "https://[:1::2]/repo",
+      "https://[1::2:]/repo",
+      "https://[::1:]/repo",
       "https://[1:::2]/repo",
       "https://[1:2:3:4:5:6:7:8:9]/repo",
       "https://[::ffff:192.168.001.1]/repo",
@@ -25,6 +29,22 @@
   "release_versions": {
     "accepted": ["1", "v1.2.3-rc+build_7"],
     "rejected": ["", " release", "v1/next"]
+  },
+  "portal_bases": {
+    "accepted": ["/", "/guide/", "/guide-v2/_docs~1/"],
+    "rejected": [
+      "guide/",
+      "/guide",
+      "/../guide/",
+      "/guide/?x=1",
+      "/guide//",
+      "//attacker.invalid/",
+      "/café/",
+      "/%2e/",
+      "/%252e/",
+      "/\"><script>alert(1)</script><a href=\"/",
+      "/\" autofocus onfocus=\"alert(1)\" x=\"/"
+    ]
   },
   "page_titles": {
     "accepted": ["Guide", "Café architecture"],

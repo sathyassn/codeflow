@@ -1,11 +1,13 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import config from "./portal.config.json" with { type: "json" };
+import rawConfig from "./portal.config.json" with { type: "json" };
+import { validatePortalConfig } from "./scripts/lib.mjs";
 
-if (!["signal", "folio"].includes(config.theme)) throw new Error("portal.config.json: theme must be signal or folio");
+const config = validatePortalConfig(rawConfig);
+const base = config.base;
 
 export default defineConfig({
-  base: config.base,
+  base,
   integrations: [
     starlight({
       title: config.title,
@@ -16,10 +18,10 @@ export default defineConfig({
           tag: "script",
           content: `document.documentElement.dataset.portalTheme=${JSON.stringify(config.theme)};`,
         },
-        { tag: "script", attrs: { src: `${config.base}portal-preview.js`, defer: true } },
+        { tag: "script", attrs: { src: `${base}portal-preview.js`, defer: true } },
       ],
       sidebar: config.layers.map((layer) => ({ label: layer.label, items: [{ autogenerate: { directory: layer.id } }] })),
-      favicon: `${config.base === "/" ? "/" : config.base}favicon.svg`,
+      favicon: `${base}favicon.svg`,
       social: [],
       lastUpdated: true,
       pagination: true,

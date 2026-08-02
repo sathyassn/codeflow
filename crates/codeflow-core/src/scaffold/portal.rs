@@ -27,6 +27,121 @@ struct ReadBudget {
     remaining: u64,
 }
 
+#[derive(Debug)]
+struct PortalMutation {
+    path: String,
+    before: Option<Vec<u8>>,
+    after: Option<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct PortalMutationPlan {
+    mutations: BTreeMap<String, PortalMutation>,
+}
+
+struct PortalReconciliation<'a> {
+    root: &'a Path,
+    read_budget: &'a mut ReadBudget,
+    mutations: &'a mut PortalMutationPlan,
+    report: &'a mut Report,
+}
+
+impl PortalMutationPlan {
+    fn write(
+        &mut self,
+        root: &Path,
+        path: &str,
+        bytes: Vec<u8>,
+        maximum: u64,
+        label: &str,
+    ) -> Result<(), ScaffoldError> {
+        let before = snapshot_project_file(root, path, maximum, label)?;
+        self.insert(PortalMutation {
+            path: path.into(),
+            before,
+            after: Some(bytes),
+        })
+    }
+
+    fn remove(
+        &mut self,
+        root: &Path,
+        path: &str,
+        maximum: u64,
+        label: &str,
+    ) -> Result<(), ScaffoldError> {
+        let before = snapshot_project_file(root, path, maximum, label)?;
+        self.insert(PortalMutation {
+            path: path.into(),
+            before,
+            after: None,
+        })
+    }
+
+    fn insert(&mut self, mutation: PortalMutation) -> Result<(), ScaffoldError> {
+        match self.mutations.get(&mutation.path) {
+            Some(existing) if existing.after == mutation.after => Ok(()),
+            Some(_) => Err(ScaffoldError::InvalidState {
+                what: mutation.path,
+                detail: "portal transaction planned conflicting mutations".into(),
+            }),
+            None => {
+                self.mutations.insert(mutation.path.clone(), mutation);
+                Ok(())
+            }
+        }
+    }
+
+    fn commit(self, root: &Path) -> Result<(), ScaffoldError> {
+        self.commit_inner(root, None)
+    }
+
+    #[cfg(test)]
+    fn commit_with_fault_after(
+        self,
+        root: &Path,
+        mutation_index: usize,
+    ) -> Result<(), ScaffoldError> {
+        self.commit_inner(root, Some(mutation_index))
+    }
+
+    fn commit_inner(self, root: &Path, fault_after: Option<usize>) -> Result<(), ScaffoldError> {
+        let missing_directories = missing_parent_directories(root, self.mutations.values())?;
+        let mut applied = Vec::new();
+        for (index, mutation) in self.mutations.values().enumerate() {
+            // Atomic writes may report a durability-sync failure after rename;
+            // include the in-flight path in rollback even when apply returns Err.
+            applied.push(mutation);
+            let result = match &mutation.after {
+                Some(bytes) => write_beneath_root(root, &mutation.path, bytes),
+                None => remove_beneath_root(root, &mutation.path),
+            };
+            let result = result.and_then(|()| {
+                if fault_after == Some(index) {
+                    Err(ScaffoldError::InvalidState {
+                        what: mutation.path.clone(),
+                        detail: "injected portal transaction failure".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(error) = result {
+                rollback_mutations(root, &applied, &missing_directories).map_err(
+                    |rollback_error| ScaffoldError::InvalidState {
+                        what: "docs portal transaction".into(),
+                        detail: format!(
+                            "commit failed ({error}); rollback also failed ({rollback_error})"
+                        ),
+                    },
+                )?;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ReadBudget {
     fn new() -> Self {
         Self {
@@ -231,6 +346,7 @@ pub fn setup_portal(
         relative_root.display()
     ));
     let mut read_budget = ReadBudget::new();
+    let mut mutations = PortalMutationPlan::default();
     let mut next_files = BTreeMap::new();
     for file in &manifest.files {
         let asset = source
@@ -276,20 +392,35 @@ pub fn setup_portal(
             if dest.exists() {
                 report.file(dest_text, Action::Skipped);
             } else {
-                write_beneath_root(repo_root, &dest_text, pristine.as_bytes())?;
+                mutations.write(
+                    repo_root,
+                    &dest_text,
+                    pristine.as_bytes().to_vec(),
+                    MAX_MANAGED_FILE_BYTES,
+                    "user-owned portal destination",
+                )?;
                 report.file(dest_text, Action::Created);
             }
         } else {
             reconcile_managed(
-                repo_root,
+                &mut PortalReconciliation {
+                    root: repo_root,
+                    read_budget: &mut read_budget,
+                    mutations: &mut mutations,
+                    report: &mut report,
+                },
                 &dest_text,
                 prior_baseline_rel.as_deref(),
                 &pristine,
                 old_file,
-                &mut read_budget,
-                &mut report,
             )?;
-            write_beneath_root(repo_root, &baseline_rel, pristine.as_bytes())?;
+            mutations.write(
+                repo_root,
+                &baseline_rel,
+                pristine.as_bytes().to_vec(),
+                MAX_MANAGED_FILE_BYTES,
+                "portal baseline destination",
+            )?;
         }
         next_files.insert(
             file.path.clone(),
@@ -323,7 +454,12 @@ pub fn setup_portal(
                 .as_deref()
                 .is_some_and(|bytes| sha256_hex(bytes) == state.pristine_sha256)
             {
-                remove_beneath_root(repo_root, &dest_text)?;
+                mutations.remove(
+                    repo_root,
+                    &dest_text,
+                    MAX_MANAGED_FILE_BYTES,
+                    "retired managed portal file",
+                )?;
                 report.file(dest_text, Action::Removed);
             } else if current.is_some() {
                 report.file(dest_text, Action::KeptUserModified);
@@ -337,8 +473,15 @@ pub fn setup_portal(
         files: next_files,
     };
     let encoded = serde_json::to_vec_pretty(&state)?;
-    write_beneath_root(repo_root, STATE_PATH, &encoded)?;
-    prune_unreferenced_baselines(repo_root, &state)?;
+    mutations.write(
+        repo_root,
+        STATE_PATH,
+        encoded,
+        MAX_STATE_BYTES,
+        "portal adoption state",
+    )?;
+    plan_unreferenced_baseline_pruning(repo_root, &state, &mut mutations)?;
+    mutations.commit(repo_root)?;
     Ok(report)
 }
 
@@ -358,19 +501,27 @@ pub fn update_adopted_portal(
 }
 
 fn reconcile_managed(
-    root: &Path,
+    context: &mut PortalReconciliation<'_>,
     dest_text: &str,
     baseline_rel: Option<&str>,
     pristine: &str,
     old: Option<&PortalFileState>,
-    read_budget: &mut ReadBudget,
-    report: &mut Report,
 ) -> Result<(), ScaffoldError> {
-    let Some(current_bytes) =
-        read_project_file(root, dest_text, "managed portal file", read_budget)?
+    let Some(current_bytes) = read_project_file(
+        context.root,
+        dest_text,
+        "managed portal file",
+        context.read_budget,
+    )?
     else {
-        write_beneath_root(root, dest_text, pristine.as_bytes())?;
-        report.file(dest_text, Action::Added);
+        context.mutations.write(
+            context.root,
+            dest_text,
+            pristine.as_bytes().to_vec(),
+            MAX_MANAGED_FILE_BYTES,
+            "managed portal destination",
+        )?;
+        context.report.file(dest_text, Action::Added);
         return Ok(());
     };
     let current =
@@ -379,35 +530,49 @@ fn reconcile_managed(
             detail: format!("managed portal file is not UTF-8: {error}"),
         })?;
     if current == pristine {
-        report.file(dest_text, Action::Unchanged);
+        context.report.file(dest_text, Action::Unchanged);
         return Ok(());
     }
     if old.is_some_and(|state| sha256_hex(current.as_bytes()) == state.pristine_sha256) {
-        write_beneath_root(root, dest_text, pristine.as_bytes())?;
-        report.file(dest_text, Action::Changed);
+        context.mutations.write(
+            context.root,
+            dest_text,
+            pristine.as_bytes().to_vec(),
+            MAX_MANAGED_FILE_BYTES,
+            "managed portal destination",
+        )?;
+        context.report.file(dest_text, Action::Changed);
         return Ok(());
     }
     if old.is_some_and(|state| state.pristine_sha256 == sha256_hex(pristine.as_bytes())) {
-        report.file(dest_text, Action::KeptUserModified);
+        context.report.file(dest_text, Action::KeptUserModified);
         return Ok(());
     }
     let base = match baseline_rel {
-        Some(path) => read_project_file(root, path, "portal baseline", read_budget)?
-            .map(String::from_utf8)
-            .transpose()
-            .map_err(|error| ScaffoldError::InvalidState {
-                what: path.into(),
-                detail: format!("portal baseline is not UTF-8: {error}"),
-            })?
-            .unwrap_or_default(),
+        Some(path) => {
+            read_project_file(context.root, path, "portal baseline", context.read_budget)?
+                .map(String::from_utf8)
+                .transpose()
+                .map_err(|error| ScaffoldError::InvalidState {
+                    what: path.into(),
+                    detail: format!("portal baseline is not UTF-8: {error}"),
+                })?
+                .unwrap_or_default()
+        }
         None => String::new(),
     };
     let baseline_is_authentic =
         old.is_some_and(|state| sha256_hex(base.as_bytes()) == state.pristine_sha256);
     if !base.is_empty() && baseline_is_authentic {
         if let Ok(merged) = diffy::merge(&base, &current, pristine) {
-            write_beneath_root(root, dest_text, merged.as_bytes())?;
-            report.file(dest_text, Action::Merged);
+            context.mutations.write(
+                context.root,
+                dest_text,
+                merged.into_bytes(),
+                MAX_MANAGED_FILE_BYTES,
+                "managed portal destination",
+            )?;
+            context.report.file(dest_text, Action::Merged);
             return Ok(());
         }
     }
@@ -415,15 +580,21 @@ fn reconcile_managed(
         "{dest_text}.codeflow-{}.new",
         &sha256_hex(pristine.as_bytes())[..12]
     );
-    let conflict_path = guard_beneath_root(root, Path::new(&conflict))?;
+    let conflict_path = guard_beneath_root(context.root, Path::new(&conflict))?;
     if std::fs::symlink_metadata(&conflict_path).is_ok() {
         return Err(ScaffoldError::InvalidState {
             what: conflict,
             detail: "refusing to overwrite a pre-existing portal conflict sidecar".into(),
         });
     }
-    write_beneath_root(root, &conflict, pristine.as_bytes())?;
-    report.file_with_notes(
+    context.mutations.write(
+        context.root,
+        &conflict,
+        pristine.as_bytes().to_vec(),
+        MAX_MANAGED_FILE_BYTES,
+        "portal conflict sidecar",
+    )?;
+    context.report.file_with_notes(
         dest_text,
         Action::Conflicted,
         vec![format!("new starter written to {conflict}")],
@@ -534,7 +705,11 @@ fn baseline_path(pristine_sha256: &str) -> String {
     format!("{BASELINE_ROOT}/{pristine_sha256}")
 }
 
-fn prune_unreferenced_baselines(root: &Path, state: &PortalState) -> Result<(), ScaffoldError> {
+fn plan_unreferenced_baseline_pruning(
+    root: &Path,
+    state: &PortalState,
+    mutations: &mut PortalMutationPlan,
+) -> Result<(), ScaffoldError> {
     let keep: BTreeSet<&str> = state
         .files
         .values()
@@ -571,7 +746,89 @@ fn prune_unreferenced_baselines(root: &Path, state: &PortalState) -> Result<(), 
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             && !keep.contains(name.as_str())
         {
-            remove_beneath_root(root, &format!("{BASELINE_ROOT}/{name}"))?;
+            mutations.remove(
+                root,
+                &format!("{BASELINE_ROOT}/{name}"),
+                MAX_MANAGED_FILE_BYTES,
+                "unreferenced portal baseline",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_project_file(
+    root: &Path,
+    relative: &str,
+    maximum: u64,
+    label: &str,
+) -> Result<Option<Vec<u8>>, ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(relative))?;
+    match read_bounded_regular(&path, maximum) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ScaffoldError::InvalidState {
+            what: relative.into(),
+            detail: format!(
+                "{label} is not a stable regular file or exceeds {maximum} bytes: {error}"
+            ),
+        }),
+    }
+}
+
+fn missing_parent_directories<'a>(
+    root: &Path,
+    mutations: impl Iterator<Item = &'a PortalMutation>,
+) -> Result<Vec<String>, ScaffoldError> {
+    let mut missing = BTreeSet::new();
+    for mutation in mutations.filter(|mutation| mutation.after.is_some()) {
+        let relative = Path::new(&mutation.path);
+        for ancestor in relative.ancestors().skip(1) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            let destination = guard_beneath_root(root, ancestor)?;
+            match std::fs::symlink_metadata(&destination) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(ScaffoldError::InvalidState {
+                        what: path_text(ancestor),
+                        detail: "portal transaction parent is not a regular directory".into(),
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing.insert(path_text(ancestor));
+                }
+                Err(error) => return Err(ScaffoldError::io(&destination, error)),
+            }
+        }
+    }
+    let mut missing: Vec<_> = missing.into_iter().collect();
+    missing.sort_by_key(|path| path.matches('/').count());
+    Ok(missing)
+}
+
+fn rollback_mutations(
+    root: &Path,
+    applied: &[&PortalMutation],
+    missing_directories: &[String],
+) -> Result<(), ScaffoldError> {
+    for mutation in applied.iter().rev() {
+        match &mutation.before {
+            Some(bytes) => write_beneath_root(root, &mutation.path, bytes)?,
+            None => remove_beneath_root(root, &mutation.path)?,
+        }
+    }
+    for relative in missing_directories.iter().rev() {
+        let path = guard_beneath_root(root, Path::new(relative))?;
+        match std::fs::remove_dir(&path) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(error) => return Err(ScaffoldError::io(path, error)),
         }
     }
     Ok(())
@@ -811,6 +1068,69 @@ mod tests {
             "{\"mine\":true}\n"
         );
         assert!(!second.has_conflicts());
+    }
+
+    #[test]
+    fn late_preflight_failure_leaves_portal_adoption_byte_identical() {
+        let temp = initialized_root();
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let source = DirSource::new(assets);
+        setup_portal(&source, temp.path(), Path::new("guide")).unwrap();
+
+        let user_config = b"{\"mine\":true}\n";
+        std::fs::write(temp.path().join("guide/portal.config.json"), user_config).unwrap();
+        std::fs::remove_file(temp.path().join("guide/.node-version")).unwrap();
+        std::fs::remove_file(temp.path().join("guide/astro.config.mjs")).unwrap();
+        std::fs::create_dir(temp.path().join("guide/astro.config.mjs")).unwrap();
+        let state_before = std::fs::read(temp.path().join(STATE_PATH)).unwrap();
+        let baselines_before: BTreeMap<_, _> = std::fs::read_dir(temp.path().join(BASELINE_ROOT))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name(),
+                    std::fs::read(entry.path()).expect("baseline must remain a regular file"),
+                )
+            })
+            .collect();
+
+        let error = setup_portal(&source, temp.path(), Path::new("guide")).unwrap_err();
+        assert!(error.to_string().contains("astro.config.mjs"));
+        assert!(!temp.path().join("guide/.node-version").exists());
+        assert!(temp.path().join("guide/astro.config.mjs").is_dir());
+        assert_eq!(
+            std::fs::read(temp.path().join("guide/portal.config.json")).unwrap(),
+            user_config
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join(STATE_PATH)).unwrap(),
+            state_before
+        );
+        let baselines_after: BTreeMap<_, _> = std::fs::read_dir(temp.path().join(BASELINE_ROOT))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name(),
+                    std::fs::read(entry.path()).expect("baseline must remain a regular file"),
+                )
+            })
+            .collect();
+        assert_eq!(baselines_after, baselines_before);
+    }
+
+    #[test]
+    fn commit_phase_failure_rolls_back_files_and_created_directories() {
+        let temp = initialized_root();
+        let mut plan = PortalMutationPlan::default();
+        plan.write(temp.path(), "guide/a.txt", b"a\n".to_vec(), 32, "fixture")
+            .unwrap();
+        plan.write(temp.path(), "guide/b.txt", b"b\n".to_vec(), 32, "fixture")
+            .unwrap();
+        assert!(plan.commit_with_fault_after(temp.path(), 0).is_err());
+        assert!(!temp.path().join("guide/a.txt").exists());
+        assert!(!temp.path().join("guide/b.txt").exists());
+        assert!(!temp.path().join("guide").exists());
     }
 
     #[test]

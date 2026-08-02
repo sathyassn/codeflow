@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
+import GithubSlugger from "github-slugger";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
@@ -68,7 +69,9 @@ export function titleFor(frontmatter, body, sourcePath) {
   const heading = markdownNodes(markdownTree(body), "heading")
     .find((node) => node.depth === 1 && visibleNodeText(node).trim())?.children;
   const headingText = heading ? visibleNodeText({ children: heading }).trim() : "";
-  return headingText || path.posix.basename(sourcePath, ".md").replaceAll("-", " ");
+  const derived = headingText || path.posix.basename(sourcePath, ".md").replaceAll("-", " ");
+  if (!derived || derived.length > 256) throw new Error(`${sourcePath}: derived title is invalid`);
+  return derived;
 }
 
 export function validatePageMetadata(frontmatter, sourcePath) {
@@ -82,7 +85,7 @@ export function validatePageMetadata(frontmatter, sourcePath) {
 
 export function rewriteRepositoryMarkdown(body, {
   sourcePath, sourceRoutes, repositoryFiles = new Map(), pinnedSourceUrl = () => null,
-  commit = "", base, strictTargets, mediaReferences,
+  commit = "", base, strictTargets, mediaReferences, sourceAnchors = new Map(),
 }) {
   const tree = markdownTree(body);
   const referenceKinds = new Map();
@@ -97,7 +100,7 @@ export function rewriteRepositoryMarkdown(body, {
   visitMarkdown(tree, (node) => {
     if (node.type !== "definition") return;
     const kind = referenceKinds.get(node.identifier);
-    if (kind) definitionResolutions.set(node.identifier, resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind }));
+    if (kind) definitionResolutions.set(node.identifier, resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors }));
   });
   let previewSequence = 0;
   visitMarkdown(tree, (node, parent, index, ancestors) => {
@@ -120,7 +123,7 @@ export function rewriteRepositoryMarkdown(body, {
       }
       const resolved = node.type === "definition"
         ? definitionResolutions.get(node.identifier)
-        : resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind });
+        : resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors });
       if (resolved.sourceReference) {
         parent.children[index] = node.type === "definition" ? { type: "text", value: "" } : sourceReferenceNode(node, resolved.sourceReference, commit);
       } else node.url = resolved.url;
@@ -191,13 +194,16 @@ function unsafeUrl(value) {
   return /^(?:javascript|data|file|vbscript):/.test(normalized);
 }
 
-function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind }) {
+function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors }) {
   if (unsafeUrl(value)) throw new Error(`${sourcePath}: unsafe Markdown URL scheme`);
   if (/^(?:https?:|mailto:)/i.test(value)) {
     if (kind === "image") throw new Error(`${sourcePath}: remote images are not imported: ${value}`);
     return { url: value };
   }
-  if (value.startsWith("#")) return { url: value };
+  if (value.startsWith("#")) {
+    assertPortalFragment(value, sourcePath, sourceAnchors);
+    return { url: value };
+  }
   if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//") || value.startsWith("/")) throw new Error(`${sourcePath}: unsupported Markdown URL: ${value}`);
   const match = String(value).match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
   if (!match || !match[1]) throw new Error(`${sourcePath}: invalid repository-relative Markdown URL: ${value}`);
@@ -207,7 +213,10 @@ function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles
   const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(sourcePath), decoded));
   const safe = safeRelative(resolved, `${sourcePath} Markdown target`);
   const suffix = `${match[2] ?? ""}${match[3] ?? ""}`;
-  if (sourceRoutes.has(safe)) return { url: `${withBase(base, sourceRoutes.get(safe))}${suffix}` };
+  if (sourceRoutes.has(safe)) {
+    if (match[3]) assertPortalFragment(match[3], safe, sourceAnchors);
+    return { url: `${withBase(base, sourceRoutes.get(safe))}${suffix}` };
+  }
   if (kind === "link" && repositoryFiles.has(safe)) {
     const href = pinnedSourceUrl(safe);
     return href === null ? { sourceReference: safe } : { url: `${href}${suffix}` };
@@ -221,6 +230,20 @@ function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles
   const mediaRoute = `media/${sha256(safe).slice(0, 16)}-${path.posix.basename(safe)}`;
   mediaReferences.set(safe, mediaRoute);
   return { url: `${base === "/" ? `/${mediaRoute}` : `${base}${mediaRoute}`}${suffix}` };
+}
+
+function assertPortalFragment(fragment, targetPath, sourceAnchors) {
+  let decoded;
+  try { decoded = decodeURIComponent(fragment.slice(1)); }
+  catch { throw new Error(`${targetPath}: malformed Markdown fragment: ${fragment}`); }
+  if (!decoded || /[\u0000-\u001f\u007f]/.test(decoded) || !sourceAnchors.get(targetPath)?.has(decoded)) {
+    throw new Error(`${targetPath}: Markdown fragment does not match a rendered heading: ${fragment}`);
+  }
+}
+
+export function headingAnchors(markdown) {
+  const slugger = new GithubSlugger();
+  return new Set(markdownNodes(markdownTree(markdown), "heading").map((node) => slugger.slug(visibleNodeText(node))));
 }
 
 function sourceReferenceNode(node, sourcePath, commit) {
@@ -323,12 +346,11 @@ export function excerptFor(text) {
 }
 
 export function validateBase(value) {
-  if (typeof value !== "string" || !value.startsWith("/") || !value.endsWith("/") || value.includes("\\") || value.includes("?") || value.includes("#")) {
-    throw new Error("base: expected an absolute URL path ending in /");
+  if (typeof value !== "string" || value.length > 256 || !/^\/(?:[A-Za-z0-9._~-]+\/)*$/.test(value)) {
+    throw new Error("base: expected a canonical absolute URL path of RFC 3986 unreserved segments ending in /");
   }
-  const parts = value.split("/").filter(Boolean);
-  if (parts.some((part) => part === "." || part === "..")) throw new Error("base: traversal is not allowed");
-  return value === "/" ? "/" : `/${parts.join("/")}/`;
+  if (value.split("/").some((part) => part === "." || part === "..")) throw new Error("base: traversal is not allowed");
+  return value;
 }
 
 export function withBase(base, route) {
@@ -378,7 +400,7 @@ export function validatePortalConfig(value) {
 export function validRepositoryUrl(value) {
   if (typeof value !== "string" || value.length < 1 || value.length > 2048 || /[\s\\]/u.test(value) || !value.startsWith("https://")) return false;
   const rawAuthority = value.slice("https://".length).split("/", 1)[0];
-  if (!rawAuthority || !/^[\x21-\x7e]+$/.test(rawAuthority) || rawAuthority.includes("@")) return false;
+  if (!rawAuthority || !/^[\x21-\x7e]+$/.test(rawAuthority) || rawAuthority.includes("@") || rawAuthority.includes("%")) return false;
   if (rawAuthority.startsWith("[")) {
     const close = rawAuthority.indexOf("]");
     const suffix = close < 0 ? "invalid" : rawAuthority.slice(close + 1);

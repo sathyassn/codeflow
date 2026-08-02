@@ -90,6 +90,7 @@ Run the locked workflow from the adopted portal root:
 npm ci
 npm run check
 npm run build
+npm run browser:verify
 codeflow validate --portal <repository-relative-directory>
 ```
 
@@ -119,6 +120,16 @@ material portal change, verify:
   platform evidence reported rather than inferred;
 - task-owned browser state, ports, test data, traces, and screenshots, followed
   by verified resource cleanup.
+
+`npm run browser:verify` is the reusable headless default. It starts a
+task-owned loopback preview on an ephemeral port; runs Chromium, Firefox, and
+WebKit sequentially with separate temporary profiles; checks landmarks and
+names, WCAG 2.2 AA axe rules, layout, search, appearance persistence, deep
+links, focus obscuration, target size, responsive overflow, console failures,
+and remote requests; then records screenshot/trace digests and verifies server
+and profile teardown. Set a unique `PORTAL_BROWSER_RUN` for concurrent tasks.
+Use a headed task-owned browser only for a finding the headless run cannot
+settle, never the operator's profile or view.
 
 The directly invoked Claude judgment primary reviews the rendered experience,
 content hierarchy, and source fidelity. Codex verifies implementation,

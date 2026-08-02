@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { withWorkflowLease } from "./publication.mjs";
+import { assertToolOutputRoots, withWorkflowLease } from "./publication.mjs";
 
 const workflow = process.argv[2];
-if (!["build", "check"].includes(workflow)) throw new Error("workflow must be build or check");
+if (!["build", "check", "dev", "preview"].includes(workflow)) throw new Error("workflow must be build, check, dev, or preview");
 const root = process.cwd();
 
 await withWorkflowLease(root, async () => {
+  await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
   if (workflow === "check") await run(process.execPath, ["--test", "tests/adapter.test.mjs"]);
-  await run(process.execPath, ["scripts/adapter.mjs"]);
+  if (workflow !== "preview") await run(process.execPath, ["scripts/adapter.mjs"]);
   await run(process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), workflow]);
   if (workflow === "build") await run(process.execPath, ["scripts/evidence.mjs"]);
 });

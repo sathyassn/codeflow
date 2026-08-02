@@ -2,6 +2,7 @@ node_modules/
 dist/
 .astro/
 .portal/generated/
+.portal/browser-evidence/
 src/content/docs/
 public/llms.txt
 public/markdown/

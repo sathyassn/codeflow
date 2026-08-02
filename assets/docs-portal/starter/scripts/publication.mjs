@@ -445,6 +445,32 @@ export async function assertNoSymlink(root, relative) {
   }
 }
 
+export async function assertToolOutputRoots(root, relatives) {
+  if (!Array.isArray(relatives) || !relatives.length) throw new Error("tool output roots must be a non-empty array");
+  for (const relative of relatives) {
+    const safe = safeRelative(relative, "tool output root");
+    await assertNoSymlink(root, safe);
+    const output = path.join(root, safe);
+    let metadata;
+    try { metadata = await lstat(output); }
+    catch (error) { if (error?.code === "ENOENT") continue; throw error; }
+    if (!metadata.isDirectory()) throw new Error(`tool output root is not a regular directory: ${safe}`);
+    const pending = [output];
+    let entriesSeen = 0;
+    while (pending.length) {
+      const directory = pending.pop();
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        entriesSeen += 1;
+        if (entriesSeen > 50_000) throw new Error(`tool output root contains too many entries: ${safe}`);
+        const candidate = path.join(directory, entry.name);
+        if (entry.isSymbolicLink()) throw new Error(`symlink refused in tool output root: ${path.relative(root, candidate)}`);
+        if (entry.isDirectory()) pending.push(candidate);
+        else if (!entry.isFile()) throw new Error(`non-regular entry refused in tool output root: ${path.relative(root, candidate)}`);
+      }
+    }
+  }
+}
+
 export async function collectBuiltArtifacts(root, limits = {}) {
   const maximumFiles = limits.maximumFiles ?? 50_000;
   const maximumDepth = limits.maximumDepth ?? 32;

@@ -8,14 +8,16 @@
   },
   "scripts": {
     "build": "node scripts/workflow.mjs build",
+    "browser:verify": "node scripts/browser-verify.mjs",
     "check": "node scripts/workflow.mjs check",
-    "dev": "node scripts/adapter.mjs && astro dev",
-    "preview": "astro preview",
+    "dev": "node scripts/workflow.mjs dev",
+    "preview": "node scripts/workflow.mjs preview",
     "update": "node scripts/adapter.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.6",
     "astro": "7.1.6",
+    "github-slugger": "2.0.0",
     "pagefind": "1.5.2",
     "remark-gfm": "4.0.1",
     "remark-parse": "11.0.0",
@@ -24,6 +26,8 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.62.1",
     "@astrojs/check": "0.9.10",
     "typescript": "6.0.3"
   },

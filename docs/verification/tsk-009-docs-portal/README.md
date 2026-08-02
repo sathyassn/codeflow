@@ -1,5 +1,12 @@
 # TSK-009 documentation portal verification
 
+> Status: in progress. All evidence and review claims below are historical,
+> provisional records from superseded candidates. Material integration findings
+> invalidated promotion of those candidates. Nothing below is a current pass or
+> approval claim; the corrected implementation SHA will replace this record
+> after fresh deterministic, browser, security, platform, size, and independent
+> Claude/Codex reviews.
+
 This record binds the portal task to observable repository, build, browser,
 security, and size evidence. Generated portal output is disposable and was not
 published.

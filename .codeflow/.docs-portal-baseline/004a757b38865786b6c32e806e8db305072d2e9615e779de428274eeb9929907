@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
-import { assertExpectedPageArtifacts, collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
+import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
@@ -41,16 +41,56 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
   const root = await selfContainedPortalFixture();
   try {
     const name = "Mixed Case + café.md";
-    await writeFile(path.join(root, "docs", name), "# Exact route\n");
+    await writeFile(path.join(root, "docs", name), "# Exact route\n\n## Deep target\n\n[Jump](#deep-target)\n");
     commitFixture(root, "add exact route source");
     runLocalAdapter(root);
     const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const route = "reference/Mixed Case + café";
     assert.equal((await readFile(path.join(root, `src/content/docs/${route}.md`), "utf8")).split("\n").includes(`slug: ${JSON.stringify(route)}`), true);
+    assert.match(await readFile(path.join(root, "public/llms.txt"), "utf8"), /\.\/markdown\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\.md/);
     assert.match(await readFile(path.join(root, "dist/reference/index.html"), "utf8"), /href="\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\/"/);
     assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /data-codeflow-search-root="reference\/Mixed Case \+ café"/);
+    assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /id="deep-target"/);
+    assert.match(await readFile(path.join(root, `dist/${route}/index.html`), "utf8"), /href="#deep-target"/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("tool output roots never traverse external symlinks", { skip: process.platform === "win32" }, async () => {
+  const { symlink } = await import("node:fs/promises");
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-output-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-output-canary-"));
+  try {
+    const sentinel = path.join(outside, "sentinel.txt");
+    await writeFile(sentinel, "must survive\n");
+    await symlink(outside, path.join(root, "dist"));
+    await assert.rejects(assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]), /symlink refused/);
+    assert.equal(await readFile(sentinel, "utf8"), "must survive\n");
+    await rm(path.join(root, "dist"));
+    await mkdir(path.join(root, "dist"));
+    await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
+    assert.equal(await readFile(sentinel, "utf8"), "must survive\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("attribute-breaking base paths fail before generated output", async () => {
+  for (const base of ["/\"><script>alert(1)</script><a href=\"/", "/\" autofocus onfocus=\"alert(1)\" x=\"/"]) {
+    const root = await portalFixture();
+    try {
+      const configPath = path.join(root, "portal.config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      config.base = base;
+      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      commitFixture(root, "add hostile base path");
+      const result = runAdapter(root, false);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /base:/);
+      await assert.rejects(readFile(path.join(root, "src/content/docs/index.md")), /ENOENT/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("repository URLs and bounded page metadata use the portable contract", () => {
@@ -59,6 +99,14 @@ test("repository URLs and bounded page metadata use the portable contract", () =
   assert.equal(validatePageMetadata({ title: "Title", status: "planned" }, "docs/page.md").title, "Title");
   assert.throws(() => validatePageMetadata({ title: "" }, "docs/page.md"), /title is invalid/);
   assert.throws(() => validatePageMetadata({ status: 1 }, "docs/page.md"), /status is invalid/);
+});
+
+test("derived titles use the same UTF-16 boundary as declared titles", () => {
+  const astral = "🚀";
+  assert.equal(titleFor({}, `# ${"a".repeat(254)}${astral}\n`, "docs/page.md").length, 256);
+  assert.throws(() => titleFor({}, `# ${"a".repeat(255)}${astral}\n`, "docs/page.md"), /derived title is invalid/);
+  assert.equal(titleFor({}, "Body only\n", `docs/${"a".repeat(256)}.md`).length, 256);
+  assert.throws(() => titleFor({}, "Body only\n", `docs/${"a".repeat(257)}.md`), /derived title is invalid/);
 });
 
 test("shared authority contract is enforced by the JavaScript producer", async () => {
@@ -72,6 +120,8 @@ test("shared authority contract is enforced by the JavaScript producer", async (
   ], base: "/" };
   for (const value of fixture.release_versions.accepted) assert.doesNotThrow(() => validatePortalConfig({ ...baseConfig, release_version: value }), value);
   for (const value of fixture.release_versions.rejected) assert.throws(() => validatePortalConfig({ ...baseConfig, release_version: value }), /release_version/, value);
+  for (const value of fixture.portal_bases.accepted) assert.equal(validateBase(value), value);
+  for (const value of fixture.portal_bases.rejected) assert.throws(() => validateBase(value), /base/, value);
   for (const value of fixture.page_titles.accepted) assert.doesNotThrow(() => validatePageMetadata({ title: value }, "fixture.md"), value);
   for (const value of fixture.page_titles.rejected) assert.throws(() => validatePageMetadata({ title: value }, "fixture.md"), /title/, value);
   for (const value of fixture.page_statuses.accepted) assert.doesNotThrow(() => validatePageMetadata({ status: value }, "fixture.md"), value);
@@ -170,6 +220,27 @@ test("the AST rewrite permits external links but refuses remote images and ambig
   assert.throws(() => rewriteRepositoryMarkdown("[Binary](secret.key)", options), /unsupported local media type/);
 });
 
+test("portal-owned Markdown fragments must match rendered heading anchors", () => {
+  const sourceAnchors = new Map([
+    ["docs/guide.md", headingAnchors("# Guide\n\n## Local outcome\n")],
+    ["docs/decision.md", headingAnchors("# Decision\n\n## Café result\n\n## Repeat\n\n## Repeat\n")],
+  ]);
+  const options = {
+    sourcePath: "docs/guide.md",
+    sourceRoutes: new Map([["docs/decision.md", "system/decision"]]),
+    base: "/",
+    strictTargets: new Map(),
+    mediaReferences: new Map(),
+    sourceAnchors,
+  };
+  assert.match(rewriteRepositoryMarkdown("[Local](#local-outcome)", options), /#local-outcome/);
+  assert.match(rewriteRepositoryMarkdown("[Encoded](decision.md#caf%C3%A9-result)", options), /caf%C3%A9-result/);
+  assert.match(rewriteRepositoryMarkdown("[Second](decision.md#repeat-1)", options), /#repeat-1/);
+  for (const link of ["#missing", "decision.md#repeat-2", "decision.md#caf%25C3%25A9-result", "decision.md#bad%ZZ"]) {
+    assert.throws(() => rewriteRepositoryMarkdown(`[Broken](${link})`, options), /fragment/);
+  }
+});
+
 test("strict IDs preview outside code but code examples remain literal", () => {
   const targets = new Map([["ADR-0048", { route: "/system/decisions/adr-0048/", title: "Decision", status: "accepted", source_path: "docs/decisions/ADR-0048.md" }]]);
   const rendered = rewriteRepositoryMarkdown("ADR-0048 and `ADR-0048`", { sourcePath: "docs/guide.md", sourceRoutes: new Map(), base: "/", strictTargets: targets, mediaReferences: new Map() });
@@ -195,8 +266,12 @@ test("work-record aliases and base paths produce canonical relationships and lin
   const relationships = extractPageRelationships({ epic_id: "EPC-005", specs: ["SPC-005"], depends_on: ["TSK-008"], adrs: ["ADR-0048"] }, "", "project-management/tasks/TSK-009.md");
   assert.deepEqual(relationships.map(({ type }) => type), ["epic", "spec", "depends_on", "decision"]);
   assert.equal(validateBase("/guide/"), "/guide/");
+  assert.equal(validateBase("/guide-v2/_docs~1/"), "/guide-v2/_docs~1/");
   assert.equal(withBase("/guide/", "system/architecture"), "/guide/system/architecture/");
-  for (const invalid of ["guide/", "/guide", "/../guide/", "/guide/?x=1"]) assert.throws(() => validateBase(invalid));
+  for (const invalid of [
+    "guide/", "/guide", "/../guide/", "/guide/?x=1", "/guide//", "/café/", "/%2e/", "/%252e/",
+    "/\"><script>alert(1)</script><a href=\"/", "/\" autofocus onfocus=\"alert(1)\" x=\"/",
+  ]) assert.throws(() => validateBase(invalid), invalid);
 });
 
 test("portal configuration is closed, bounded, and deeply typed", () => {
@@ -884,7 +959,7 @@ test("the AST adapter rewrites cross-layer documents and copies bounded committe
   try {
     await mkdir(path.join(root, "docs/decisions"), { recursive: true });
     await mkdir(path.join(root, "docs/media"), { recursive: true });
-    await writeFile(path.join(root, "docs/decisions/ADR-0001.md"), "---\nid: ADR-0001\ntitle: Decision\n---\n\n# Decision\n");
+    await writeFile(path.join(root, "docs/decisions/ADR-0001.md"), "---\nid: ADR-0001\ntitle: Decision\n---\n\n# Decision\n\n## Outcome\n");
     const png = pngHeader(1, 1);
     await writeFile(path.join(root, "docs/media/flow.png"), png);
     await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\n[Decision](decisions/ADR-0001.md#outcome)\n\n![Flow](media/flow.png)\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n`[literal](missing.md)`\n");
@@ -918,12 +993,12 @@ test("the adapter rejects raster truncation, type mismatch, and dimension bombs"
 });
 
 test("the AST adapter fails broken documents and repository traversal", async () => {
-  for (const link of ["missing.md", "../../outside.png"]) {
+  for (const link of ["missing.md", "../../outside.png", "#missing-heading"]) {
     const root = await portalFixture();
     try {
       await writeFile(path.join(root, "docs/guide.md"), `# Guide\n\n[Broken](${link})\n`);
       commitFixture(root, "add broken link");
-      assert.match(runAdapter(root, false).stderr, /does not exist|stay beneath/);
+      assert.match(runAdapter(root, false).stderr, /does not exist|stay beneath|fragment/);
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 });

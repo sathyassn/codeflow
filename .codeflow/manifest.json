@@ -53,7 +53,7 @@
     ".agents/skills/cf-docs-portal/SKILL.md": {
       "src": "agents/skills/cf-docs-portal/SKILL.md",
       "ownership": "managed",
-      "sha256": "89c3d84133fb6294579e624a6e37600389f67c1c914d04627b5ca095a59b568a",
+      "sha256": "e2cdc30f3e6c13fa9ea2098cbe7267676b9b5f8e6d3b78a740e240b39916cf07",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/agents/openai.yaml": {
@@ -77,7 +77,7 @@
     ".agents/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "9a6ad9373008667213e1371d140010d0a969aa1219456d759ba0f8725de27f4a",
+      "sha256": "c126a3fd5f5ffe437f1a519929e87f2a09dcedb95171ea285588c52fb23ff5b0",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/SKILL.md": {
@@ -323,7 +323,7 @@
     ".claude/skills/cf-docs-portal/SKILL.md": {
       "src": "agents/skills/cf-docs-portal/SKILL.md",
       "ownership": "managed",
-      "sha256": "89c3d84133fb6294579e624a6e37600389f67c1c914d04627b5ca095a59b568a",
+      "sha256": "e2cdc30f3e6c13fa9ea2098cbe7267676b9b5f8e6d3b78a740e240b39916cf07",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/agents/openai.yaml": {
@@ -347,7 +347,7 @@
     ".claude/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "9a6ad9373008667213e1371d140010d0a969aa1219456d759ba0f8725de27f4a",
+      "sha256": "c126a3fd5f5ffe437f1a519929e87f2a09dcedb95171ea285588c52fb23ff5b0",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/SKILL.md": {
@@ -623,7 +623,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "5215c683fe25c8eb39456e5a0d913d82929cbcac2ea6c4318e29e82e89872e42",
+      "sha256": "28ba44ef5b01dee0cf28bc757b40661495224dcf65a232aad233a53c9f79f337",
       "exec": false
     },
     "CLAUDE.md": {

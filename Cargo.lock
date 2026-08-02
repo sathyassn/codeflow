@@ -276,6 +276,7 @@ dependencies = [
  "git2",
  "glob",
  "libc",
+ "pulldown-cmark",
  "quick-xml",
  "regex",
  "rusqlite",
