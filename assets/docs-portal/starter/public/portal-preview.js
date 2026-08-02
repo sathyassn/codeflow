@@ -22,7 +22,7 @@ document.addEventListener("focusout", (event) => {
 document.addEventListener("click", (event) => {
   const link = event.target?.closest?.(`${selector} > a`);
   const touched = link ? touchLinks.delete(link) : false;
-  const coarsePointerClick = !event.pointerType && matchMedia("(hover: none) and (pointer: coarse)").matches;
+  const coarsePointerClick = event.detail > 0 && !event.pointerType && matchMedia("(hover: none) and (pointer: coarse)").matches;
   if (!link || (!["touch", "pen"].includes(event.pointerType) && !coarsePointerClick && !touched)) return;
   const preview = link.closest(selector);
   if (preview.classList.contains("portal-preview-open")) return;
