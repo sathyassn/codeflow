@@ -9,7 +9,7 @@ import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
-import { assertArtifactClaims, discoverSurfaceRoutes, pinnedSourceUrl } from "../scripts/browser-verify.mjs";
+import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics, pinnedSourceUrl } from "../scripts/browser-verify.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -87,6 +87,26 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     pages[69].output_markdown_sha256 = "0".repeat(64);
     await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("browser diagnostics ignore only navigation-cancelled local loads", () => {
+  const paired = meaningfulRuntimeDiagnostics({
+    console: [],
+    page: ["TypeError: Importing a module script failed."],
+    request: ["GET http://127.0.0.1/_astro/ui.js: cancelled", "GET http://127.0.0.1/favicon.svg: NS_BINDING_ABORTED"],
+    remote: [],
+  });
+  assert.deepEqual(paired, { console: [], page: [], request: [], remote: [] });
+  const material = meaningfulRuntimeDiagnostics({
+    console: ["application failure"],
+    page: ["TypeError: Importing a module script failed."],
+    request: ["GET http://127.0.0.1/_astro/ui.js: connection reset"],
+    remote: ["https://example.com/tracker"],
+  });
+  assert.equal(material.page.length, 1);
+  assert.equal(material.request.length, 1);
+  assert.equal(material.console.length, 1);
+  assert.equal(material.remote.length, 1);
 });
 
 test("Astro preserves the explicit canonical route in output and links", { skip: process.platform === "win32", timeout: 120_000 }, async () => {

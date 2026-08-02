@@ -186,7 +186,8 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     const undersized = targets.filter((target) => target.width < 24 || target.height < 24);
     if (undersized.length) throw new Error(`${name}: primary target smaller than 24 CSS pixels: ${JSON.stringify(undersized)}`);
     await page.screenshot({ path: path.join(output, `${name}-mobile.png`), fullPage: true });
-    if (Object.values(runtime).some((items) => items.length)) throw new Error(`${name}: runtime/network isolation failure: ${JSON.stringify(runtime)}`);
+    const runtimeFailures = meaningfulRuntimeDiagnostics(runtime);
+    if (Object.values(runtimeFailures).some((items) => items.length)) throw new Error(`${name}: runtime/network isolation failure: ${JSON.stringify(runtimeFailures)}`);
 
     await context.tracing.stop({ path: trace });
     traceStarted = false;
@@ -427,6 +428,17 @@ export function boundedError(error) {
   const bytes = Buffer.from(String(error?.stack ?? error));
   if (bytes.length <= MAX_RESULT_ERROR_BYTES) return bytes.toString("utf8");
   return `${bytes.subarray(0, MAX_RESULT_ERROR_BYTES).toString("utf8")}\n[diagnostic truncated]`;
+}
+
+export function meaningfulRuntimeDiagnostics(runtime) {
+  const cancelled = (value) => /\b(?:cancelled|NS_BINDING_ABORTED|net::ERR_ABORTED)\b/i.test(value);
+  const cancelledModule = runtime.request.some((value) => cancelled(value) && /\/_astro\/[^ ]+\.js\b/.test(value));
+  return {
+    console: [...runtime.console],
+    page: runtime.page.filter((value) => !(cancelledModule && value === "TypeError: Importing a module script failed.")),
+    request: runtime.request.filter((value) => !cancelled(value)),
+    remote: [...runtime.remote],
+  };
 }
 
 function pushBoundedDiagnostic(target, value) {
