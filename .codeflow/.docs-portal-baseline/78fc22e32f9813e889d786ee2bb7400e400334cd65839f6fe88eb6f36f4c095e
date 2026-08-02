@@ -277,11 +277,13 @@ async function assertThemeMatrix(page, engine, output) {
   await page.setViewportSize({ width: 1440, height: 900 });
   for (const utilityTheme of ["signal", "folio"]) {
     for (const mode of ["light", "dark"]) {
-      await page.evaluate(({ utilityTheme, mode }) => {
+      const tokens = await page.evaluate(async ({ utilityTheme, mode }) => {
         document.documentElement.dataset.portalTheme = utilityTheme;
         document.documentElement.dataset.theme = mode;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const style = getComputedStyle(document.documentElement);
+        return { font: style.getPropertyValue("--sl-font").trim(), accent: style.getPropertyValue("--sl-color-accent").trim() };
       }, { utilityTheme, mode });
-      const tokens = await page.evaluate(() => ({ font: getComputedStyle(document.documentElement).getPropertyValue("--sl-font").trim(), accent: getComputedStyle(document.documentElement).getPropertyValue("--sl-color-accent").trim() }));
       if (!tokens.font || !tokens.accent) throw new Error(`${engine}: ${utilityTheme}/${mode} utility tokens are absent`);
       if (utilityTheme === "folio" && !tokens.font.includes("Georgia")) throw new Error(`${engine}: folio typography was not applied`);
       if (utilityTheme === "signal" && !tokens.font.includes("Inter")) throw new Error(`${engine}: signal typography was not applied`);
