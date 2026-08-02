@@ -208,7 +208,7 @@ async function assertLayout(page, engine) {
 
 async function assertA11y(page, engine, surface) {
   const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
-  if (result.violations.length) throw new Error(`${engine}: ${surface} accessibility violations: ${JSON.stringify(result.violations.map((item) => ({ id: item.id, impact: item.impact, nodes: item.nodes.length })))}`);
+  if (result.violations.length) throw new Error(`${engine}: ${surface} accessibility violations: ${JSON.stringify(result.violations.map((item) => ({ id: item.id, impact: item.impact, nodes: item.nodes.slice(0, 4).map((node) => ({ target: node.target, failure: node.failureSummary })) })))}`);
 }
 
 async function assertBeforePaintTheme(page, engine, expected) {

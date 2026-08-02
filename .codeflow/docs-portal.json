@@ -33,7 +33,7 @@
     },
     "public/portal-preview.js": {
       "ownership": "managed",
-      "pristine_sha256": "a1e629486eac4753651c182d1a75a1e6cfcfdd9269708572bbe3291d641cf57f"
+      "pristine_sha256": "12b6111cf23eadfc2c4b834209abab1b9776882f7a2ae4acf8c31a04871870f5"
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
@@ -41,7 +41,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "05d030f251430fdcd132a651300fe028eebac740e41c242b90efef39acbe53f6"
+      "pristine_sha256": "dd74ed078c1082a2c4bb6998a969891f13c4f46e5966d7ffefae8e2388d39dc5"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
@@ -69,7 +69,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "6641ec71aa68746e967926c4a35954c42c96d6b2df5e7fa22fc002002102438a"
+      "pristine_sha256": "3557c3fe89538826b40ba42af63c967044060a6426412fc2fa76e6e336872b99"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",

@@ -15,7 +15,8 @@ document.addEventListener("focusout", (event) => {
 
 document.addEventListener("click", (event) => {
   const link = event.target?.closest?.(`${selector} > a`);
-  if (!link || !["touch", "pen"].includes(event.pointerType)) return;
+  const coarsePointerClick = !event.pointerType && matchMedia("(hover: none) and (pointer: coarse)").matches;
+  if (!link || (!["touch", "pen"].includes(event.pointerType) && !coarsePointerClick)) return;
   const preview = link.closest(selector);
   if (preview.classList.contains("portal-preview-open")) return;
   event.preventDefault();
