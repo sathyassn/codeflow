@@ -105,9 +105,8 @@ export function rewriteRepositoryMarkdown(body, {
   let previewSequence = 0;
   visitMarkdown(tree, (node, parent, index, ancestors) => {
     if (node.type === "html") {
-      parent.children[index] = /^<!--[\s\S]*-->$/.test(node.value.trim())
-        ? { type: "text", value: "" }
-        : { type: "html", value: escapeGeneratedHtml(node.value) };
+      if (/^<!--[\s\S]*-->$/.test(node.value.trim())) parent.children.splice(index, 1);
+      else parent.children[index] = { type: "html", value: escapeGeneratedHtml(node.value) };
       return;
     }
     if (["linkReference", "imageReference"].includes(node.type)) {
@@ -125,7 +124,8 @@ export function rewriteRepositoryMarkdown(body, {
         ? definitionResolutions.get(node.identifier)
         : resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors });
       if (resolved.sourceReference) {
-        parent.children[index] = node.type === "definition" ? { type: "text", value: "" } : sourceReferenceNode(node, resolved.sourceReference, commit);
+        if (node.type === "definition") parent.children.splice(index, 1);
+        else parent.children[index] = sourceReferenceNode(node, resolved.sourceReference, commit);
       } else node.url = resolved.url;
       return;
     }

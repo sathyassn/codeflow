@@ -238,12 +238,15 @@ test("frontmatter parsing is strict and deterministic", () => {
 });
 
 test("the AST rewrite escapes raw HTML while preserving code and GFM", () => {
-  const source = "<!-- editorial note -->\n<script>x</script>\n\nInline `<tag>&` remains code.\n\n```html\n<div>example</div>\n```";
-  const rendered = rewriteRepositoryMarkdown(source, { sourcePath: "docs/guide.md", sourceRoutes: new Map(), base: "/", strictTargets: new Map(), mediaReferences: new Map() });
+  const source = "<!-- editorial note -->\n<script>x</script>\n\nInline `<tag>&` remains code.\n\n## ADR-0048 outcome\n\n```html\n<div>example</div>\n```\n\nAfter the fence.";
+  const targets = new Map([["ADR-0048", { route: "/system/decision/", title: "Decision", source_path: "docs/decision.md", status: "accepted", stale: false }]]);
+  const rendered = rewriteRepositoryMarkdown(source, { sourcePath: "docs/guide.md", sourceRoutes: new Map(), base: "/", strictTargets: targets, mediaReferences: new Map() });
   assert.doesNotMatch(rendered, /editorial note/);
   assert.match(rendered, /&lt;script&gt;/);
   assert.match(rendered, /`<tag>&`/);
   assert.match(rendered, /<div>example<\/div>/);
+  assert.match(rendered, /\n\n## <span class="portal-id-preview">/);
+  assert.match(rendered, /```\n\nAfter the fence\./);
 });
 
 test("the AST rewrite permits external links but refuses remote images and ambiguous references", () => {
