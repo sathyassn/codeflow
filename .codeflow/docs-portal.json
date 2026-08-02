@@ -33,7 +33,7 @@
     },
     "public/portal-preview.js": {
       "ownership": "managed",
-      "pristine_sha256": "605080707afb1f3b66c81e16c06343db8f7641d891b86b075256f514a824215c"
+      "pristine_sha256": "6ad7ee87347647c712b53b2fb82eb21ad43acacfbb6bc7492a9ef08992f68fb8"
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
