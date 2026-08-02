@@ -24,6 +24,7 @@ const MAX_PAGES: usize = 10_000;
 const MAX_REPOSITORY_FILES: usize = 100_000;
 const MAX_GIT_TREE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 100_000;
+const MAX_TOTAL_TRAVERSAL_ENTRIES: usize = 100_000;
 const MAX_CLAIMED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_TOTAL_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -1974,19 +1975,24 @@ fn verify_reserved_public_inventory(
         .collect();
     let mut actual = BTreeSet::new();
     let mut portable_actual = BTreeSet::new();
-    let mut count = 0;
+    let mut file_count = 0;
+    let mut entries_seen = 0;
     let mut bytes = 0;
     for namespace in ["public/markdown", "public/media"] {
-        collect_reserved_public_files(
+        if !collect_reserved_public_files(
             portal,
             Path::new(namespace),
             0,
-            &mut count,
+            &mut file_count,
+            &mut entries_seen,
+            MAX_TOTAL_TRAVERSAL_ENTRIES,
             &mut bytes,
             &mut actual,
             &mut portable_actual,
             report,
-        );
+        ) {
+            break;
+        }
     }
     for path in actual.difference(&expected) {
         report.issues.push(format!(
@@ -2005,31 +2011,40 @@ fn collect_reserved_public_files(
     portal: &Path,
     relative: &Path,
     depth: usize,
-    count: &mut usize,
+    file_count: &mut usize,
+    entries_seen: &mut usize,
+    maximum_entries: usize,
     bytes: &mut u64,
     paths: &mut BTreeSet<String>,
     portable_paths: &mut BTreeSet<String>,
     report: &mut PortalValidationReport,
-) {
+) -> bool {
     if depth > 32 {
         report
             .issues
             .push("reserved public output exceeds 32 directory levels".into());
-        return;
+        return true;
     }
     let directory = portal.join(relative);
     let entries = match std::fs::read_dir(&directory) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
         Err(error) => {
             report.issues.push(format!(
                 "reserved public output is unreadable {}: {error}",
                 directory.display()
             ));
-            return;
+            return true;
         }
     };
     for entry in entries {
+        *entries_seen += 1;
+        if *entries_seen > maximum_entries {
+            report.issues.push(format!(
+                "reserved public output traversal exceeds {maximum_entries} total entries"
+            ));
+            return false;
+        }
         let Ok(entry) = entry else {
             report
                 .issues
@@ -2053,18 +2068,22 @@ fn collect_reserved_public_files(
                 child.display()
             ));
         } else if kind.is_dir() {
-            collect_reserved_public_files(
+            if !collect_reserved_public_files(
                 portal,
                 &child,
                 depth + 1,
-                count,
+                file_count,
+                entries_seen,
+                maximum_entries,
                 bytes,
                 paths,
                 portable_paths,
                 report,
-            );
+            ) {
+                return false;
+            }
         } else if kind.is_file() {
-            *count += 1;
+            *file_count += 1;
             *bytes = bytes.saturating_add(entry.metadata().map_or(u64::MAX, |item| item.len()));
             let Some(text) = portable_relative_path(&child) else {
                 report.issues.push(format!(
@@ -2073,11 +2092,11 @@ fn collect_reserved_public_files(
                 ));
                 continue;
             };
-            if *count > MAX_PAGES + 1_000 || *bytes > MAX_TOTAL_ARTIFACT_BYTES {
+            if *file_count > MAX_PAGES + 1_000 || *bytes > MAX_TOTAL_ARTIFACT_BYTES {
                 report
                     .issues
                     .push("reserved public output exceeds its corpus limit".into());
-                return;
+                return false;
             }
             if !portable_paths.insert(portable_key(&text)) {
                 report.issues.push(format!(
@@ -2093,6 +2112,7 @@ fn collect_reserved_public_files(
             ));
         }
     }
+    true
 }
 
 fn raster_dimensions(extension: &str, bytes: &[u8]) -> Option<(u32, u32)> {
@@ -2197,20 +2217,32 @@ fn collect_dist_artifacts(
     portal: &Path,
     report: &mut PortalValidationReport,
 ) -> DistArtifactInventory {
+    collect_dist_artifacts_with_entry_limit(portal, report, MAX_TOTAL_TRAVERSAL_ENTRIES)
+}
+
+#[allow(clippy::too_many_lines)] // Keeps the production and test entry limits on one identical traversal.
+fn collect_dist_artifacts_with_entry_limit(
+    portal: &Path,
+    report: &mut PortalValidationReport,
+    maximum_entries: usize,
+) -> DistArtifactInventory {
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Recursive audit state is explicit and shared across the whole tree.
     fn visit(
         root: &Path,
         relative: &Path,
         depth: usize,
+        entries_seen: &mut usize,
+        maximum_entries: usize,
         total_bytes: &mut u64,
         paths: &mut BTreeSet<String>,
         portable_paths: &mut BTreeSet<String>,
         report: &mut PortalValidationReport,
-    ) {
+    ) -> bool {
         if depth > 32 {
             report
                 .issues
                 .push("built artifact tree exceeds 32 directory levels".into());
-            return;
+            return true;
         }
         let directory = root.join(relative);
         let entries = match std::fs::read_dir(&directory) {
@@ -2220,10 +2252,17 @@ fn collect_dist_artifacts(
                     "built artifact directory is unreadable {}: {error}",
                     directory.display()
                 ));
-                return;
+                return true;
             }
         };
         for entry in entries {
+            *entries_seen += 1;
+            if *entries_seen > maximum_entries {
+                report.issues.push(format!(
+                    "built artifact traversal exceeds {maximum_entries} total entries"
+                ));
+                return false;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
@@ -2250,15 +2289,19 @@ fn collect_dist_artifacts(
                     child.display()
                 ));
             } else if kind.is_dir() {
-                visit(
+                if !visit(
                     root,
                     &child,
                     depth + 1,
+                    entries_seen,
+                    maximum_entries,
                     total_bytes,
                     paths,
                     portable_paths,
                     report,
-                );
+                ) {
+                    return false;
+                }
             } else if kind.is_file() {
                 let metadata = match entry.metadata() {
                     Ok(metadata) => metadata,
@@ -2275,13 +2318,13 @@ fn collect_dist_artifacts(
                     report.issues.push(format!(
                         "built artifact corpus exceeds {MAX_TOTAL_ARTIFACT_BYTES} bytes"
                     ));
-                    return;
+                    return false;
                 }
                 if paths.len() >= MAX_ARTIFACTS {
                     report
                         .issues
                         .push(format!("artifact count exceeds {MAX_ARTIFACTS}"));
-                    return;
+                    return false;
                 }
                 let Some(relative_path) = portable_relative_path(&child) else {
                     report.issues.push(format!(
@@ -2304,10 +2347,12 @@ fn collect_dist_artifacts(
                 ));
             }
         }
+        true
     }
     let mut paths = BTreeSet::new();
     let mut portable_paths = BTreeSet::new();
     let mut total_bytes = 0;
+    let mut entries_seen = 0;
     let dist = portal.join("dist");
     match std::fs::symlink_metadata(&dist) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -2336,6 +2381,8 @@ fn collect_dist_artifacts(
         &dist,
         Path::new(""),
         0,
+        &mut entries_seen,
+        maximum_entries,
         &mut total_bytes,
         &mut paths,
         &mut portable_paths,
@@ -4879,6 +4926,59 @@ mod tests {
                 .iter()
                 .any(|issue| issue.contains("symlink is refused")));
         }
+    }
+
+    #[test]
+    fn filesystem_traversals_share_total_entry_budgets_and_abort_on_first_breach() {
+        let dist = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dist.path().join("dist")).unwrap();
+        for name in ["a.html", "b.html", "c.html"] {
+            std::fs::write(dist.path().join("dist").join(name), name).unwrap();
+        }
+        let mut report = PortalValidationReport::default();
+        let inventory = collect_dist_artifacts_with_entry_limit(dist.path(), &mut report, 2);
+        assert_eq!(inventory.paths.len(), 2);
+        assert_eq!(report.issues.len(), 1);
+        assert!(report.issues[0].contains("2 total entries"));
+
+        let public = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(public.path().join("public/markdown")).unwrap();
+        std::fs::create_dir_all(public.path().join("public/media/nested")).unwrap();
+        std::fs::write(public.path().join("public/markdown/a.md"), "a").unwrap();
+        std::fs::write(public.path().join("public/media/nested/a.png"), "a").unwrap();
+        let mut files = 0;
+        let mut entries = 0;
+        let mut bytes = 0;
+        let mut paths = BTreeSet::new();
+        let mut portable = BTreeSet::new();
+        let mut report = PortalValidationReport::default();
+        assert!(collect_reserved_public_files(
+            public.path(),
+            Path::new("public/markdown"),
+            0,
+            &mut files,
+            &mut entries,
+            2,
+            &mut bytes,
+            &mut paths,
+            &mut portable,
+            &mut report,
+        ));
+        assert!(!collect_reserved_public_files(
+            public.path(),
+            Path::new("public/media"),
+            0,
+            &mut files,
+            &mut entries,
+            2,
+            &mut bytes,
+            &mut paths,
+            &mut portable,
+            &mut report,
+        ));
+        assert_eq!(report.issues.len(), 1);
+        assert!(report.issues[0].contains("2 total entries"));
+        assert_eq!(paths, BTreeSet::from(["public/markdown/a.md".into()]));
     }
 
     #[test]

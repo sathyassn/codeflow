@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
-  referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
+  pinnedSourceUrl as providerSourceUrl, referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
@@ -236,14 +236,7 @@ function sourceLink(sourcePath) {
 }
 
 function pinnedSourceUrl(sourcePath) {
-  if (typeof config.repository_url !== "string") return null;
-  const repository = new URL(config.repository_url);
-  const root = config.repository_url.replace(/\/$/, "").replace(/\.git$/, "");
-  const encodedPath = sourcePath.split("/").map(strictUrlSegment).join("/");
-  if (repository.hostname.toLowerCase() === "github.com") return `${root}/blob/${commit}/${encodedPath}`;
-  if (repository.hostname.toLowerCase() === "gitlab.com") return `${root}/-/blob/${commit}/${encodedPath}`;
-  if (repository.hostname.toLowerCase() === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}`;
-  return null;
+  return providerSourceUrl(config.repository_url, commit, sourcePath);
 }
 
 function renderPage(page, routesById, previews, referencedMedia, anchorsBySource) {

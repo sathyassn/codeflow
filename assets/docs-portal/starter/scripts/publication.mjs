@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.mjs";
 
@@ -9,56 +9,65 @@ const RESERVED_PUBLIC_FILES = new Set(["llms.txt"]);
 const RESERVED_PUBLIC_PREFIXES = ["markdown", "media"];
 const MAX_PRESERVED_UNKNOWN_BYTES = 64 * 1024 * 1024;
 const MAX_PRESERVED_UNKNOWN_FILES = 10_000;
+const MAX_PRESERVED_UNKNOWN_ENTRIES = 10_000;
 const MAX_PRESERVED_UNKNOWN_DEPTH = 32;
 const PUBLICATION_LEASE_MAX_AGE_MS = 30 * 60 * 1000;
 const WORKFLOW_LEASE_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS = 5_000;
 
-export async function withWorkflowLease(portalRoot, action) {
+export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
   if (typeof action !== "function") throw new Error("workflow lease action must be a function");
+  if (!testHooks || typeof testHooks !== "object" || Array.isArray(testHooks)
+    || Object.keys(testHooks).some((key) => !["afterCandidateReady", "afterStaleRename"].includes(key))
+    || Object.values(testHooks).some((hook) => hook !== undefined && typeof hook !== "function")) {
+    throw new Error("workflow lease testHooks are invalid");
+  }
   await assertNoSymlink(portalRoot, ".portal");
-  const directory = path.join(portalRoot, ".portal/workflow.lock");
-  await mkdir(path.dirname(directory), { recursive: true });
+  const portalDirectory = path.join(portalRoot, ".portal");
+  const claim = path.join(portalDirectory, "workflow.lock");
+  await mkdir(portalDirectory, { recursive: true });
+  await recoverWorkflowLeaseDebris(portalDirectory);
   let lease;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const now = Date.now();
     lease = { schema_version: 1, token: randomBytes(24).toString("hex"), created_at_ms: now, heartbeat_at_ms: now };
+    const candidate = path.join(portalDirectory, `.workflow-lock-candidate-${lease.token}`);
     try {
-      await mkdir(directory, { mode: 0o700 });
-      try {
-        await writeDurableJson(path.join(directory, "owner.json"), lease, { exclusive: true });
-        await syncDirectory(path.dirname(directory));
-        break;
-      } catch (error) {
-        await rm(directory, { recursive: true, force: true });
-        throw error;
-      }
+      await mkdir(candidate, { mode: 0o700 });
+      await writeDurableJson(path.join(candidate, "owner.json"), lease, { exclusive: true });
+      await syncDirectory(portalDirectory);
+      if (testHooks.afterCandidateReady) await testHooks.afterCandidateReady(candidate, structuredClone(lease));
+      await link(path.join(candidate, "owner.json"), claim);
+      await syncDirectory(portalDirectory);
+      break;
     } catch (error) {
+      if (error?.code === "ENOENT") continue;
       if (error?.code !== "EEXIST") throw error;
-      const [existing, metadata] = await Promise.all([readWorkflowLease(directory), lstat(directory)]);
-      const heartbeat = existing?.heartbeat_at_ms ?? metadata.mtimeMs;
-      const maximumAge = existing === null ? INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS : WORKFLOW_LEASE_MAX_AGE_MS;
-      if (Date.now() - heartbeat <= maximumAge) {
-        if (existing === null && attempt < 4) {
-          await new Promise((resolve) => setTimeout(resolve, 25));
-          continue;
-        }
-        throw new Error(existing === null ? "portal build/check workflow lease is still initializing" : "portal build/check workflow already in progress");
-      }
-      const stale = `${directory}.stale-${process.pid}-${Date.now()}-${randomBytes(8).toString("hex")}`;
-      try { await rename(directory, stale); }
+      await removeVerifiedWorkflowDirectory(candidate, lease.token);
+      const existing = await readWorkflowLeaseClaim(portalDirectory, claim);
+      if (Date.now() - existing.heartbeat_at_ms <= WORKFLOW_LEASE_MAX_AGE_MS) throw new Error("portal build/check workflow already in progress");
+      const stale = path.join(portalDirectory, `.workflow-lock-reclaim-${existing.token}.json`);
+      try { await rename(claim, stale); }
       catch (renameError) {
-        if (["ENOENT", "EEXIST", "ENOTEMPTY"].includes(renameError?.code)) continue;
+        if (["ENOENT", "EEXIST"].includes(renameError?.code)) continue;
         throw renameError;
       }
-      await rm(stale, { recursive: true, force: true });
+      await syncDirectory(portalDirectory);
+      if (testHooks.afterStaleRename) await testHooks.afterStaleRename(stale, structuredClone(existing));
+      await removeVerifiedWorkflowClaim(stale, existing.token);
+      await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, existing.token), existing.token);
     }
   }
-  if (lease === undefined || !await readWorkflowLease(directory).then((current) => current?.token === lease.token, () => false)) throw new Error("could not acquire portal build/check workflow lease");
+  if (lease === undefined || !await readWorkflowLeaseClaim(portalDirectory, claim).then((current) => current.token === lease.token, () => false)) throw new Error("could not acquire portal build/check workflow lease");
   let heartbeatError = null;
+  let heartbeatWrite = Promise.resolve();
   const heartbeat = setInterval(() => {
-    lease.heartbeat_at_ms = Date.now();
-    writeDurableJson(path.join(directory, "owner.json"), lease).catch((error) => { heartbeatError = error; });
+    heartbeatWrite = heartbeatWrite.then(async () => {
+      const current = await readWorkflowLeaseClaim(portalDirectory, claim);
+      if (current.token !== lease.token) throw new Error("portal workflow lease was lost");
+      lease.heartbeat_at_ms = Date.now();
+      await writeDurableJson(path.join(workflowCandidate(portalDirectory, lease.token), "owner.json"), lease);
+    }).catch((error) => { heartbeatError = error; });
   }, 30_000);
   heartbeat.unref();
   try {
@@ -67,22 +76,94 @@ export async function withWorkflowLease(portalRoot, action) {
     return result;
   } finally {
     clearInterval(heartbeat);
-    const current = await readWorkflowLease(directory).catch(() => null);
-    if (current?.token === lease.token) await rm(directory, { recursive: true, force: true });
+    await heartbeatWrite;
+    await releaseWorkflowLease(portalDirectory, claim, lease);
   }
 }
 
-async function readWorkflowLease(directory) {
+async function readWorkflowLeaseDirectory(directory) {
   const metadata = await lstat(directory);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error("unsafe portal workflow lease");
   const owner = path.join(directory, "owner.json");
+  const value = JSON.parse(await readBoundedRegularFile(owner, 4096, "portal workflow lease owner"));
+  validatePublicationLease(value);
+  return value;
+}
+
+async function readWorkflowLeaseClaim(portalDirectory, claim) {
+  const claimed = JSON.parse(await readBoundedRegularFile(claim, 4096, "portal workflow lease claim"));
+  validatePublicationLease(claimed);
+  const current = await readWorkflowLeaseDirectory(workflowCandidate(portalDirectory, claimed.token));
+  if (current.token !== claimed.token) throw new Error("portal workflow lease claim identity does not match");
+  return current;
+}
+
+async function releaseWorkflowLease(portalDirectory, claim, lease) {
+  let current;
+  try { current = await readWorkflowLeaseClaim(portalDirectory, claim); }
+  catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  if (current.token !== lease.token) return;
+  const released = path.join(portalDirectory, `.workflow-lock-release-${lease.token}.json`);
+  try { await rename(claim, released); }
+  catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  await syncDirectory(portalDirectory);
+  await removeVerifiedWorkflowClaim(released, lease.token);
+  await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, lease.token), lease.token);
+}
+
+async function removeVerifiedWorkflowDirectory(directory, expectedToken) {
+  let current;
+  try { current = await readWorkflowLeaseDirectory(directory); }
+  catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  if (current.token !== expectedToken || !path.basename(directory).endsWith(`-${expectedToken}`)) {
+    throw new Error("portal workflow lease cleanup identity does not match");
+  }
+  await rm(directory, { recursive: true });
+  await syncDirectory(path.dirname(directory));
+}
+
+async function removeVerifiedWorkflowClaim(claim, expectedToken) {
+  let lease;
   try {
-    const value = JSON.parse(await readBoundedRegularFile(owner, 4096, "portal workflow lease owner"));
-    validatePublicationLease(value);
-    return value;
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
+    lease = JSON.parse(await readBoundedRegularFile(claim, 4096, "portal workflow lease cleanup claim"));
+    validatePublicationLease(lease);
+  } catch (error) { if (error?.code === "ENOENT") return; throw error; }
+  if (lease.token !== expectedToken || !path.basename(claim).includes(`-${expectedToken}.json`)) throw new Error("portal workflow lease cleanup claim identity does not match");
+  await rm(claim);
+  await syncDirectory(path.dirname(claim));
+}
+
+function workflowCandidate(portalDirectory, token) {
+  return path.join(portalDirectory, `.workflow-lock-candidate-${token}`);
+}
+
+async function recoverWorkflowLeaseDebris(portalDirectory) {
+  const entries = await readdir(portalDirectory, { withFileTypes: true });
+  if (entries.length > 4096) throw new Error("portal workflow lease recovery entry budget exceeded");
+  let candidates = 0;
+  let activeToken = null;
+  try {
+    const claim = JSON.parse(await readBoundedRegularFile(path.join(portalDirectory, "workflow.lock"), 4096, "portal workflow lease claim"));
+    validatePublicationLease(claim);
+    activeToken = claim.token;
+  } catch (error) { if (error?.code !== "ENOENT") throw error; }
+  for (const entry of entries) {
+    const match = entry.name.match(/^\.workflow-lock-(candidate|reclaim|release)-([a-f0-9]{48})(\.json)?$/);
+    if (!match) continue;
+    candidates += 1;
+    if (candidates > 64) throw new Error("portal workflow lease recovery contains too many candidates");
+    const target = path.join(portalDirectory, entry.name);
+    if (match[1] === "candidate") {
+      if (match[3] || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
+      const lease = await readWorkflowLeaseDirectory(target);
+      if (lease.token !== match[2]) throw new Error("portal workflow lease recovery identity does not match");
+      if (activeToken === lease.token || Date.now() - lease.heartbeat_at_ms <= INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS) continue;
+      await removeVerifiedWorkflowDirectory(target, match[2]);
+    } else {
+      if (match[3] !== ".json" || entry.isSymbolicLink() || !entry.isFile()) throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
+      await removeVerifiedWorkflowClaim(target, match[2]);
+      await removeVerifiedWorkflowDirectory(workflowCandidate(portalDirectory, match[2]), match[2]);
+    }
   }
 }
 
@@ -367,12 +448,12 @@ async function walkFiles(root, relative = "", state = { count: 0 }) {
   catch (error) { if (error?.code === "ENOENT") return []; throw error; }
   const files = [];
   for (const entry of entries.sort((a, b) => compareDeterministicText(a.name, b.name))) {
+    state.count += 1;
+    if (state.count > MAX_PRESERVED_UNKNOWN_ENTRIES) throw new Error(`generated corpus entry count exceeds ${MAX_PRESERVED_UNKNOWN_ENTRIES}: ${root}`);
     const next = path.posix.join(relative, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`symlink refused in generated corpus: ${path.join(root, next)}`);
     if (entry.isDirectory()) files.push(...await walkFiles(root, next, state));
     else if (entry.isFile()) {
-      state.count += 1;
-      if (state.count > MAX_PRESERVED_UNKNOWN_FILES) throw new Error(`generated corpus file count exceeds ${MAX_PRESERVED_UNKNOWN_FILES}: ${root}`);
       files.push(next);
     } else throw new Error(`non-regular entry refused in generated corpus: ${path.join(root, next)}`);
   }
@@ -473,8 +554,10 @@ export async function assertNoSymlink(root, relative) {
   }
 }
 
-export async function assertToolOutputRoots(root, relatives) {
+export async function assertToolOutputRoots(root, relatives, maximumEntries = 50_000) {
   if (!Array.isArray(relatives) || !relatives.length) throw new Error("tool output roots must be a non-empty array");
+  if (!Number.isSafeInteger(maximumEntries) || maximumEntries < 1) throw new Error("maximumEntries: expected a positive safe integer");
+  let entriesSeen = 0;
   for (const relative of relatives) {
     const safe = safeRelative(relative, "tool output root");
     await assertNoSymlink(root, safe);
@@ -484,12 +567,11 @@ export async function assertToolOutputRoots(root, relatives) {
     catch (error) { if (error?.code === "ENOENT") continue; throw error; }
     if (!metadata.isDirectory()) throw new Error(`tool output root is not a regular directory: ${safe}`);
     const pending = [output];
-    let entriesSeen = 0;
     while (pending.length) {
       const directory = pending.pop();
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         entriesSeen += 1;
-        if (entriesSeen > 50_000) throw new Error(`tool output root contains too many entries: ${safe}`);
+        if (entriesSeen > maximumEntries) throw new Error(`tool output roots contain more than ${maximumEntries} total entries`);
         const candidate = path.join(directory, entry.name);
         if (entry.isSymbolicLink()) throw new Error(`symlink refused in tool output root: ${path.relative(root, candidate)}`);
         if (entry.isDirectory()) pending.push(candidate);
@@ -501,23 +583,26 @@ export async function assertToolOutputRoots(root, relatives) {
 
 export async function collectBuiltArtifacts(root, limits = {}) {
   const maximumFiles = limits.maximumFiles ?? 50_000;
+  const maximumEntries = limits.maximumEntries ?? 50_000;
   const maximumDepth = limits.maximumDepth ?? 32;
   const maximumFileBytes = limits.maximumFileBytes ?? 64 * 1024 * 1024;
   const maximumTotalBytes = limits.maximumTotalBytes ?? 512 * 1024 * 1024;
   const onProgress = limits.onProgress;
-  for (const [label, value] of Object.entries({ maximumFiles, maximumDepth, maximumFileBytes, maximumTotalBytes })) {
+  for (const [label, value] of Object.entries({ maximumFiles, maximumEntries, maximumDepth, maximumFileBytes, maximumTotalBytes })) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label}: expected a positive safe integer`);
   }
   if (onProgress !== undefined && typeof onProgress !== "function") throw new Error("onProgress: expected a function");
   const rootMetadata = await lstat(root);
   if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw new Error(`built artifact root is not a regular directory: ${root}`);
-  const state = { count: 0, bytes: 0, portableKeys: new Set() };
+  const state = { count: 0, entries: 0, bytes: 0, portableKeys: new Set() };
   const files = [];
   async function visit(relative = "") {
     const depth = relative ? relative.split("/").length : 0;
     if (depth > maximumDepth) throw new Error(`built artifact depth exceeds ${maximumDepth}: ${root}`);
     const entries = await readdir(path.join(root, relative), { withFileTypes: true });
     for (const entry of entries.sort((a, b) => compareDeterministicText(a.name, b.name))) {
+      state.entries += 1;
+      if (state.entries > maximumEntries) throw new Error(`built artifact entry count exceeds ${maximumEntries}: ${root}`);
       const next = path.posix.join(relative, entry.name);
       if (entry.isSymbolicLink()) throw new Error(`built artifact symlink refused: ${next}`);
       if (entry.isDirectory()) { if (onProgress) await onProgress(); await visit(next); }
@@ -525,7 +610,7 @@ export async function collectBuiltArtifacts(root, limits = {}) {
         state.count += 1;
         if (state.count > maximumFiles) throw new Error(`built artifact count exceeds ${maximumFiles}: ${root}`);
         const file = path.join(root, next);
-        const result = await hashRegularFile(file, maximumFileBytes);
+        const result = await hashBoundedRegularFile(file, maximumFileBytes, "built artifact");
         state.bytes += result.bytes;
         if (state.bytes > maximumTotalBytes) throw new Error(`built artifact corpus exceeds ${maximumTotalBytes} bytes: ${root}`);
         const artifactPath = `dist/${safeRelative(next, "built artifact")}`;
@@ -551,17 +636,20 @@ export function assertExpectedPageArtifacts(pages, artifacts) {
   }
 }
 
-async function hashRegularFile(file, maximumBytes) {
-  const { handle, opened } = await openStableRegularFile(file, maximumBytes, "built artifact");
+export async function hashBoundedRegularFile(file, maximumBytes, label = "file", testHooks = {}) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) throw new Error("maximumBytes: expected a non-negative safe integer");
+  if (testHooks.afterOpen !== undefined && typeof testHooks.afterOpen !== "function") throw new Error("afterOpen: expected a function");
+  const { handle, opened } = await openStableRegularFile(file, maximumBytes, label);
   try {
+    if (testHooks.afterOpen) await testHooks.afterOpen();
     const hash = createHash("sha256");
     let bytes = 0;
     for await (const chunk of handle.createReadStream({ autoClose: false })) {
       bytes += chunk.length;
-      if (bytes > maximumBytes) throw new Error(`built artifact exceeds ${maximumBytes} bytes: ${file}`);
+      if (bytes > maximumBytes) throw new Error(`${label} exceeds ${maximumBytes} bytes: ${file}`);
       hash.update(chunk);
     }
-    await assertStableRegularFile(file, handle, opened, bytes, "built artifact");
+    await assertStableRegularFile(file, handle, opened, bytes, label);
     return { bytes, sha256: hash.digest("hex") };
   } finally { await handle.close(); }
 }

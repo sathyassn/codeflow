@@ -12,6 +12,7 @@
     { "path": "public/portal-preview.js", "ownership": "managed" },
     { "path": "scripts/adapter.mjs", "ownership": "managed" },
     { "path": "scripts/browser-verify.mjs", "ownership": "managed" },
+    { "path": "scripts/child-lifecycle.mjs", "ownership": "managed" },
     { "path": "scripts/evidence.mjs", "ownership": "managed" },
     { "path": "scripts/git-snapshot.mjs", "ownership": "managed" },
     { "path": "scripts/lib.mjs", "ownership": "managed" },

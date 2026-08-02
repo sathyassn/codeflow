@@ -16,7 +16,7 @@
 id: CAP-001
 name: scaffold-init
 area: scaffold
-status: building
+status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
 epics: [EPC-001]
 adrs: [ADR-0019, ADR-0025, ADR-0026]

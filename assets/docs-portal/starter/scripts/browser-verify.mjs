@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +8,9 @@ import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
-import { safeRelative, strictUrlSegment, validatePortalConfig, withBase } from "./lib.mjs";
-import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
+import { withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
+import { pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
 const root = process.cwd();
 const MAX_SERVER_OUTPUT_BYTES = 64 * 1024;
@@ -22,10 +23,10 @@ const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await withWorkflowLease(root, verifyPortal);
+  await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, () => verifyPortal(lifecycle)));
 }
 
-async function verifyPortal() {
+async function verifyPortal(lifecycle) {
   const configBytes = await readBoundedRegularFile(path.join(root, "portal.config.json"), 64 * 1024, "portal configuration");
   const config = validatePortalConfig(JSON.parse(configBytes));
   await assertNoSymlink(root, ".portal/generated/evidence.json");
@@ -58,6 +59,7 @@ async function verifyPortal() {
     env: { ...process.env, BROWSER: "none" },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const untrackServer = lifecycle.trackChild(server);
   let serverOutput = Buffer.alloc(0);
   server.stdout.on("data", (chunk) => { serverOutput = appendBounded(serverOutput, chunk, MAX_SERVER_OUTPUT_BYTES); });
   server.stderr.on("data", (chunk) => { serverOutput = appendBounded(serverOutput, chunk, MAX_SERVER_OUTPUT_BYTES); });
@@ -66,9 +68,11 @@ async function verifyPortal() {
   try {
     await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
-      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces }));
+      lifecycle.throwIfInterrupted();
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, lifecycle }));
     }
   } catch (error) {
+    lifecycle.throwIfInterrupted();
     results.push({ engine: "preview", status: "failed", error: boundedError(error) });
   } finally {
     server.kill("SIGTERM");
@@ -78,8 +82,10 @@ async function verifyPortal() {
       server.kill("SIGKILL");
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5_000))]);
     }
+    untrackServer();
   }
 
+  lifecycle.throwIfInterrupted();
   const teardownVerified = await fetch(siteRoot).then(() => false, () => true);
   const afterArtifacts = await collectBuiltArtifacts(path.join(root, "dist"));
   assertArtifactClaims(generated.artifacts, afterArtifacts, "after browser verification");
@@ -115,20 +121,23 @@ async function verifyPortal() {
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces }) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, lifecycle }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
   const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
   let context;
+  let removeContextCleanup = () => {};
   let traceStarted = false;
   try {
-    context = await engine.launchPersistentContext(profile, {
+    context = await lifecycle.acquire(engine.launchPersistentContext(profile, {
       headless: true,
       colorScheme: "dark",
       reducedMotion: "reduce",
       hasTouch: true,
       viewport: { width: 1440, height: 900 },
-    });
+    }), (lateContext) => lateContext.close());
+    lifecycle.throwIfInterrupted();
+    removeContextCleanup = lifecycle.addCleanup(() => context?.close());
     await context.addInitScript(() => {
       window.__codeflowThemeBeforePaint = null;
       requestAnimationFrame(() => { window.__codeflowThemeBeforePaint = document.documentElement.dataset.theme ?? null; });
@@ -192,6 +201,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     await context.tracing.stop({ path: trace });
     traceStarted = false;
     await context.close();
+    removeContextCleanup();
     context = null;
     return {
       engine: name,
@@ -199,10 +209,12 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
       checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search", "system-and-mode-persistence-before-paint", "layer-journey", "deep-link", previewResult, "source-link", "keyboard-traversal-and-focus", "signal-and-folio-light-dark", "target-size", "responsive", "console", "network-isolation"],
     };
   } catch (error) {
+    lifecycle.throwIfInterrupted();
     if (context && traceStarted) await context.tracing.stop({ path: trace }).catch(() => {});
     return { engine: name, status: "failed", error: boundedError(error) };
   } finally {
     if (context) await context.close().catch(() => {});
+    removeContextCleanup();
     await rm(profile, { recursive: true, force: true });
   }
 }
@@ -407,17 +419,6 @@ export function assertArtifactClaims(claimed, actual, phase) {
   if (JSON.stringify(expected) !== JSON.stringify(observed)) throw new Error(`current dist bytes do not match commit-bound artifact claims ${phase}`);
 }
 
-export function pinnedSourceUrl(repositoryUrl, commit, sourcePath) {
-  const repository = new URL(repositoryUrl);
-  const base = repositoryUrl.replace(/\/$/, "").replace(/\.git$/, "");
-  const encoded = sourcePath.split("/").map(strictUrlSegment).join("/");
-  const host = repository.hostname.toLowerCase();
-  if (host === "github.com") return `${base}/blob/${commit}/${encoded}`;
-  if (host === "gitlab.com") return `${base}/-/blob/${commit}/${encoded}`;
-  if (host === "bitbucket.org") return `${base}/src/${commit}/${encoded}`;
-  return null;
-}
-
 export function appendBounded(current, chunk, maximum) {
   const next = Buffer.concat([current, Buffer.from(chunk)]);
   if (next.length <= maximum) return next;
@@ -470,20 +471,15 @@ async function evidenceInventory(directory) {
   let total = 0;
   for (const entry of entries) {
     const file = path.join(directory, entry);
-    const metadata = await lstat(file);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`browser evidence contains a non-regular artifact: ${entry}`);
-    const artifact = await artifactFor(file);
+    const remaining = MAX_BROWSER_EVIDENCE_BYTES - total;
+    if (remaining <= 0) throw new Error(`browser evidence exceeds ${MAX_BROWSER_EVIDENCE_BYTES} bytes`);
+    const result = await hashBoundedRegularFile(file, Math.min(32 * 1024 * 1024, remaining), "browser evidence artifact");
+    const artifact = { file: path.basename(file), ...result };
     total += artifact.bytes;
-    if (total > 64 * 1024 * 1024) throw new Error(`browser evidence exceeds 67108864 bytes: ${total}`);
+    if (total > MAX_BROWSER_EVIDENCE_BYTES) throw new Error(`browser evidence exceeds ${MAX_BROWSER_EVIDENCE_BYTES} bytes: ${total}`);
     artifacts.push(artifact);
   }
   return artifacts;
-}
-
-async function artifactFor(file) {
-  const bytes = await readFile(file);
-  if (bytes.length > 32 * 1024 * 1024) throw new Error(`browser artifact exceeds 33554432 bytes: ${file}`);
-  return { file: path.basename(file), bytes: bytes.length, sha256: digest(bytes) };
 }
 
 function digest(bytes) {

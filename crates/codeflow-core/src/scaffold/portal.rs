@@ -22,6 +22,7 @@ const BASELINE_ROOT: &str = ".codeflow/.docs-portal-baseline";
 const TRANSACTION_LOCK_PATH: &str = ".codeflow/.docs-portal.lock";
 const TRANSACTION_PATH: &str = ".codeflow/.docs-portal-transaction";
 const TRANSACTION_STAGE_PREFIX: &str = ".docs-portal-transaction-stage-";
+const TRANSACTION_CLEANUP_PREFIX: &str = ".docs-portal-transaction-cleanup-";
 const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BUNDLE_FILES: usize = 256;
 const MAX_STATE_BYTES: u64 = 64 * 1024;
@@ -52,6 +53,10 @@ struct PortalMutationPlan {
 #[serde(deny_unknown_fields)]
 struct PortalTransactionJournal {
     schema_version: u32,
+    transaction_id: String,
+    portal_root: String,
+    state_path: String,
+    baseline_root: String,
     mutations: Vec<PortalJournalMutation>,
 }
 
@@ -173,20 +178,26 @@ impl PortalMutationPlan {
         }
     }
 
-    fn commit(self, root: &Path) -> Result<(), ScaffoldError> {
-        self.commit_inner(root, None)
+    fn commit(self, root: &Path, portal_root: &Path) -> Result<(), ScaffoldError> {
+        self.commit_inner(root, portal_root, None)
     }
 
     #[cfg(test)]
     fn commit_with_fault_after(
         self,
         root: &Path,
+        portal_root: &Path,
         mutation_index: usize,
     ) -> Result<(), ScaffoldError> {
-        self.commit_inner(root, Some(mutation_index))
+        self.commit_inner(root, portal_root, Some(mutation_index))
     }
 
-    fn commit_inner(self, root: &Path, fault_after: Option<usize>) -> Result<(), ScaffoldError> {
+    fn commit_inner(
+        self,
+        root: &Path,
+        portal_root: &Path,
+        fault_after: Option<usize>,
+    ) -> Result<(), ScaffoldError> {
         for mutation in self.mutations.values() {
             ensure_snapshot_unchanged(
                 root,
@@ -197,7 +208,7 @@ impl PortalMutationPlan {
         }
         let ordered = ordered_mutations(&self.mutations);
         let missing_directories = missing_parent_directories(root, ordered.iter().copied())?;
-        prepare_portal_transaction(root, &ordered)?;
+        prepare_portal_transaction(root, portal_root, &ordered)?;
         let mut applied = Vec::new();
         for (index, mutation) in ordered.into_iter().enumerate() {
             if let Err(error) = ensure_snapshot_unchanged(
@@ -207,7 +218,7 @@ impl PortalMutationPlan {
                 "pre-apply",
             ) {
                 rollback_mutations(root, &applied, &missing_directories)?;
-                remove_portal_transaction(root)?;
+                remove_portal_transaction(root, portal_root)?;
                 return Err(error);
             }
             // Atomic writes may report a durability-sync failure after rename;
@@ -236,11 +247,11 @@ impl PortalMutationPlan {
                         ),
                     },
                 )?;
-                remove_portal_transaction(root)?;
+                remove_portal_transaction(root, portal_root)?;
                 return Err(error);
             }
         }
-        remove_portal_transaction(root)?;
+        remove_portal_transaction(root, portal_root)?;
         Ok(())
     }
 
@@ -248,6 +259,7 @@ impl PortalMutationPlan {
     fn commit_with_abrupt_fault_after(
         self,
         root: &Path,
+        portal_root: &Path,
         mutation_index: usize,
     ) -> Result<(), ScaffoldError> {
         for mutation in self.mutations.values() {
@@ -259,7 +271,7 @@ impl PortalMutationPlan {
             )?;
         }
         let ordered = ordered_mutations(&self.mutations);
-        prepare_portal_transaction(root, &ordered)?;
+        prepare_portal_transaction(root, portal_root, &ordered)?;
         for (index, mutation) in ordered.into_iter().enumerate() {
             match &mutation.after {
                 Some(bytes) => write_beneath_root(root, &mutation.path, bytes)?,
@@ -272,7 +284,7 @@ impl PortalMutationPlan {
                 });
             }
         }
-        remove_portal_transaction(root)
+        remove_portal_transaction(root, portal_root)
     }
 }
 
@@ -347,8 +359,10 @@ fn acquire_portal_transaction_lease(root: &Path) -> Result<PortalTransactionLeas
 
 fn prepare_portal_transaction(
     root: &Path,
+    portal_root: &Path,
     mutations: &[&PortalMutation],
 ) -> Result<(), ScaffoldError> {
+    let portal_root = validate_portal_root(portal_root)?;
     let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
     if transaction.exists() {
         return Err(ScaffoldError::InvalidState {
@@ -360,6 +374,9 @@ fn prepare_portal_transaction(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
+    let transaction_id = sha256_hex(
+        format!("{}-{nonce}-{}", std::process::id(), path_text(&portal_root)).as_bytes(),
+    );
     let stage_relative = format!(
         ".codeflow/{TRANSACTION_STAGE_PREFIX}{}-{nonce}",
         std::process::id()
@@ -368,7 +385,11 @@ fn prepare_portal_transaction(
     std::fs::create_dir(&stage).map_err(|error| ScaffoldError::io(&stage, error))?;
     let prepared = (|| {
         let mut journal = PortalTransactionJournal {
-            schema_version: 1,
+            schema_version: 2,
+            transaction_id,
+            portal_root: path_text(&portal_root),
+            state_path: STATE_PATH.into(),
+            baseline_root: BASELINE_ROOT.into(),
             mutations: Vec::with_capacity(mutations.len()),
         };
         for (index, mutation) in mutations.iter().enumerate() {
@@ -401,8 +422,12 @@ fn prepare_portal_transaction(
     prepared
 }
 
-fn recover_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
-    remove_abandoned_transaction_stages(root)?;
+fn recover_portal_transaction(
+    root: &Path,
+    expected_portal_root: &Path,
+) -> Result<(), ScaffoldError> {
+    let expected_portal_root = validate_portal_root(expected_portal_root)?;
+    remove_abandoned_transaction_debris(root, &expected_portal_root)?;
     let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
     let metadata = match std::fs::symlink_metadata(&transaction) {
         Ok(metadata) => metadata,
@@ -415,27 +440,19 @@ fn recover_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
             detail: "portal transaction journal is not a regular directory".into(),
         });
     }
-    let manifest_path = transaction.join("manifest.json");
-    let manifest = read_bounded_regular(&manifest_path, 512 * 1024).map_err(|error| {
-        ScaffoldError::InvalidState {
-            what: TRANSACTION_PATH.into(),
-            detail: format!("portal transaction journal is unreadable: {error}"),
-        }
-    })?;
-    let journal: PortalTransactionJournal = serde_json::from_slice(&manifest)?;
-    if journal.schema_version != 1
-        || journal.mutations.is_empty()
-        || journal.mutations.len() > 2_048
-    {
-        return Err(ScaffoldError::InvalidState {
-            what: TRANSACTION_PATH.into(),
-            detail: "portal transaction journal has an invalid envelope".into(),
-        });
-    }
+    let journal = read_transaction_journal(&transaction, TRANSACTION_PATH)?;
+    validate_transaction_journal(&journal, &expected_portal_root, TRANSACTION_PATH)?;
     let mut paths = BTreeSet::new();
     let mut bytes_remaining = MAX_RECONCILIATION_READ_BYTES;
     for (index, mutation) in journal.mutations.iter().enumerate() {
-        validate_journal_mutation(root, index, mutation, &mut paths, &mut bytes_remaining)?;
+        validate_journal_mutation(
+            root,
+            &expected_portal_root,
+            index,
+            mutation,
+            &mut paths,
+            &mut bytes_remaining,
+        )?;
         let maximum = mutation
             .before_bytes
             .into_iter()
@@ -501,11 +518,48 @@ fn recover_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
             }
         }
     }
-    remove_portal_transaction(root)
+    remove_portal_transaction(root, &expected_portal_root)
+}
+
+fn read_transaction_journal(
+    directory: &Path,
+    label: &str,
+) -> Result<PortalTransactionJournal, ScaffoldError> {
+    let manifest_path = directory.join("manifest.json");
+    let manifest = read_bounded_regular(&manifest_path, 512 * 1024).map_err(|error| {
+        ScaffoldError::InvalidState {
+            what: label.into(),
+            detail: format!("portal transaction journal is unreadable: {error}"),
+        }
+    })?;
+    serde_json::from_slice(&manifest).map_err(Into::into)
+}
+
+fn validate_transaction_journal(
+    journal: &PortalTransactionJournal,
+    expected_portal_root: &Path,
+    label: &str,
+) -> Result<(), ScaffoldError> {
+    let expected_root = path_text(expected_portal_root);
+    if journal.schema_version != 2
+        || !valid_lower_sha256(&journal.transaction_id)
+        || journal.portal_root != expected_root
+        || journal.state_path != STATE_PATH
+        || journal.baseline_root != BASELINE_ROOT
+        || journal.mutations.is_empty()
+        || journal.mutations.len() > 2_048
+    {
+        return Err(ScaffoldError::InvalidState {
+            what: label.into(),
+            detail: "portal transaction journal has an invalid or mismatched envelope".into(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_journal_mutation(
     root: &Path,
+    portal_root: &Path,
     index: usize,
     mutation: &PortalJournalMutation,
     paths: &mut BTreeSet<String>,
@@ -518,6 +572,18 @@ fn validate_journal_mutation(
         });
     }
     guard_beneath_root(root, Path::new(&mutation.path))?;
+    let portal_prefix = format!("{}/", path_text(portal_root));
+    let baseline_prefix = format!("{BASELINE_ROOT}/");
+    let in_portal = mutation.path.starts_with(&portal_prefix);
+    let baseline_hash = mutation.path.strip_prefix(&baseline_prefix);
+    let in_baseline = baseline_hash.is_some_and(valid_lower_sha256);
+    if mutation.path != STATE_PATH && !in_portal && !in_baseline {
+        return Err(ScaffoldError::InvalidState {
+            what: mutation.path.clone(),
+            detail: "portal transaction journal destination is outside its adopted namespaces"
+                .into(),
+        });
+    }
     if !paths.insert(portable_key(&mutation.path)) {
         return Err(ScaffoldError::InvalidState {
             what: mutation.path.clone(),
@@ -552,6 +618,18 @@ fn validate_journal_mutation(
                     })?;
         }
     }
+    if let Some(baseline_hash) = baseline_hash {
+        let content_hash = mutation
+            .after_sha256
+            .as_deref()
+            .or(mutation.before_sha256.as_deref());
+        if content_hash != Some(baseline_hash) {
+            return Err(ScaffoldError::InvalidState {
+                what: mutation.path.clone(),
+                detail: "portal baseline destination is not bound to its content hash".into(),
+            });
+        }
+    }
     let expected_stage = format!("after/{index:04}");
     if mutation.after_bytes.is_some() != mutation.staged_file.is_some()
         || mutation
@@ -577,7 +655,14 @@ fn snapshot_matches(snapshot: Option<&[u8]>, bytes: Option<u64>, hash: Option<&s
     }
 }
 
-fn remove_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
+fn valid_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn remove_portal_transaction(root: &Path, portal_root: &Path) -> Result<(), ScaffoldError> {
     let transaction = guard_beneath_root(root, Path::new(TRANSACTION_PATH))?;
     match std::fs::symlink_metadata(&transaction) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -587,31 +672,96 @@ fn remove_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
             })
         }
         Ok(_) => {
-            std::fs::remove_dir_all(&transaction)
+            let journal = read_transaction_journal(&transaction, TRANSACTION_PATH)?;
+            validate_transaction_journal(&journal, portal_root, TRANSACTION_PATH)?;
+            let cleanup_relative = format!(
+                ".codeflow/{TRANSACTION_CLEANUP_PREFIX}{}",
+                journal.transaction_id
+            );
+            let cleanup = guard_beneath_root(root, Path::new(&cleanup_relative))?;
+            if std::fs::symlink_metadata(&cleanup).is_ok() {
+                return Err(ScaffoldError::InvalidState {
+                    what: cleanup_relative,
+                    detail: "portal transaction cleanup tombstone already exists".into(),
+                });
+            }
+            std::fs::rename(&transaction, &cleanup)
                 .map_err(|error| ScaffoldError::io(&transaction, error))?;
-            sync_parent(&transaction)
+            sync_parent(&transaction)?;
+            remove_transaction_tombstone(root, &cleanup, portal_root, &journal.transaction_id)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(ScaffoldError::io(&transaction, error)),
     }
 }
 
-fn remove_abandoned_transaction_stages(root: &Path) -> Result<(), ScaffoldError> {
+fn remove_transaction_tombstone(
+    root: &Path,
+    tombstone: &Path,
+    portal_root: &Path,
+    expected_id: &str,
+) -> Result<(), ScaffoldError> {
+    let relative =
+        path_text(
+            tombstone
+                .strip_prefix(root)
+                .map_err(|_| ScaffoldError::InvalidState {
+                    what: path_text(tombstone),
+                    detail: "portal transaction tombstone escaped the repository".into(),
+                })?,
+        );
+    let metadata = std::fs::symlink_metadata(tombstone)
+        .map_err(|error| ScaffoldError::io(tombstone, error))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ScaffoldError::InvalidState {
+            what: relative.clone(),
+            detail: "portal transaction cleanup tombstone is not a regular directory".into(),
+        });
+    }
+    let journal = read_transaction_journal(tombstone, &relative)?;
+    validate_transaction_journal(&journal, portal_root, &relative)?;
+    if journal.transaction_id != expected_id
+        || tombstone.file_name().and_then(|name| name.to_str())
+            != Some(&format!("{TRANSACTION_CLEANUP_PREFIX}{expected_id}"))
+    {
+        return Err(ScaffoldError::InvalidState {
+            what: relative,
+            detail: "portal transaction cleanup tombstone identity does not match".into(),
+        });
+    }
+    std::fs::remove_dir_all(tombstone).map_err(|error| ScaffoldError::io(tombstone, error))?;
+    sync_parent(tombstone)
+}
+
+fn remove_abandoned_transaction_debris(
+    root: &Path,
+    portal_root: &Path,
+) -> Result<(), ScaffoldError> {
     let codeflow = guard_beneath_root(root, Path::new(".codeflow"))?;
     let entries =
         std::fs::read_dir(&codeflow).map_err(|error| ScaffoldError::io(&codeflow, error))?;
-    let mut seen = 0_usize;
+    let mut total_seen = 0_usize;
+    let mut debris_seen = 0_usize;
     for entry in entries {
-        let entry = entry.map_err(|error| ScaffoldError::io(&codeflow, error))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(TRANSACTION_STAGE_PREFIX) {
-            continue;
-        }
-        seen += 1;
-        if seen > 64 {
+        total_seen += 1;
+        if total_seen > 4_096 {
             return Err(ScaffoldError::InvalidState {
                 what: ".codeflow".into(),
-                detail: "too many abandoned portal transaction stages".into(),
+                detail: "portal transaction recovery entry budget exceeded".into(),
+            });
+        }
+        let entry = entry.map_err(|error| ScaffoldError::io(&codeflow, error))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_stage = name.starts_with(TRANSACTION_STAGE_PREFIX);
+        let cleanup_id = name.strip_prefix(TRANSACTION_CLEANUP_PREFIX);
+        if !is_stage && cleanup_id.is_none() {
+            continue;
+        }
+        debris_seen += 1;
+        if debris_seen > 64 {
+            return Err(ScaffoldError::InvalidState {
+                what: ".codeflow".into(),
+                detail: "too many abandoned portal transaction recovery entries".into(),
             });
         }
         let metadata = entry
@@ -625,11 +775,21 @@ fn remove_abandoned_transaction_stages(root: &Path) -> Result<(), ScaffoldError>
         {
             return Err(ScaffoldError::InvalidState {
                 what: path_text(&entry.path()),
-                detail: "abandoned portal transaction stage is not a regular directory".into(),
+                detail: "abandoned portal transaction entry is not a regular directory".into(),
             });
         }
-        std::fs::remove_dir_all(entry.path())
-            .map_err(|error| ScaffoldError::io(entry.path(), error))?;
+        if let Some(cleanup_id) = cleanup_id {
+            if !valid_lower_sha256(cleanup_id) {
+                return Err(ScaffoldError::InvalidState {
+                    what: path_text(&entry.path()),
+                    detail: "portal transaction cleanup tombstone name is invalid".into(),
+                });
+            }
+            remove_transaction_tombstone(root, &entry.path(), portal_root, cleanup_id)?;
+        } else {
+            std::fs::remove_dir_all(entry.path())
+                .map_err(|error| ScaffoldError::io(entry.path(), error))?;
+        }
     }
     Ok(())
 }
@@ -812,7 +972,7 @@ pub fn setup_portal(
         return Err(ScaffoldError::NotInitialized);
     }
     let _lease = acquire_portal_transaction_lease(repo_root)?;
-    recover_portal_transaction(repo_root)?;
+    recover_portal_transaction(repo_root, portal_root)?;
     setup_portal_locked(source, repo_root, portal_root)
 }
 
@@ -1023,7 +1183,7 @@ fn setup_portal_locked(
         "portal adoption state",
     )?;
     plan_unreferenced_baseline_pruning(repo_root, &state, &mut mutations)?;
-    mutations.commit(repo_root)?;
+    mutations.commit(repo_root, &relative_root)?;
     Ok(report)
 }
 
@@ -1040,10 +1200,10 @@ pub fn update_adopted_portal(
         return Ok(None);
     }
     let _lease = acquire_portal_transaction_lease(repo_root)?;
-    recover_portal_transaction(repo_root)?;
     let Some(state) = load_state(repo_root)? else {
         return Ok(None);
     };
+    recover_portal_transaction(repo_root, Path::new(&state.root))?;
     setup_portal_locked(source, repo_root, Path::new(&state.root)).map(Some)
 }
 
@@ -1720,7 +1880,9 @@ mod tests {
             .unwrap();
         plan.write(temp.path(), "guide/b.txt", b"b\n".to_vec(), 32, "fixture")
             .unwrap();
-        assert!(plan.commit_with_fault_after(temp.path(), 0).is_err());
+        assert!(plan
+            .commit_with_fault_after(temp.path(), Path::new("guide"), 0)
+            .is_err());
         assert!(!temp.path().join("guide/a.txt").exists());
         assert!(!temp.path().join("guide/b.txt").exists());
         assert!(!temp.path().join("guide").exists());
@@ -1730,11 +1892,13 @@ mod tests {
     fn abrupt_transaction_is_recovered_by_roll_forward_at_every_boundary() {
         for boundary in 0..3 {
             let temp = initialized_root();
-            std::fs::write(temp.path().join("old.txt"), b"old\n").unwrap();
+            std::fs::create_dir(temp.path().join("guide")).unwrap();
+            std::fs::write(temp.path().join("guide/old.txt"), b"old\n").unwrap();
             let mut plan = PortalMutationPlan::default();
             plan.write(temp.path(), "guide/a.txt", b"a\n".to_vec(), 32, "fixture")
                 .unwrap();
-            plan.remove(temp.path(), "old.txt", 32, "fixture").unwrap();
+            plan.remove(temp.path(), "guide/old.txt", 32, "fixture")
+                .unwrap();
             plan.write(
                 temp.path(),
                 STATE_PATH,
@@ -1745,17 +1909,17 @@ mod tests {
             .unwrap();
 
             let error = plan
-                .commit_with_abrupt_fault_after(temp.path(), boundary)
+                .commit_with_abrupt_fault_after(temp.path(), Path::new("guide"), boundary)
                 .unwrap_err();
             assert!(error.to_string().contains("abrupt"));
             assert!(temp.path().join(TRANSACTION_PATH).is_dir());
 
-            recover_portal_transaction(temp.path()).unwrap();
+            recover_portal_transaction(temp.path(), Path::new("guide")).unwrap();
             assert_eq!(
                 std::fs::read(temp.path().join("guide/a.txt")).unwrap(),
                 b"a\n"
             );
-            assert!(!temp.path().join("old.txt").exists());
+            assert!(!temp.path().join("guide/old.txt").exists());
             assert_eq!(
                 std::fs::read(temp.path().join(STATE_PATH)).unwrap(),
                 br#"{"schema_version":1}"#
@@ -1793,17 +1957,26 @@ mod tests {
     #[test]
     fn transaction_recovery_preserves_unexpected_external_edits() {
         let temp = initialized_root();
-        std::fs::write(temp.path().join("value.txt"), b"before\n").unwrap();
+        std::fs::create_dir(temp.path().join("guide")).unwrap();
+        std::fs::write(temp.path().join("guide/value.txt"), b"before\n").unwrap();
         let mut plan = PortalMutationPlan::default();
-        plan.write(temp.path(), "value.txt", b"after\n".to_vec(), 32, "fixture")
-            .unwrap();
-        assert!(plan.commit_with_abrupt_fault_after(temp.path(), 0).is_err());
-        std::fs::write(temp.path().join("value.txt"), b"operator edit\n").unwrap();
+        plan.write(
+            temp.path(),
+            "guide/value.txt",
+            b"after\n".to_vec(),
+            32,
+            "fixture",
+        )
+        .unwrap();
+        assert!(plan
+            .commit_with_abrupt_fault_after(temp.path(), Path::new("guide"), 0)
+            .is_err());
+        std::fs::write(temp.path().join("guide/value.txt"), b"operator edit\n").unwrap();
 
-        let error = recover_portal_transaction(temp.path()).unwrap_err();
+        let error = recover_portal_transaction(temp.path(), Path::new("guide")).unwrap_err();
         assert!(error.to_string().contains("concurrent edit"));
         assert_eq!(
-            std::fs::read(temp.path().join("value.txt")).unwrap(),
+            std::fs::read(temp.path().join("guide/value.txt")).unwrap(),
             b"operator edit\n"
         );
         assert!(temp.path().join(TRANSACTION_PATH).is_dir());
@@ -1836,7 +2009,9 @@ mod tests {
             "fixture",
         )
         .unwrap();
-        assert!(plan.commit_with_abrupt_fault_after(temp.path(), 0).is_err());
+        assert!(plan
+            .commit_with_abrupt_fault_after(temp.path(), Path::new("guide"), 0)
+            .is_err());
         std::fs::remove_file(temp.path().join("guide/value.txt")).unwrap();
         std::fs::write(
             temp.path().join(TRANSACTION_PATH).join("after/0000"),
@@ -1844,13 +2019,14 @@ mod tests {
         )
         .unwrap();
 
-        let error = recover_portal_transaction(temp.path()).unwrap_err();
+        let error = recover_portal_transaction(temp.path(), Path::new("guide")).unwrap_err();
         assert!(error.to_string().contains("does not match its journal"));
         assert!(!temp.path().join("guide/value.txt").exists());
         assert!(temp.path().join(TRANSACTION_PATH).is_dir());
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One table-style test exercises every closed journal field and namespace.
     fn transaction_journal_validation_is_closed_and_bounded() {
         let temp = initialized_root();
         let valid = PortalJournalMutation {
@@ -1864,7 +2040,14 @@ mod tests {
         let validate = |mutation: &PortalJournalMutation,
                         paths: &mut BTreeSet<String>,
                         remaining: &mut u64| {
-            validate_journal_mutation(temp.path(), 0, mutation, paths, remaining)
+            validate_journal_mutation(
+                temp.path(),
+                Path::new("guide"),
+                0,
+                mutation,
+                paths,
+                remaining,
+            )
         };
 
         let mut paths = BTreeSet::new();
@@ -1902,13 +2085,127 @@ mod tests {
             after_bytes: Some(1),
             staged_file: Some("after/0000".into()),
         };
-        let error =
-            validate_journal_mutation(temp.path(), 1, &aliased_stage, &mut BTreeSet::new(), &mut 2)
-                .unwrap_err();
+        let error = validate_journal_mutation(
+            temp.path(),
+            Path::new("guide"),
+            1,
+            &aliased_stage,
+            &mut BTreeSet::new(),
+            &mut 2,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("invalid staged output"));
         aliased_stage.staged_file = Some("after/0001".into());
-        validate_journal_mutation(temp.path(), 1, &aliased_stage, &mut BTreeSet::new(), &mut 2)
-            .unwrap();
+        validate_journal_mutation(
+            temp.path(),
+            Path::new("guide"),
+            1,
+            &aliased_stage,
+            &mut BTreeSet::new(),
+            &mut 2,
+        )
+        .unwrap();
+
+        let mut outside = PortalJournalMutation {
+            path: "outside.txt".into(),
+            before_sha256: None,
+            before_bytes: None,
+            after_sha256: None,
+            after_bytes: None,
+            staged_file: None,
+        };
+        let error = validate_journal_mutation(
+            temp.path(),
+            Path::new("guide"),
+            0,
+            &outside,
+            &mut BTreeSet::new(),
+            &mut 2,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("outside its adopted namespaces"));
+        outside.path = format!("{BASELINE_ROOT}/not-a-content-hash");
+        let error = validate_journal_mutation(
+            temp.path(),
+            Path::new("guide"),
+            0,
+            &outside,
+            &mut BTreeSet::new(),
+            &mut 2,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("outside its adopted namespaces"));
+        outside.path = format!("{BASELINE_ROOT}/{}", "a".repeat(64));
+        let error = validate_journal_mutation(
+            temp.path(),
+            Path::new("guide"),
+            0,
+            &outside,
+            &mut BTreeSet::new(),
+            &mut 2,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("content hash"));
+    }
+
+    #[test]
+    fn recovery_is_bound_to_the_exact_portal_root_and_namespaces() {
+        let temp = initialized_root();
+        let mut plan = PortalMutationPlan::default();
+        plan.write(
+            temp.path(),
+            "guide/value.txt",
+            b"after\n".to_vec(),
+            32,
+            "fixture",
+        )
+        .unwrap();
+        assert!(plan
+            .commit_with_abrupt_fault_after(temp.path(), Path::new("guide"), 0)
+            .is_err());
+
+        let error = recover_portal_transaction(temp.path(), Path::new("other")).unwrap_err();
+        assert!(error.to_string().contains("mismatched envelope"));
+        assert!(temp.path().join(TRANSACTION_PATH).is_dir());
+
+        let manifest_path = temp.path().join(TRANSACTION_PATH).join("manifest.json");
+        let mut journal: PortalTransactionJournal =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        journal.state_path = ".codeflow/other.json".into();
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+        let error = recover_portal_transaction(temp.path(), Path::new("guide")).unwrap_err();
+        assert!(error.to_string().contains("mismatched envelope"));
+    }
+
+    #[test]
+    fn completed_transaction_tombstone_is_recovered_by_matching_identity() {
+        let temp = initialized_root();
+        let mut plan = PortalMutationPlan::default();
+        plan.write(
+            temp.path(),
+            "guide/value.txt",
+            b"after\n".to_vec(),
+            32,
+            "fixture",
+        )
+        .unwrap();
+        assert!(plan
+            .commit_with_abrupt_fault_after(temp.path(), Path::new("guide"), 0)
+            .is_err());
+        let transaction = temp.path().join(TRANSACTION_PATH);
+        let journal = read_transaction_journal(&transaction, TRANSACTION_PATH).unwrap();
+        let tombstone = temp.path().join(format!(
+            ".codeflow/{TRANSACTION_CLEANUP_PREFIX}{}",
+            journal.transaction_id
+        ));
+        std::fs::rename(&transaction, &tombstone).unwrap();
+
+        recover_portal_transaction(temp.path(), Path::new("guide")).unwrap();
+        assert!(!tombstone.exists());
+        assert_eq!(
+            std::fs::read(temp.path().join("guide/value.txt")).unwrap(),
+            b"after\n"
+        );
     }
 
     #[test]
@@ -1916,37 +2213,37 @@ mod tests {
         let temp = initialized_root();
         let transaction = temp.path().join(TRANSACTION_PATH);
         std::fs::write(&transaction, b"not a directory").unwrap();
-        assert!(recover_portal_transaction(temp.path())
+        assert!(recover_portal_transaction(temp.path(), Path::new("guide"))
             .unwrap_err()
             .to_string()
             .contains("not a regular directory"));
         std::fs::remove_file(&transaction).unwrap();
 
         std::fs::create_dir(&transaction).unwrap();
-        assert!(recover_portal_transaction(temp.path())
+        assert!(recover_portal_transaction(temp.path(), Path::new("guide"))
             .unwrap_err()
             .to_string()
             .contains("journal is unreadable"));
         std::fs::write(
             transaction.join("manifest.json"),
-            br#"{"schema_version":2,"mutations":[]}"#,
+            br#"{"schema_version":2,"transaction_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","portal_root":"guide","state_path":".codeflow/docs-portal.json","baseline_root":".codeflow/.docs-portal-baseline","mutations":[]}"#,
         )
         .unwrap();
-        assert!(recover_portal_transaction(temp.path())
+        assert!(recover_portal_transaction(temp.path(), Path::new("guide"))
             .unwrap_err()
             .to_string()
-            .contains("invalid envelope"));
+            .contains("invalid or mismatched envelope"));
         std::fs::remove_dir_all(&transaction).unwrap();
 
         let abandoned = temp
             .path()
             .join(".codeflow/.docs-portal-transaction-stage-fixture");
         std::fs::create_dir(&abandoned).unwrap();
-        recover_portal_transaction(temp.path()).unwrap();
+        recover_portal_transaction(temp.path(), Path::new("guide")).unwrap();
         assert!(!abandoned.exists());
 
         std::fs::write(&abandoned, b"wrong type").unwrap();
-        assert!(recover_portal_transaction(temp.path())
+        assert!(recover_portal_transaction(temp.path(), Path::new("guide"))
             .unwrap_err()
             .to_string()
             .contains("not a regular directory"));
@@ -2019,7 +2316,7 @@ mod tests {
         .unwrap();
         std::fs::write(temp.path().join("second.txt"), b"concurrent edit").unwrap();
 
-        let error = plan.commit(temp.path()).unwrap_err();
+        let error = plan.commit(temp.path(), Path::new("guide")).unwrap_err();
         assert!(error.to_string().contains("snapshot changed"));
         assert_eq!(
             std::fs::read(temp.path().join("first.txt")).unwrap(),

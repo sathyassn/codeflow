@@ -457,6 +457,18 @@ export function strictUrlSegment(value) {
   return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
+export function pinnedSourceUrl(repositoryUrl, commit, sourcePath) {
+  if (typeof repositoryUrl !== "string") return null;
+  const repository = new URL(repositoryUrl);
+  const root = repositoryUrl.replace(/\/$/, "").replace(/\.git$/, "");
+  const encodedPath = sourcePath.split("/").map(strictUrlSegment).join("/");
+  const host = repository.hostname.toLowerCase();
+  if (host === "github.com") return `${root}/blob/${commit}/${encodedPath}`;
+  if (host === "gitlab.com") return `${root}/-/blob/${commit}/${encodedPath}`;
+  if (host === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}`;
+  return null;
+}
+
 function contrastRatio(left, right) {
   const luminance = (hex) => {
     const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);

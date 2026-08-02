@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, cp, mkdtemp, mkdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdtemp, mkdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
-import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
+import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
-import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics, pinnedSourceUrl } from "../scripts/browser-verify.mjs";
+import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics } from "../scripts/browser-verify.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -532,15 +532,85 @@ test("one workflow lease covers a complete build or check sequence", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("an abandoned workflow directory without an owner is reclaimed", async () => {
+test("an ownerless workflow directory is preserved rather than reclaimed without identity", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-incomplete-workflow-"));
   try {
     const lock = path.join(root, ".portal/workflow.lock");
     await mkdir(lock, { recursive: true });
     const stale = new Date(Date.now() - 10_000);
     await utimes(lock, stale, stale);
-    assert.equal(await withWorkflowLease(root, async () => "recovered"), "recovered");
-    await assert.rejects(readFile(path.join(lock, "owner.json")), /ENOENT/);
+    await assert.rejects(withWorkflowLease(root, async () => "unsafe"), /stable regular|directory/);
+    assert.equal((await lstat(lock)).isDirectory(), true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a stalled workflow candidate cannot delete the atomic winner", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-candidate-race-"));
+  try {
+    let candidateReady;
+    const ready = new Promise((resolve) => { candidateReady = resolve; });
+    let resumeCreator;
+    const resume = new Promise((resolve) => { resumeCreator = resolve; });
+    let releaseWinner;
+    const winnerHeld = new Promise((resolve) => { releaseWinner = resolve; });
+    const creator = withWorkflowLease(root, async () => "creator", {
+      afterCandidateReady: async (candidate, lease) => {
+        const stale = Date.now() - 10_000;
+        await writeFile(path.join(candidate, "owner.json"), JSON.stringify({ ...lease, created_at_ms: stale, heartbeat_at_ms: stale }));
+        candidateReady();
+        await resume;
+      },
+    }).catch((error) => error);
+    await ready;
+    let winnerToken;
+    const winner = withWorkflowLease(root, async () => {
+      winnerToken = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token;
+      await winnerHeld;
+      return "winner";
+    });
+    await waitUntil(() => winnerToken !== undefined);
+    resumeCreator();
+    const creatorResult = await creator;
+    assert.match(String(creatorResult), /already in progress/);
+    assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, winnerToken);
+    releaseWinner();
+    assert.equal(await winner, "winner");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a stalled stale-lease reclaimer cannot remove a later winner", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-reclaimer-race-"));
+  try {
+    const stale = Date.now() - 5 * 60 * 60 * 1000;
+    const staleLease = {
+      schema_version: 1, token: "a".repeat(48), created_at_ms: stale, heartbeat_at_ms: stale,
+    };
+    const staleCandidate = path.join(root, `.portal/.workflow-lock-candidate-${staleLease.token}`);
+    await mkdir(staleCandidate, { recursive: true });
+    await writeFile(path.join(staleCandidate, "owner.json"), JSON.stringify(staleLease));
+    await writeFile(path.join(root, ".portal/workflow.lock"), JSON.stringify(staleLease));
+    let reclaimReady;
+    const ready = new Promise((resolve) => { reclaimReady = resolve; });
+    let resumeReclaimer;
+    const resume = new Promise((resolve) => { resumeReclaimer = resolve; });
+    let releaseWinner;
+    const winnerHeld = new Promise((resolve) => { releaseWinner = resolve; });
+    const reclaimer = withWorkflowLease(root, async () => "reclaimer", {
+      afterStaleRename: async () => { reclaimReady(); await resume; },
+    }).catch((error) => error);
+    await ready;
+    let winnerToken;
+    const winner = withWorkflowLease(root, async () => {
+      winnerToken = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token;
+      await winnerHeld;
+      return "winner";
+    });
+    await waitUntil(() => winnerToken !== undefined);
+    resumeReclaimer();
+    assert.match(String(await reclaimer), /already in progress/);
+    assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, winnerToken);
+    releaseWinner();
+    assert.equal(await winner, "winner");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -561,7 +631,7 @@ test("workflow interruption reaches the child and releases its lease", { skip: p
     `);
     const child = spawn(process.execPath, [path.join(root, "scripts/workflow.mjs"), "preview"], { cwd: root, stdio: "ignore" });
     await waitUntil(async () => Promise.all([
-      readFile(path.join(root, ".portal/workflow.lock/owner.json")),
+      readFile(path.join(root, ".portal/workflow.lock")),
       readFile(path.join(root, ".child-ready")),
     ]).then(() => true, () => false));
     child.kill("SIGTERM");
@@ -571,7 +641,42 @@ test("workflow interruption reaches the child and releases its lease", { skip: p
     });
     assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
     assert.equal(await readFile(path.join(root, ".child-signal"), "utf8"), "SIGTERM\n");
-    await assert.rejects(readFile(path.join(root, ".portal/workflow.lock/owner.json")), /ENOENT/);
+    await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("direct browser lifecycle interruption closes resources and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const runner = path.join(root, "browser-lifecycle-fixture.mjs");
+    await writeFile(runner, `
+      import { spawn } from "node:child_process";
+      import { writeFile } from "node:fs/promises";
+      import path from "node:path";
+      import { withSignalAwareChildLifecycle } from "./scripts/child-lifecycle.mjs";
+      import { withWorkflowLease } from "./scripts/publication.mjs";
+      const root = process.cwd();
+      await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, async () => {
+        const preview = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)"], { stdio: "ignore" });
+        lifecycle.trackChild(preview);
+        lifecycle.addCleanup(() => writeFile(path.join(root, ".browser-closed"), "closed\\n"));
+        await writeFile(path.join(root, ".browser-ready"), "ready\\n");
+        await lifecycle.wait(new Promise(() => {}));
+      }));
+    `);
+    const child = spawn(process.execPath, [runner], { cwd: root, stdio: "ignore" });
+    await waitUntil(async () => Promise.all([
+      readFile(path.join(root, ".portal/workflow.lock")),
+      readFile(path.join(root, ".browser-ready")),
+    ]).then(() => true, () => false));
+    child.kill("SIGTERM");
+    const outcome = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
+    assert.equal(await readFile(path.join(root, ".browser-closed"), "utf8"), "closed\n");
+    await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -667,9 +772,42 @@ test("built artifact evidence is deterministic and bounded", async () => {
       { path: "dist/z.txt", sha256: sha256("z") },
     ]);
     await assert.rejects(collectBuiltArtifacts(root, { maximumFiles: 1 }), /count exceeds/);
+    await assert.rejects(collectBuiltArtifacts(root, { maximumEntries: 2 }), /entry count exceeds/);
     await assert.rejects(collectBuiltArtifacts(root, { maximumTotalBytes: 1 }), /corpus exceeds/);
     await assert.rejects(collectBuiltArtifacts(root, { maximumDepth: 1 }), /depth exceeds/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("tool output traversal uses one global total-entry budget", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-tool-output-budget-"));
+  try {
+    await mkdir(path.join(root, "one/nested"), { recursive: true });
+    await mkdir(path.join(root, "two"));
+    await writeFile(path.join(root, "two/file.txt"), "x");
+    await assert.rejects(assertToolOutputRoots(root, ["one", "two"], 1), /total entries/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("streamed browser artifact hashes reject growth and path replacement races", { skip: process.platform === "win32" }, async () => {
+  const { symlink } = await import("node:fs/promises");
+  for (const race of ["growth", "swap"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-browser-hash-${race}-`));
+    try {
+      const artifact = path.join(root, "trace.zip");
+      const secret = path.join(root, "secret.txt");
+      await writeFile(artifact, "stable");
+      await writeFile(secret, "secret");
+      await assert.rejects(hashBoundedRegularFile(artifact, 64, "browser evidence artifact", {
+        afterOpen: async () => {
+          if (race === "growth") await writeFile(artifact, "stable-but-changed");
+          else {
+            await rename(artifact, `${artifact}.opened`);
+            await symlink(secret, artifact);
+          }
+        },
+      }), /changed while it was being read/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("Git snapshot reads scale by corpus phase and disable configured fsmonitor execution", async () => {

@@ -37,11 +37,15 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "e489f74568f9cd047b2f0d2bc800dca8f433e57b9d5233cccd7b77120f8c4ae4"
+      "pristine_sha256": "2868d04ad3dd07b66ed02d9506914792b574c2750b067ef6996bc8a7642a795a"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ae33f60f5ac2b4e90550c9217d926d97e7567400c7894a91c99d22e47dfef44d"
+      "pristine_sha256": "e6d900a996bf88d4f35becba3d8c8a4537c2ccb69f89124f1d7f2546acc6f835"
+    },
+    "scripts/child-lifecycle.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "f39265d730f6022c4368d29da47bc2f86da5e4358e588262b136063c8af67175"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
@@ -53,7 +57,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f05496573e0432ba3f88b99e0b70bd14809967de58ad4e7e38c7dc5db98a3417"
+      "pristine_sha256": "5127c2283287d628a5da6fe664571a56c7970c7ab8a379ce3d2bd746ab115dc2"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -61,11 +65,11 @@
     },
     "scripts/publication.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "cb1e83728f83125cd1eae5d6e7bf92b7079e9cb6961a48f14f22e360272f346a"
+      "pristine_sha256": "50d3ccdd217b1bda049bd1ef4dd287908c2354f5959f080a8b58bbdaaf7ee259"
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "32b646a0ba83c333d34c4578da73810ad79386a8a8e9b742ccfe6d6025748dae"
+      "pristine_sha256": "7f6cb85b950700b43485d7be74f01709e4357267a0b18748e0355b2f92edc6c8"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -77,7 +81,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "27cbd3ffe6d33ea5f22d2ba7eb813bd1fd89090670cc9ec4984c724f94f2b116"
+      "pristine_sha256": "1b938abb643fe7b38a2c8f8e425f6c5ef07c66b4470fe69444dc7d1254000894"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
