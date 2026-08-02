@@ -434,8 +434,8 @@ fn recover_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
     }
     let mut paths = BTreeSet::new();
     let mut bytes_remaining = MAX_RECONCILIATION_READ_BYTES;
-    for mutation in &journal.mutations {
-        validate_journal_mutation(root, mutation, &mut paths, &mut bytes_remaining)?;
+    for (index, mutation) in journal.mutations.iter().enumerate() {
+        validate_journal_mutation(root, index, mutation, &mut paths, &mut bytes_remaining)?;
         let maximum = mutation
             .before_bytes
             .into_iter()
@@ -506,6 +506,7 @@ fn recover_portal_transaction(root: &Path) -> Result<(), ScaffoldError> {
 
 fn validate_journal_mutation(
     root: &Path,
+    index: usize,
     mutation: &PortalJournalMutation,
     paths: &mut BTreeSet<String>,
     bytes_remaining: &mut u64,
@@ -551,11 +552,12 @@ fn validate_journal_mutation(
                     })?;
         }
     }
+    let expected_stage = format!("after/{index:04}");
     if mutation.after_bytes.is_some() != mutation.staged_file.is_some()
         || mutation
             .staged_file
             .as_deref()
-            .is_some_and(|path| !path.starts_with("after/") || validate_asset_path(path).is_err())
+            .is_some_and(|path| path != expected_stage)
     {
         return Err(ScaffoldError::InvalidState {
             what: mutation.path.clone(),
@@ -1862,7 +1864,7 @@ mod tests {
         let validate = |mutation: &PortalJournalMutation,
                         paths: &mut BTreeSet<String>,
                         remaining: &mut u64| {
-            validate_journal_mutation(temp.path(), mutation, paths, remaining)
+            validate_journal_mutation(temp.path(), 0, mutation, paths, remaining)
         };
 
         let mut paths = BTreeSet::new();
@@ -1891,6 +1893,22 @@ mod tests {
         invalid_stage.staged_file = Some("elsewhere/0000".into());
         let error = validate(&invalid_stage, &mut BTreeSet::new(), &mut 2).unwrap_err();
         assert!(error.to_string().contains("invalid staged output"));
+
+        let mut aliased_stage = PortalJournalMutation {
+            path: "guide/other.txt".into(),
+            before_sha256: None,
+            before_bytes: None,
+            after_sha256: Some("b".repeat(64)),
+            after_bytes: Some(1),
+            staged_file: Some("after/0000".into()),
+        };
+        let error =
+            validate_journal_mutation(temp.path(), 1, &aliased_stage, &mut BTreeSet::new(), &mut 2)
+                .unwrap_err();
+        assert!(error.to_string().contains("invalid staged output"));
+        aliased_stage.staged_file = Some("after/0001".into());
+        validate_journal_mutation(temp.path(), 1, &aliased_stage, &mut BTreeSet::new(), &mut 2)
+            .unwrap();
     }
 
     #[test]
