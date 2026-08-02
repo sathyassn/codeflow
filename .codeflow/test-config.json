@@ -103,7 +103,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm ci --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal"
+          "command": "npm run deps:install --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal"
         }
       },
       "timeout_seconds": 300

@@ -10,6 +10,7 @@
     "build": "node scripts/workflow.mjs build",
     "browser:verify": "node scripts/browser-verify.mjs",
     "check": "node scripts/workflow.mjs check",
+    "deps:install": "node scripts/install-dependencies.mjs",
     "dev": "node scripts/workflow.mjs dev",
     "preview": "node scripts/workflow.mjs preview",
     "update": "node scripts/adapter.mjs"

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { TextDecoder } from "node:util";
 import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.mjs";
+import { hardenedChildEnvironment } from "./process-environment.mjs";
 
 const MAX_GIT_TREE_BYTES = 64 * 1024 * 1024;
 const MAX_GIT_STATUS_BYTES = 8 * 1024 * 1024;
@@ -208,14 +209,8 @@ function statusPath(value) {
 }
 
 export function hardenedGitEnvironment(source = process.env) {
-  const executablePath = source.PATH ?? source.Path;
-  if (typeof executablePath !== "string" || executablePath.length === 0) throw new Error("Git snapshot requires PATH");
-  const environment = { PATH: executablePath };
-  for (const key of ["SystemRoot", "WINDIR", "PATHEXT", "TMPDIR", "TMP", "TEMP"]) {
-    if (typeof source[key] === "string" && source[key].length > 0) environment[key] = source[key];
-  }
   return {
-    ...environment,
+    ...hardenedChildEnvironment(source),
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_NO_LAZY_FETCH: "1",

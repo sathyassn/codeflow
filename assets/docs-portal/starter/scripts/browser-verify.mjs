@@ -10,6 +10,7 @@ import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
 const root = process.cwd();
@@ -56,7 +57,7 @@ async function verifyPortal(lifecycle) {
   const siteRoot = new URL(config.base, origin).toString();
   const server = spawn(process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), "preview", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: root,
-    env: { ...process.env, BROWSER: "none" },
+    env: hardenedChildEnvironment(process.env, { BROWSER: "none" }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const untrackServer = lifecycle.trackChild(server);
@@ -131,6 +132,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
   try {
     context = await lifecycle.acquire(engine.launchPersistentContext(profile, {
       headless: true,
+      env: hardenedChildEnvironment(),
       colorScheme: "dark",
       reducedMotion: "reduce",
       hasTouch: true,

@@ -16,12 +16,19 @@ content-addressed names prevent a second browsable lockfile/dependency surface.
 
 ## Dependency discipline
 
-Use the committed `.node-version`, lockfile, and `npm ci`. Review install scripts before relaxing
-an `--ignore-scripts` install; native packages may require their pinned scripts,
-so an unavailable build is better than an unrecorded exception. Run `npm audit`
-and the repository's dependency scanner. Rehearse upgrades in a disposable
-worktree or directory, inspect transitive and runtime changes, and change exact
-pins plus the lockfile together.
+Use the committed `.node-version`, lockfile, and `npm run deps:install`. The
+managed installer first proves that every lockfile package declaring a lifecycle
+script matches the exact reviewed-and-ignored inventory, then runs `npm ci
+--ignore-scripts` with a minimal non-secret environment. The current starter has
+no lifecycle-script exception. If a future pinned dependency cannot operate
+without one, stop: review the exact package/version and script source, record why
+the behavior is required, implement the narrow exception in the managed
+installer under the same environment boundary, and add an executable canary.
+Never use a manual `npm rebuild` or plain `npm ci` as an undocumented bypass; an
+unavailable build is safer than an unreviewed exception. Run `npm audit` and the
+repository's dependency scanner. Rehearse upgrades in a disposable worktree or
+directory, inspect transitive and runtime changes, and change exact pins,
+lockfile, reviewed inventory, and evidence together.
 
 ## Release evidence
 
@@ -77,12 +84,13 @@ repository files that are not published into the portal remain under the
 linked source host's authority and are not claimed as portal-verified anchors.
 
 Repository reads use a bounded commit inventory plus batched blob reads rather
-than one process per source. Git receives only an explicit process-environment
-allowlist; model, cloud, credential, loader-injection, and Git configuration
-variables are never inherited. It runs without fsmonitor, prompts, lazy
-fetching, replacement objects, optional locks, pagers, or inherited
-repository/config redirection. Missing local objects, output overflow, and
-timeouts fail closed. Non-reserved public files are preserved only when they
-are committed regular runtime inputs whose worktree bytes match the snapshot.
-Publication writes the committed blobs; untracked active content, symlinks,
-masked edits, or a file that changes identity during verification aborts.
+than one process per source. Install, build, preview, browser, and Git children
+receive only an explicit process-environment allowlist; model, provider, cloud,
+package-registry credential, and loader-injection variables are never inherited.
+Git additionally runs without inherited configuration, fsmonitor, prompts, lazy
+fetching, replacement objects, optional locks, or pagers. Missing local objects,
+output overflow, and timeouts fail closed. Non-reserved public files are
+preserved only when they are committed regular runtime inputs whose worktree
+bytes match the snapshot. Publication writes the committed blobs; untracked
+active content, symlinks, masked edits, or a file that changes identity during
+verification aborts.

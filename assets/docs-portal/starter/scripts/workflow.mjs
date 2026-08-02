@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
+import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertToolOutputRoots, withWorkflowLease } from "./publication.mjs";
 
 const workflow = process.argv[2];
@@ -18,7 +19,12 @@ await withSignalAwareChildLifecycle(async (lifecycle) => {
 
 function run(lifecycle, command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: root, stdio: "inherit" });
+    const child = spawn(command, args, {
+      cwd: root,
+      env: hardenedChildEnvironment(),
+      stdio: "inherit",
+      windowsHide: true,
+    });
     const untrack = lifecycle.trackChild(child);
     let settled = false;
     const finish = (error) => {

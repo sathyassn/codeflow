@@ -87,12 +87,18 @@ component, or framework back into the product's design system.
 Run the locked workflow from the adopted portal root:
 
 ```sh
-npm ci
+npm run deps:install
 npm run check
 npm run build
 npm run browser:verify
 codeflow validate --portal <repository-relative-directory>
 ```
+
+The managed installer verifies the lockfile's lifecycle-script inventory and
+runs the locked install with dependency scripts disabled under a non-secret
+environment allowlist. Do not replace it with plain `npm ci` or an ad-hoc
+`npm rebuild`; follow the reviewed-exception process in `references/operations.md`
+if a future pinned dependency genuinely requires a lifecycle script.
 
 The Node adapter alone derives the content graph and evidence manifest. The
 Rust validator executes no project code and writes nothing; it verifies the

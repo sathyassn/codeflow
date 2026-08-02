@@ -10,6 +10,8 @@ import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifac
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
 import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics } from "../scripts/browser-verify.mjs";
+import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from "../scripts/install-dependencies.mjs";
+import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -1181,6 +1183,74 @@ test("Git snapshot child environments exclude inherited credentials and injectio
   for (const key of ["AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "LD_PRELOAD"]) {
     assert.equal(key in environment, false, `${key} escaped the child-environment allowlist`);
   }
+});
+
+test("all portal child classes execute without inherited provider secrets", () => {
+  const environment = hardenedChildEnvironment({
+    PATH: process.env.PATH,
+    HOME: "/safe/home",
+    TMPDIR: "/safe/tmp",
+    LANG: "C.UTF-8",
+    AWS_SECRET_ACCESS_KEY: "aws-canary",
+    AZURE_CLIENT_SECRET: "azure-canary",
+    GOOGLE_APPLICATION_CREDENTIALS: "/secret/google.json",
+    OPENAI_API_KEY: "openai-canary",
+    ANTHROPIC_API_KEY: "anthropic-canary",
+    NPM_TOKEN: "npm-canary",
+    npm_execpath: "/trusted/npm-cli.js",
+    NODE_OPTIONS: "--require=/tmp/inject.cjs",
+    NODE_PATH: "/tmp/inject-modules",
+    LD_PRELOAD: "/tmp/inject.so",
+    DYLD_INSERT_LIBRARIES: "/tmp/inject.dylib",
+  }, { BROWSER: "none" });
+  assert.equal(environment.HOME, "/safe/home");
+  assert.equal(environment.BROWSER, "none");
+  assert.throws(() => hardenedChildEnvironment({ PATH: "/safe/bin" }, { OPENAI_API_KEY: "override" }), /override is not allowed/);
+
+  const keys = [
+    "AWS_SECRET_ACCESS_KEY",
+    "AZURE_CLIENT_SECRET",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "NPM_TOKEN",
+    "npm_execpath",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+  ];
+  const probe = spawnSync(process.execPath, ["-e", `process.stdout.write(JSON.stringify(${JSON.stringify(keys)}.filter((key) => key in process.env)))`], {
+    encoding: "utf8",
+    env: environment,
+  });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.deepEqual(JSON.parse(probe.stdout), []);
+
+  const windowsLike = hardenedChildEnvironment({
+    Path: "C:\\Windows\\System32",
+    SystemRoot: "C:\\Windows",
+    USERPROFILE: "C:\\Users\\safe",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    APPDATA: "C:\\Users\\safe\\AppData\\Roaming",
+    LOCALAPPDATA: "C:\\Users\\safe\\AppData\\Local",
+    npm_execpath: "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+  });
+  assert.equal(windowsLike.PATH, "C:\\Windows\\System32");
+  assert.equal(windowsLike.USERPROFILE, "C:\\Users\\safe");
+  for (const key of ["APPDATA", "LOCALAPPDATA", "npm_execpath"]) assert.equal(key in windowsLike, false);
+});
+
+test("locked installs reject unreviewed dependency lifecycle scripts", async () => {
+  const lockfile = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+  assert.doesNotThrow(() => assertReviewedInstallScripts(lockfile));
+  const unexpected = structuredClone(lockfile);
+  unexpected.packages["node_modules/unreviewed"] = { version: "1.0.0", hasInstallScript: true };
+  assert.throws(() => assertReviewedInstallScripts(unexpected), /unreviewed dependency lifecycle scripts/);
+  const changed = structuredClone(lockfile);
+  const [reviewedPath] = REVIEWED_IGNORED_LIFECYCLE_SCRIPTS.keys();
+  changed.packages[reviewedPath].version = "999.0.0";
+  assert.throws(() => assertReviewedInstallScripts(changed), /reviewed ignored lifecycle script changed/);
 });
 
 test("the adapter emits one bounded non-searchable current-source stub without ancestor content", async () => {

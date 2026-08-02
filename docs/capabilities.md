@@ -769,9 +769,12 @@ configured-tree source coverage, semantic source-root-relative routes,
 reserved generated-public namespaces, locale-independent ordering, workflow
 lease, and recoverable publication transaction fail closed before mixed or
 active content can be claimed. Index flags cannot hide changed runtime,
-configuration, source, token, or media bytes. Git subprocesses receive only a small
-non-secret environment allowlist; inherited credential, loader, and Git
-configuration variables never cross the boundary. A broken current Markdown blob yields only a
+configuration, source, token, or media bytes. The locked installer verifies the
+exact lifecycle-script inventory and disables dependency scripts. Install,
+build, preview, browser, and Git subprocesses receive only a small non-secret
+environment allowlist; inherited provider, cloud, package-registry credential,
+and loader variables never cross the boundary, while Git also rejects inherited
+configuration. A broken current Markdown blob yields only a
 bounded, visible, non-searchable current-source error page; Git history and
 previous generated data are never republished.
 `codeflow validate --portal <directory>` executes no project code and writes

@@ -280,6 +280,36 @@ fn portal_bundle_is_single_complete_and_bounded() {
         workflow.contains("path.join(\"node_modules\", \"astro\", \"bin\", \"astro.mjs\")"),
         "the portal workflow must execute the pinned Astro package entrypoint"
     );
+    assert!(
+        workflow.contains("env: hardenedChildEnvironment()"),
+        "portal workflow children must receive the shared allowlisted environment"
+    );
+    let browser = std::fs::read_to_string(bundle.join("scripts/browser-verify.mjs"))
+        .expect("portal browser verifier is readable");
+    assert!(
+        browser.contains("env: hardenedChildEnvironment(process.env, { BROWSER: \"none\" })")
+            && browser.contains("env: hardenedChildEnvironment(),"),
+        "portal preview and browser children must receive the shared allowlisted environment"
+    );
+    assert!(
+        !browser.contains("env: { ...process.env"),
+        "portal browser verification must not forward the ambient environment"
+    );
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(bundle.join("package.json")).expect("portal package is readable"),
+    )
+    .expect("portal package is JSON");
+    assert_eq!(
+        package["scripts"]["deps:install"], "node scripts/install-dependencies.mjs",
+        "the portal must expose its hardened locked-install entrypoint"
+    );
+    let installer = std::fs::read_to_string(bundle.join("scripts/install-dependencies.mjs"))
+        .expect("portal dependency installer is readable");
+    assert!(
+        installer.contains("spawn(process.execPath, [npmCli, \"ci\", \"--ignore-scripts\", \"--no-audit\", \"--no-fund\"]")
+            && installer.contains("env: hardenedChildEnvironment()"),
+        "the portal dependency installer must use npm without a shell and disable lifecycle scripts under the allowlisted environment"
+    );
     for forbidden in [
         root.join("assets/base/agents/skills/cf-docs-portal/package-lock.json"),
         root.join(".agents/skills/cf-docs-portal/package-lock.json"),

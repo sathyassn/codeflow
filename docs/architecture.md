@@ -447,9 +447,11 @@ the route contract is qualified through a real Starlight build rather than a
 string-only unit test. It parses GFM
 through a syntax tree and publishes all generated roots transactionally under
 one workflow lease with locale-independent ordering. Commit inventory and blob
-reads are batched and bounded; Git receives only a small non-secret environment
-allowlist, and prompts, lazy fetching, replacement objects, fsmonitor, pagers,
-optional locks, and inherited redirection are disabled. A broken current source
+reads are batched and bounded. The locked installer verifies the exact set of
+dependency lifecycle scripts before disabling them; install, build, preview,
+browser, and Git children receive only a small non-secret environment allowlist.
+Git prompts, lazy fetching, replacement objects, fsmonitor, pagers, optional
+locks, and inherited redirection are additionally disabled. A broken current source
 gets only a bounded visible error page at its stable route, outside the active
 graph, search, previews, and current-content indexes; history is never walked
 or republished. `codeflow validate --portal <dir>` is a read-only Rust verifier

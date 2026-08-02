@@ -211,14 +211,19 @@ search, source links, and machine-readable documentation twins justify it:
 ```sh
 codeflow portal setup --path docs-portal
 cd docs-portal
-npm ci
+npm run deps:install
 npm run check
 npm run build
 cd ..
 codeflow validate --portal docs-portal
 ```
 
-The setup is offline and repository-relative. It records one adopted root;
+The managed dependency installer checks the lockfile's lifecycle-script
+inventory, keeps those scripts disabled, and passes only a small non-secret
+environment to npm. Do not substitute plain `npm ci`; a required future
+lifecycle exception belongs in the reviewed managed installer with an
+executable canary. The setup itself is offline and repository-relative. It
+records one adopted root;
 repeated setup and ordinary `codeflow update` reconcile the managed starter
 without replacing `portal.config.json`. Configure source roots there rather
 than copying authoritative prose into the portal. Generated content and search
