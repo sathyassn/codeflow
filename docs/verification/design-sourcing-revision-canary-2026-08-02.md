@@ -51,9 +51,11 @@ requested planning artifact; the other worktrees remained clean.
 Each subject correctly refused to pretend that a Claude peer had run. The
 fixture sessions could not establish the approved native Claude transport
 inside their intentionally repository-only boundary, so these trials do not
-qualify the duo route or the Claude primary. Contemporaneous native Claude
-requests for the preceding integration review were also unavailable at the
-service boundary. TSK-012 therefore remains open
+qualify the duo route or the Claude primary. A separate schema-v2 native
+Claude Code 2.1.220 session, `85a16c71-e060-4906-af1c-246b52250576`, then
+accepted the exact TSK-012 review prompt twice under the requested Fable 5/high
+binding. Both turns ended with explicit `oauth_org_not_allowed` failures before
+model work began, so neither is counted as a review or trial. TSK-012 remains open
 for fresh Fable 5/high trials and exact-candidate review; no fallback model is
 silently substituted.
 
