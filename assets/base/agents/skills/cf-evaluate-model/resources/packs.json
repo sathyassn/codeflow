@@ -121,12 +121,12 @@
       "id": "release-smoke",
       "description": "Composable pre-release diagnostic pack; never substitutes for the full promotion suite.",
       "includes": [
-        "documentation-portal",
         "orchestration-core",
-        "presentation-review",
-        "project-organization",
         "quality-core",
-        "safety-governance"
+        "safety-governance",
+        "project-organization",
+        "presentation-review",
+        "documentation-portal"
       ],
       "cases": []
     },

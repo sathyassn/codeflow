@@ -3305,6 +3305,248 @@ mod tests {
     }
 
     #[test]
+    fn public_validator_accepts_a_complete_commit_anchored_portal() {
+        let temp = tempfile::tempdir().unwrap();
+        for directory in [
+            ".codeflow",
+            "docs",
+            "portal/.portal/generated",
+            "portal/src/content/docs/orient",
+            "portal/public/markdown/orient",
+            "portal/dist/orient/guide",
+        ] {
+            std::fs::create_dir_all(temp.path().join(directory)).unwrap();
+        }
+        let config = br#"{
+          "schema_version": 1,
+          "title": "Fixture guide",
+          "description": "Complete public validator fixture",
+          "theme": "signal",
+          "repository_url": null,
+          "repository_root": "..",
+          "release_version": null,
+          "primitive_tokens": null,
+          "source_roots": ["docs"],
+          "exclude": [],
+          "layers": [
+            {"id":"orient","label":"Orient","description":"Start","paths":["docs/guide.md"]},
+            {"id":"system","label":"System","description":"Decisions","prefixes":["docs/decisions"]},
+            {"id":"reference","label":"Reference","description":"Other","fallback":true}
+          ],
+          "base": "/"
+        }"#;
+        let source = b"# Guide\n\nCommit-anchored source.\n";
+        std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
+        std::fs::write(temp.path().join("docs/guide.md"), source).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "portal-tests@codeflow.invalid"][..],
+            &["config", "user.name", "Portal tests"][..],
+            &["add", "docs", "portal/portal.config.json"][..],
+            &["commit", "-q", "-m", "fixture"][..],
+        ] {
+            assert!(Command::new("git")
+                .args(["-C"])
+                .arg(temp.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let commit = git_text_bounded(temp.path(), &["rev-parse", "HEAD"], 1024)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let source_hash = sha256_hex(source);
+        let snippet_hash = sha256_hex(b"# Guide");
+        let rendered = format!(
+            "---\ntitle: \"Guide\"\n---\n\n<!-- codeflow-page-provenance source_sha256={source_hash} built_from_commit={commit} portal_version=1.0.0 release_version=none -->\n<!-- codeflow-source-snippet sha256={snippet_hash} lines=1-1 -->\n<div class=\"portal-provenance\">Source <code>docs/guide.md</code> at <code>{commit}</code></div>\n<div data-pagefind-body data-codeflow-search-root=\"orient/guide\">\n\n# Guide\n\nCommit-anchored source.\n\n</div>\n"
+        );
+        let rendered_hash = sha256_hex(rendered.as_bytes());
+        for path in [
+            "portal/src/content/docs/orient/guide.md",
+            "portal/public/markdown/orient/guide.md",
+        ] {
+            std::fs::write(temp.path().join(path), &rendered).unwrap();
+        }
+        let llms =
+            "# Fixture guide\n\n- [orient/guide](./markdown/orient/guide.md) — docs/guide\\.md\n";
+        std::fs::write(temp.path().join("portal/public/llms.txt"), llms).unwrap();
+        let built =
+            "<main data-pagefind-body data-codeflow-search-root=\"orient/guide\">Guide</main>\n";
+        std::fs::write(
+            temp.path().join("portal/dist/orient/guide/index.html"),
+            built,
+        )
+        .unwrap();
+        let adoption = serde_json::json!({
+            "schema_version": 1,
+            "root": "portal",
+            "starter_version": "1.0.0",
+            "files": {
+                "portal.config.json": {
+                    "ownership": "user-owned",
+                    "pristine_sha256": sha256_hex(config)
+                }
+            }
+        });
+        std::fs::write(
+            temp.path().join(".codeflow/docs-portal.json"),
+            serde_json::to_vec(&adoption).unwrap(),
+        )
+        .unwrap();
+        let evidence = serde_json::json!({
+            "schema_version": 1,
+            "generator": {"name": "@codeflow/docs-portal", "version": "1.0.0"},
+            "repository": {"root": "..", "commit": commit, "release_version": null},
+            "config_sha256": sha256_hex(config),
+            "primitive_tokens": null,
+            "media": [],
+            "pages": [{
+                "source_path": "docs/guide.md",
+                "source_sha256": source_hash,
+                "built_from_commit": commit,
+                "route": "orient/guide",
+                "title": "Guide",
+                "status": null,
+                "output_markdown": "src/content/docs/orient/guide.md",
+                "output_markdown_sha256": rendered_hash,
+                "markdown_twin": "public/markdown/orient/guide.md",
+                "markdown_twin_sha256": rendered_hash,
+                "stale": false,
+                "searchable": true,
+                "ids": [],
+                "relationships": [],
+                "backlinks": [],
+                "snippets": [{"start_line": 1, "end_line": 1, "sha256": snippet_hash}],
+                "stale_reason": null
+            }],
+            "llms": {"path": "public/llms.txt", "sha256": sha256_hex(llms.as_bytes())},
+            "artifacts": [{
+                "path": "dist/orient/guide/index.html",
+                "sha256": sha256_hex(built.as_bytes())
+            }]
+        });
+        std::fs::write(
+            temp.path().join("portal/.portal/generated/evidence.json"),
+            serde_json::to_vec(&evidence).unwrap(),
+        )
+        .unwrap();
+
+        let report = validate_portal(temp.path(), Path::new("portal"));
+        assert!(report.is_clean(), "{:?}", report.issues);
+        assert_eq!(report.checked_pages, 1);
+
+        std::fs::write(
+            temp.path().join("docs/guide.md"),
+            "# Uncommitted worktree edit\n",
+        )
+        .unwrap();
+        let worktree_dirty = validate_portal(temp.path(), Path::new("portal"));
+        assert!(worktree_dirty.is_clean(), "{:?}", worktree_dirty.issues);
+
+        let evidence_path = temp.path().join("portal/.portal/generated/evidence.json");
+        let assert_rejected = |name: &str, candidate: &serde_json::Value, expected: &str| {
+            std::fs::write(&evidence_path, serde_json::to_vec(candidate).unwrap()).unwrap();
+            let rejected = validate_portal(temp.path(), Path::new("portal"));
+            assert!(
+                rejected.issues.iter().any(|issue| issue.contains(expected)),
+                "case {name} expected {expected:?}: {:?}",
+                rejected.issues
+            );
+        };
+
+        let mut candidate = evidence.clone();
+        candidate["schema_version"] = 2.into();
+        assert_rejected("schema", &candidate, "unsupported evidence schema");
+
+        let mut candidate = evidence.clone();
+        candidate["generator"]["name"] = "forged-generator".into();
+        assert_rejected("generator", &candidate, "name/version is not pinned");
+
+        let mut candidate = evidence.clone();
+        candidate["generator"]["version"] = "9.9.9".into();
+        assert_rejected(
+            "starter-version",
+            &candidate,
+            "does not match adopted starter",
+        );
+
+        let mut candidate = evidence.clone();
+        candidate["repository"]["release_version"] = "not a version".into();
+        assert_rejected("release", &candidate, "release version is invalid");
+
+        let mut candidate = evidence.clone();
+        candidate["repository"]["root"] = ".".into();
+        assert_rejected("repository-root", &candidate, "does not resolve");
+
+        let mut candidate = evidence.clone();
+        candidate["config_sha256"] = "0".repeat(64).into();
+        assert_rejected("configuration", &candidate, "configuration hash mismatch");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["built_from_commit"] = "0".repeat(40).into();
+        assert_rejected("page-commit", &candidate, "was not built from");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["route"] = "../guide".into();
+        assert_rejected("route", &candidate, "duplicate or unsafe route");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["title"] = "".into();
+        assert_rejected("title", &candidate, "has an invalid title");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["status"] = "".into();
+        assert_rejected("status", &candidate, "has an invalid status");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["output_markdown"] = "src/content/docs/wrong.md".into();
+        assert_rejected("canonical-output", &candidate, "canonical route/content");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["source_sha256"] = "0".repeat(64).into();
+        assert_rejected("source-hash", &candidate, "Git source hash mismatch");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["stale"] = true.into();
+        assert_rejected("stale-envelope", &candidate, "invalid stale-stub envelope");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["ids"] = serde_json::json!(["TSK-999"]);
+        assert_rejected("identity", &candidate, "claims missing or invalid ID");
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["relationships"] = serde_json::json!([{
+            "type": "unknown",
+            "target": "TSK-999",
+            "source_id": null
+        }]);
+        assert_rejected(
+            "relationship",
+            &candidate,
+            "invalid or duplicate relationship",
+        );
+
+        let mut candidate = evidence.clone();
+        candidate["pages"][0]["backlinks"] = serde_json::json!([{
+            "type": "related",
+            "source_route": "../unsafe",
+            "target": "TSK-999",
+            "source_id": null
+        }]);
+        assert_rejected("backlink", &candidate, "invalid or duplicate backlink");
+
+        let mut candidate = evidence.clone();
+        candidate["llms"]["path"] = "public/list.txt".into();
+        assert_rejected("llms", &candidate, "must target public/llms.txt");
+
+        let mut candidate = evidence.clone();
+        candidate["artifacts"][0]["path"] = "public/bundle.html".into();
+        assert_rejected("artifact", &candidate, "must stay under dist");
+    }
+
+    #[test]
     fn semantic_route_fixtures_stay_in_parity_with_the_javascript_adapter() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),

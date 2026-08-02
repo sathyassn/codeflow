@@ -131,7 +131,7 @@
     ".agents/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "1c0ad94fdf3a8e8ca065fd921b13f2a2132a8254f960635b48d3b700b3ac7aa4",
+      "sha256": "187cea8ffda6fd1f4da37b8cc0c394b8b039efdf9e6404635a5a7455fba6c08d",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
@@ -401,7 +401,7 @@
     ".claude/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "1c0ad94fdf3a8e8ca065fd921b13f2a2132a8254f960635b48d3b700b3ac7aa4",
+      "sha256": "187cea8ffda6fd1f4da37b8cc0c394b8b039efdf9e6404635a5a7455fba6c08d",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
