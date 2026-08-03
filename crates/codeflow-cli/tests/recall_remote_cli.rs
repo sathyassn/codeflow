@@ -92,10 +92,10 @@ fn recall_all_answers_why_question_across_two_repos() {
     let text = stdout(&out);
     assert!(text.contains("[proj-a]"), "missing repo-a hit:\n{text}");
     assert!(text.contains("[proj-b]"), "missing repo-b hit:\n{text}");
-    let adr_path = Path::new("docs")
-        .join("decisions")
-        .join("ADR-0003-recall-engine.md");
-    assert!(text.contains(adr_path.to_string_lossy().as_ref()), "{text}");
+    assert!(
+        text.contains("docs/decisions/ADR-0003-recall-engine.md"),
+        "repository-relative output must remain portable:\n{text}"
+    );
     assert!(
         text.contains("(session)"),
         "session summary should surface:\n{text}"
