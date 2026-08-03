@@ -155,6 +155,7 @@ async function stopChildOnce(child, signal, graceMs) {
   if (exitProven(child)) return;
   let proven = false;
   let ambiguousExit = false;
+  const childErrors = [];
   let resolveExit;
   const exited = new Promise((resolve) => { resolveExit = resolve; });
   const onExit = (code, exitSignal) => {
@@ -165,7 +166,9 @@ async function stopChildOnce(child, signal, graceMs) {
     proven = true;
     resolveExit();
   };
+  const onError = (error) => { childErrors.push(boundedMessage(error)); };
   child.on("exit", onExit);
+  child.on("error", onError);
   if (exitProven(child)) {
     proven = true;
     resolveExit();
@@ -179,6 +182,7 @@ async function stopChildOnce(child, signal, graceMs) {
     if (await boundedExitProof(exited, () => proven || exitProven(child), graceMs)) return;
   } finally {
     child.off("exit", onExit);
+    child.off("error", onError);
   }
 
   const detail = attempts.map(({ attemptedSignal, accepted, error }) => {
@@ -186,7 +190,8 @@ async function stopChildOnce(child, signal, graceMs) {
     return `${attemptedSignal} returned ${accepted}`;
   }).join("; ");
   const ambiguity = ambiguousExit ? "; an exit event without a code or signal was not accepted as proof" : "";
-  throw new Error(`child exit was not proven after bounded termination (${detail}${ambiguity})`);
+  const errors = childErrors.length > 0 ? `; child emitted error: ${childErrors.join("; ")}` : "";
+  throw new Error(`child exit was not proven after bounded termination (${detail}${ambiguity}${errors})`);
 }
 
 function signalChild(child, signal) {

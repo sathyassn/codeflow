@@ -992,6 +992,35 @@ test("child cleanup rejects kill failure without exit proof", async () => {
   );
 });
 
+test("child cleanup contains asynchronous kill errors", async () => {
+  class AsyncKillErrorChild extends EventEmitter {
+    pid = 45;
+    exitCode = null;
+    signalCode = null;
+    kill(signal) {
+      queueMicrotask(() => this.emit("error", new Error(`${signal} denied`)));
+      return true;
+    }
+  }
+  await assert.rejects(
+    stopChild(new AsyncKillErrorChild(), "SIGTERM", { graceMs: 10 }),
+    /child emitted error: SIGTERM denied; SIGKILL denied/,
+  );
+});
+
+test("child cleanup reports synchronous kill exceptions", async () => {
+  class ThrowingKillChild extends EventEmitter {
+    pid = 46;
+    exitCode = null;
+    signalCode = null;
+    kill(signal) { throw new Error(`${signal} refused`); }
+  }
+  await assert.rejects(
+    stopChild(new ThrowingKillChild(), "SIGTERM", { graceMs: 10 }),
+    /SIGTERM threw SIGTERM refused; SIGKILL threw SIGKILL refused/,
+  );
+});
+
 test("child cleanup rejects an ambiguous exit event", async () => {
   class AmbiguousExitChild extends EventEmitter {
     pid = 43;
