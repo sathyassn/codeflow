@@ -129,11 +129,7 @@ try {
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   tracingStarted = true;
   const page = context.pages()[0] ?? await context.newPage();
-  await page.goto(pathToFileURL(bootstrapPath).href);
-  await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"));
-  // The application keeps an authenticated long-poll open, so network-idle is
-  // not a valid readiness signal. DOM readiness plus owned content is.
-  await page.waitForLoadState("domcontentloaded");
+  await openAuthenticatedPresentation(page, bootstrapPath, port);
   const initialText = await page.locator("body").innerText();
   if (!initialText.includes("First revision")) {
     throw new Error(`Authenticated application omitted its document text at ${page.url()}: ${initialText.slice(0, 2_000)}`);
@@ -196,8 +192,7 @@ try {
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
-  await revisedPage.goto(pathToFileURL(secondBootstrapPath).href);
-  await revisedPage.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"));
+  await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
   await revisedPage.getByText("Second revision").waitFor();
   const exportPath = join(output, "review.html");
   run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "technical", "--mode", "dark"], project);
@@ -482,6 +477,17 @@ async function launchBrowser(profile) {
   });
   await launched.addInitScript({ content: axe.source });
   return launched;
+}
+
+async function openAuthenticatedPresentation(page, bootstrapPath, servicePort) {
+  // The private file immediately submits into the loopback service. Waiting
+  // for its full load event conflates that handoff with the destination page
+  // and can hang behind long-lived application requests on a loaded runner.
+  await page.goto(pathToFileURL(bootstrapPath).href, { waitUntil: "commit" });
+  await page.waitForURL(
+    new RegExp(`^http://127\\.0\\.0\\.1:${servicePort}/app/`, "u"),
+    { waitUntil: "domcontentloaded" },
+  );
 }
 
 function observeContext(
