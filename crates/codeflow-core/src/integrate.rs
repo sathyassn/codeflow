@@ -722,14 +722,31 @@ mod tests {
     #[test]
     fn rejects_a_branch_that_moved_during_the_test_gate() {
         let dir = repo_with_feature_branch();
-        // The gate command force-advances feat/x mid-run, then exits 0 (gate passes).
-        write_test_config(dir.path(), "git commit --allow-empty -m moved; true");
+        // Prepare an untested descendant, then make the passing gate advance
+        // feat/x to it. update-ref needs no ambient Git identity and returns a
+        // failure if the intended mutation does not happen.
+        git(dir.path(), &["checkout", "-b", "untested", "feat/x"]);
+        commit_file(
+            dir.path(),
+            "untested.txt",
+            "untested\n",
+            "test: add untested change",
+        );
+        git(dir.path(), &["checkout", "main"]);
+        write_test_config(
+            dir.path(),
+            "git update-ref refs/heads/feat/x refs/heads/untested",
+        );
 
         let before = branch_oid(dir.path(), "main");
         let err = integrate(dir.path(), "feat/x", "main").expect_err("must refuse");
         assert!(
             matches!(err, IntegrateError::MergeFailed { .. }),
             "expected a moved-branch refusal, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("moved during integrate"),
+            "refusal must identify the tested-tip race: {err}"
         );
         assert_eq!(
             branch_oid(dir.path(), "main"),
