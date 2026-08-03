@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
+import { TextDecoder } from "node:util";
 import GithubSlugger from "github-slugger";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
@@ -9,6 +10,22 @@ import { unified } from "unified";
 import YAML from "yaml";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+export function checkoutEquivalentBytes(committed, worktree) {
+  if (committed.equals(worktree)) return true;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  try {
+    const canonical = (bytes) => {
+      const text = decoder.decode(bytes);
+      const normalized = text.replace(/\r\n/g, "\n");
+      return normalized.includes("\r") ? null : normalized;
+    };
+    const committedText = canonical(committed);
+    return committedText !== null && committedText === canonical(worktree);
+  } catch {
+    return false;
+  }
+}
 
 // JavaScript's relational string comparison is specified over UTF-16 code
 // units. Keep evidence ordering independent of the host locale and ICU build.

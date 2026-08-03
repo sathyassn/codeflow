@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -35,6 +35,14 @@ test("safe paths reject traversal and platform separators", () => {
   assert.throws(() => safeRelative(`docs/${"é".repeat(128)}`));
   assert.equal(safeRelative(`docs/${"é".repeat(127)}`), `docs/${"é".repeat(127)}`);
   assert.equal(safeRelative("docs/guide.md"), "docs/guide.md");
+});
+
+test("checkout byte comparison permits only reversible text newlines", () => {
+  assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\r\nbeta\r\n")), true);
+  assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\nbeta changed\n")), false);
+  assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\rbeta\n")), false);
+  assert.equal(checkoutEquivalentBytes(Buffer.from([0xff, 0x00]), Buffer.from([0xff, 0x00])), true);
+  assert.equal(checkoutEquivalentBytes(Buffer.from([0xff, 0x00]), Buffer.from([0xfe, 0x00])), false);
 });
 
 test("producer evidence limits reject every verifier boundary at N plus one", () => {
@@ -1509,6 +1517,9 @@ test("tracked public runtime bytes are authoritative and untracked active conten
   }
   const root = await selfContainedPortalFixture();
   try {
+    const nodeVersionPath = path.join(root, ".node-version");
+    const nodeVersion = await readFile(nodeVersionPath, "utf8");
+    await writeFile(nodeVersionPath, nodeVersion.replace(/\r?\n/g, "\r\n"));
     await writeFile(path.join(root, "public/rogue.html"), "<script>rogue()</script>");
     assert.match(runLocalAdapter(root, false).stderr, /must match HEAD exactly|refusing uncommitted portal file/);
   } finally { await rm(root, { recursive: true, force: true }); }

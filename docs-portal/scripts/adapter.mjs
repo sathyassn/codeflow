@@ -3,7 +3,7 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
+  amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
   pinnedSourceUrl as providerSourceUrl, referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
@@ -392,7 +392,9 @@ async function assertWorktreeMatchesCommit(records, committedBlobs, perFileBytes
     const worktree = await readBoundedRegularFile(path.join(repositoryRoot, record.path), perFileBytes, `${label} ${record.path}`);
     totalBytes += committed.length;
     if (totalBytes > totalLimit) throw new Error(`${label} inputs exceed ${totalLimit} bytes`);
-    if (!committed.equals(worktree)) throw new Error(`${label} does not match ${commit}: ${record.path}`);
+    // Git may materialize committed LF text as CRLF on Windows. Accept only
+    // that reversible text transformation; committed blobs remain authority.
+    if (!checkoutEquivalentBytes(committed, worktree)) throw new Error(`${label} does not match ${commit}: ${record.path}`);
   }
 }
 
