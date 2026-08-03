@@ -38,47 +38,76 @@ pub(crate) fn harden_private_file(path: &Path, file: &fs::File) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub(crate) fn open_private_create_new(path: &Path) -> Result<fs::File> {
-    use std::os::windows::{ffi::OsStrExt as _, io::FromRawHandle as _};
-    use windows_sys::Win32::{
-        Foundation::{LocalFree, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE},
-        Security::{
+struct PrivateSecurityDescriptor(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
+
+#[cfg(windows)]
+impl PrivateSecurityDescriptor {
+    fn new(path: &Path, directory: bool) -> Result<Self> {
+        use windows_sys::Win32::Security::{
             Authorization::{
                 ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
             },
-            PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
-        },
+            PSECURITY_DESCRIPTOR,
+        };
+
+        let current = current_user_sid()?;
+        let inheritance = if directory { "OICI" } else { "" };
+        let sddl = format!(
+            "O:{sid}G:{sid}D:P(A;{inheritance};GA;;;{sid})",
+            sid = current.text
+        );
+        let sddl = sddl
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        if unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &raw mut descriptor,
+                std::ptr::null_mut(),
+            )
+        } == 0
+            || descriptor.is_null()
+        {
+            return Err(PresentError::UnsafePath(path.to_path_buf()));
+        }
+        Ok(Self(descriptor))
+    }
+
+    fn attributes(&mut self) -> windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+
+        SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
+                .expect("security attributes size fits u32"),
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PrivateSecurityDescriptor {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::LocalFree(self.0.cast()) };
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn open_private_create_new(path: &Path) -> Result<fs::File> {
+    use std::os::windows::{ffi::OsStrExt as _, io::FromRawHandle as _};
+    use windows_sys::Win32::{
+        Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE},
         Storage::FileSystem::{
             CreateFileW, CREATE_NEW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT,
             FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
         },
     };
 
-    let current = current_user_sid()?;
-    let sddl = format!("O:{sid}G:{sid}D:P(A;;GA;;;{sid})", sid = current.text);
-    let sddl = sddl
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    if unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(),
-            SDDL_REVISION_1,
-            &raw mut descriptor,
-            std::ptr::null_mut(),
-        )
-    } == 0
-        || descriptor.is_null()
-    {
-        return Err(PresentError::UnsafePath(path.to_path_buf()));
-    }
-    let security = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
-            .expect("security attributes size fits u32"),
-        lpSecurityDescriptor: descriptor,
-        bInheritHandle: 0,
-    };
+    let mut descriptor = PrivateSecurityDescriptor::new(path, false)?;
+    let security = descriptor.attributes();
     let wide_path = path
         .as_os_str()
         .encode_wide()
@@ -95,7 +124,6 @@ pub(crate) fn open_private_create_new(path: &Path) -> Result<fs::File> {
             std::ptr::null_mut(),
         )
     };
-    unsafe { LocalFree(descriptor.cast()) };
     if handle == INVALID_HANDLE_VALUE {
         return Err(PresentError::io(path, std::io::Error::last_os_error()));
     }
@@ -104,6 +132,24 @@ pub(crate) fn open_private_create_new(path: &Path) -> Result<fs::File> {
         return Err(error);
     }
     Ok(file)
+}
+
+#[cfg(windows)]
+pub(crate) fn create_private_directory(path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+
+    let mut descriptor = PrivateSecurityDescriptor::new(path, true)?;
+    let security = descriptor.attributes();
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    if unsafe { CreateDirectoryW(wide_path.as_ptr(), &raw const security) } == 0 {
+        return Err(PresentError::io(path, std::io::Error::last_os_error()));
+    }
+    verify_private_directory(path)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -136,50 +182,6 @@ pub(crate) fn is_link_like(metadata: &fs::Metadata) -> bool {
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn is_link_like(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
-}
-
-#[cfg(windows)]
-pub(crate) fn harden_private_path(path: &Path, directory: bool) -> Result<()> {
-    let sid = &current_user_sid()?.text;
-    let owner = format!("*{sid}");
-    let grant = if directory {
-        format!("*{sid}:(OI)(CI)F")
-    } else {
-        format!("*{sid}:F")
-    };
-    let icacls = trusted_system_path("icacls.exe")?;
-    let owner_output = icacls_owner_command(&icacls, path, &owner)
-        .output()
-        .map_err(|error| PresentError::io(path, error))?;
-    if !owner_output.status.success()
-        || owner_output.stdout.len() + owner_output.stderr.len() > 64 * 1024
-    {
-        return Err(PresentError::UnsafePath(path.to_path_buf()));
-    }
-    let acl_output = icacls_acl_command(&icacls, path, &grant)
-        .output()
-        .map_err(|error| PresentError::io(path, error))?;
-    if !acl_output.status.success() || acl_output.stdout.len() + acl_output.stderr.len() > 64 * 1024
-    {
-        return Err(PresentError::UnsafePath(path.to_path_buf()));
-    }
-    Ok(())
-}
-
-#[cfg(any(windows, test))]
-fn icacls_owner_command(executable: &Path, path: &Path, owner: &str) -> Command {
-    let mut command = restricted_command(executable);
-    command.arg(path).args(["/setowner", owner]);
-    command
-}
-
-#[cfg(any(windows, test))]
-fn icacls_acl_command(executable: &Path, path: &Path, grant: &str) -> Command {
-    let mut command = restricted_command(executable);
-    command
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r", grant]);
-    command
 }
 
 #[cfg(windows)]
@@ -607,6 +609,14 @@ mod windows_tests {
     use super::*;
 
     #[test]
+    fn private_directory_is_owner_private_at_creation() {
+        let temporary = tempfile::tempdir().expect("Windows private-directory fixture");
+        let path = temporary.path().join("private");
+        create_private_directory(&path).expect("private directory is created");
+        verify_private_directory(&path).expect("private directory descriptor verifies");
+    }
+
+    #[test]
     fn trusted_system_path_rejects_traversal_and_accepts_known_binary() {
         assert!(trusted_system_path("../taskkill.exe").is_err());
         assert!(trusted_system_path("taskkill.exe").is_ok());
@@ -671,39 +681,6 @@ mod tests {
             .env("ANTHROPIC_API_KEY", "anthropic-canary");
         apply_restricted_environment(&mut command);
         assert_restricted_environment(&command);
-
-        let owner_command = icacls_owner_command(
-            Path::new("C:/state"),
-            Path::new("C:/state/session"),
-            "*S-1-5-21-1",
-        );
-        assert_restricted_environment(&owner_command);
-        let owner_arguments: Vec<_> = owner_command.get_args().collect();
-        assert_eq!(
-            owner_arguments,
-            [
-                Path::new("C:/state/session").as_os_str(),
-                OsStr::new("/setowner"),
-                OsStr::new("*S-1-5-21-1"),
-            ]
-        );
-
-        let acl_command = icacls_acl_command(
-            Path::new("C:/state"),
-            Path::new("C:/state/session"),
-            "*S-1-5-21-1:F",
-        );
-        assert_restricted_environment(&acl_command);
-        let acl_arguments: Vec<_> = acl_command.get_args().collect();
-        assert_eq!(
-            acl_arguments,
-            [
-                Path::new("C:/state/session").as_os_str(),
-                OsStr::new("/inheritance:r"),
-                OsStr::new("/grant:r"),
-                OsStr::new("*S-1-5-21-1:F"),
-            ]
-        );
     }
 
     #[test]

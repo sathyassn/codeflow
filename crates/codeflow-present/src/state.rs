@@ -16,11 +16,11 @@ use crate::{
     document::{ParsedDocument, PresentationDocument, Provenance},
     error::{PresentError, Result},
     limits,
-    platform::{harden_private_path, is_link_like},
+    platform::is_link_like,
 };
 
 #[cfg(not(windows))]
-use crate::platform::harden_private_file;
+use crate::platform::{harden_private_file, harden_private_path};
 
 const STATE_SCHEMA_VERSION: u32 = 1;
 const UPDATE_MARKER: &str = ".updating.json";
@@ -2361,25 +2361,30 @@ pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
             }
             Ok(_) => return Err(PresentError::UnsafePath(current)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let builder = fs::DirBuilder::new();
-                #[cfg(unix)]
-                let builder = {
-                    use std::os::unix::fs::DirBuilderExt;
-                    let mut builder = builder;
-                    builder.mode(0o700);
+                #[cfg(windows)]
+                crate::platform::create_private_directory(&current)?;
+                #[cfg(not(windows))]
+                {
+                    let builder = fs::DirBuilder::new();
+                    #[cfg(unix)]
+                    let builder = {
+                        use std::os::unix::fs::DirBuilderExt;
+                        let mut builder = builder;
+                        builder.mode(0o700);
+                        builder
+                    };
+                    #[cfg(not(unix))]
+                    let builder = builder;
                     builder
-                };
-                #[cfg(not(unix))]
-                let builder = builder;
-                builder
-                    .create(&current)
-                    .map_err(|error| PresentError::io(&current, error))?;
-                let metadata = fs::symlink_metadata(&current)
-                    .map_err(|error| PresentError::io(&current, error))?;
-                if !metadata.is_dir() || is_link_like(&metadata) {
-                    return Err(PresentError::UnsafePath(current));
+                        .create(&current)
+                        .map_err(|error| PresentError::io(&current, error))?;
+                    let metadata = fs::symlink_metadata(&current)
+                        .map_err(|error| PresentError::io(&current, error))?;
+                    if !metadata.is_dir() || is_link_like(&metadata) {
+                        return Err(PresentError::UnsafePath(current));
+                    }
+                    harden_private_path(&current, true)?;
                 }
-                harden_private_path(&current, true)?;
             }
             Err(error) => return Err(PresentError::io(&current, error)),
         }
