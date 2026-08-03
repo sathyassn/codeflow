@@ -138,9 +138,10 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
       window.__codeflowThemeBeforePaint = null;
       requestAnimationFrame(() => { window.__codeflowThemeBeforePaint = document.documentElement.dataset.theme ?? null; });
     });
-    // Screenshot-backed traces retain the interaction timeline without copying
-    // every traversed document snapshot into the bounded evidence envelope.
-    await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
+    // The named review screenshots carry visual evidence. Keep the trace to
+    // action/network metadata so all engines fit the deterministic evidence
+    // envelope instead of duplicating an unbounded screenshot timeline.
+    await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
     traceStarted = true;
     await context.route("**/*", async (route) => {
       const url = new URL(route.request().url());
