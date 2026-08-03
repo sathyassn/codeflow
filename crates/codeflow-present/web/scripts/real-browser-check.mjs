@@ -24,6 +24,7 @@ if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(runPrefix)) {
 }
 const injectCleanupFailure = process.argv.includes("--inject-cleanup-failure");
 const NAVIGATION_TIMEOUT_MS = 45_000;
+const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
 const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
 const windowsProfileConfinement = qualifyWindowsEnvironment();
 const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
@@ -482,11 +483,19 @@ async function launchBrowser(profile) {
 async function openAuthenticatedPresentation(page, bootstrapPath, servicePort) {
   // The private file immediately submits into the loopback service. Waiting
   // for its full load event conflates that handoff with the destination page
-  // and can hang behind long-lived application requests on a loaded runner.
-  await page.goto(pathToFileURL(bootstrapPath).href, { waitUntil: "commit" });
+  // and can hang behind long-lived application requests. A cold renderer on a
+  // loaded shared runner gets more startup room, still capped by the journey's
+  // whole 180-second deadline.
+  await page.goto(pathToFileURL(bootstrapPath).href, {
+    waitUntil: "commit",
+    timeout: timeoutWithinQualification(BOOTSTRAP_COMMIT_TIMEOUT_MS, "bootstrap document commit"),
+  });
   await page.waitForURL(
     new RegExp(`^http://127\\.0\\.0\\.1:${servicePort}/app/`, "u"),
-    { waitUntil: "domcontentloaded" },
+    {
+      waitUntil: "domcontentloaded",
+      timeout: timeoutWithinQualification(NAVIGATION_TIMEOUT_MS, "authenticated application readiness"),
+    },
   );
 }
 
@@ -746,6 +755,14 @@ function assertWithinDeadline(phase) {
   if (Date.now() >= qualificationDeadline) {
     throw new Error(`Qualification exceeded its 180-second deadline before ${phase}`);
   }
+}
+
+function timeoutWithinQualification(ceiling, phase) {
+  const remaining = qualificationDeadline - Date.now();
+  if (remaining <= 0) {
+    throw new Error(`Qualification exceeded its 180-second deadline before ${phase}`);
+  }
+  return Math.min(ceiling, remaining);
 }
 
 async function bounded(promise, timeout, phase) {
