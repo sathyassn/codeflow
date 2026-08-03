@@ -245,14 +245,31 @@ fn md_files_under(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn rel_to(root: &Path, path: &Path) -> String {
-    encode_path(path.strip_prefix(root).unwrap_or(path))
+    let encoded = encode_path(path.strip_prefix(root).unwrap_or(path));
+    #[cfg(windows)]
+    {
+        encoded.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        encoded
+    }
 }
 
 fn display_rel_to(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
+    let display = path
+        .strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
-        .into_owned()
+        .into_owned();
+    #[cfg(windows)]
+    {
+        display.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        display
+    }
 }
 
 #[cfg(unix)]

@@ -1172,11 +1172,15 @@ mod tests {
         );
         assert!(squashed.proof.contains("patch-equivalent"));
         let rendered = render_status(&view, false);
-        let canonical_worktree = std::fs::canonicalize(&wt_path).unwrap();
+        let rendered_path = squashed.path.as_deref().expect("worktree has a path");
+        assert_eq!(
+            std::fs::canonicalize(rendered_path).unwrap(),
+            std::fs::canonicalize(&wt_path).unwrap(),
+            "reported path must resolve to the linked worktree"
+        );
         assert!(
             rendered.contains(&format!(
-                "removable worktree feat/squashed -> {} (patch-equivalent in main)",
-                canonical_worktree.display()
+                "removable worktree feat/squashed -> {rendered_path} (patch-equivalent in main)"
             )),
             "{rendered}"
         );

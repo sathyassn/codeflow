@@ -35,7 +35,10 @@ for (const [path, locked] of Object.entries(lock.packages ?? {})) {
   const license = normalizeLicense(packageJson.license ?? packageJson.licenses);
   const record = { name, version: locked.version, license };
   if (name === "khroma" && locked.version === "2.1.0" && license === "UNKNOWN") {
-    const licenseText = await readFile(join(webRoot, path, "LICENSE"));
+    // The immutable 2.1.0 package publishes this file as lowercase `license`.
+    // Use the archive's real spelling so clean case-sensitive Linux installs
+    // verify the same evidence as macOS and Windows.
+    const licenseText = await readFile(join(webRoot, path, "license"));
     const hash = createHash("sha256").update(licenseText).digest("hex");
     if (hash !== "66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49") {
       throw new Error("khroma 2.1.0 license evidence changed");

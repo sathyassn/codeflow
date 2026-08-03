@@ -133,16 +133,16 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         for path in files {
             report.checked_records += 1;
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+            let display = relative.to_string_lossy().replace('\\', "/");
             if let Ok(content) = std::fs::read(&path) {
                 if let Ok((data, _)) = parse_frontmatter(&content) {
                     if let Some(identity) = supported_identity(&data, valid_identity) {
-                        let display = relative.display().to_string();
                         if let Some(first) = identities.get(&identity) {
                             report.issues.push(format!(
                                 "duplicate work id {identity}: {first} and {display}"
                             ));
                         } else {
-                            identities.insert(identity, display);
+                            identities.insert(identity, display.clone());
                         }
                     }
                 }
@@ -152,17 +152,15 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
                     report.issues.extend(
                         errors
                             .into_iter()
-                            .map(|error| format!("{}: {error}", relative.display())),
+                            .map(|error| format!("{display}: {error}")),
                     );
                     report.warnings.extend(
                         warnings
                             .into_iter()
-                            .map(|warning| format!("{}: {warning}", relative.display())),
+                            .map(|warning| format!("{display}: {warning}")),
                     );
                 }
-                Err(error) => report
-                    .issues
-                    .push(format!("{}: {error}", relative.display())),
+                Err(error) => report.issues.push(format!("{display}: {error}")),
             }
         }
     }

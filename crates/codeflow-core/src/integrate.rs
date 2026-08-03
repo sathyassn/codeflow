@@ -683,9 +683,10 @@ mod tests {
                 .trim()
                 .to_string();
         assert_eq!(root_head, "main", "root worktree stays on main");
+        let landed = fs::read_to_string(dir.path().join("feature.txt")).unwrap();
         assert_eq!(
-            fs::read_to_string(dir.path().join("feature.txt")).unwrap(),
-            "feature\n",
+            landed.lines().collect::<Vec<_>>(),
+            ["feature"],
             "target worktree files must match the landed tree"
         );
         let status = git(dir.path(), &["status", "--porcelain"]);
@@ -696,10 +697,19 @@ mod tests {
     #[test]
     fn successful_ref_update_warns_when_checkout_restore_fails() {
         let dir = repo_with_feature_branch();
-        write_test_config(
-            dir.path(),
-            "mkdir -p .git/hooks; printf '#!/bin/sh\\nexit 1\\n' > .git/hooks/post-checkout; chmod +x .git/hooks/post-checkout",
-        );
+        let hooks = dir.path().join(".codeflow/test-hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        let post_checkout = hooks.join("post-checkout");
+        fs::write(&post_checkout, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mut permissions = fs::metadata(&post_checkout).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&post_checkout, permissions).unwrap();
+        }
+        write_test_config(dir.path(), "git config core.hooksPath .codeflow/test-hooks");
 
         let outcome = integrate(dir.path(), "feat/x", "main")
             .expect("the landed ref is a partial success, not a failed integration");

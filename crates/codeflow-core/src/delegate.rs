@@ -1369,7 +1369,7 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -2269,5 +2269,24 @@ mod tests {
             validate_prompt_id(Some("not-a-uuid")).unwrap_err().kind,
             ErrorKind::Invalid
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn init_fails_closed_before_creating_native_windows_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let error = init("run-1", &state).unwrap_err();
+
+        assert_eq!(error.kind, ErrorKind::Invalid);
+        assert_eq!(
+            error.message,
+            "native Windows is unsupported for delegate state; use WSL2"
+        );
+        assert!(!state.exists());
     }
 }

@@ -2573,8 +2573,17 @@ fn load_fragment_artifact(
     budget_reported: &mut bool,
     report: &mut PortalValidationReport,
 ) -> Option<String> {
-    let built_relative = Path::new("dist").join(route).join("index.html");
-    let built = safe_join(portal, &built_relative, "portal fragment artifact", report)?;
+    // `route` is already a validated portable path. Keep that representation
+    // through `safe_join`: constructing a PathBuf with `join` first would turn
+    // its separators into `\\` on Windows and make the strict portable-path
+    // boundary reject CodeFlow's own canonical route.
+    let built_relative = format!("dist/{route}/index.html");
+    let built = safe_join(
+        portal,
+        Path::new(&built_relative),
+        "portal fragment artifact",
+        report,
+    )?;
     let html = read_bounded_text(&built, MAX_CLAIMED_FILE_BYTES).ok()?;
     let bytes = u64::try_from(html.len()).ok()?;
     let Some(remaining) = remaining_bytes.checked_sub(bytes) else {
@@ -3971,6 +3980,9 @@ mod tests {
             &["init", "-q"][..],
             &["config", "user.email", "portal-tests@codeflow.invalid"][..],
             &["config", "user.name", "Portal tests"][..],
+            // Preserve the fixture's intentional CRLF bytes in the committed
+            // blob regardless of the Windows runner's global Git defaults.
+            &["config", "core.autocrlf", "false"][..],
             &["add", "docs", "portal/portal.config.json"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {

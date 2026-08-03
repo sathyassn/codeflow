@@ -40,6 +40,12 @@ jobs:
       - name: Install exact npm for the owned presentation renderer
         run: npm install --global npm@11.17.0
 
+      # The repository's full test configuration includes the same coverage
+      # target enforced by the dedicated coverage job. A clean runner must not
+      # rely on ambient developer tooling for the strict aggregate gate.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Build codeflow from source
         run: |
           cargo build --release -p codeflow-cli

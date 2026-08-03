@@ -644,10 +644,20 @@ mod tests {
 
     #[test]
     fn test_run_target_caps_output_and_flags_truncation() {
-        let target = make_target(
-            "noisy",
-            "yes x | head -c 1100000; yes e | head -c 1100000 >&2",
-        );
+        let mut target = if cfg!(windows) {
+            make_target(
+                "noisy",
+                "[Console]::Out.Write('x' * 1100000); [Console]::Error.Write('e' * 1100000)",
+            )
+        } else {
+            make_target(
+                "noisy",
+                "yes x | head -c 1100000; yes e | head -c 1100000 >&2",
+            )
+        };
+        if cfg!(windows) {
+            target.shell = CommandShell::Powershell;
+        }
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
 
@@ -727,7 +737,12 @@ mod tests {
 
     #[test]
     fn test_run_target_with_env() {
-        let mut target = make_target("test", "echo $MY_VAR");
+        let command = if cfg!(windows) {
+            "echo %MY_VAR%"
+        } else {
+            "echo $MY_VAR"
+        };
+        let mut target = make_target("test", command);
         target
             .env
             .insert("MY_VAR".to_string(), "hello_from_env".to_string());
@@ -1049,7 +1064,12 @@ mod tests {
 
     #[test]
     fn test_target_env_includes_target_name() {
-        let target = make_target("mytest", "echo $TARGET");
+        let command = if cfg!(windows) {
+            "echo %TARGET%"
+        } else {
+            "echo $TARGET"
+        };
+        let target = make_target("mytest", command);
         let dir = tempfile::tempdir().unwrap();
         let result = run_target(&target, "full", dir.path()).unwrap();
         assert!(result.stdout.contains("mytest"));

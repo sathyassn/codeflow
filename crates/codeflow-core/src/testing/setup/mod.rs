@@ -915,7 +915,11 @@ mod tests {
         assert!(matches!(result, SetupResult::Aborted));
     }
 
-    /// Helper: byte-equal round-trip test for a single template.
+    /// Helper: authored-content round-trip test for a single template.
+    ///
+    /// Git may materialize JSON fixtures with CRLF on Windows, while the JSON
+    /// writer deliberately emits LF. Normalize only that platform newline
+    /// convention; every other byte remains part of the contract.
     fn assert_template_roundtrip(template_name: &str) {
         let template_path = assets_template_dir().join(template_name);
 
@@ -935,10 +939,16 @@ mod tests {
 
         let written_bytes = std::fs::read(&out_path).unwrap();
 
+        let normalize_crlf = |bytes: &[u8]| {
+            std::str::from_utf8(bytes)
+                .expect("JSON templates and writer output must remain UTF-8")
+                .replace("\r\n", "\n")
+        };
+
         assert_eq!(
-            original_bytes,
-            written_bytes,
-            "byte-equal round-trip failed for {template_name}.\n\
+            normalize_crlf(&original_bytes),
+            normalize_crlf(&written_bytes),
+            "authored-content round-trip failed for {template_name}.\n\
              Original ({} bytes):\n{}\n\nWritten ({} bytes):\n{}",
             original_bytes.len(),
             String::from_utf8_lossy(&original_bytes),

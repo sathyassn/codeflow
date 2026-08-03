@@ -64,3 +64,24 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         );
     }
 }
+
+#[test]
+fn strict_repository_gate_installs_its_declared_coverage_tool() {
+    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/codeflow-ci.yml"))
+        .expect("repository CI workflow must be readable");
+    let gates = workflow
+        .split("\n  rust:")
+        .next()
+        .expect("codeflow gates job must precede the Rust job");
+    let install = gates
+        .find("uses: taiki-e/install-action@cargo-llvm-cov")
+        .expect("strict gate must install cargo-llvm-cov on a clean runner");
+    let strict = gates
+        .find("run: codeflow test --mode full --strict")
+        .expect("strict aggregate gate must remain enabled");
+
+    assert!(
+        install < strict,
+        "cargo-llvm-cov must be available before the strict aggregate gate"
+    );
+}
