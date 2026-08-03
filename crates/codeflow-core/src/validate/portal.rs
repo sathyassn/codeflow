@@ -192,6 +192,8 @@ struct Page {
     searchable: bool,
     #[serde(deserialize_with = "deserialize_ids")]
     ids: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_ids")]
+    unavailable_ids: Vec<String>,
     #[serde(deserialize_with = "deserialize_relationships")]
     relationships: Vec<Relationship>,
     #[serde(default, deserialize_with = "deserialize_backlinks")]
@@ -663,11 +665,19 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                     .issues
                     .push(format!("{} has an invalid stale-stub envelope", page.route));
             }
-        } else if page.stale_reason.is_some() {
-            report.issues.push(format!(
-                "{} active page unexpectedly claims a stale diagnostic",
-                page.route
-            ));
+        } else {
+            if page.stale_reason.is_some() {
+                report.issues.push(format!(
+                    "{} active page unexpectedly claims a stale diagnostic",
+                    page.route
+                ));
+            }
+            if !page.unavailable_ids.is_empty() {
+                report.issues.push(format!(
+                    "{} active page unexpectedly claims unavailable identities",
+                    page.route
+                ));
+            }
         }
         for claimed in [
             &page.source_path,
@@ -768,6 +778,34 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 "{} identities do not exactly match authoritative source",
                 page.route
             ));
+        }
+        let claimed_unavailable: BTreeSet<String> = page.unavailable_ids.iter().cloned().collect();
+        let expected_unavailable = authority
+            .unavailable_ids_by_source
+            .get(&page.source_path)
+            .cloned()
+            .unwrap_or_default();
+        if claimed_unavailable.len() != page.unavailable_ids.len()
+            || claimed_unavailable != expected_unavailable
+        {
+            report.issues.push(format!(
+                "{} unavailable identities do not exactly match its bounded stale-source recovery",
+                page.route
+            ));
+        }
+        for id in &page.unavailable_ids {
+            if !page.stale || !strict_id(id) || !ids.contains(id) {
+                report.issues.push(format!(
+                    "{} claims an invalid unavailable identity {id}",
+                    page.route
+                ));
+            }
+            if let Some(prior) = id_owner.insert(id.clone(), page.route.clone()) {
+                report.issues.push(format!(
+                    "duplicate ID ownership for {id}: {prior} and {}",
+                    page.route
+                ));
+            }
         }
         verify_snippets(
             page,
@@ -3397,6 +3435,7 @@ fn parse_strict_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json:
 struct AuthorityIds {
     owners: BTreeMap<String, String>,
     ids_by_source: BTreeMap<String, BTreeSet<String>>,
+    unavailable_ids_by_source: BTreeMap<String, BTreeSet<String>>,
     relationships: BTreeMap<String, BTreeSet<Relationship>>,
     issues: Vec<String>,
 }
@@ -3418,20 +3457,29 @@ fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> Auth
     let mut authority = AuthorityIds {
         owners: BTreeMap::new(),
         ids_by_source: BTreeMap::new(),
+        unavailable_ids_by_source: BTreeMap::new(),
         relationships: BTreeMap::new(),
         issues: Vec::new(),
     };
     let mut seen_sources = BTreeSet::new();
     for page in pages {
-        if page.stale
-            || !seen_sources.insert(page.source_path.as_str())
-            || !safe_path_text(&page.source_path)
-        {
+        if !seen_sources.insert(page.source_path.as_str()) || !safe_path_text(&page.source_path) {
             continue;
         }
         let Some(bytes) = source_blobs.get(&page.source_path) else {
             continue;
         };
+        if page.stale {
+            let recovered = recover_unavailable_ids(bytes, &page.source_path);
+            for id in &recovered {
+                add_authoritative_id(id, &page.source_path, &mut authority);
+            }
+            authority
+                .unavailable_ids_by_source
+                .insert(page.source_path.clone(), recovered);
+            authority.ids_by_source.remove(&page.source_path);
+            continue;
+        }
         let text = match String::from_utf8(bytes.clone()) {
             Ok(text) => text
                 .strip_prefix('\u{feff}')
@@ -3495,6 +3543,59 @@ fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> Auth
         }
     }
     authority
+}
+
+fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return BTreeSet::new();
+    };
+    let mut recovered = BTreeSet::new();
+    for line in text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+    {
+        let Some(value) = line.trim_start().strip_prefix("id:") else {
+            continue;
+        };
+        let value = value.trim_start();
+        let candidate =
+            if let Some(quote) = value.chars().next().filter(|c| matches!(c, '\'' | '"')) {
+                let rest = &value[quote.len_utf8()..];
+                let Some(end) = rest.find(quote) else {
+                    continue;
+                };
+                let trailing = rest[end + quote.len_utf8()..].trim();
+                if !trailing.is_empty() && !trailing.starts_with('#') {
+                    continue;
+                }
+                &rest[..end]
+            } else {
+                let end = value.find(char::is_whitespace).unwrap_or(value.len());
+                let trailing = value[end..].trim();
+                if !trailing.is_empty() && !trailing.starts_with('#') {
+                    continue;
+                }
+                &value[..end]
+            };
+        if strict_id(candidate) {
+            recovered.insert(candidate.to_string());
+        }
+    }
+    if source_path != "docs/capabilities.md" {
+        if let Some(filename_id) = Path::new(source_path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_uppercase)
+            .filter(|value| strict_id(value))
+        {
+            return BTreeSet::from([filename_id]);
+        }
+        return recovered.into_iter().take(1).collect();
+    }
+    recovered
 }
 
 fn add_authoritative_id(id: &str, source_path: &str, authority: &mut AuthorityIds) {
@@ -3734,6 +3835,7 @@ mod tests {
             stale: false,
             searchable: true,
             ids: Vec::new(),
+            unavailable_ids: Vec::new(),
             relationships: Vec::new(),
             backlinks: Vec::new(),
             snippets: Vec::new(),
@@ -3843,6 +3945,21 @@ mod tests {
         }
         assert!(!safe_path_text(&format!("docs/{}", "é".repeat(128))));
         assert!(safe_path_text(&format!("docs/{}", "é".repeat(127))));
+    }
+
+    #[test]
+    fn stale_identity_recovery_is_bounded_and_fail_closed() {
+        let recovered = recover_unavailable_ids(
+            b"---\nid: 'TSK-101' # stable identity\ntitle: [broken\nid: TSK-102 trailing\n",
+            "docs/guide.md",
+        );
+        assert_eq!(recovered, BTreeSet::from(["TSK-101".to_string()]));
+
+        let filename = recover_unavailable_ids(b"id: TSK-999\n", "tasks/TSK-123.md");
+        assert_eq!(filename, BTreeSet::from(["TSK-123".to_string()]));
+
+        assert!(recover_unavailable_ids(b"id: ../../secret\n", "docs/guide.md").is_empty());
+        assert!(recover_unavailable_ids(&[0xff, 0xfe], "docs/guide.md").is_empty());
     }
 
     #[test]

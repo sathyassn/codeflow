@@ -48,12 +48,13 @@ test("checkout byte comparison permits only reversible text newlines", () => {
 test("producer evidence limits reject every verifier boundary at N plus one", () => {
   const page = {
     ids: Array(EVIDENCE_LIMITS.idsPerPage).fill("CAP-001"),
+    unavailable_ids: Array(EVIDENCE_LIMITS.idsPerPage).fill("CAP-002"),
     relationships: Array(EVIDENCE_LIMITS.relationshipsPerPage).fill({}),
     backlinks: Array(EVIDENCE_LIMITS.backlinksPerPage).fill({}),
     snippets: Array(EVIDENCE_LIMITS.snippetsPerPage).fill({}),
   };
   assert.doesNotThrow(() => assertEvidencePageLimits(page));
-  for (const field of ["ids", "relationships", "backlinks", "snippets"]) {
+  for (const field of ["ids", "unavailable_ids", "relationships", "backlinks", "snippets"]) {
     const over = { ...page, [field]: [...page[field], {}] };
     assert.throws(() => assertEvidencePageLimits(over), new RegExp(`${field} count exceeds`));
   }
@@ -1351,12 +1352,12 @@ test("the adapter emits one bounded non-searchable current-source stub without a
   try {
     const source = path.join(root, "docs/guide.md");
     await writeFile(source, "---\nid: TSK-101\ntitle: Guide\ndepends_on: [TSK-102]\n---\n\n# Guide\n\nGrounded content references TSK-102.\n");
-    await writeFile(path.join(root, "docs/target.md"), "---\nid: TSK-102\ntitle: Current target\n---\n\n# Target\n\nThis current page references TSK-101.\n");
+    await writeFile(path.join(root, "docs/target.md"), "---\nid: TSK-102\ntitle: Current target\ndepends_on: [TSK-101]\n---\n\n# Target\n\nThis current page references TSK-101.\n");
     commitFixture(root, "add valid guide");
     runAdapter(root);
     const prior = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
     assert.match(prior, /Grounded content/);
-    await writeFile(source, "---\ntitle: broken\n");
+    await writeFile(source, "---\nid: TSK-101\ntitle: [broken\n");
     commitFixture(root, "break guide");
     runAdapter(root);
     const output = path.join(root, "src/content/docs/reference/guide.md");
@@ -1373,13 +1374,14 @@ test("the adapter emits one bounded non-searchable current-source stub without a
     assert.equal(stale.searchable, false);
     assert.deepEqual(stale.snippets, []);
     assert.deepEqual(stale.ids, []);
+    assert.deepEqual(stale.unavailable_ids, ["TSK-101"]);
     assert.deepEqual(stale.relationships, []);
     assert.equal(typeof stale.stale_reason, "string");
     assert.equal("last_good_commit" in stale, false);
     assert.equal("last_good_source_sha256" in stale, false);
     assert.deepEqual(target.backlinks, []);
     const targetOutput = await readFile(path.join(root, "src/content/docs/reference/target.md"), "utf8");
-    assert.doesNotMatch(targetOutput, /stale — excluded from the current graph/);
+    assert.match(targetOutput, /TSK-101 — stale/);
     assert.doesNotMatch(targetOutput, /### Inverse links/);
     const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
     assert.doesNotMatch(landing, /Guide/);

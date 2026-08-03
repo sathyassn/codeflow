@@ -10,3 +10,4 @@ public/media/
 public/.codeflow-generated.json
 playwright-report/
 test-results/
+.portal-test-runtime-*/

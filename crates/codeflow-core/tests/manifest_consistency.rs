@@ -367,6 +367,39 @@ fn portal_bundle_is_single_complete_and_bounded() {
     }
 }
 
+/// The repository guide is the first consumer of the shipped starter. Keep
+/// project-owned configuration independent, but require every reusable starter
+/// file to exist and remain byte-identical so a dogfood-only fix cannot pass
+/// while consumers receive stale runtime or tests.
+#[test]
+fn portal_dogfood_runtime_matches_the_shipped_starter() {
+    let root = repo_root();
+    let starter = root.join("assets/docs-portal/starter");
+    let dogfood = root.join("docs-portal");
+    let mut problems = Vec::new();
+    for source in walk_files(&starter) {
+        let relative = rel(&starter, &source);
+        if relative == "portal.config.json" {
+            continue;
+        }
+        let deployed = dogfood.join(&relative);
+        if !deployed.is_file() {
+            problems.push(format!("missing dogfood file {relative}"));
+            continue;
+        }
+        if std::fs::read(&source).expect("read starter portal file")
+            != std::fs::read(&deployed).expect("read dogfood portal file")
+        {
+            problems.push(format!("byte drift at {relative}"));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "docs-portal diverged from the shipped reusable starter:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
 #[test]
 fn portal_skill_names_collision_safe_conflict_sidecars() {
     let skill = std::fs::read_to_string(
@@ -550,6 +583,13 @@ fn design_source_live_and_baseline_copies_are_byte_identical() {
 #[test]
 fn present_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-present");
+}
+
+/// Documentation-portal references include lifecycle and installer safety
+/// duties, so pin the complete managed directory like the other rich skills.
+#[test]
+fn docs_portal_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-docs-portal");
 }
 
 /// Presentation JSON contracts are public consumer inputs and exported state.

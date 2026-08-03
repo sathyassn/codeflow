@@ -12,6 +12,7 @@ export const EVIDENCE_LIMITS = Object.freeze({
 export function assertEvidencePageLimits(page, label = "page") {
   for (const [field, maximum] of [
     ["ids", EVIDENCE_LIMITS.idsPerPage],
+    ["unavailable_ids", EVIDENCE_LIMITS.idsPerPage],
     ["relationships", EVIDENCE_LIMITS.relationshipsPerPage],
     ["backlinks", EVIDENCE_LIMITS.backlinksPerPage],
     ["snippets", EVIDENCE_LIMITS.snippetsPerPage],

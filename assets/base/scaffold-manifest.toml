@@ -234,7 +234,7 @@ dest = ".codex/config.toml"
 ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
-# --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 13 skills, 1 workflow;
+# --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 14 skills, 1 workflow;
 #     cf-stack is the agent-led stack setup (CodeFlow ADR-0003); cf-delegate +
 #     cf-consult are the cross-vendor delegation capability (CodeFlow ADR-0005),
 #     added when the

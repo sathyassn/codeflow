@@ -654,17 +654,17 @@ impl SessionStore {
                 )
             })?;
         self.ensure_project_capacity_unlocked(minimum_bytes, true)?;
-        create_private_dir_all(&staging)?;
-        write_json_atomic(
-            &staging.join(CREATE_TRANSACTION_MARKER),
-            &CreateTransactionMarker {
-                schema_version: 1,
-                session_id: id,
-                nonce: create_nonce,
-            },
-        )?;
-        create_private_dir_all(&staging.join("revisions"))?;
         let result = (|| {
+            create_private_dir_all(&staging)?;
+            write_json_atomic(
+                &staging.join(CREATE_TRANSACTION_MARKER),
+                &CreateTransactionMarker {
+                    schema_version: 1,
+                    session_id: id,
+                    nonce: create_nonce,
+                },
+            )?;
+            create_private_dir_all(&staging.join("revisions"))?;
             write_json_atomic(
                 &staging.join("revisions/00000000000000000001.json"),
                 &initial_revision,
@@ -788,10 +788,22 @@ impl SessionStore {
                     entry.path().display()
                 )));
             }
-            let marker: CreateTransactionMarker = read_json(
-                &entry.path().join(CREATE_TRANSACTION_MARKER),
-                limits::MAX_SESSION_STATE_BYTES,
-            )?;
+            let marker_path = entry.path().join(CREATE_TRANSACTION_MARKER);
+            match fs::symlink_metadata(&marker_path) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // A process can stop after the private, collision-checked
+                    // transaction directory is created but before its proof is
+                    // durably written. No published session can own this path;
+                    // remove the incomplete create instead of wedging every
+                    // subsequent presentation command.
+                    remove_dir_confined(sessions_dir, &entry.path())?;
+                    continue;
+                }
+                Err(error) => return Err(PresentError::io(&marker_path, error)),
+            }
+            let marker: CreateTransactionMarker =
+                read_json(&marker_path, limits::MAX_SESSION_STATE_BYTES)?;
             if marker
                 != (CreateTransactionMarker {
                     schema_version: 1,
@@ -3340,16 +3352,31 @@ mod tests {
     }
 
     #[test]
-    fn recovery_rejects_exact_transaction_names_without_matching_proof() {
+    fn recovery_removes_unmarked_creates_but_rejects_unproved_transactions() {
         let (_temp, store) = store();
         let sessions = store.root.join("sessions");
         let staged_id = Uuid::new_v4();
         let staged_nonce = Uuid::new_v4();
         let staged = sessions.join(format!(".creating-{staged_id}-{}", staged_nonce.simple()));
         create_private_dir_all(&staged).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        assert!(!staged.exists());
+
+        let mismatched =
+            sessions.join(format!(".creating-{staged_id}-{}", Uuid::new_v4().simple()));
+        create_private_dir_all(&mismatched).unwrap();
+        write_json_atomic(
+            &mismatched.join(CREATE_TRANSACTION_MARKER),
+            &CreateTransactionMarker {
+                schema_version: 1,
+                session_id: staged_id,
+                nonce: staged_nonce,
+            },
+        )
+        .unwrap();
         assert!(store.list().is_err());
-        assert!(staged.exists());
-        fs::remove_dir_all(&staged).unwrap();
+        assert!(mismatched.exists());
+        fs::remove_dir_all(&mismatched).unwrap();
 
         let session = store.create(parsed()).unwrap();
         let trash_nonce = Uuid::new_v4();

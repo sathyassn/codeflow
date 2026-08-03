@@ -42,7 +42,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Greenfield/brownfield initialized-baseline parity, idempotent update, narrow
   cleanup, reproducible locked assets, exact CI Node/npm tooling, binary Git
   attributes, and isolated deterministic release payload-size deltas now have
-  owning checks.
+  owning checks. Interrupted presentation creation is recoverable even before
+  its transaction marker is written. Documentation-portal stale stubs retain
+  only a bounded unavailable identity so current records can link to the safe
+  diagnostic without republishing stale content, and a parity gate keeps the
+  dogfood runtime identical to the shipped starter on every supported host.
 - **Claude's OS sandbox now keeps installed plugin code executable without
   exposing mutable plugin or private Claude state.** The broad `~/.claude`
   subprocess-read denial remains, while the higher-precedence filesystem
