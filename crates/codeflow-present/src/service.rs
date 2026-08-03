@@ -1259,8 +1259,11 @@ mod tests {
                 }],
             }))
             .unwrap();
-        let bootstrap_path = temp.path().join("bootstrap.html");
-        fs::write(&bootstrap_path, b"bootstrap").unwrap();
+        let runtime = store.runtime_dir(session.id).unwrap();
+        let control = runtime.join("control");
+        crate::state::create_private_dir_all(&control).unwrap();
+        let bootstrap_path = control.join("bootstrap.html");
+        write_bootstrap(&bootstrap_path, "bootstrap").unwrap();
         let now = now_unix();
         let state = AppState {
             store,
@@ -1610,7 +1613,7 @@ mod tests {
         let (_temp, state) = app_state();
         let bootstrap = (*state.bootstrap_path).clone();
         let ready = bootstrap.with_file_name("ready.json");
-        fs::write(&ready, b"identity").unwrap();
+        write_bootstrap(&ready, "identity").unwrap();
         drop(RuntimeCleanup::new(
             state.store,
             state.session_id,

@@ -1,8 +1,10 @@
 use std::{
+    collections::HashSet,
     fmt::Write as _,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -403,6 +405,48 @@ pub(crate) struct RuntimeControlLease {
     _project: File,
     _session: File,
     _runtime: File,
+}
+
+static ACTIVE_RUNTIME_LEASES: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+/// Holds both the process-local reservation and the cross-process file lock for
+/// one presentation runtime role.
+pub struct RuntimeLease {
+    file: Option<File>,
+    path: PathBuf,
+}
+
+impl Drop for RuntimeLease {
+    fn drop(&mut self) {
+        // Keep the process-local reservation until the OS handle has released
+        // its cross-process lock. A contender can otherwise observe a brief
+        // unlocked registry entry while the file is still locked.
+        drop(self.file.take());
+        if let Ok(mut active) = active_runtime_leases().lock() {
+            active.remove(&self.path);
+        }
+    }
+}
+
+fn active_runtime_leases() -> &'static Mutex<HashSet<PathBuf>> {
+    ACTIVE_RUNTIME_LEASES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn reserve_runtime_lease(path: &Path) -> Result<bool> {
+    active_runtime_leases()
+        .lock()
+        .map(|mut active| active.insert(path.to_path_buf()))
+        .map_err(|_| {
+            PresentError::ServiceUnavailable(
+                "the process-local presentation lease registry is unavailable".to_string(),
+            )
+        })
+}
+
+fn release_runtime_lease(path: &Path) {
+    if let Ok(mut active) = active_runtime_leases().lock() {
+        active.remove(path);
+    }
 }
 
 impl SessionStore {
@@ -1725,30 +1769,53 @@ impl SessionStore {
         Ok(())
     }
 
-    pub fn acquire_service_lease(&self, id: Uuid) -> Result<File> {
+    pub fn acquire_service_lease(&self, id: Uuid) -> Result<RuntimeLease> {
         self.acquire_runtime_lease(id, ".service.lock", "running service")
     }
 
-    pub fn acquire_startup_lease(&self, id: Uuid) -> Result<File> {
+    pub fn acquire_startup_lease(&self, id: Uuid) -> Result<RuntimeLease> {
         self.acquire_runtime_lease(id, ".startup.lock", "service startup")
     }
 
-    pub fn acquire_browser_launch_lease(&self, id: Uuid) -> Result<File> {
+    pub fn acquire_browser_launch_lease(&self, id: Uuid) -> Result<RuntimeLease> {
         self.acquire_runtime_lease(id, ".browser-launch.lock", "browser launch")
     }
 
-    fn acquire_runtime_lease(&self, id: Uuid, file_name: &str, owner: &str) -> Result<File> {
+    fn acquire_runtime_lease(
+        &self,
+        id: Uuid,
+        file_name: &str,
+        owner: &str,
+    ) -> Result<RuntimeLease> {
         self.load(id)?;
         let path = self.session_dir(id).join(file_name);
-        let lease = open_private_append(&path)?;
-        match lease.try_lock_exclusive() {
-            Ok(()) => Ok(lease),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                Err(PresentError::ServiceUnavailable(format!(
-                    "presentation session {id} already has a {owner}"
-                )))
+        if !reserve_runtime_lease(&path)? {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "presentation session {id} already has a {owner}"
+            )));
+        }
+        let lease = match open_private_append(&path) {
+            Ok(lease) => lease,
+            Err(error) => {
+                release_runtime_lease(&path);
+                return Err(error);
             }
-            Err(error) => Err(PresentError::io(path, error)),
+        };
+        match lease.try_lock_exclusive() {
+            Ok(()) => Ok(RuntimeLease {
+                file: Some(lease),
+                path,
+            }),
+            Err(error) => {
+                release_runtime_lease(&path);
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    Err(PresentError::ServiceUnavailable(format!(
+                        "presentation session {id} already has a {owner}"
+                    )))
+                } else {
+                    Err(PresentError::io(path, error))
+                }
+            }
         }
     }
 
@@ -1757,15 +1824,33 @@ impl SessionStore {
         id: Uuid,
         file_name: &str,
         owner: &str,
-    ) -> Result<Option<File>> {
+    ) -> Result<Option<RuntimeLease>> {
         let path = self.session_dir(id).join(file_name);
-        let lease = open_private_append(&path)?;
+        if !reserve_runtime_lease(&path)? {
+            return Ok(None);
+        }
+        let lease = match open_private_append(&path) {
+            Ok(lease) => lease,
+            Err(error) => {
+                release_runtime_lease(&path);
+                return Err(error);
+            }
+        };
         match lease.try_lock_exclusive() {
-            Ok(()) => Ok(Some(lease)),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(PresentError::ServiceUnavailable(format!(
-                "failed to prove absence of {owner} for session {id}: {error}"
-            ))),
+            Ok(()) => Ok(Some(RuntimeLease {
+                file: Some(lease),
+                path,
+            })),
+            Err(error) => {
+                release_runtime_lease(&path);
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    Ok(None)
+                } else {
+                    Err(PresentError::ServiceUnavailable(format!(
+                        "failed to prove absence of {owner} for session {id}: {error}"
+                    )))
+                }
+            }
         }
     }
 
@@ -2519,7 +2604,7 @@ fn open_private_append(path: &Path) -> Result<File> {
                 ) =>
             {
                 let mut existing = OpenOptions::new();
-                existing.append(true).read(true);
+                existing.append(true).read(true).write(true);
                 add_no_follow(&mut existing);
                 existing
                     .open(path)
