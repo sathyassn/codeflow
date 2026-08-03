@@ -89,9 +89,13 @@ Prerequisite: install the release-pinned git-cliff version
 binary from <https://github.com/orhun/git-cliff/releases>).
 
 ```sh
-# 1. Choose the explicit clean base: latest main for a standalone release, or
-#    the accepted integration candidate after every required task has landed.
-BASE=main  # or integration/EPC-NNN-<slug>
+# 1. Refresh remote truth and choose an explicit remote-tracking base: latest
+#    main for a standalone release, or the accepted integration candidate after
+#    every required task has landed. Verify it is the reviewed commit.
+git fetch --prune --tags origin
+BASE=origin/main  # or origin/integration/EPC-NNN-<slug>
+EXPECTED="<reviewed-commit-sha>"
+test "$(git rev-parse "$BASE^{commit}")" = "$EXPECTED"
 git switch -c chore/release "$BASE"
 
 # 2. Compute the next version from the conventional commits since the last tag:
