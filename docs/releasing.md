@@ -89,9 +89,10 @@ Prerequisite: install the release-pinned git-cliff version
 binary from <https://github.com/orhun/git-cliff/releases>).
 
 ```sh
-# 1. For a standalone release, branch from latest main. For an accepted epic,
-#    use its clean integration candidate after every required task has landed:
-git switch -c chore/release main
+# 1. Choose the explicit clean base: latest main for a standalone release, or
+#    the accepted integration candidate after every required task has landed.
+BASE=main  # or integration/EPC-NNN-<slug>
+git switch -c chore/release "$BASE"
 
 # 2. Compute the next version from the conventional commits since the last tag:
 NEXT=$(git cliff --bumped-version)        # current history resolves to v3.0.0

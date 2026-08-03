@@ -8,17 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [3.0.0] - 2026-08-02
 
-> **Breaking migrations.** Test configurations that use the
-> unsupported `changed_files` coverage scope must migrate to `per_file`,
-> `per_package`, `per_module`, or `global`. That explicit contract break requires
-> a major bump from `v2.1.0`. Full-tier consumers must also repair canonical
-> work records before updating: `validate --docs` now blocks filename/ID
-> mismatches, malformed or dangling work relationships, completed tasks with
-> unchecked acceptance criteria, and approved/implemented specs with unresolved
-> open questions. Run the current `codeflow validate --docs`, fix every reported
-> record on a planning branch, and merge that repair before installing v3. The
-> feature additions in this release do not reduce these managed-contract
-> changes to a minor release.
+> **Breaking migrations.** Before installing v3:
+>
+> - replace every `changed_files` coverage scope with `per_file`, `per_package`,
+>   `per_module`, or `global`;
+> - rename or remove test modes outside `quick`, `essential`, and `full`;
+> - set `security.dangerous_commands` to `block`, or remove the key to accept
+>   the non-relaxable default; and
+> - repair canonical work records reported by `codeflow validate --docs`,
+>   including filename/ID mismatches, malformed or dangling relationships,
+>   completed tasks with unchecked acceptance criteria, and approved or
+>   implemented specs with unresolved open questions.
+>
+> Make those repairs on a planning branch and merge them before updating. These
+> contract changes require a major bump from `v2.1.0`; feature additions do not
+> reduce the release to a minor version.
 
 ### Fixed
 

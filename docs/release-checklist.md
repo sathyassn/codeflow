@@ -26,10 +26,11 @@ named human release decision.
 - [ ] Secret scanning, dependency audit, policy validation, and the repository
       integrity/managed-drift checks pass or have a documented, human-approved
       disposition that does not weaken a non-relaxable floor.
-- [ ] A fresh authenticated mirror fetches every branch, approved tag, and
-      hosted pull-request head. Record its ref digest; inventory forbidden
-      runtime paths; run both raw and configured redacted Gitleaks scans; and
-      reject broad path/directory allowlists that could hide a future secret.
+- [ ] A fresh authenticated mirror inventories every remote branch and tag,
+      hosted pull-request head and merge ref, and any other fetchable or
+      servable ref. Record its ref digest; inventory forbidden runtime paths;
+      run both raw and configured redacted Gitleaks scans; and reject broad
+      path/directory allowlists that could hide a future secret.
 - [ ] The operator-approved publication boundary is complete before visibility
       changes. For a sanitized public repository, retain the original remote as
       a sealed private archive and publish only selected clean refs—never a
