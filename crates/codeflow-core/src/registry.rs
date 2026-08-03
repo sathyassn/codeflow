@@ -100,7 +100,7 @@ pub fn is_initialized(repo_root: &Path) -> bool {
 pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
-        if dir.join(".codeflow").is_dir() {
+        if is_initialized(dir) {
             return Some(dir.to_path_buf());
         }
         current = dir.parent();
@@ -419,6 +419,21 @@ mod tests {
     fn test_find_repo_root_none_outside() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(find_repo_root(dir.path()), None);
+    }
+
+    #[test]
+    fn test_find_repo_root_ignores_user_state_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        fs::write(
+            dir.path().join(".codeflow/config.toml"),
+            "[recall]\nlimit = 20\n",
+        )
+        .unwrap();
+        let nested = dir.path().join("AppData/Local/Temp/project");
+        fs::create_dir_all(&nested).unwrap();
+
+        assert_eq!(find_repo_root(&nested), None);
     }
 
     #[test]
