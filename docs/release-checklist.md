@@ -8,8 +8,9 @@ named human release decision.
 
 ## 1. Scope and version
 
-- [ ] The release branch starts at the latest protected `main` and contains
-      only the intended release changes.
+- [ ] The release branch starts at the latest protected `main`, or at the clean
+      accepted integration candidate for one coherent epic, and contains only
+      the intended release changes.
 - [ ] Conventional commits resolve to the intended SemVer bump; breaking
       changes and migrations are explicit.
 - [ ] `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, release notes, and the proposed
@@ -25,6 +26,19 @@ named human release decision.
 - [ ] Secret scanning, dependency audit, policy validation, and the repository
       integrity/managed-drift checks pass or have a documented, human-approved
       disposition that does not weaken a non-relaxable floor.
+- [ ] A fresh authenticated mirror fetches every branch, approved tag, and
+      hosted pull-request head. Record its ref digest; inventory forbidden
+      runtime paths; run both raw and configured redacted Gitleaks scans; and
+      reject broad path/directory allowlists that could hide a future secret.
+- [ ] The operator-approved publication boundary is complete before visibility
+      changes. For a sanitized public repository, retain the original remote as
+      a sealed private archive and publish only selected clean refs—never a
+      mirror push. For a history rewrite, separately purge retained hosted PR
+      refs and caches. Rescan resulting public refs and regenerated exact
+      fingerprints rather than reusing pre-rewrite commit IDs.
+- [ ] Hosted PR/issue/review text, releases and assets, Actions logs/artifacts,
+      Pages, and packages have an explicit audited or removed disposition. An
+      ordinary branch scan does not prove those provider-owned surfaces safe.
 - [ ] Presentation document/token/history schemas match the Rust contracts and
       adversarial fixtures; service request/auth/bootstrap/sandbox/export
       matrices, crash recovery, concurrent feedback, retention, and

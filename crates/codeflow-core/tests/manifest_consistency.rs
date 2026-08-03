@@ -31,6 +31,50 @@ fn repo_root() -> PathBuf {
         .expect("repo root resolves")
 }
 
+#[test]
+fn repository_runtime_state_never_enters_the_tracked_tree() {
+    let root = repo_root();
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "-z"])
+        .output()
+        .expect("git is available for repository hygiene verification");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut forbidden: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .filter(|path| {
+            path.starts_with(".state/")
+                || path.starts_with(".claude/memory/")
+                || path.ends_with(".profraw")
+        })
+        .collect();
+    forbidden.sort();
+    assert!(
+        forbidden.is_empty(),
+        "repository-local runtime state is tracked:\n  {}",
+        forbidden.join("\n  ")
+    );
+
+    let ignore = std::fs::read_to_string(root.join(".gitignore"))
+        .expect("repository .gitignore is readable");
+    let lines: BTreeSet<&str> = ignore.lines().map(str::trim).collect();
+    for required in ["/.state/", "/.claude/memory/", "*.profraw"] {
+        assert!(
+            lines.contains(required),
+            "repository .gitignore must retain root-scoped runtime guard {required}"
+        );
+    }
+}
+
 /// Every regular file under `dir`, recursively, as absolute paths.
 fn walk_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();

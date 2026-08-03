@@ -84,11 +84,13 @@ compressed archive size is not equivalent evidence.
 
 ### The runbook
 
-Prerequisite: install git-cliff once (`cargo install git-cliff`, or a prebuilt
+Prerequisite: install the release-pinned git-cliff version
+(`cargo install git-cliff --version 2.13.1 --locked`, or the matching prebuilt
 binary from <https://github.com/orhun/git-cliff/releases>).
 
 ```sh
-# 1. On a release branch, off the latest main:
+# 1. For a standalone release, branch from latest main. For an accepted epic,
+#    use its clean integration candidate after every required task has landed:
 git switch -c chore/release main
 
 # 2. Compute the next version from the conventional commits since the last tag:
@@ -100,13 +102,15 @@ echo "$NEXT"
 #    then refresh the lockfile:
 cargo build
 
-# 4. Prepend the new version's section to CHANGELOG.md — this keeps the curated
-#    past entries intact (unlike `-o`, which regenerates the whole file). Then
-#    review/refine the draft; git-cliff writes from commit subjects, so tighten
-#    the wording:
-git cliff --unreleased --tag "$NEXT" --prepend CHANGELOG.md
+# 4. Generate a review aid; do not write it over the curated changelog:
+git cliff --unreleased --tag "$NEXT" > /tmp/codeflow-release-notes.md
 
-# 5. Commit and open a PR:
+# 5. Promote the curated Unreleased body in CHANGELOG.md to a dated release,
+#    restore an empty Unreleased section above it, and reconcile the draft.
+#    Preserve human-written migrations and comparison links; rerunning this
+#    procedure must not duplicate a release section.
+
+# 6. Commit and open a PR:
 git commit -am "chore(release): $NEXT"
 git push -u origin chore/release   # then open the PR
 ```

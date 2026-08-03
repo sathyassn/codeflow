@@ -6,7 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-> **Next release: `v3.0.0` (MAJOR).** Test configurations that use the
+## [3.0.0] - 2026-08-02
+
+> **Breaking migrations.** Test configurations that use the
 > unsupported `changed_files` coverage scope must migrate to `per_file`,
 > `per_package`, `per_module`, or `global`. That explicit contract break requires
 > a major bump from `v2.1.0`. Full-tier consumers must also repair canonical
@@ -15,8 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > unchecked acceptance criteria, and approved/implemented specs with unresolved
 > open questions. Run the current `codeflow validate --docs`, fix every reported
 > record on a planning branch, and merge that repair before installing v3. The
-> feature additions below do not reduce these managed-contract changes to a
-> minor release.
+> feature additions in this release do not reduce these managed-contract
+> changes to a minor release.
 
 ### Fixed
 
@@ -698,6 +700,7 @@ set) shares no code with it and is preserved at the `v1-final` tag.
 - cargo-dist release pipeline with prebuilt binaries for macOS (arm64/x64) and
   Linux (x64) and a shell installer.
 
-[Unreleased]: https://github.com/sathyassn/codeflow/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/sathyassn/codeflow/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/sathyassn/codeflow/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/sathyassn/codeflow/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sathyassn/codeflow/releases/tag/v2.0.0

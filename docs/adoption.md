@@ -33,7 +33,7 @@ install), use `gh`:
 # platform also includes x86_64-pc-windows-msvc (.zip containing codeflow.exe)
 # aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
 A=codeflow-cli-aarch64-apple-darwin
-gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
+gh release download v3.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
 tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
 install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 ```
@@ -230,6 +230,31 @@ than copying authoritative prose into the portal. Generated content and search
 output remain disposable, and local generation never publishes a site. Read
 `cf-docs-portal` for content, dependency, browser, accessibility, evidence, and
 cleanup obligations.
+
+## Optional interactive review documents
+
+Standard and full tiers also include `cf-present`. It is a bounded review
+utility for complex explanations, alternatives, plans, diffs, and evidence—not
+a product UI or durable documentation store. Author a schema-valid temporary
+JSON document from the skill's block catalog, then let the CLI enforce semantic
+and byte limits and open a task-owned isolated browser profile:
+
+```sh
+codeflow present open /path/to/review-document.json
+codeflow present list
+codeflow present feedback <session-id>
+codeflow present close <session-id>
+codeflow present clear --dry-run
+```
+
+Use `update` for immutable revisions, `resolve` for delivered feedback, and
+`export` only when a portable read-only artifact is required. Keep inputs,
+feedback, exports, and session state untracked unless the user deliberately
+promotes an outcome to its real task, spec, ADR, capability, or project doc.
+Close sessions when review ends and dry-run retention cleanup before removal.
+The utility never attaches to the operator's browser or replaces ordinary chat
+for a short answer. Read `cf-present` for the exact routing, authoring,
+feedback, evidence, and cleanup contract.
 
 ## Network, tools, and autonomy
 
@@ -572,7 +597,7 @@ The one-line version: **codeflow *enforces* the same rules on every harness (git
 hooks + CI); it *guides* Claude and Codex.** Any tool that touches the repo is
 disciplined; the richer in-session help is where the integrations are.
 
-**Verified against:** codex-cli 0.144.3 and Claude Code 2.1.211 on 2026-07-16
+**Verified against:** codex-cli 0.144.3 and Claude Code 2.1.220 on 2026-08-02
 (with earlier hook-specific evidence retained by ADR-0008, ADR-0013, and
 ADR-0014). These surfaces (hook payload contracts, config schemas) move fast on
 both sides; the release checklist
@@ -636,12 +661,13 @@ interactive-only (consult/delegate/duo never shell out to `codex exec`), so a
 headless Codex run happens only when a user starts one — and the git-hook
 plane + CI still bind it.
 
-A Codex-primary session can host the full duo, not only a consult. Codex
-coordinates and implements in its current App/interactive CLI session while
-Claude, reached through a task-scoped interactive tmux session, leads design and
-performs the final independent review. From a Claude Code host, the same fixed
-roles run through the official Codex plugin. Both seats independently research
-and plan before approving the same versioned contract (ADR-0023).
+A Codex-primary session can host the full duo, not only a consult. The host
+owns orchestration and routes production by the qualified capability binding,
+risk, evidence needs, and available capacity; no vendor receives implementation
+work merely because of its name. From a Claude Code host, the official Codex
+plugin provides the independent Codex lane. Both seats independently research
+and plan before approving the same versioned contract; material design and
+implementation receive cross-lineage review (ADR-0023, ADR-0046).
 
 Google's Antigravity `agy` is **not** bound automatically (its hook dialect
 differs and its macOS reliability is unresolved); the cf-delegate skill carries

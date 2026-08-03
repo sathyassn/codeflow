@@ -83,6 +83,7 @@ ordinary task execution and adds no model-running CLI command.
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
 | `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
 | `portal setup --path <dir>` | Explicitly adopt or reconcile the offline documentation-portal starter |
+| `present` | Open, revise, review, export, close, and clear bounded local interactive presentation sessions |
 | `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |

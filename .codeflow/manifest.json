@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scaffold_version": "2.1.0",
+  "scaffold_version": "3.0.0",
   "files": {
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
@@ -215,7 +215,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "e4e2f20e5b295c2da82862cca0c9414dab72f882a14d9c8064b5c4cef8ca01da",
+      "sha256": "4407ecb0328dc1d629a23b52fdc1decd5d74dc82ad5152c3a59ddfe9dbfc1168",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -491,7 +491,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "e4e2f20e5b295c2da82862cca0c9414dab72f882a14d9c8064b5c4cef8ca01da",
+      "sha256": "4407ecb0328dc1d629a23b52fdc1decd5d74dc82ad5152c3a59ddfe9dbfc1168",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {
@@ -635,13 +635,13 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "28ba44ef5b01dee0cf28bc757b40661495224dcf65a232aad233a53c9f79f337",
+      "sha256": "90353935104d17eaee61448c660e8176a4aff9a4871f3a426f1ebb084ac01b12",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "d2c86a4db8d266fa560d979795a125545684f04a4eabe71baa3479be0ac48f72",
+      "sha256": "63a4ba716f60502ebaa5fe87dccd8686e190d32762d7a5db0d3fa013b95a0151",
       "exec": false
     },
     "docs/architecture.md": {

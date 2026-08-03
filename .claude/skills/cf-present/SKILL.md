@@ -30,8 +30,8 @@ Use `cf-present` when at least one is true:
 Stay in chat for a short answer, a small list, one simple diagram, or a status
 update that needs no interaction. Do not turn formatting preference into a
 runtime session. Use `cf-design` for a consuming product's design direction and
-the future documentation-portal flow for durable repository documentation;
-neither inherits this utility's themes or components.
+use `cf-docs-portal` for durable repository documentation. Neither inherits
+this utility's themes or components.
 
 ## 2. Shape the information before encoding it
 

@@ -1,4 +1,4 @@
-<!-- codeflow:managed:begin scaffold=2.1.0 -->
+<!-- codeflow:managed:begin scaffold=3.0.0 -->
 <!-- Owned by `codeflow update`. Edits inside this block are replaced on update;
      put project-specific instructions outside the markers. -->
 

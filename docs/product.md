@@ -35,11 +35,11 @@ multi-user coordination remains deferred.
   project-management on top (ADR-0019) — the binary validating every shape so
   growth is mechanical.
 - Host-neutral skill contracts for a Claude+Codex duo over every non-trivial
-  repository task: stage-aware parallel independent work, fixed
-  design/implementation/review roles, versioned dual approval, bounded
-  worktree parallelism, effective network/tool autonomy, and evidence-based
-  verification through each vendor's native interactive harness (ADR-0023,
-  ADR-0024, ADR-0025).
+  repository task: stage-aware parallel independent work, capability-routed
+  production and review, versioned dual approval, bounded worktree parallelism,
+  effective network/tool autonomy, and evidence-based verification through
+  each vendor's native interactive harness (ADR-0023, ADR-0024, ADR-0025,
+  ADR-0046).
 
 ## Non-goals
 

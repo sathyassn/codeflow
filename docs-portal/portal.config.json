@@ -4,7 +4,7 @@
   "description": "Layered project documentation generated from repository-owned sources.",
   "theme": "signal",
   "repository_url": "https://github.com/sathyassn/codeflow",
-  "release_version": "2.1.0",
+  "release_version": "3.0.0",
   "primitive_tokens": null,
   "repository_root": "..",
   "source_roots": ["docs", "project-management"],
