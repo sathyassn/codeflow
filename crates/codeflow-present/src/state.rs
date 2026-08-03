@@ -3883,6 +3883,23 @@ mod tests {
     }
 
     #[test]
+    fn corrupted_runtime_lease_path_fails_closed_without_leaking_the_reservation() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let lock_path = store.session_dir(session.id).join(".service.lock");
+        create_private_dir_all(&lock_path).unwrap();
+
+        assert!(matches!(
+            store.try_acquire_runtime_lease(session.id, ".service.lock", "running service"),
+            Err(PresentError::ServiceUnavailable(message))
+                if message.contains("failed to prove absence of running service")
+        ));
+
+        fs::remove_dir(&lock_path).unwrap();
+        assert!(store.acquire_service_lease(session.id).is_ok());
+    }
+
+    #[test]
     fn clear_removes_only_closed_selected_session_via_tombstone_rename() {
         let (_temp, store) = store();
         let closed = store.create(parsed()).unwrap();
