@@ -127,3 +127,15 @@ outstanding native-platform acceptance. The green, independently reviewed
 cleanup implementation may proceed onto the EPC-005 integration branch so
 dependency-aware work can continue, but its open gates must not be relabeled as
 complete.
+
+## Post-integration canary correction
+
+The first v3 exact-tree aggregate rerun exposed an intermittent defect in the
+delayed-acquisition test handshake: its readiness file could be observed before
+`lifecycle.acquire(...)` had registered the resource. A signal in that interval
+correctly refused a new acquisition during shutdown, while the test incorrectly
+expected cleanup for a resource it had not registered. The corrected fixture
+creates the acquisition promise before publishing readiness and then awaits the
+same promise. Runtime lifecycle code is unchanged. The corrected canary passed
+50 consecutive isolated runs and the complete 83-test producer suite; aggregate
+verification and independent re-review remain required after landing.

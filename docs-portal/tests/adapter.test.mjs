@@ -1052,12 +1052,13 @@ test("lifecycle drains a delayed acquisition before re-signalling", { skip: proc
           await appendFile(path.join(root, ".acquire-order"), "acquired\\n");
           resolve({ id: "resource" });
         }, 150));
-        await writeFile(path.join(root, ".acquire-ready"), "ready\\n");
-        await lifecycle.acquire(resource, async ({ id }) => {
+        const acquisition = lifecycle.acquire(resource, async ({ id }) => {
           cleanupRuns += 1;
           await appendFile(path.join(root, ".acquire-order"), "cleanup-" + id + "\\n");
           await writeFile(path.join(root, ".acquire-cleanup-count"), String(cleanupRuns) + "\\n");
         });
+        await writeFile(path.join(root, ".acquire-ready"), "ready\\n");
+        await acquisition;
       });
     `);
     const child = spawn(process.execPath, [runner], { cwd: root, stdio: "ignore" });
