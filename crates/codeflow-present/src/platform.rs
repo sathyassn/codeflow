@@ -141,23 +141,40 @@ pub(crate) fn is_link_like(metadata: &fs::Metadata) -> bool {
 #[cfg(windows)]
 pub(crate) fn harden_private_path(path: &Path, directory: bool) -> Result<()> {
     let sid = &current_user_sid()?.text;
+    let owner = format!("*{sid}");
     let grant = if directory {
         format!("*{sid}:(OI)(CI)F")
     } else {
         format!("*{sid}:F")
     };
     let icacls = trusted_system_path("icacls.exe")?;
-    let output = icacls_command(&icacls, path, &grant)
+    let owner_output = icacls_owner_command(&icacls, path, &owner)
         .output()
         .map_err(|error| PresentError::io(path, error))?;
-    if !output.status.success() || output.stdout.len() + output.stderr.len() > 64 * 1024 {
+    if !owner_output.status.success()
+        || owner_output.stdout.len() + owner_output.stderr.len() > 64 * 1024
+    {
+        return Err(PresentError::UnsafePath(path.to_path_buf()));
+    }
+    let acl_output = icacls_acl_command(&icacls, path, &grant)
+        .output()
+        .map_err(|error| PresentError::io(path, error))?;
+    if !acl_output.status.success() || acl_output.stdout.len() + acl_output.stderr.len() > 64 * 1024
+    {
         return Err(PresentError::UnsafePath(path.to_path_buf()));
     }
     Ok(())
 }
 
 #[cfg(any(windows, test))]
-fn icacls_command(executable: &Path, path: &Path, grant: &str) -> Command {
+fn icacls_owner_command(executable: &Path, path: &Path, owner: &str) -> Command {
+    let mut command = restricted_command(executable);
+    command.arg(path).args(["/setowner", owner]);
+    command
+}
+
+#[cfg(any(windows, test))]
+fn icacls_acl_command(executable: &Path, path: &Path, grant: &str) -> Command {
     let mut command = restricted_command(executable);
     command
         .arg(path)
@@ -655,12 +672,38 @@ mod tests {
         apply_restricted_environment(&mut command);
         assert_restricted_environment(&command);
 
-        let command = icacls_command(
+        let owner_command = icacls_owner_command(
+            Path::new("C:/state"),
+            Path::new("C:/state/session"),
+            "*S-1-5-21-1",
+        );
+        assert_restricted_environment(&owner_command);
+        let owner_arguments: Vec<_> = owner_command.get_args().collect();
+        assert_eq!(
+            owner_arguments,
+            [
+                Path::new("C:/state/session").as_os_str(),
+                OsStr::new("/setowner"),
+                OsStr::new("*S-1-5-21-1"),
+            ]
+        );
+
+        let acl_command = icacls_acl_command(
             Path::new("C:/state"),
             Path::new("C:/state/session"),
             "*S-1-5-21-1:F",
         );
-        assert_restricted_environment(&command);
+        assert_restricted_environment(&acl_command);
+        let acl_arguments: Vec<_> = acl_command.get_args().collect();
+        assert_eq!(
+            acl_arguments,
+            [
+                Path::new("C:/state/session").as_os_str(),
+                OsStr::new("/inheritance:r"),
+                OsStr::new("/grant:r"),
+                OsStr::new("*S-1-5-21-1:F"),
+            ]
+        );
     }
 
     #[test]
