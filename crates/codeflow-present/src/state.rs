@@ -2587,11 +2587,14 @@ fn open_private_append(path: &Path) -> Result<File> {
                 ) =>
             {
                 let mut existing = OpenOptions::new();
-                existing.append(true).read(true).write(true);
+                existing.read(true).write(true);
                 add_no_follow(&mut existing);
-                existing
+                let mut file = existing
                     .open(path)
-                    .map_err(|error| PresentError::io(path, error))?
+                    .map_err(|error| PresentError::io(path, error))?;
+                file.seek(SeekFrom::End(0))
+                    .map_err(|error| PresentError::io(path, error))?;
+                file
             }
             Err(error) => return Err(error),
         };
