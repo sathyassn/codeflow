@@ -13,6 +13,9 @@ use std::{
 #[cfg(any(windows, test))]
 use std::collections::BTreeSet;
 
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::os::unix::fs::OpenOptionsExt as _;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -572,7 +575,6 @@ fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<P
             "browser identity output exceeded its bound".to_string(),
         ));
     }
-    use std::os::unix::fs::OpenOptionsExt as _;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
@@ -1359,6 +1361,59 @@ mod tests {
             "chrome --user-data-dir=/tmp/profile-other --flag",
             "--user-data-dir=/tmp/profile"
         ));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_process_identity_proves_exact_markers_and_absence() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("browser-profile");
+        fs::create_dir(&profile).unwrap();
+        let instance = Uuid::new_v4();
+        let mut child = crate::platform::restricted_command("/bin/sh")
+            .args([
+                "-c",
+                "read value || true",
+                "cf-present-browser",
+                &format!("--user-data-dir={}", profile.display()),
+                &format!("--cf-present-instance={instance}"),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match process_identity(pid, instance, &profile) {
+                Ok(ProcessIdentity::Owned) => break,
+                result if Instant::now() < deadline => {
+                    let _ = result;
+                    thread::sleep(Duration::from_millis(10));
+                }
+                result => panic!("Linux process identity did not settle: {result:?}"),
+            }
+        }
+        assert_eq!(
+            process_identity(pid, Uuid::new_v4(), &profile).unwrap(),
+            ProcessIdentity::Reused
+        );
+        assert!(owned_process_candidates(instance, &profile)
+            .unwrap()
+            .contains(&pid));
+
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            process_identity(pid, instance, &profile).unwrap(),
+            ProcessIdentity::Absent
+        );
+        assert!(process_identity(u32::MAX, instance, &profile)
+            .unwrap_err()
+            .to_string()
+            .contains("outside the platform range"));
     }
 
     #[test]
