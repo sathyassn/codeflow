@@ -115,7 +115,12 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
         let Ok((data, _)) = parse_frontmatter(&bytes) else {
             continue;
         };
-        let epic_id = get_string_field(&data, "id");
+        let format_id = get_string_field(&data, "format_id");
+        let epic_id = if is_valid_epic_format_id(&format_id) {
+            format_id
+        } else {
+            get_string_field(&data, "id")
+        };
         if epic_id.is_empty() {
             continue;
         }
@@ -1098,6 +1103,25 @@ mod tests {
             issue.message.contains("EPC-001 links CAP-001")
                 && issue.message.contains("does not link back")
         }));
+    }
+
+    #[test]
+    fn reciprocal_links_use_the_stable_format_id_for_legacy_epics() {
+        let dir = clean_repo();
+        let path = dir.path().join("project-management/epics/EPC-001.md");
+        let epic = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            path,
+            epic.replace("id: EPC-001", "id: epic-01a\nformat_id: EPC-001"),
+        )
+        .unwrap();
+
+        let report = lint_docs(dir.path());
+        assert!(
+            report.is_clean(),
+            "stable reciprocal identity should remain clean: {:?}",
+            report.issues
+        );
     }
 
     #[test]
