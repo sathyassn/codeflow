@@ -98,6 +98,19 @@
       }
     },
     {
+      "name": "docs-validation",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "cargo run --quiet -p codeflow-cli -- validate --docs"
+        },
+        "full": {
+          "command": "cargo run --quiet -p codeflow-cli -- validate --docs"
+        }
+      }
+    },
+    {
       "name": "cf-present-qualification",
       "enabled": true,
       "runner": "custom",

@@ -6,7 +6,7 @@ import {
   amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
   pinnedSourceUrl as providerSourceUrl, referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
-  strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
+  recoverUnavailableIds, strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
@@ -334,7 +334,7 @@ function staleStubPage(sourcePath, sourceHash, bytes, error) {
   const layer = chooseLayer(sourcePath, layers);
   let text = "";
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch {}
-  const unavailableIds = recoverStaleLookupIds(text, sourcePath);
+  const unavailableIds = recoverUnavailableIds(text, sourcePath);
   return {
     source_path: sourcePath,
     source_sha256: sourceHash,
@@ -354,15 +354,6 @@ function staleStubPage(sourcePath, sourceHash, bytes, error) {
     excerpt: null,
     stale_reason: boundedDiagnostic(error),
   };
-}
-
-function recoverStaleLookupIds(text, sourcePath) {
-  const matches = [...text.matchAll(/(?:^|\n)[ \t]*id:[ \t]*["']?((?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?)["']?[ \t]*(?:#[^\n]*)?(?=\n|$)/g)]
-    .map((match) => match[1]);
-  if (sourcePath === "docs/capabilities.md") return [...new Set(matches)].sort(compareDeterministicText);
-  const filenameId = path.posix.basename(sourcePath, ".md").toUpperCase();
-  if (/^(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?$/.test(filenameId)) return [filenameId];
-  return matches.length ? [matches[0]] : [];
 }
 
 function boundedDiagnostic(error) {

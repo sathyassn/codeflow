@@ -150,6 +150,7 @@ export function rewriteRepositoryMarkdown(body, {
     const children = [];
     let cursor = 0;
     for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
+      if (!strictId(match[0])) continue;
       if (match.index > cursor) children.push({ type: "text", value: node.value.slice(cursor, match.index) });
       const target = strictTargets.get(match[0]);
       if (!target) children.push({ type: "text", value: match[0] });
@@ -170,7 +171,9 @@ function escapeGeneratedHtml(value) {
 export function referencedIds(markdown) {
   const found = new Set();
   for (const node of markdownNodes(markdownTree(markdown), "text")) {
-    for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) found.add(match[0]);
+    for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
+      if (strictId(match[0])) found.add(match[0]);
+    }
   }
   return [...found];
 }
@@ -274,7 +277,7 @@ function sourceReferenceNode(node, sourcePath, commit) {
 }
 
 function strictIdPreview(id, target, suffix) {
-  const statusText = target.stale ? "stale — excluded from the current graph" : target.status;
+  const statusText = target.status;
   const status = typeof statusText === "string" && statusText ? `<span>Status: ${escapeGeneratedHtml(statusText)}</span>` : "";
   const previewId = `portal-preview-${suffix}`;
   return `<span class="portal-id-preview"><a href="${escapeGeneratedHtml(target.route)}" aria-describedby="${previewId}">${id}</a><span id="${previewId}" role="tooltip"><strong>${escapeGeneratedHtml(target.title)}</strong>${status}<span>Source: <code>${escapeGeneratedHtml(target.source_path)}</code></span></span></span>`;
@@ -291,7 +294,37 @@ export function amendmentHeadings(markdown) {
 }
 
 export function strictId(value) {
-  return /^(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?$/.test(value);
+  return /^(?:(?:ADR|EPC|SPC|CAP)-\d{3,}|TSK-\d{3,}(?:-\d{3,})?)$/.test(value);
+}
+
+export function recoverUnavailableIds(text, sourcePath) {
+  const normalized = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const recovered = [];
+  for (const line of normalized.split("\n")) {
+    const match = line.match(/^[ \t]*id:[ \t]*(.*)$/);
+    if (!match) continue;
+    const value = match[1].trimStart();
+    let candidate;
+    if (value.startsWith("\"") || value.startsWith("'")) {
+      const quote = value[0];
+      const end = value.indexOf(quote, 1);
+      if (end < 0) continue;
+      const trailing = value.slice(end + 1).trim();
+      if (trailing && !trailing.startsWith("#")) continue;
+      candidate = value.slice(1, end);
+    } else {
+      const token = value.match(/^(\S+)(.*)$/);
+      if (!token) continue;
+      const trailing = token[2].trim();
+      if (trailing && !trailing.startsWith("#")) continue;
+      candidate = token[1];
+    }
+    if (strictId(candidate) && !recovered.includes(candidate)) recovered.push(candidate);
+  }
+  if (sourcePath === "docs/capabilities.md") return [...recovered].sort(compareDeterministicText);
+  const filenameId = path.posix.basename(sourcePath, ".md").toUpperCase();
+  if (strictId(filenameId)) return [filenameId];
+  return recovered.length ? [recovered[0]] : [];
 }
 
 export function collectPageIds(frontmatter, text, sourcePath) {

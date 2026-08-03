@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -43,6 +43,15 @@ test("checkout byte comparison permits only reversible text newlines", () => {
   assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\rbeta\n")), false);
   assert.equal(checkoutEquivalentBytes(Buffer.from([0xff, 0x00]), Buffer.from([0xff, 0x00])), true);
   assert.equal(checkoutEquivalentBytes(Buffer.from([0xff, 0x00]), Buffer.from([0xfe, 0x00])), false);
+});
+
+test("stale identity recovery matches the verifier grammar and ordering", () => {
+  assert.deepEqual(recoverUnavailableIds("\uFEFF---\r\nid: 'TSK-101' # note\r\n", "docs/guide.md"), ["TSK-101"]);
+  assert.deepEqual(recoverUnavailableIds('id: "TSK-101\'\n', "docs/guide.md"), []);
+  assert.deepEqual(recoverUnavailableIds("id: CAP-001-002\n", "docs/guide.md"), []);
+  assert.deepEqual(recoverUnavailableIds("id: TSK-200\nid: TSK-100\n", "docs/guide.md"), ["TSK-200"]);
+  assert.deepEqual(recoverUnavailableIds("id: CAP-002\nid: CAP-001\n", "docs/capabilities.md"), ["CAP-001", "CAP-002"]);
+  assert.deepEqual(recoverUnavailableIds("id: TSK-999\n", "tasks/TSK-123.md"), ["TSK-123"]);
 });
 
 test("producer evidence limits reject every verifier boundary at N plus one", () => {

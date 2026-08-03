@@ -3550,6 +3550,7 @@ fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> 
         return BTreeSet::new();
     };
     let mut recovered = BTreeSet::new();
+    let mut first_recovered = None;
     for line in text
         .strip_prefix('\u{feff}')
         .unwrap_or(text)
@@ -3581,6 +3582,7 @@ fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> 
                 &value[..end]
             };
         if strict_id(candidate) {
+            first_recovered.get_or_insert_with(|| candidate.to_string());
             recovered.insert(candidate.to_string());
         }
     }
@@ -3593,7 +3595,7 @@ fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> 
         {
             return BTreeSet::from([filename_id]);
         }
-        return recovered.into_iter().take(1).collect();
+        return first_recovered.into_iter().collect();
     }
     recovered
 }
@@ -3950,15 +3952,21 @@ mod tests {
     #[test]
     fn stale_identity_recovery_is_bounded_and_fail_closed() {
         let recovered = recover_unavailable_ids(
-            b"---\nid: 'TSK-101' # stable identity\ntitle: [broken\nid: TSK-102 trailing\n",
+            b"\xef\xbb\xbf---\r\nid: 'TSK-101' # stable identity\r\ntitle: [broken\r\nid: TSK-102 trailing\r\n",
             "docs/guide.md",
         );
         assert_eq!(recovered, BTreeSet::from(["TSK-101".to_string()]));
+
+        let document_order =
+            recover_unavailable_ids(b"id: TSK-200\nid: TSK-100\n", "docs/guide.md");
+        assert_eq!(document_order, BTreeSet::from(["TSK-200".to_string()]));
 
         let filename = recover_unavailable_ids(b"id: TSK-999\n", "tasks/TSK-123.md");
         assert_eq!(filename, BTreeSet::from(["TSK-123".to_string()]));
 
         assert!(recover_unavailable_ids(b"id: ../../secret\n", "docs/guide.md").is_empty());
+        assert!(recover_unavailable_ids(b"id: CAP-001-002\n", "docs/guide.md").is_empty());
+        assert!(recover_unavailable_ids(b"id: \"TSK-101'\n", "docs/guide.md").is_empty());
         assert!(recover_unavailable_ids(&[0xff, 0xfe], "docs/guide.md").is_empty());
     }
 

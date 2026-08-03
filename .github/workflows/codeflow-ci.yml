@@ -78,6 +78,9 @@ jobs:
       - name: cargo doc --workspace -D warnings
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+      - name: codeflow validate --docs from source
+        run: cargo run --quiet -p codeflow-cli -- validate --docs
+
   windows:
     name: windows (build + test + clippy)
     runs-on: windows-latest

@@ -47,6 +47,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only a bounded unavailable identity so current records can link to the safe
   diagnostic without republishing stale content, and a parity gate keeps the
   dogfood runtime identical to the shipped starter on every supported host.
+  Producer and verifier now share one strict unavailable-identity grammar,
+  while the local aggregate and CI both enforce the reciprocal documentation
+  graph instead of leaving that check to a separate hosted step.
 - **Claude's OS sandbox now keeps installed plugin code executable without
   exposing mutable plugin or private Claude state.** The broad `~/.claude`
   subprocess-read denial remains, while the higher-precedence filesystem
