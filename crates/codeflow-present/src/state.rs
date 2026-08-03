@@ -449,6 +449,33 @@ fn release_runtime_lease(path: &Path) {
     }
 }
 
+fn try_runtime_lease(path: &Path) -> Result<Option<RuntimeLease>> {
+    if !reserve_runtime_lease(path)? {
+        return Ok(None);
+    }
+    let lease = match open_private_append(path) {
+        Ok(lease) => lease,
+        Err(error) => {
+            release_runtime_lease(path);
+            return Err(error);
+        }
+    };
+    match lease.try_lock_exclusive() {
+        Ok(()) => Ok(Some(RuntimeLease {
+            file: Some(lease),
+            path: path.to_path_buf(),
+        })),
+        Err(error) => {
+            release_runtime_lease(path);
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                Ok(None)
+            } else {
+                Err(PresentError::io(path, error))
+            }
+        }
+    }
+}
+
 impl SessionStore {
     pub fn discover(project: &Path) -> Result<Self> {
         let repository = git2::Repository::discover(project).map_err(|error| {
@@ -1789,34 +1816,11 @@ impl SessionStore {
     ) -> Result<RuntimeLease> {
         self.load(id)?;
         let path = self.session_dir(id).join(file_name);
-        if !reserve_runtime_lease(&path)? {
-            return Err(PresentError::ServiceUnavailable(format!(
+        try_runtime_lease(&path)?.ok_or_else(|| {
+            PresentError::ServiceUnavailable(format!(
                 "presentation session {id} already has a {owner}"
-            )));
-        }
-        let lease = match open_private_append(&path) {
-            Ok(lease) => lease,
-            Err(error) => {
-                release_runtime_lease(&path);
-                return Err(error);
-            }
-        };
-        match lease.try_lock_exclusive() {
-            Ok(()) => Ok(RuntimeLease {
-                file: Some(lease),
-                path,
-            }),
-            Err(error) => {
-                release_runtime_lease(&path);
-                if error.kind() == std::io::ErrorKind::WouldBlock {
-                    Err(PresentError::ServiceUnavailable(format!(
-                        "presentation session {id} already has a {owner}"
-                    )))
-                } else {
-                    Err(PresentError::io(path, error))
-                }
-            }
-        }
+            ))
+        })
     }
 
     fn try_acquire_runtime_lease(
@@ -1826,32 +1830,11 @@ impl SessionStore {
         owner: &str,
     ) -> Result<Option<RuntimeLease>> {
         let path = self.session_dir(id).join(file_name);
-        if !reserve_runtime_lease(&path)? {
-            return Ok(None);
-        }
-        let lease = match open_private_append(&path) {
-            Ok(lease) => lease,
-            Err(error) => {
-                release_runtime_lease(&path);
-                return Err(error);
-            }
-        };
-        match lease.try_lock_exclusive() {
-            Ok(()) => Ok(Some(RuntimeLease {
-                file: Some(lease),
-                path,
-            })),
-            Err(error) => {
-                release_runtime_lease(&path);
-                if error.kind() == std::io::ErrorKind::WouldBlock {
-                    Ok(None)
-                } else {
-                    Err(PresentError::ServiceUnavailable(format!(
-                        "failed to prove absence of {owner} for session {id}: {error}"
-                    )))
-                }
-            }
-        }
+        try_runtime_lease(&path).map_err(|error| {
+            PresentError::ServiceUnavailable(format!(
+                "failed to prove absence of {owner} for session {id}: {error}"
+            ))
+        })
     }
 
     fn read_events_unlocked(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
