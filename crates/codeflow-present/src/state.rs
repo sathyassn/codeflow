@@ -2313,7 +2313,7 @@ fn platform_state_root() -> Result<PathBuf> {
         use windows_sys::Win32::UI::Shell::FOLDERID_LocalAppData;
 
         let root = crate::platform::known_folder(&FOLDERID_LocalAppData)?;
-        return Ok(root.join("codeflow").join("present"));
+        Ok(root.join("codeflow").join("present"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -2498,7 +2498,7 @@ fn create_private_file(path: &Path) -> Result<()> {
 pub(crate) fn open_private_create_new(path: &Path) -> Result<File> {
     #[cfg(windows)]
     {
-        return crate::platform::open_private_create_new(path);
+        crate::platform::open_private_create_new(path)
     }
     #[cfg(not(windows))]
     {
@@ -2599,7 +2599,7 @@ fn open_private_append(path: &Path) -> Result<File> {
             Err(error) => return Err(error),
         };
         validate_private_file(path, &file)?;
-        return Ok(file);
+        Ok(file)
     }
 
     #[cfg(not(windows))]
@@ -2829,6 +2829,9 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
     result
 }
 
+// Keep one fallible contract at the atomic-write call sites even on targets
+// where Rust does not expose directory fsync.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn sync_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {

@@ -69,8 +69,9 @@ named human release decision.
 - [ ] `cargo dist plan --output-format=json` lists the two macOS archives, the
       Linux x86-64 archive, the Windows x86-64 MSVC archive, and both shell and
       PowerShell installers on native runners.
-- [ ] Optional host-agnostic `cargo-xwin` and `cargo-zigbuild` checks pass; their
-      versions and host are recorded. These are compile/link evidence only.
+- [ ] Optional host-agnostic `cargo-xwin` target clippy/build and
+      `cargo-zigbuild` checks pass; their versions and host are recorded. These
+      are static-analysis/compile/link evidence only.
 - [ ] Native macOS, Linux, and Windows build/test canaries pass. Record the OS,
       architecture, Rust version, and exact command. WSL2 is recorded as Linux,
       not as native Windows.

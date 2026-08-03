@@ -128,9 +128,7 @@ pub(crate) fn open_private_create_new(path: &Path) -> Result<fs::File> {
         return Err(PresentError::io(path, std::io::Error::last_os_error()));
     }
     let file = unsafe { fs::File::from_raw_handle(handle.cast()) };
-    if let Err(error) = verify_private_file(path, &file) {
-        return Err(error);
-    }
+    verify_private_file(path, &file)?;
     Ok(file)
 }
 

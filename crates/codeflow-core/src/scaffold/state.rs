@@ -339,6 +339,9 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
     result
 }
 
+// Keep atomic scaffold writes on one fallible contract even on targets where
+// Rust does not expose directory fsync.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn sync_directory(path: &Path) -> Result<(), ScaffoldError> {
     #[cfg(unix)]
     {
@@ -427,6 +430,9 @@ pub(crate) fn remove_beneath_root(root: &Path, rel: &str) -> Result<(), Scaffold
 }
 
 /// Sets (or clears) the executable bit.
+// Windows has no Unix executable bit, but callers retain one cross-platform
+// fallible contract.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 pub(crate) fn set_exec(path: &Path, exec: bool) -> Result<(), ScaffoldError> {
     #[cfg(unix)]
     {

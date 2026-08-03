@@ -21,7 +21,8 @@ driven and human-gated. Two tools do the work:
 
 Release CI uses native cargo-dist runners for macOS, Linux, and Windows so each
 binary is linked with the platform SDK and can be exercised there. For an
-earlier host-agnostic build check, the repository also provides Cargo aliases:
+earlier host-agnostic target lint and build check, the repository also provides
+Cargo aliases:
 
 ```sh
 cargo install --locked cargo-xwin --version 0.23.0
@@ -36,9 +37,9 @@ cargo cross-check-linux       # requires Zig on PATH
 cargo cross-build-linux       # requires Zig on PATH
 ```
 
-`cargo-xwin` acquires the Windows CRT/SDK inputs needed to build MSVC targets
-from macOS or Linux. `cargo-zigbuild` uses Zig as the linker for a Linux GNU
-binary with a glibc 2.17 floor. macOS artifacts still build on macOS because
+`cargo-xwin` acquires the Windows CRT/SDK inputs needed to lint and build MSVC
+targets from macOS or Linux. `cargo-zigbuild` uses Zig as the linker for a Linux
+GNU binary with a glibc 2.17 floor. macOS artifacts still build on macOS because
 Apple SDK redistribution/licensing prevents a generic bundled cross toolchain.
 Cross-build success proves compilation and linking only; it never replaces a
 native Windows/Linux/macOS test and installer canary.

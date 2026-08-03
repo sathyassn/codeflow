@@ -85,3 +85,17 @@ fn strict_repository_gate_installs_its_declared_coverage_tool() {
         "cargo-llvm-cov must be available before the strict aggregate gate"
     );
 }
+
+#[test]
+fn windows_cross_check_lints_target_specific_code() {
+    let config = fs::read_to_string(workspace_root().join(".cargo/config.toml"))
+        .expect("Cargo configuration must be readable");
+
+    assert!(
+        config.contains(
+            "cross-check-windows = \"xwin clippy --workspace --all-targets --target \
+             x86_64-pc-windows-msvc -- -D warnings\""
+        ),
+        "the host-agnostic Windows check must lint target-specific code, not only compile it"
+    );
+}
