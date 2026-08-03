@@ -23,6 +23,7 @@ if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(runPrefix)) {
   throw new Error(`Invalid qualification run prefix: ${runPrefix}`);
 }
 const injectCleanupFailure = process.argv.includes("--inject-cleanup-failure");
+const NAVIGATION_TIMEOUT_MS = 45_000;
 const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
 const windowsProfileConfinement = qualifyWindowsEnvironment();
 const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
@@ -495,7 +496,10 @@ function observeContext(
     if (observedPages.has(observedPage)) return;
     observedPages.add(observedPage);
     observedPage.setDefaultTimeout(15_000);
-    observedPage.setDefaultNavigationTimeout(20_000);
+    // A cold shared runner may still be CPU-bound after the qualification's
+    // release-build rehearsal. Keep navigation bounded, but leave enough room
+    // for the local bootstrap and application assets to complete under load.
+    observedPage.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     observedPage.on("console", (message) => {
       if (message.type() === "error") {
         const location = message.location();
