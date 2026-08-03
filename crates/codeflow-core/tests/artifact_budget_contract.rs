@@ -74,8 +74,27 @@ fn normalized(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn authored_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index..].starts_with(b"\r\n") {
+            normalized.push(b'\n');
+            index += 2;
+        } else {
+            normalized.push(bytes[index]);
+            index += 1;
+        }
+    }
+    normalized
+}
+
 fn assert_byte_budget(path: &Path, max_bytes: usize) -> usize {
-    let bytes = read(path);
+    // Git may materialize tracked text with CRLF on Windows. Measure the
+    // authored LF-normalized content so one reviewed budget has identical
+    // meaning on every host; lone carriage returns and all other bytes still
+    // count normally.
+    let bytes = authored_bytes(&read(path));
     let diagnostic_lines = bytes.split_inclusive(|byte| *byte == b'\n').count();
     assert!(
         bytes.len() <= max_bytes,
@@ -89,6 +108,14 @@ fn assert_byte_budget(path: &Path, max_bytes: usize) -> usize {
         max_bytes
     );
     bytes.len()
+}
+
+#[test]
+fn byte_budgets_are_independent_of_checkout_newlines() {
+    let lf = b"first line\nsecond line\n";
+    let crlf = b"first line\r\nsecond line\r\n";
+    assert_eq!(authored_bytes(lf), authored_bytes(crlf));
+    assert_eq!(authored_bytes(b"first\rline"), b"first\rline");
 }
 
 fn manifest() -> ScaffoldManifest {
