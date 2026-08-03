@@ -113,11 +113,17 @@ candidate. The final implementation now:
   reproduced an unhandled asynchronous child `error` event and blocked it. The
   correction at `109cb2f50e5dea7ec95de5e9fc69c36a1de7d044` contains that event,
   preserves the bounded error in the cleanup verdict, and adds executable
-  asynchronous and synchronous failure canaries. The corrected delta still
-  requires fresh exact re-review and a successful native Fable verdict before
-  task completion; prior approval is not carried forward to changed code.
+  asynchronous and synchronous failure canaries.
+- A fresh independent Codex review inspected exact metadata HEAD
+  `0420d654378fb30e1693e1c4664968b4de4b7a8d` and code candidate
+  `109cb2f50e5dea7ec95de5e9fc69c36a1de7d044`, reran the eight lifecycle cases
+  plus a combined asynchronous-error/action-error canary, verified both mirrors
+  and content-addressed baselines, and approved with no material finding. It did
+  not rerun the full strict, three-engine, hosted Windows, native-platform,
+  supply-chain, or size evidence and did not substitute for Fable review.
 
-TSK-009 remains in progress for exact-candidate independent/Fable review and
-the outstanding native-platform acceptance. The green cleanup implementation
-may proceed onto the EPC-005 integration branch so dependency-aware work can
-continue, but its open gates must not be relabeled as complete.
+TSK-009 remains in progress for the exact-candidate Fable verdict and
+outstanding native-platform acceptance. The green, independently reviewed
+cleanup implementation may proceed onto the EPC-005 integration branch so
+dependency-aware work can continue, but its open gates must not be relabeled as
+complete.
