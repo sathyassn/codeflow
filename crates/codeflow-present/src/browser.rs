@@ -552,7 +552,17 @@ fn macos_identity_command(pid: u32) -> Command {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<ProcessIdentity> {
-    let command_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
+    process_identity_from_proc(Path::new("/proc"), pid, instance_id, profile_dir)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_identity_from_proc(
+    proc_root: &Path,
+    pid: u32,
+    instance_id: Uuid,
+    profile_dir: &Path,
+) -> Result<ProcessIdentity> {
+    let command_path = proc_root.join(pid.to_string()).join("cmdline");
     let metadata = match fs::symlink_metadata(&command_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -591,14 +601,7 @@ fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<P
             "browser identity output exceeded its bound".to_string(),
         ));
     }
-    let arguments = bytes
-        .split(|byte| *byte == 0)
-        .filter(|argument| !argument.is_empty())
-        .map(std::str::from_utf8)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| {
-            PresentError::BrowserUnavailable("browser identity is not UTF-8".to_string())
-        })?;
+    let arguments = linux_command_line_arguments(&bytes)?;
     if !arguments_prove_identity(&arguments, instance_id, profile_dir) {
         return Ok(ProcessIdentity::Reused);
     }
@@ -664,13 +667,23 @@ fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec<u32>> {
+    let current_uid = unsafe { libc::geteuid() };
+    owned_process_candidates_from_proc(Path::new("/proc"), current_uid, instance_id, profile_dir)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn owned_process_candidates_from_proc(
+    proc_root: &Path,
+    current_uid: u32,
+    instance_id: Uuid,
+    profile_dir: &Path,
+) -> Result<Vec<u32>> {
     use std::os::unix::fs::MetadataExt as _;
 
     let mut candidates = Vec::new();
     let mut examined = 0_usize;
-    let current_uid = unsafe { libc::geteuid() };
-    for entry in fs::read_dir("/proc").map_err(|error| PresentError::io("/proc", error))? {
-        let entry = entry.map_err(|error| PresentError::io("/proc", error))?;
+    for entry in fs::read_dir(proc_root).map_err(|error| PresentError::io(proc_root, error))? {
+        let entry = entry.map_err(|error| PresentError::io(proc_root, error))?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
@@ -703,14 +716,7 @@ fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(PresentError::io(&cmdline, error)),
         };
-        let arguments = bytes
-            .split(|byte| *byte == 0)
-            .filter(|argument| !argument.is_empty())
-            .map(std::str::from_utf8)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|_| {
-                PresentError::BrowserUnavailable("browser identity is not UTF-8".to_string())
-            })?;
+        let arguments = linux_command_line_arguments(&bytes)?;
         if arguments_prove_identity(&arguments, instance_id, profile_dir) {
             candidates.push(pid);
             if candidates.len() > 64 {
@@ -721,6 +727,16 @@ fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec
         }
     }
     Ok(candidates)
+}
+
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn linux_command_line_arguments(bytes: &[u8]) -> Result<Vec<&str>> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .map(std::str::from_utf8)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| PresentError::BrowserUnavailable("browser identity is not UTF-8".to_string()))
 }
 
 #[cfg(unix)]
@@ -1363,6 +1379,18 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn linux_command_line_decoder_is_nul_exact_and_rejects_non_utf8() {
+        assert_eq!(
+            linux_command_line_arguments(b"browser\0\0--flag=value\0").unwrap(),
+            ["browser", "--flag=value"]
+        );
+        assert!(linux_command_line_arguments(b"browser\0\xff\0")
+            .unwrap_err()
+            .to_string()
+            .contains("not UTF-8"));
+    }
+
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn linux_process_identity_proves_exact_markers_and_absence() {
@@ -1414,6 +1442,71 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("outside the platform range"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_proc_identity_rejects_unsafe_command_line_shapes() {
+        let temp = tempfile::tempdir().unwrap();
+        let instance = Uuid::new_v4();
+        let profile = temp.path().join("browser-profile");
+
+        fs::create_dir_all(temp.path().join("1/cmdline")).unwrap();
+        assert!(
+            process_identity_from_proc(temp.path(), 1, instance, &profile)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeded its bound")
+        );
+
+        fs::create_dir_all(temp.path().join("2")).unwrap();
+        fs::write(temp.path().join("2/cmdline"), vec![b'x'; 64 * 1024 + 1]).unwrap();
+        assert!(
+            process_identity_from_proc(temp.path(), 2, instance, &profile)
+                .unwrap_err()
+                .to_string()
+                .contains("exceeded its bound")
+        );
+
+        fs::create_dir_all(temp.path().join("3")).unwrap();
+        fs::write(temp.path().join("3/cmdline"), b"browser\0\xff\0").unwrap();
+        assert!(
+            process_identity_from_proc(temp.path(), 3, instance, &profile)
+                .unwrap_err()
+                .to_string()
+                .contains("not UTF-8")
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_proc_inventory_rejects_oversize_and_invalid_identity() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let current_uid = unsafe { libc::geteuid() };
+
+        let oversize = tempfile::tempdir().unwrap();
+        fs::create_dir(oversize.path().join("7")).unwrap();
+        fs::write(oversize.path().join("7/cmdline"), vec![b'x'; 64 * 1024 + 1]).unwrap();
+        assert!(owned_process_candidates_from_proc(
+            oversize.path(),
+            current_uid,
+            instance,
+            profile
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("exceeded its bound"));
+
+        let invalid = tempfile::tempdir().unwrap();
+        fs::create_dir(invalid.path().join("8")).unwrap();
+        fs::write(invalid.path().join("8/cmdline"), b"browser\0\xff\0").unwrap();
+        assert!(
+            owned_process_candidates_from_proc(invalid.path(), current_uid, instance, profile)
+                .unwrap_err()
+                .to_string()
+                .contains("not UTF-8")
+        );
     }
 
     #[test]
@@ -1665,6 +1758,7 @@ mod tests {
             .process_group(0);
         let mut child = command.spawn().unwrap();
         let pid = child.id();
+        let waiter = thread::spawn(move || child.wait().unwrap());
         let deadline = Instant::now() + Duration::from_secs(1);
         while process_identity(pid, instance, &profile).unwrap() != ProcessIdentity::Owned {
             assert!(Instant::now() < deadline);
@@ -1672,7 +1766,7 @@ mod tests {
         }
 
         terminate_qualified_process(pid, instance, &profile).unwrap();
-        let status = child.wait().unwrap();
+        let status = waiter.join().unwrap();
         assert!(!status.success());
         assert!(owned_process_candidates(instance, &profile)
             .unwrap()

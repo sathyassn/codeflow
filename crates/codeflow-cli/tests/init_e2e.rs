@@ -93,6 +93,10 @@ fn read(root: &Path, rel: &str) -> String {
     std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
+fn normalize_crlf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -281,8 +285,8 @@ fn assert_update_round_trips(root: &Path) {
         "managed region did not round-trip"
     );
     assert_eq!(
-        read(root, ".claude/settings.json"),
-        settings_before,
+        normalize_crlf(&read(root, ".claude/settings.json")),
+        normalize_crlf(&settings_before),
         "settings merge did not round-trip"
     );
     assert_eq!(
