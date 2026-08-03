@@ -24,7 +24,9 @@ const MAX_TOTAL_MEDIA_BYTES = 64 * 1024 * 1024;
 const MAX_MEDIA_FILES = 1_000;
 const MAX_STALE_REASON_BYTES = 512;
 const MAX_STALE_STUB_BYTES = 4 * 1024;
-const portalRoot = process.cwd();
+// Canonicalize before comparing paths: Windows runners may expose the same
+// directory through both long and 8.3 names, which are not lexically relative.
+const portalRoot = await realpath(process.cwd());
 await recoverOwnedCorpus(portalRoot);
 const discoveredRepositoryRoot = await findRepositoryRoot(portalRoot);
 const repositoryRoot = await realpath(discoveredRepositoryRoot);
