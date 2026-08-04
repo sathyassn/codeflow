@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-test fixture — file: containment probe</title>
+</head>
+<body>
+<h1>file: containment probe</h1>
+<p>This page is <strong>not a candidate</strong>. It exists so the self-test can prove that a page inside the study
+  cannot read operator files merely because the network is blocked. Every request below must be aborted and recorded
+  as an outside-study file request.</p>
+<ul>
+  <li>plain traversal to the repository root</li>
+  <li>percent-encoded traversal to a system file</li>
+  <li>sibling-prefix directory whose path starts with the study root's characters</li>
+</ul>
+
+<!-- Paths are relative to <study>/tools/fixtures/, so five levels reach the
+     repository root and three reach the study's own parent directory. -->
+<!-- 1. plain traversal out of the study, to a file that really exists -->
+<img alt="" width="1" height="1" src="../../../../../AGENTS.md">
+<!-- 2. percent-encoded traversal, decoded by the browser before it is routed -->
+<img alt="" width="1" height="1" src="..%2F..%2F..%2F..%2F..%2FCLAUDE.md">
+<!-- 3. absolute system path -->
+<img alt="" width="1" height="1" src="/etc/hosts">
+<!-- 4. sibling prefix: resolves next to the study, and its path begins with the
+     study root's own characters, so a naive startsWith check would admit it -->
+<img alt="" width="1" height="1" src="../../../tsk-014-w2-other/secret.png">
+
+<script>
+  // The probes are fired by the parser; give them a tick to be routed, then
+  // signal readiness so the harness screenshots and records deterministically.
+  addEventListener("load", () => setTimeout(() => { document.documentElement.dataset.ready = "true"; }, 300));
+</script>
+</body>
+</html>

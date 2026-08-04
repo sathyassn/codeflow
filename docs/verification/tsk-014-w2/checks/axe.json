@@ -1,0 +1,239 @@
+{
+  "browser_version": "150.0.7871.129",
+  "playwright_core_version": "1.62.1",
+  "axe_core_version": "4.10.3",
+  "results": [
+    {
+      "render": "p1-a-wave-lanes-light-desktop",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-a-wave-lanes-light-mobile",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-a-wave-lanes-dark-desktop",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-a-wave-lanes-dark-mobile",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-a-wave-lanes-light-desktop-reduced",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "reduce",
+      "violations": []
+    },
+    {
+      "render": "p1-b-blocking-matrix-light-desktop",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-b-blocking-matrix-light-mobile",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-b-blocking-matrix-dark-desktop",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-b-blocking-matrix-dark-mobile",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-b-blocking-matrix-light-desktop-reduced",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "reduce",
+      "violations": []
+    },
+    {
+      "render": "p1-c-critical-ribbon-light-desktop",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-c-critical-ribbon-light-mobile",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-c-critical-ribbon-dark-desktop",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-c-critical-ribbon-dark-mobile",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-c-critical-ribbon-light-desktop-reduced",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "reduce",
+      "violations": []
+    },
+    {
+      "render": "p2-a-evidence-grid-light-desktop",
+      "page": "cases/p2/a-evidence-grid/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-a-evidence-grid-light-mobile",
+      "page": "cases/p2/a-evidence-grid/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-a-evidence-grid-dark-desktop",
+      "page": "cases/p2/a-evidence-grid/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-a-evidence-grid-dark-mobile",
+      "page": "cases/p2/a-evidence-grid/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-a-evidence-grid-light-desktop-reduced",
+      "page": "cases/p2/a-evidence-grid/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "reduce",
+      "violations": []
+    },
+    {
+      "render": "p2-b-provenance-rail-light-desktop",
+      "page": "cases/p2/b-provenance-rail/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-b-provenance-rail-light-mobile",
+      "page": "cases/p2/b-provenance-rail/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-b-provenance-rail-dark-desktop",
+      "page": "cases/p2/b-provenance-rail/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-b-provenance-rail-dark-mobile",
+      "page": "cases/p2/b-provenance-rail/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-b-provenance-rail-light-desktop-reduced",
+      "page": "cases/p2/b-provenance-rail/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "reduce",
+      "violations": []
+    },
+    {
+      "render": "p1-baseline-light-desktop",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p1-baseline-light-mobile",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-baseline-light-desktop",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "motion": "no-preference",
+      "violations": []
+    },
+    {
+      "render": "p2-baseline-light-mobile",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "motion": "no-preference",
+      "violations": []
+    }
+  ]
+}

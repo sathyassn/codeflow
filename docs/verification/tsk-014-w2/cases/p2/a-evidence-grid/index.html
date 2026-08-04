@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2-a — TSK-007 coverage, and where there is none</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    /* --muted is tuned against the --gap fill below: axe measured 4.48:1 at
+       #656d7b on #eceef1 for the 10.9px note text, just under the AA floor. */
+    --ink: #17191e; --dim: #5b6373; --muted: #5a616f; --line: #cdd1d9; --page: #fcfcfb; --rule: #e6e9ee;
+    --gap: #eceef1; --warn: #8a3a12; --ok: #2f6b4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a4acba; --muted: #9aa2b0; --line: #3c424e; --page: #131519; --rule: #24282f;
+            --gap: #1c1f26; --warn: #f0b073; --ok: #7ed3a9; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 78rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  .lede { margin: 0 0 1.3rem; color: var(--dim); max-width: 48rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+  .lede .finding { color: var(--ink); }
+
+  .cue { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+    font-size: .74rem; border: 1px solid var(--line); border-bottom: 0; padding: .4rem .6rem; }
+  .cue .shape { color: var(--dim); }
+  .cue .more { font-weight: 650; }
+  .cue[data-overflowing="false"] .more { color: var(--muted); font-weight: 400; }
+
+  .scroller { overflow-x: auto; border: 1px solid var(--line); }
+  .scroller:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: .8rem; }
+  th, td { border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    padding: .45rem .55rem; vertical-align: top; }
+  thead th { font-size: .72rem; font-weight: 600; color: var(--dim); text-align: left; white-space: nowrap; }
+  tbody th { text-align: left; font-weight: 600; min-width: 12rem; }
+  .stick1 { position: sticky; left: 0; z-index: 3; background: var(--page);
+    border-right: 2px solid var(--line); }
+  td { min-width: 8.5rem; }
+  td[data-state="executed"] { color: var(--ok); font-weight: 600; }
+  td[data-state="bounded"], td[data-state="notclaimed"] { color: var(--warn); }
+  td[data-state="notrun"] { background: var(--gap); color: var(--dim); }
+  td[data-state="na"] { color: var(--muted); }
+  td[data-state="executed"]::before { content: "● "; }
+  td[data-state="bounded"]::before, td[data-state="notclaimed"]::before { content: "◐ "; }
+  td[data-state="notrun"]::before { content: "○ "; }
+  td small { display: block; font-weight: 400; color: var(--muted); font-size: .68rem; margin-top: .12rem; }
+  caption { text-align: left; padding: .5rem .6rem; font-size: .73rem; color: var(--dim);
+    border-bottom: 1px solid var(--line); }
+
+  .why { margin-top: 1.4rem; display: grid; gap: .5rem; max-width: 54rem; font-size: .8rem; }
+  .why div { display: grid; grid-template-columns: 10rem 1fr; gap: .7rem; }
+  .why span:first-child { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); padding-top: .15rem; }
+  .src { margin-top: 1.2rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+  @media (prefers-reduced-motion: no-preference) { .scroller { scroll-behavior: smooth; } }
+  @media (max-width: 760px) { .why div { grid-template-columns: 1fr; gap: .1rem; } tbody th { min-width: 10rem; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>TSK-007 — what is actually proved, and where the evidence is missing</h1>
+  <p class="lede">Every row is a claim the qualification makes; every column is a lane that could prove it.
+    <strong>The shaded cells are the finding</strong> — nothing failed there, nothing was attempted.
+    <span class="finding" id="finding"></span></p>
+
+  <div class="cue" id="cue" data-overflowing="false">
+    <span class="shape" id="shape"></span>
+    <span class="more" id="more"></span>
+  </div>
+  <div class="scroller" id="scroller" tabindex="0" role="region"
+       aria-label="Claim and evidence-lane coverage grid" aria-describedby="cue">
+    <table id="grid">
+      <caption>Coverage at exact implementation candidate <code>826715510440df53fc999e68d77429d7b49a6d55</code>.</caption>
+    </table>
+  </div>
+
+  <div class="why">
+    <div><span>● executed</span><span>run at the exact candidate; the artifact is bound to that revision.</span></div>
+    <div><span>◐ bounded</span><span>a real run exists, but at an older revision or without a passing artifact — explicitly not promoted.</span></div>
+    <div><span>○ not run</span><span>no evidence exists in this lane.</span></div>
+  </div>
+  <p class="src">Source: <code>docs/verification/tsk-007-presentation/README.md</code>, through the shared fact registry
+    <code>shared/tsk007-facts.js</code>. Every material cell carries a verbatim quotation that
+    <code>tools/verify.mjs</code> checks against that record.</p>
+</main>
+
+<script src="../../../shared/tsk007-facts.js"></script>
+<script>
+(() => {
+  const d = window.tsk007Facts;
+  const table = document.getElementById("grid");
+  const thead = document.createElement("thead");
+  thead.innerHTML = `<tr><th scope="col" class="stick1">claim</th>${d.lanes.map(l => `<th scope="col">${l}</th>`).join("")}</tr>`;
+  const tbody = document.createElement("tbody");
+  d.claims.forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<th scope="row" class="stick1">${c.claim}</th>` + c.cells.map((cell, i) =>
+      `<td data-state="${cell.state}" aria-label="${c.claim}, ${d.lanes[i]}: ${cell.text}${cell.note ? ", " + cell.note : ""}">` +
+      `${cell.text}${cell.note ? `<small>${cell.note}</small>` : ""}</td>`).join("");
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+
+  // One derived statement, and only the one that answers the question: how deep
+  // the executed evidence actually goes. No metric row.
+  const flat = d.claims.flatMap(c => c.cells);
+  const applicable = flat.filter(c => c.state !== "na").length;
+  const lanesWithExecuted = new Set();
+  d.claims.forEach(c => c.cells.forEach((cell, i) => { if (cell.state === "executed") lanesWithExecuted.add(d.lanes[i]); }));
+  const platformLanes = d.lanes.filter(l => l !== "independent review");
+  const executedPlatforms = platformLanes.filter(l => lanesWithExecuted.has(l));
+  document.getElementById("finding").textContent =
+    `Of ${platformLanes.length} platform lanes, executed evidence at the exact candidate exists in ${executedPlatforms.length}: ${executedPlatforms.join(", ")}.`;
+
+  const scroller = document.getElementById("scroller");
+  const cue = document.getElementById("cue");
+  const updateCue = () => {
+    const overflowing = scroller.scrollWidth - scroller.clientWidth > 2;
+    cue.dataset.overflowing = String(overflowing);
+    const allHeaders = [...table.querySelectorAll("thead th")];
+    const stickyWidth = allHeaders[0].getBoundingClientRect().width;
+    const headers = allHeaders.slice(1);
+    const bounds = scroller.getBoundingClientRect();
+    const visible = headers.filter(h => {
+      const r = h.getBoundingClientRect();
+      return r.left >= bounds.left + stickyWidth - 1 && r.right <= bounds.right + 1;
+    });
+    const first = visible.length ? headers.indexOf(visible[0]) + 1 : 0;
+    const last = visible.length ? headers.indexOf(visible[visible.length - 1]) + 1 : 0;
+    document.getElementById("shape").textContent =
+      `${d.claims.length} claims × ${d.lanes.length} evidence lanes · the claim column stays fixed`;
+    document.getElementById("more").textContent = !overflowing
+      ? `all ${d.lanes.length} lanes visible`
+      : visible.length
+        ? `showing lanes ${first}–${last} of ${d.lanes.length} — scroll sideways for the rest →`
+        : `no lane fits yet — scroll sideways to read the ${d.lanes.length} of them →`;
+  };
+  scroller.addEventListener("scroll", updateCue, { passive: true });
+  addEventListener("resize", updateCue);
+  updateCue();
+
+  document.documentElement.dataset.applicableCells = String(applicable);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

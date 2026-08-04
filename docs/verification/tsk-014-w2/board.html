@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSK-014 W2 comparison board</title>
+<style>
+  /* Deliberately neutral. The board frames the candidates without becoming a
+     design specimen: system font, no palette, no ornament. */
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, -apple-system, sans-serif; margin: 0; background: Canvas; color: CanvasText; }
+  main { max-width: 92rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 1.05rem; margin-top: 2.5rem; border-top: 1px solid GrayText; padding-top: 1rem; }
+  .q { font-weight: 600; }
+  .meta { color: GrayText; font-size: .85rem; }
+  .warn { border: 1px solid GrayText; padding: .6rem .8rem; font-size: .9rem; }
+  .controls { position: sticky; top: 0; background: Canvas; padding: .6rem 0; border-bottom: 1px solid GrayText;
+    z-index: 5; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+  .controls label { font-size: .85rem; }
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1rem; margin-top: 1rem; }
+  figure { margin: 0; border: 1px solid GrayText; }
+  figcaption { padding: .4rem .6rem; font-size: .85rem; border-bottom: 1px solid GrayText; }
+  figcaption b { display: block; }
+  img { display: block; width: 100%; height: auto; }
+  .decision { margin-top: 1rem; border: 1px dashed GrayText; padding: .7rem .9rem; font-size: .9rem; }
+  table { border-collapse: collapse; margin-top: 1rem; font-size: .85rem; width: 100%; }
+  th, td { border: 1px solid GrayText; padding: .35rem .5rem; text-align: left; vertical-align: top; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TSK-014 W2 — rendered comparison board</h1>
+  <p class="meta">Candidates side by side at the same viewport and mode. Baselines are the ordinary-chat and
+    ordinary-Markdown floors. Protocol: <a href="rubric.md">rubric.md</a> (pinned by
+    <a href="rubric.lock.json">rubric.lock.json</a>). Answers: <a href="answer-key.md">answer-key.md</a> —
+    do not open before observing.</p>
+
+  <p class="warn"><b>Observer state:</b> G1–G8 are <b>not run</b>. Deterministic checks pass; that says the study is
+    internally consistent and accessible, not that any composition reads. The author's self-critique is evidence, not a
+    verdict. See <a href="observer-state.md">observer-state.md</a>.</p>
+
+  <div class="controls">
+    <label><input type="radio" name="mode" value="light" checked> light</label>
+    <label><input type="radio" name="mode" value="dark"> dark</label>
+    <label><input type="radio" name="vp" value="desktop" checked> desktop</label>
+    <label><input type="radio" name="vp" value="mobile"> mobile</label>
+    <span class="meta" id="state"></span>
+  </div>
+
+  <section>
+    <h2>P1 — EPC-005 plan graph</h2>
+    <p class="q">Which EPC-005 tasks can start today, which chain of unfinished tasks is the longest path to
+      <code>TSK-010</code>, and which of the startable tasks could wait without moving that finish?</p>
+    <div class="strip" id="p1"></div>
+    <div class="decision"><b>Operator decision:</b> which encoding should <code>cf-present</code> use for a dependency
+      graph? &nbsp;<span class="meta">a-wave-lanes / b-blocking-matrix / c-critical-ribbon / none of these</span></div>
+  </section>
+
+  <section>
+    <h2>P2 — TSK-007 qualification evidence</h2>
+    <p class="q">At the exact implementation candidate <code>82671551</code>, which platforms have executed journey
+      evidence, and which claim is blocked by an authorization failure rather than by a test failure?</p>
+    <div class="strip" id="p2"></div>
+    <div class="decision"><b>Operator decision:</b> which encoding should <code>cf-present</code> use for sparse
+      claim/evidence coverage? &nbsp;<span class="meta">a-evidence-grid / b-provenance-rail / none of these</span></div>
+  </section>
+
+  <section>
+    <h2>Implementation feasibility</h2>
+    <p class="meta">What each encoding would cost inside the accepted document contract. Basis: the closed block
+      catalogue in <code>.codeflow/schemas/present/document-v1.schema.json</code> — <code>narrative, bullets, callout,
+      comparison, decision, table, status, code, diff, tree, diagram, media, disclosure, tabs, feedback_prompt,
+      html</code> — with SPC-004 §2 (block catalogue), §11 (one sandboxed HTML escape, no component SDK) and the
+      <code>diagram.kind</code> enum <code>flowchart, sequence, timeline, state, class, entity_relationship,
+      mindmap</code>. This annotation lives here, in the neutral record, and never inside a candidate.</p>
+    <table>
+      <thead><tr><th>Candidate</th><th>Verdict</th><th>Basis</th></tr></thead>
+      <tbody>
+        <tr><td>p1-a wave lanes</td><td><b>needs one new typed block</b></td>
+          <td>No block carries typed nodes and edges with derived lanes. <code>diagram</code> renders Mermaid source, which cannot express readiness waves, stream lanes, chain membership or room, and <code>tree</code> is single-parent only.</td></tr>
+        <tr><td>p1-b blocking matrix</td><td><b>expressible today</b></td>
+          <td><code>table</code> carries the rows, columns and derived cells; the sticky identity columns and overflow cue are renderer behaviour, not schema.</td></tr>
+        <tr><td>p1-c critical ribbon</td><td><b>needs one new typed block</b></td>
+          <td>Bars positioned across a wave axis with earliest/latest extents have no equivalent; <code>diagram.kind: timeline</code> is a Mermaid timeline, not a slack-bearing schedule, and a <code>table</code> loses the positional encoding that carries the whole reading.</td></tr>
+        <tr><td>p2-a evidence grid</td><td><b>expressible today</b></td>
+          <td><code>table</code> plus per-cell text; the four cell states are content, and the absence shading is a renderer style over an existing state value.</td></tr>
+        <tr><td>p2-b provenance rail</td><td><b>needs one new typed block</b></td>
+          <td>A per-claim rail with a travelled extent, a stopping point and untravelled remainder has no analogue. <code>tree</code> cannot express a stop, and <code>status</code> is a flat item list. The sandboxed <code>html</code> escape could carry it, but SPC-004 §11 scopes that to one session-local escape, not a reusable evidence form.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>P3, D1, D2</h2>
+    <p class="meta">Not authored. Exact continuation boundary: <a href="NEXT.md">NEXT.md</a>. No placeholder stands in
+      for an unauthored candidate.</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const cases = {
+    p1: [
+      { id: "p1-a-wave-lanes", label: "a — readiness waves, longest chain, room", src: "cases/p1/a-wave-lanes/index.html" },
+      { id: "p1-b-blocking-matrix", label: "b — blocking incidence with derived readiness and room", src: "cases/p1/b-blocking-matrix/index.html" },
+      { id: "p1-c-critical-ribbon", label: "c — longest chain against room", src: "cases/p1/c-critical-ribbon/index.html" },
+      { id: "p1-baseline", label: "baseline — ordinary Markdown", src: "baselines/p1/baseline.html", baseline: true },
+    ],
+    p2: [
+      { id: "p2-a-evidence-grid", label: "a — claim × lane coverage", src: "cases/p2/a-evidence-grid/index.html" },
+      { id: "p2-b-provenance-rail", label: "b — provenance rails and where they stop", src: "cases/p2/b-provenance-rail/index.html" },
+      { id: "p2-baseline", label: "baseline — ordinary Markdown", src: "baselines/p2/baseline.html", baseline: true },
+    ],
+  };
+  const state = { mode: "light", vp: "desktop" };
+  const draw = () => {
+    document.getElementById("state").textContent =
+      `showing ${state.mode} · ${state.vp} — baselines render in the default mode only`;
+    for (const [key, items] of Object.entries(cases)) {
+      const host = document.getElementById(key);
+      host.textContent = "";
+      items.forEach((item) => {
+        const mode = item.baseline ? "light" : state.mode;
+        const file = `renders/${item.id}-${mode}-${state.vp}.png`;
+        const fig = document.createElement("figure");
+        fig.innerHTML = `<figcaption><b>${item.label}</b><a href="${item.src}">open the page</a> ` +
+          `<span class="meta">${file}</span></figcaption>` +
+          `<img src="${file}" alt="${item.label}, ${mode} ${state.vp} render">`;
+        host.append(fig);
+      });
+    }
+  };
+  document.querySelectorAll("input").forEach((i) => i.addEventListener("change", (e) => {
+    state[e.target.name === "mode" ? "mode" : "vp"] = e.target.value;
+    draw();
+  }));
+  draw();
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

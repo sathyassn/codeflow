@@ -1,0 +1,305 @@
+{
+  "note": "the answer each candidate published at runtime; verify.mjs recomputes the expected answer from frontmatter",
+  "answers": [
+    {
+      "render": "p1-a-wave-lanes-light-desktop",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-a-wave-lanes-light-mobile",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-a-wave-lanes-dark-desktop",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-a-wave-lanes-dark-mobile",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-a-wave-lanes-light-desktop-reduced",
+      "page": "cases/p1/a-wave-lanes/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-b-blocking-matrix-light-desktop",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-b-blocking-matrix-light-mobile",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-b-blocking-matrix-dark-desktop",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-b-blocking-matrix-dark-mobile",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-b-blocking-matrix-light-desktop-reduced",
+      "page": "cases/p1/b-blocking-matrix/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-c-critical-ribbon-light-desktop",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-c-critical-ribbon-light-mobile",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-c-critical-ribbon-dark-desktop",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-c-critical-ribbon-dark-mobile",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    },
+    {
+      "render": "p1-c-critical-ribbon-light-desktop-reduced",
+      "page": "cases/p1/c-critical-ribbon/index.html",
+      "answer": {
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ],
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        }
+      }
+    }
+  ]
+}

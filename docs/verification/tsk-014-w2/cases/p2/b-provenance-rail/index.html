@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2-b — how far each TSK-007 claim travels before its evidence stops</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #17191e; --dim: #5b6373; --muted: #656d7b; --line: #cdd1d9; --page: #fcfcfb;
+    --travelled: #17191e; --stop: #8a3a12; --untravelled: #b9bfc9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a4acba; --muted: #9aa2b0; --line: #3c424e; --page: #131519;
+            --travelled: #e9ebf0; --stop: #f0b073; --untravelled: #4b5261; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 76rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  .lede { margin: 0 0 1.8rem; color: var(--dim); max-width: 47rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .scale { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line);
+    padding-bottom: .3rem; margin-bottom: 1.4rem; }
+  .scale span { font-size: .66rem; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); }
+
+  .claim { margin-bottom: 1.9rem; }
+  .claim > h2 { font-size: .92rem; margin: 0 0 .15rem; font-weight: 650; }
+  .distance { font-size: .74rem; margin: 0 0 1.1rem; color: var(--muted); }
+  .distance b { font-weight: 650; }
+  .claim[data-intact="true"] .distance b { color: var(--travelled); }
+  .claim[data-intact="false"] .distance b { color: var(--stop); }
+
+  /* The rail is the explanatory form: distance travelled, where it stops, and
+     how much track is left are carried by position and continuity. Labels name
+     the rail; nothing is enclosed. */
+  .stops { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); }
+  .stop { position: relative; padding: 1.5rem .9rem 0 0; font-size: .76rem; color: var(--muted); }
+  .stop::before { content: ""; position: absolute; top: .28rem; left: 0;
+    width: .62rem; height: .62rem; border-radius: 50%;
+    border: 2px solid var(--untravelled); background: var(--page); }
+  .stop::after { content: ""; position: absolute; top: .565rem; left: .62rem; right: 0;
+    border-top: 2px dotted var(--untravelled); }
+  .stop:last-child::after { display: none; }
+
+  .stop[data-reached="true"] { color: var(--ink); }
+  .stop[data-reached="true"]::before { border-color: var(--travelled); background: var(--travelled); }
+  .stop[data-reached="true"]:not([data-terminal="true"])::after { border-top: 2px solid var(--travelled); }
+
+  /* The stopping point: a cap across the rail, then nothing but open track. */
+  .stop[data-terminal="true"]::before { border-color: var(--stop); background: var(--page); box-shadow: 0 0 0 3px var(--page); }
+  .stop[data-terminal="true"] .cap { position: absolute; top: -.05rem; left: .18rem; width: 2px; height: .82rem;
+    background: var(--stop); }
+  /* The stop note sits above the rail on wide screens and flows as its own line
+     on narrow ones, so it never overstrikes the open track or a stage label. */
+  .stopnote { position: absolute; left: .35rem; top: -1.15rem; white-space: nowrap;
+    font-size: .66rem; letter-spacing: .04em; color: var(--stop); font-weight: 650;
+    background: var(--page); padding: 0 .3rem 0 .1rem; }
+
+  .stop b { display: block; font-size: .66rem; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin-bottom: .1rem; }
+  .stop code { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .67rem; color: var(--muted); margin-top: .2rem; word-break: break-all; }
+  .stop[data-reached="false"] b { color: var(--muted); }
+
+  .why { font-size: .76rem; color: var(--stop); margin: .9rem 0 0; padding-left: .62rem;
+    border-left: 2px solid var(--stop); max-width: 52rem; }
+  .why b { font-weight: 650; }
+
+  .src { margin-top: 1.4rem; font-size: .7rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: .8rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+
+  @media (max-width: 820px) {
+    .scale { display: none; }
+    /* The rail rotates: same continuity, same stopping point, read downward. */
+    .stops { grid-template-columns: 1fr; }
+    .stop { padding: 0 0 1.15rem 1.5rem; }
+    .stop::before { top: .18rem; left: 0; }
+    .stop::after { top: .8rem; left: .28rem; right: auto; bottom: -.1rem; width: 0;
+      border-top: 0; border-left: 2px dotted var(--untravelled); }
+    .stop[data-reached="true"]:not([data-terminal="true"])::after { border-top: 0; border-left: 2px solid var(--travelled); }
+    .stop[data-terminal="true"] .cap { top: .12rem; left: -.12rem; width: .86rem; height: 2px; }
+    .stopnote { position: static; display: block; background: none; padding: 0; margin-bottom: .15rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>TSK-007 — how far each claim travels before its evidence stops</h1>
+  <p class="lede">Each claim runs along one rail: what produced it, the artifact and the revision that artifact is
+    bound to, and the acceptance at the end. <strong id="summary"></strong> The open track past a stopping point is
+    evidence that was never produced — not evidence that failed.</p>
+
+  <div class="scale">
+    <span>claim</span><span>what produced it</span><span>artifact and revision</span><span>acceptance</span>
+  </div>
+
+  <div id="rails"></div>
+
+  <p class="src">Source: <code>docs/verification/tsk-007-presentation/README.md</code>, through the shared fact registry
+    <code>shared/tsk007-facts.js</code>. Digests, revisions and the session identifier are quoted verbatim and checked
+    by <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/tsk007-facts.js"></script>
+<script>
+(() => {
+  const facts = window.tsk007Facts;
+  const stages = ["claim", "what produced it", "artifact and revision", "acceptance"];
+  const withProvenance = facts.claims.filter(c => c.provenance);
+  const host = document.getElementById("rails");
+
+  withProvenance.forEach(c => {
+    const p = c.provenance;
+    const intact = p.reaches === 4;
+    const steps = [
+      { label: c.claim, detail: "" },
+      { label: p.produced, detail: p.producedDetail },
+      { label: p.artifact, detail: p.artifactDetail },
+      { label: p.acceptance, detail: p.acceptanceDetail },
+    ];
+    const section = document.createElement("section");
+    section.className = "claim";
+    section.dataset.intact = String(intact);
+    section.innerHTML =
+      `<h2>${c.claim}</h2>` +
+      `<p class="distance">${intact
+        ? "travels all <b>4 of 4</b> stages — bound to the exact candidate"
+        : `travels <b>${p.reaches} of 4</b> stages, then stops`}</p>` +
+      `<ol class="stops">${steps.map((s, i) => {
+        const n = i + 1;
+        const reached = n <= p.reaches;
+        const terminal = !intact && n === p.reaches;
+        return `<li class="stop" data-reached="${reached}" data-terminal="${terminal}">` +
+          (terminal ? `<span class="cap" aria-hidden="true"></span><span class="stopnote">evidence stops here</span>` : "") +
+          `<b>${stages[i]}</b>${s.label}${s.detail ? `<code>${s.detail}</code>` : ""}</li>`;
+      }).join("")}</ol>` +
+      (intact ? "" : `<p class="why"><b>Why it stops:</b> ${p.reason}</p>`);
+    section.setAttribute("aria-label",
+      `${c.claim}: ${intact ? "reaches acceptance at the exact candidate" : `stops after ${p.reaches} of 4 stages`}`);
+    host.append(section);
+  });
+
+  const stopped = withProvenance.filter(c => c.provenance.reaches < 4).length;
+  document.getElementById("summary").textContent =
+    `${stopped} of ${withProvenance.length} rails stop before acceptance, at three different stages.`;
+
+  document.documentElement.dataset.railsStopped = String(stopped);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1-c — what sets the EPC-005 finish, and what has room</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #17191e; --dim: #5b6373; --line: #cdd1d9; --page: #fcfcfb;
+    --crit: #17191e; --slackfill: #dfe3ea; --slackedge: #b6bcc7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a4acba; --line: #3c424e; --page: #131519;
+            --crit: #e9ebf0; --slackfill: #2a2f38; --slackedge: #4a5160; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 70rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  .lede { margin: 0 0 1.6rem; color: var(--dim); max-width: 45rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .landed { font-size: .76rem; color: var(--dim); border-left: 3px solid var(--line);
+    padding: .35rem .7rem; margin-bottom: 1.4rem; }
+  .landed b { color: var(--ink); font-weight: 600; }
+
+  .axis, .row { display: grid; grid-template-columns: 11rem repeat(var(--waves), minmax(0, 1fr)); gap: 0 .3rem; align-items: center; }
+  .axis { border-bottom: 1px solid var(--line); padding-bottom: .3rem; margin-bottom: .7rem; }
+  .axis span { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); text-align: center; }
+  .axis span:first-child { text-align: left; }
+
+  .band { margin-bottom: 1.6rem; }
+  .band > h2 { font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; color: var(--dim);
+    margin: 0 0 .5rem; font-weight: 600; }
+  .band > p { margin: .1rem 0 .9rem; font-size: .78rem; color: var(--dim); max-width: 42rem; }
+
+  .row { margin-bottom: .3rem; }
+  .row .who { font-size: .8rem; font-weight: 600; padding-right: .6rem; }
+  .row .who i { display: block; font-style: normal; font-weight: 400; font-size: .68rem; color: var(--dim); }
+  .bar { height: 1.55rem; display: flex; align-items: center; padding: 0 .5rem; font-size: .72rem;
+    white-space: nowrap; overflow: hidden; }
+  .bar.crit { background: var(--crit); color: var(--page); font-weight: 600; }
+  .bar.slack { background: var(--slackfill); border: 1px dashed var(--slackedge); color: var(--dim); }
+  .bar.earliest { background: transparent; border: 1px solid var(--ink); color: var(--ink); font-weight: 600; }
+
+  .chain { position: relative; }
+  .chain .row .bar.crit::after { content: "→"; margin-left: auto; opacity: .8; }
+  .chain .row:last-child .bar.crit::after { content: "finish"; margin-left: auto; opacity: .8; font-weight: 400; }
+
+  .note { font-size: .78rem; color: var(--dim); border-top: 1px solid var(--line); padding-top: .9rem; max-width: 50rem; }
+  .note b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1.1rem; font-size: .7rem; color: var(--dim); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (max-width: 760px) {
+    .axis { display: none; }
+    .row { grid-template-columns: 1fr; gap: .15rem; margin-bottom: .9rem; }
+    .row .who { padding: 0; }
+    .bar { height: auto; padding: .3rem .5rem; white-space: normal; }
+    .bar.crit::after, .chain .row:last-child .bar.crit::after { content: ""; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>EPC-005 — the chain that sets the finish, and the work that has room</h1>
+  <p class="lede">Every unfinished task is placed at its <strong>earliest possible wave</strong>; anything reaching
+    wave 1 is <strong>startable today</strong>. A task with <strong>room</strong> can start later without moving the
+    finish; a task with none cannot. The tasks with no room form one chain — that chain <em>is</em> the remaining
+    schedule.</p>
+
+  <div class="landed" id="landed"></div>
+  <div class="axis" id="axis"></div>
+
+  <section class="band chain">
+    <h2>No room — moves the finish</h2>
+    <p id="chain-note"></p>
+    <div id="chain"></div>
+  </section>
+
+  <section class="band">
+    <h2>Has room</h2>
+    <p>The solid block is the earliest wave the task could start; the dashed extension is how far it can slip before it joins the chain above.</p>
+    <div id="loose"></div>
+  </section>
+
+  <p class="note"><b>Room</b> = latest wave − earliest wave, where the latest wave is fixed by the longest remaining
+    path to <code>TSK-010</code>. Both are computed here from <code>depends_on</code> and <code>status</code>; nothing is asserted by hand.</p>
+  <p class="src">Source: <code>project-management/tasks/TSK-005.md</code> … <code>TSK-014.md</code> frontmatter.</p>
+</main>
+
+<script type="application/json" id="plan-data">
+{
+  "source": "project-management/tasks/TSK-005.md..TSK-014.md frontmatter",
+  "sink": "TSK-010",
+  "tasks": [
+    {"id":"TSK-005","title":"strengthen editorial and product design contracts","status":"complete","deps":[],"specs":["SPC-003"],"target":"main"},
+    {"id":"TSK-006","title":"research and prototype the presentation experience","status":"complete","deps":["TSK-005"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-007","title":"verify and qualify the presentation utility","status":"blocked","deps":["TSK-011"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-008","title":"research and prototype documentation portals","status":"complete","deps":["TSK-005"],"specs":["SPC-005"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-009","title":"build and qualify the documentation portal utility","status":"blocked","deps":["TSK-008","TSK-014"],"specs":["SPC-005"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-010","title":"integrate and release the CodeFlow system","status":"todo","deps":["TSK-007","TSK-009","TSK-013","TSK-014"],"specs":[],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-011","title":"build the interactive presentation utility","status":"blocked","deps":["TSK-006","TSK-014"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-012","title":"refine design exploration, sourcing, and revision contracts","status":"cancelled","deps":["TSK-005"],"specs":["SPC-006"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-013","title":"prepare the v3 release candidate","status":"in_progress","deps":[],"specs":[],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-014","title":"recover the design method and utility directions","status":"in_progress","deps":["TSK-005","TSK-006","TSK-008"],"specs":["SPC-004","SPC-005","SPC-006"],"target":"integration/EPC-005-presentation-system"}
+  ]
+}
+</script>
+
+<script src="../../../shared/plan-model.js"></script>
+<script>
+(() => {
+  const data = JSON.parse(document.getElementById("plan-data").textContent);
+  const model = window.planModel(data);
+  const { open, done, chain: chainIds, startable, maxWave, latest, slack } = model;
+  const earliest = model.wave;
+
+  document.documentElement.style.setProperty("--waves", maxWave);
+
+  const landedTasks = data.tasks.filter(t => t.status === "complete");
+  const cancelled = data.tasks.filter(t => t.status === "cancelled");
+  document.getElementById("landed").innerHTML =
+    `<b>${landedTasks.length} landed</b> — ${landedTasks.map(t => t.id).join(", ")}. ` +
+    `<b>${cancelled.length} cancelled</b> — ${cancelled.map(t => t.id).join(", ")}, not outstanding work.`;
+
+  const axis = document.getElementById("axis");
+  axis.innerHTML = `<span>remaining task</span>` +
+    Array.from({ length: maxWave }, (_, i) => `<span>wave ${i + 1}</span>`).join("");
+
+  const chain = chainIds.map(id => model.byId.get(id));
+  const loose = open.filter(t => !chainIds.includes(t.id)).sort((a, b) => earliest(a.id) - earliest(b.id));
+
+  document.getElementById("chain-note").textContent =
+    `${chainIds.join(" → ")} — ${chain.length} tasks, ${maxWave} waves. Any of them slipping moves the finish by the same amount.`;
+
+  const row = (t, critical) => {
+    const e = earliest(t.id), l = latest(t.id), s = slack(t.id);
+    const el = document.createElement("div");
+    el.className = "row";
+    const label = `<div class="who">${t.id}<i>${t.title}</i></div>`;
+    let cells = "";
+    for (let w = 1; w <= maxWave; w++) {
+      if (w < e || w > l) { cells += `<div></div>`; continue; }
+      const start = startable.includes(t.id) && w === e ? " · startable today" : "";
+      if (critical) {
+        cells += `<div class="bar crit">wave ${w}${start}</div>`;
+      } else if (w === e) {
+        cells += `<div class="bar earliest">earliest: wave ${w}${start}</div>`;
+      } else {
+        cells += `<div class="bar slack">could slip to wave ${w}</div>`;
+      }
+    }
+    el.innerHTML = label + cells;
+    el.setAttribute("aria-label",
+      `${t.id}, ${t.title}, status ${t.status}, earliest wave ${e}, latest wave ${l}, ` +
+      (startable.includes(t.id) ? "startable today, " : "") +
+      (s === 0 ? "no room, on the longest chain" : `${s} wave${s === 1 ? "" : "s"} of room`));
+    return el;
+  };
+
+  const chainEl = document.getElementById("chain");
+  chain.forEach(t => chainEl.append(row(t, true)));
+  const looseEl = document.getElementById("loose");
+  loose.forEach(t => looseEl.append(row(t, false)));
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

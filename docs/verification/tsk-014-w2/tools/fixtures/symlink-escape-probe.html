@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-test fixture — symlink escape probe</title>
+</head>
+<body>
+<h1>symlink escape probe</h1>
+<p>This page is <strong>not a candidate</strong>. The self-test creates
+  <code>escape-link.md</code> beside it as a symlink pointing outside the study, runs this page, and removes the link
+  afterwards. A lexical containment check would admit the link because its path lies inside the study; only a canonical
+  real-path check rejects it.</p>
+
+<img alt="" width="1" height="1" src="./escape-link.md">
+
+<script>
+  addEventListener("load", () => setTimeout(() => { document.documentElement.dataset.ready = "true"; }, 300));
+</script>
+</body>
+</html>
