@@ -28,6 +28,7 @@ const NAVIGATION_TIMEOUT_MS = 45_000;
 const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
 const BROWSER_CLOSE_TIMEOUT_MS = 15_000;
 const BROWSER_TERMINATION_GRACE_MS = 2_500;
+const PROCESS_INVENTORY_TIMEOUT_MS = 10_000;
 
 class BoundedTimeoutError extends Error {
   constructor(timeout, phase) {
@@ -94,6 +95,9 @@ let serviceFingerprint;
 let result;
 let primaryError;
 let tracingStarted = false;
+let browserExecutable;
+let browserVersion;
+let playwrightCoreVersion;
 let browserCloseFallbacks = 0;
 let closeTimeoutInjectionPending = injectCloseTimeout;
 const requests = [];
@@ -115,6 +119,11 @@ try {
     mkdir(trace),
     mkdir(taskTemp),
   ]);
+  browserExecutable = await findBrowser();
+  playwrightCoreVersion = JSON.parse(
+    await readFile(join(webRoot, "node_modules", "playwright-core", "package.json"), "utf8"),
+  ).version;
+  if (!playwrightCoreVersion) throw new Error("Could not record the Playwright qualification version");
   run("git", ["init", "--quiet"], project);
 
   const firstDocument = join(project, "review-v1.json");
@@ -137,6 +146,7 @@ try {
   if (!serviceFingerprint) throw new Error(`Presentation service ${servicePid} had no observable process identity`);
 
   context = await launchBrowser(browserProfileV1);
+  recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV1 = await waitForProfileProcess(browserProfileV1);
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
@@ -200,6 +210,7 @@ try {
   if (!secondBootstrapPath) throw new Error(`Could not parse presentation show output: ${shown}`);
 
   context = await launchBrowser(browserProfileV2);
+  recordBrowserVersion(context);
   observeContext(context, requests, responses, consoleErrors, observerTasks);
   const browserProcessesV2 = await waitForProfileProcess(browserProfileV2);
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
@@ -259,6 +270,10 @@ try {
     run_id: runId,
     platform: `${process.platform}-${process.arch}`,
     headless: true,
+    toolchain: {
+      browser_version: browserVersion,
+      playwright_core_version: playwrightCoreVersion,
+    },
     task_owned_resources: {
       project,
       home,
@@ -483,7 +498,7 @@ async function portAcceptsConnections(candidatePort) {
 async function launchBrowser(profile) {
   assertWithinDeadline("launch browser");
   const launched = await chromium.launchPersistentContext(profile, {
-    executablePath: await findBrowser(),
+    executablePath: browserExecutable,
     headless: true,
     viewport: { width: 1280, height: 900 },
     env: browserEnvironment,
@@ -502,6 +517,19 @@ async function launchBrowser(profile) {
   });
   await launched.addInitScript({ content: axe.source });
   return launched;
+}
+
+function recordBrowserVersion(openContext) {
+  const observedBrowserVersion = openContext.browser()?.version();
+  if (!observedBrowserVersion) {
+    throw new Error("Could not record the driven browser version");
+  }
+  if (browserVersion && browserVersion !== observedBrowserVersion) {
+    throw new Error(
+      `Driven browser version changed during qualification: ${browserVersion} to ${observedBrowserVersion}`,
+    );
+  }
+  browserVersion = observedBrowserVersion;
 }
 
 async function openAuthenticatedPresentation(page, bootstrapPath, servicePort) {
@@ -760,7 +788,7 @@ function processInventory() {
       const raw = execFileSync(powershell, [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress",
-      ], { env: browserEnvironment, encoding: "utf8", timeout: 10_000 });
+      ], { env: browserEnvironment, encoding: "utf8", timeout: PROCESS_INVENTORY_TIMEOUT_MS });
       const parsed = JSON.parse(raw || "[]");
       return (Array.isArray(parsed) ? parsed : [parsed]).map((entry) => ({
         pid: Number(entry.ProcessId),
@@ -772,7 +800,7 @@ function processInventory() {
     const raw = execFileSync("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="], {
       env: browserEnvironment,
       encoding: "utf8",
-      timeout: 5_000,
+      timeout: PROCESS_INVENTORY_TIMEOUT_MS,
     });
     return raw.split("\n").flatMap((line) => {
       const match = line.match(/^\s*(\d+)\s+(\d+)\s+((?:\S+\s+){4}\d{4})\s+(.+)$/u);

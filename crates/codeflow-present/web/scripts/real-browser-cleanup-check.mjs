@@ -6,6 +6,13 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const qualification = resolve(scriptDirectory, "real-browser-check.mjs");
+const packageDefinition = JSON.parse(
+  await readFile(resolve(scriptDirectory, "..", "package.json"), "utf8"),
+);
+const expectedPlaywrightCoreVersion = packageDefinition.devDependencies?.["playwright-core"];
+if (!expectedPlaywrightCoreVersion) {
+  throw new Error("The web package does not declare playwright-core");
+}
 const runPrefix = `tsk007-cleanup-${process.pid}`;
 const completed = spawnSync(process.execPath, [qualification, "--inject-cleanup-failure"], {
   env: { ...process.env, CF_PRESENT_RUN_PREFIX: runPrefix },
@@ -54,6 +61,12 @@ try {
   const results = JSON.parse(await readFile(join(fallbackEvidence, "output", "results.json"), "utf8"));
   if (results.checks?.browser_close_fallbacks !== 1) {
     throw new Error(`Injected close timeout did not use one exact-owned fallback: ${JSON.stringify(results)}`);
+  }
+  if (
+    !results.toolchain?.browser_version
+    || results.toolchain?.playwright_core_version !== expectedPlaywrightCoreVersion
+  ) {
+    throw new Error(`Injected close timeout omitted its qualified browser toolchain: ${JSON.stringify(results)}`);
   }
 } finally {
   await rm(fallbackEvidence, { recursive: true, force: false });
