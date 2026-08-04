@@ -1,25 +1,23 @@
 ---
 name: cf-design
-description: Establish and settle proportionate product, UX, interaction, and visual-design intent before implementing a new or materially reshaped user-facing surface. Use for web, native, mobile, desktop, or other interfaces when the task changes experience direction, information hierarchy, interaction, brand expression, typography, colour, layout, imagery, or motion; also use to review implementation fidelity against an accepted direction. Conform to an existing system without ceremony for bounded changes, and skip for cosmetic edits whose design intent is already explicit.
+description: Establish and settle proportionate product, UX, interaction, composition, and visual-design intent before implementing or materially reshaping a user-facing surface. Use for web, mobile, tablet, desktop, native, or other interfaces when work changes experience direction, hierarchy, composition, interaction, brand expression, typography, colour, layout, imagery, or motion, and for fidelity review against an accepted direction. Conform without ceremony for bounded changes and skip cosmetic edits with explicit design intent.
 ---
 
 # cf-design — design direction before implementation
 
-Produce the design intent that the CodeFlow quality contract later verifies.
-Ground it in the creator, audience, use context, subject, and systems already in
-force. Treat design as a reasoned product decision, not decoration or a catalog
-of fashionable patterns.
+Produce the design intent that the quality contract later verifies, grounded in
+the creator, audience, context, subject, and systems in force. Design is a
+reasoned product decision, not decoration or a catalog of fashionable patterns.
 
-This is a supporting flow inside `cf-model-orchestrator`. The host still owns
-Plan vN and multi-model settlement. The role qualified as
-`claude-judgment-primary` leads design judgment; the Codex primary challenges
-feasibility, proportionality, failure modes, implementation fidelity, and
-testability. Concrete model names and effort live in the ensemble binding, not
-here.
+This supports `cf-model-orchestrator`, which owns Plan vN and settlement. The
+role qualified as `claude-judgment-primary` leads design
+judgment; the Codex primary challenges feasibility, proportionality, failure
+modes, fidelity, and testability. Model names and effort live in the ensemble
+binding, not here.
 
 ## 1. Select the process weight
 
-Choose the lightest path that still resolves material design uncertainty:
+Choose the lightest path that resolves material uncertainty:
 
 ```text
 cosmetic or exact local correction
@@ -28,23 +26,29 @@ cosmetic or exact local correction
 bounded change inside an established system
   -> DESIGN_INTENT: conform — <system or approved surface>
 
-new or materially reshaped user-facing surface
-  -> settle one evidence-grounded direction before implementation
+new or reshaped surface whose direction and primary composition follow
+from accepted evidence
+  -> settle one direction, compose its surfaces, then build
 
-novel product surface with materially open direction
-  -> compare two or three distinct, viable directions before settlement
+materially open direction, primary composition, or experience
+  -> render and compare materially different candidates, then settle
 ```
 
-Do not promote a tweak into a redesign. Do not use an existing system as an
-excuse to avoid resolving a genuinely new interaction or experience.
+Direction and composition are separate uncertainties. An accepted direction
+does not settle how a surface must be composed, and an established system does
+not settle a genuinely new explanation, collection, comparison, journey, or
+interaction. Resolve each at the rung its own evidence requires. Do not promote
+a tweak into a redesign, and do not use an existing system as an excuse to
+avoid resolving something genuinely new.
 
 ## 2. Inspect before inventing
 
-Read the brief and the consuming project's `docs/product.md`, relevant
+Read the brief, `docs/product.md`, relevant
 capabilities, architecture, accepted decisions, research, content, and
 project-owned brand or design guidance. Inspect the actual product and existing
 design system before proposing a parallel visual language:
 
+- the subject: real objects, data, artefacts, states, and vocabulary in play;
 - tokens, typography, colour roles, spacing, imagery, and motion;
 - accessible primitives, application components, and view composition;
 - information architecture, content patterns, journeys, and interaction state;
@@ -53,30 +57,26 @@ design system before proposing a parallel visual language:
 - platform conventions and the constraints of the target medium;
 - previous operator-approved examples and explicit rejected directions.
 
-Use authoritative product evidence first. External references inform a
-direction; they do not override the brief or license copying.
+Use authoritative evidence first. References never override the brief or
+license copying.
 
 ## 3. Establish design intent
 
 Resolve only the dimensions that materially steer the surface:
 
-1. **Creator intent.** What the surface is meant to achieve and what must be
-   preserved, in the operator's or product's terms.
-2. **Audience, job, and context.** Who uses it, what they are trying to
-   accomplish, and the conditions in which they do so.
+1. **Creator intent.** What the surface must achieve and preserve, in the
+   operator's or product's terms.
+2. **Audience, job, and context.** Who uses it, their task, and its conditions.
 3. **Experience target.** The interaction qualities and emotional register
-   that materially affect decisions: for example calm, dense, playful,
-   restrained, authoritative, reassuring, or urgent.
+   that materially steer decisions.
 4. **Language and voice.** The product's documented voice, terminology,
-   audience literacy, trust and risk context, and the copy needed across
-   navigation, actions, guidance, validation, empty, loading, error, success,
-   destructive, and recovery states. Refer substantial language judgment to
+   audience literacy, trust and risk context, and the copy its navigation,
+   actions, guidance, validation, empty, loading, error, success, destructive,
+   and recovery states need. Refer substantial language judgment to
    `cf-editorial-review`; do not invent a product personality.
-5. **Appearance modes.** Decide only the modes the product and platform need:
-   light, dark, high contrast, system-following, user override, persistence,
-   reduced motion, and mode-safe imagery or data visualization as applicable.
-   The consuming product owns its themes and tokens; CodeFlow supplies no
-   product palette or preset.
+5. **Appearance modes.** Decide only the applicable light, dark, high-contrast,
+   system-following, override, persistence, reduced-motion, and mode-safe media
+   behavior.
 6. **Systems and constraints.** Existing design system, brand, platform
    conventions, content, accessibility target, technical boundaries, and
    accepted non-goals.
@@ -93,53 +93,69 @@ personas, preferences, quotes, metrics, testimonials, or brand history.
 Clarify when missing intent would materially change the outcome. Otherwise use
 the safest established convention and disclose the assumption.
 
-CodeFlow utilities may use this reasoning process, but their curated utility
-themes, components, and runtime choices never become the consuming product's
-design direction. Product evidence flows into a utility only when the project
-explicitly chooses that one-way adaptation; utility defaults never flow back as
-product authority.
+The consuming product owns its themes, palettes, and tokens; CodeFlow supplies
+no preset and no house style. This skill never absorbs a CodeFlow utility's
+runtime mechanics. A utility may use this reasoning for its own design, but its
+themes, components, and runtime choices never become a product's direction, and
+product evidence reaches a utility only by explicit project choice.
 
-## 4. Research and explore proportionately
+For materially open composition or reusable-system work, read
+[references/composition-and-design-system.md](references/composition-and-design-system.md)
+before sections 4 to 6. It carries the working detail and stopping rules.
 
-For a novel or materially open surface, research the subject's own world and
-the audience's real context before selecting a visual direction. References
-may come from products, physical materials, editorial systems, environments,
-tools, or cultural forms relevant to the brief. Record what is being borrowed:
-an information rhythm, type character, palette anchor, density, imagery
-approach, or motion stance—not pixels or protected expression.
+## 4. Model the subject before choosing form
 
-Use a small annotated reference or mood board when visual alignment is
-materially uncertain and cheaper than building competing high-fidelity
-surfaces. It is optional evidence, not a required deliverable.
+Direction states what a surface is for, not what it must show. Before choosing
+a layout, template, component, chart, or diagram, model the **subject** — real
+objects, data, artefacts, vocabulary; the **governing idea** a viewer must take
+away; the **user action** it serves; the actual **relationships and states**;
+the **hierarchy and depth** separating the at-rest idea, mechanics, and
+evidence; and the target **platform and medium**.
 
-At the top process rung, present two or three directions that differ in
-meaningful structure or experience, not colour swaps. For each, state:
+Then choose form from the relationship it must expose. Remove the sentences
+from a candidate: if the remaining structure no longer expresses the
+relationship, the structure was furniture. Earn every container — a card,
+table, panel, tab, badge, chip, or step marker is right when it represents a
+real object, boundary, grouping, state, or action, and wrong when it
+manufactures hierarchy the content lacks. Keep the at-rest view carrying the
+governing idea, mechanics one layer in, and evidence deeper, without dropping
+material content to buy calm. Form families are examples, never defaults; when
+none fits the subject, design one and justify it inside the product's own
+system.
 
-- the product and audience rationale;
-- the information and interaction concept;
-- typography, colour, layout, imagery, density, and motion stance where
-  relevant;
-- fit with existing systems and implementation constraints;
-- the strongest tradeoff or failure condition.
+## 5. Explore encodings when the composition is open
 
-When the brief fixes the direction or an established system governs it, record
-that constraint and why alternatives were waived.
+When the direction, primary composition, or experience is materially open,
+compare two or three candidates that differ in what they encode, and render the
+ones a reviewer or the operator must judge instead of describing them — a
+described composition is no evidence that it reads. Use the lightest medium
+that shows the behavior at issue, with the product's real content, at
+representative viewports and applicable modes. The same content in different
+furniture, a palette or typeface swap, a familiar template refilled, a
+generically generated diagram, or a variant differing only in ornament are not
+materially different candidates.
 
-After the operator selects a direction, offer another bounded comparison only
-while one named typography, colour, imagery, interaction, composition, motion,
-or comparable choice remains materially unresolved. Compare two or three
-contextual variants that could change the accepted outcome, recommend one, and
-stop when the choice is settled. Do not turn refinement into palette swaps, a
-generic tweak panel, or open-ended generation.
+Collapse this rung when the brief, an accepted system, or a settled direction
+already governs the composition; record the constraint and why alternatives
+were waived. A bounded conformance change needs no exploration at all. After
+selection, reopen a bounded comparison only for a named choice that can still
+change the accepted outcome, and stop when it is settled.
 
-When external inspiration, sourced or generated assets, or material
-transformations affect the direction or its implementation, read
+When external inspiration, sourced or generated assets, material
+transformations, or a design revision affect the outcome, read
 [references/design-sourcing-and-revision.md](references/design-sourcing-and-revision.md)
-before accepting them. The reference governs evidence, authority, provenance,
-privacy, and revision handling; it does not prescribe providers or require an
-asset ledger for low-risk work.
+first; it governs evidence, authority, provenance, privacy, and bounded
+revision.
 
-## 5. Settle `DESIGN_INTENT`
+## 6. Develop the selected direction into an earned system
+
+A settled direction is not yet a design system. Build only layers recurrence
+and accepted lifetime earn: semantic tokens, modes, accessible primitives,
+recurring or subject-specific components, copy states, platform behavior,
+localization, and fidelity controls. Follow the reference's evidence and
+stopping rules; neither abstract one consumer nor hard-code a recurring pattern.
+
+## 7. Settle `DESIGN_INTENT`
 
 Record the result in the existing versioned plan contract, not in a mandatory
 new document:
@@ -150,14 +166,17 @@ DESIGN_INTENT:
   CREATOR_INTENT:
   AUDIENCE_JOB_CONTEXT: <evidence source or labeled inference>
   EXPERIENCE_TARGET:
-  LANGUAGE_AND_VOICE: <project authority and applicable copy states | collapsed reason>
-  APPEARANCE_MODES: <applicable modes, preference/persistence behavior | collapsed reason>
+  LANGUAGE_AND_VOICE: <authority, applicable copy states | collapsed>
+  APPEARANCE_MODES: <modes, preference/persistence | collapsed>
   SYSTEMS_AND_CONSTRAINTS:
   OPERATOR_DIRECTION:
   RESEARCH_OR_REFERENCES: <evidence or proportionate N/A>
-  DIRECTIONS_CONSIDERED: <chosen/rejected rationale or valid waiver>
+  COMPOSITION: <subject, governing idea, user action, primary form | collapsed>
+  DIRECTIONS_CONSIDERED: <rendered candidates and rationale | valid waiver>
   SETTLED_DIRECTION:
+  SYSTEM_SCOPE: <earned layers with recurrence evidence | conform | none>
   ACCESSIBILITY_TARGET:
+  REVIEW_RUBRIC: <pre-registered gates and expected results | collapsed>
   FIDELITY_EVIDENCE_PLAN:
 ```
 
@@ -166,67 +185,70 @@ one-line `conform` or `N/A` record is valid. A durable design specification or
 ADR is created only when the project needs a long-lived design-system or
 product decision; normal project documentation conventions own it.
 
-When material feedback changes a settled direction, identify the exact design
-version the operator reviewed and retain the feedback authority plus accepted
-and rejected rationale in the new Plan vN+1. Do not overwrite the reviewed
-state or create a parallel design database. Bounded conformance feedback may
-stay in the normal task record without a new plan version when it changes no
-accepted direction, interface, or safety boundary.
+While the material direction, primary composition, or experience remains
+operator-owned, an operator-visible rendered board settles it before
+implementation. The board shows the real candidates or the selected composition
+with real content and states the decision being asked for. Agreement between
+model seats is not that decision and never substitutes for it. No board is
+required once the operator has accepted the direction, when an accepted system
+governs the work, or for a conformance or cosmetic change.
 
-The directly invoked Claude judgment primary proposes the design intent and
-direction. Codex challenges the choice. Both approve the exact Plan vN before
+Material feedback on a settled direction produces Plan vN+1 carrying the exact
+reviewed version, the feedback authority, and the accepted and rejected
+rationale; the sourcing-and-revision reference owns that record. Bounded
+conformance feedback stays in the normal task record.
+
+The Claude judgment primary proposes design intent and direction. Codex
+challenges the choice. Both approve the exact Plan vN before
 implementation.
 
-## 6. Critique before build
+## 8. Critique before build
 
-For a direction pass, ask:
+Before viewing final renders, register the applicable gates, their questions,
+and acceptable results. The composition observer is never its author; a
+threshold invented during review is invalid.
 
-- Does the hierarchy make the user's next action and the product's priorities
-  clear?
-- Do interaction, content, and state design serve the user's actual job?
-- Do typography, colour, layout, imagery, density, and motion express the
-  intended experience rather than decorate it?
-- Which choices came from the subject, brief, system, or research?
-- Which choices lack evidence from the subject, brief, system, or research?
-  Which familiar choices are still right here, and why?
-- Does the direction remain coherent across loading, empty, error, disabled,
-  success, destructive, and recovery states?
-- Do words and visuals express the same product character, and are titles,
-  navigation, actions, validation, and recovery copy clear for this audience?
-- Are localization claims and appearance-mode choices backed by the language,
-  rendered, preference, persistence, and accessibility evidence they require?
-- Is the design feasible, maintainable, responsive, accessible, and
-  proportionate to the accepted lifetime and scale?
+Apply the reference protocols that fit: five-second governing idea,
+thirty-second mechanics, form match, primary-form inventory, progressive depth,
+and no-box where a figure is the primary explanatory form. For a surface family
+or richer medium, add sibling distinctiveness and plain-baseline differential.
+Observed results decide these gates, never numeric scores; semantic containers
+remain valid.
+
+Judge everything else contextually: brief and audience fit, interaction and
+states, coherence, restraint, system fit, accessibility, craft, and platform
+conventions. Grade findings against the brief, `DESIGN_INTENT`, target, or
+observed behavior; unanchored taste is non-blocking. The gates create no house
+style or prohibited-pattern list. The operator retains final authority over an
+operator-owned direction.
 
 Read [references/design-choice-audit.md](references/design-choice-audit.md)
-only after forming a candidate direction, and only for a new/reshaped surface
-or when unexamined-choice risk is material. It audits the reasoning behind
-choices; it never supplies formats, bans, or a replacement house style.
+after forming a candidate direction, for a new or reshaped surface or when
+unexamined-choice risk is material. It carries the gate protocols and audits
+the reasoning behind choices; it supplies no formats, bans, or house style.
 
-## 7. Hand off and verify
+## 9. Hand off and verify
 
 Implementation follows the established repository architecture and the
-orchestrator's quality contract. Reuse the existing design system where it
-fits; build justified reusable foundations and application components where
-recurrence is evidenced; do not create a new framework layer for one surface.
+orchestrator's quality contract, reusing the existing design system and adding
+reusable foundations or components only where recurrence is evidenced.
 
-For web surfaces, WCAG 2.2 AA is the default minimum target unless the project
-sets a stronger standard or records a different surface-appropriate standard
-with its rationale. Accessibility is a design input and a verification
-obligation. Automated checks are partial evidence, never proof of complete
-conformance.
+For web surfaces, WCAG 2.2 AA is the default minimum unless the project records
+a stronger or different surface-appropriate target with its rationale.
+Accessibility is a design input and a verification obligation; automated checks
+are partial evidence, never proof of conformance.
 
 Compare the rendered implementation with the settled `DESIGN_INTENT` using
 evidence appropriate to the claim: structured interaction assertions,
 accessibility state, relevant viewports, same-environment screenshots or visual
 comparisons, console/network evidence, and failure traces where material.
-Review hierarchy, interaction, content, type roles, colour roles, spacing,
-imagery, density, motion, states, and platform fit only where the intent makes
-them applicable. Where language or appearance modes apply, also verify the
-actual copy states and terminology; localized variants rather than English-only
-inference; light, dark, high-contrast, system-following, and manual preference
-behavior; persistence without an incorrect-mode flash; and visual/verbal
-coherence. Record an evidenced `N/A` instead of simulating irrelevant coverage.
+Fidelity review inspects the surface as it actually renders and behaves; an
+approval statement, a green build, a passing schema check, or a description of
+the intended result is not fidelity evidence. Review only the dimensions the
+intent makes applicable, to the depth the quality contract requires, and record
+an evidenced `N/A` instead of simulating irrelevant coverage. Where language or
+appearance modes apply, verify real localized variants rather than English-only
+inference, mode preference and persistence, and no incorrect-mode flash.
 
 A difference from the settled intent is not automatically a defect: determine
 whether it is an approved improvement, an evidence-backed implementation
@@ -236,14 +258,12 @@ graded by materiality. An unanchored taste preference remains non-blocking.
 
 ## Completion
 
-Return:
+Return the process weight and evidence; settled `DESIGN_INTENT` or collapse;
+governing idea and composition; rendered candidates and operator decision where
+owned; warranted alternatives, references, and system scope; unresolved
+decisions; review and fidelity evidence; and both primary-seat approvals of the
+same plan version.
 
-- the selected process weight and evidence for it;
-- the settled `DESIGN_INTENT` or explicit collapse;
-- alternatives and references only where warranted;
-- unresolved operator-owned decisions;
-- the exact fidelity and accessibility evidence required;
-- both primary-seat approvals of the same plan version.
-
-Do not claim a user was researched, a direction was approved, a standard was
-met, or a rendered surface was verified without recheckable evidence.
+Do not claim a user was researched, a direction was approved, a composition was
+reviewed, a standard was met, or a rendered surface was verified without
+recheckable evidence.

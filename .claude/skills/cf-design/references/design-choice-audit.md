@@ -6,9 +6,18 @@ system, or set of prohibited styles. Familiar patterns may be exactly right;
 the failure is accepting or rejecting one without establishing how it serves
 this product, audience, content, context, and platform.
 
+**Substitution is the defect, not familiarity.** A card, panel, table, pill,
+badge, tab, step marker, gradient, or generated diagram is well chosen when it
+carries a real grouping, state, action, boundary, or product semantic. The same
+element fails when it stands in for a subject nobody modelled — when it exists
+to make text look designed, to fill a template, or because it is the expected
+completion for this kind of page. Ask what the element encodes; if the answer
+is only "structure" or "it looks finished", the subject work has not been done.
+
 The examples describe the shape of an unexamined decision, not an inventory of
 formats to avoid. Absence from this reference is not evidence that a choice has
-been examined.
+been examined. CodeFlow defines no house style, theme, or fixed set of
+approved forms, and this reference never creates one.
 
 ## How to use this reference
 
@@ -20,6 +29,33 @@ been examined.
    Give evidence-backed counsel, then respect the settled direction.
 
 ## Decision patterns to examine
+
+### Composition substituted for the subject
+
+- prose re-housed in rectangles, cards, or panels and presented as a figure;
+- a diagram whose payload is entirely text in boxes joined by unlabelled
+  connectors, or a generated default diagram accepted without asking what
+  relationship it exposes;
+- a lead composition that restates its own heading and adds nothing;
+- a collection, comparison, or evidence block left unshaped beneath a strong
+  lead;
+- meaning that only arrives through the caption.
+
+Remove the sentences from the composition. If the remaining structure no longer
+expresses the relationship, the structure was decoration. Check every primary
+information-bearing composition on the surface, not only the first one.
+
+### Default completion instead of a decision
+
+- gradients, glow, rounded chrome, chip walls, stat tiles, or hero patterns
+  adopted because they are the current idiom for this kind of surface;
+- an element that would appear unchanged on any product in the category;
+- visual richness added to signal effort rather than to carry meaning;
+- a form chosen because the tool produces it easily.
+
+Fashionable is not disqualifying and plainness is not a virtue. State what this
+subject, audience, or content required that the choice provides, and what would
+be lost without it.
 
 ### Borrowed structure without product logic
 
@@ -88,6 +124,49 @@ preferences and preserve comprehension without animation.
 Existing systems deserve a strong presumption, not immunity from evidence.
 Extend them coherently when the product has a real unmet need.
 
+## Observation gates
+
+These are the protocols behind the skill's pre-registered rubric. Register
+which gates apply and what result is acceptable before the final renders are
+viewed; the observer is never the artefact's author; a threshold invented at
+review time is not a review. Each gate is decided by its protocol and the
+observed result, never by a numeric score.
+
+- **Governing idea (five seconds).** The author records the intended idea
+  first. An observer sees only the at-rest composition for about five seconds
+  and states what it claims. Pass when the statement matches the recorded idea
+  in subject and claim. A composition that adds nothing beyond its heading
+  fails.
+- **Mechanics (thirty seconds).** After a short read the observer states how
+  the thing works or what to do next. Enumerating parts instead of stating the
+  relationship fails.
+- **Form match.** The author names the form and the relationship it encodes;
+  the observer states the relationship the rendered composition shows. A
+  sequence must read as ordered, a comparison as comparable, a loop as
+  returning, a hierarchy as ranked.
+- **Primary-form inventory.** List every information-bearing composition on the
+  surface — lead, collection, comparison, walkthrough, evidence block — and run
+  the form-match check on each. A strong lead never excuses an unshaped
+  composition beneath it.
+- **Progressive depth.** Each layer holds only what belongs at its altitude,
+  and the content inventory shows nothing material was dropped or demoted to
+  achieve it.
+- **No-box**, where a figure or diagram is the primary explanatory form. A
+  payload consisting entirely of text in rectangles fails; ornamental
+  connectors and icons do not rescue it. It does not apply to forms, tables,
+  settings, lists, or any container carrying real product semantics, and it
+  prohibits no component.
+- **Sibling distinctiveness and baseline differential**, where a family of
+  surfaces or a richer medium is at issue. Siblings must be identifiable by
+  their own content-bearing structure rather than a swapped tint or slot, and a
+  richer surface must materially beat the plain baseline it replaces.
+
+Record for each applied gate what was tested, at which viewport, mode, and
+state, who observed it, and the evidence. An untested gate is untested, not a
+pass. Everything outside these protocols is contextual judgment, graded by
+materiality, with the operator as final authority on an operator-owned
+direction.
+
 ## Critique lenses
 
 Use the lenses that fit the surface:
@@ -99,8 +178,8 @@ Use the lenses that fit the surface:
 - **Interaction:** are state, feedback, recovery, and destructive actions clear?
 - **Specificity:** can material choices be traced to this subject rather than
   category shorthand?
-- **Coherence:** do type, colour, layout, imagery, density, and motion reinforce
-  one direction?
+- **Coherence:** do words, type, colour, layout, imagery, density, and motion
+  reinforce one product direction?
 - **Restraint:** does every visual and interactive device earn its place?
 - **System fit:** does it extend existing foundations rather than fragment them?
 - **Accessibility:** does the design work for relevant input, perception,
@@ -109,4 +188,8 @@ Use the lenses that fit the surface:
   behavior?
 
 State the evidence behind a criticism. “This is generic,” “this is familiar,”
-or “I dislike this” alone is not a review finding.
+or “I dislike this” alone is not a review finding. Name the choice, the subject
+evidence it lacks, and what a viewer misreads or misses because of it.
+
+The observation gates above own first-reading protocols. Critique lenses audit
+the reasoning behind the choices those protocols surface.

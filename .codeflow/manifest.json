@@ -29,7 +29,7 @@
     ".agents/skills/cf-design/SKILL.md": {
       "src": "agents/skills/cf-design/SKILL.md",
       "ownership": "managed",
-      "sha256": "5411586041358340ffa0925b37f2f7c7e6ef8cde851c26d68d6d9fd6995733a9",
+      "sha256": "e7f612c3a9720eb9c454743410ab8a9c1b72fa330b8f66fc9a0d9bff07735bb8",
       "exec": false
     },
     ".agents/skills/cf-design/agents/openai.yaml": {
@@ -38,10 +38,16 @@
       "sha256": "fe2d148299c353979b5e79a010e55e60f72e3ae45c8270bfdbcd7b8e179ad5a6",
       "exec": false
     },
+    ".agents/skills/cf-design/references/composition-and-design-system.md": {
+      "src": "agents/skills/cf-design/references/composition-and-design-system.md",
+      "ownership": "managed",
+      "sha256": "ea22d31e1c27d802a72c75a542c1a36300728fa91f95ea130b6282b70fc50810",
+      "exec": false
+    },
     ".agents/skills/cf-design/references/design-choice-audit.md": {
       "src": "agents/skills/cf-design/references/design-choice-audit.md",
       "ownership": "managed",
-      "sha256": "664a8dca3e68aff174f55ee8f3019e49902ec32d52e32a00a8466ec63f9a7fa7",
+      "sha256": "9770dd101f44c14fc603df4c6ab48d1226c83c7137a84192e2a018c1f54d8bac",
       "exec": false
     },
     ".agents/skills/cf-design/references/design-sourcing-and-revision.md": {
@@ -191,7 +197,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "84896a5628c01de71d428c62f4daeae76839a2667855c19634e204becc18ec40",
+      "sha256": "59de54d210f910090152312f6c16cd77d8fbeb5e56bbfa28a142306239e4eb87",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -305,7 +311,7 @@
     ".claude/skills/cf-design/SKILL.md": {
       "src": "agents/skills/cf-design/SKILL.md",
       "ownership": "managed",
-      "sha256": "5411586041358340ffa0925b37f2f7c7e6ef8cde851c26d68d6d9fd6995733a9",
+      "sha256": "e7f612c3a9720eb9c454743410ab8a9c1b72fa330b8f66fc9a0d9bff07735bb8",
       "exec": false
     },
     ".claude/skills/cf-design/agents/openai.yaml": {
@@ -314,10 +320,16 @@
       "sha256": "fe2d148299c353979b5e79a010e55e60f72e3ae45c8270bfdbcd7b8e179ad5a6",
       "exec": false
     },
+    ".claude/skills/cf-design/references/composition-and-design-system.md": {
+      "src": "agents/skills/cf-design/references/composition-and-design-system.md",
+      "ownership": "managed",
+      "sha256": "ea22d31e1c27d802a72c75a542c1a36300728fa91f95ea130b6282b70fc50810",
+      "exec": false
+    },
     ".claude/skills/cf-design/references/design-choice-audit.md": {
       "src": "agents/skills/cf-design/references/design-choice-audit.md",
       "ownership": "managed",
-      "sha256": "664a8dca3e68aff174f55ee8f3019e49902ec32d52e32a00a8466ec63f9a7fa7",
+      "sha256": "9770dd101f44c14fc603df4c6ab48d1226c83c7137a84192e2a018c1f54d8bac",
       "exec": false
     },
     ".claude/skills/cf-design/references/design-sourcing-and-revision.md": {
@@ -467,7 +479,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "84896a5628c01de71d428c62f4daeae76839a2667855c19634e204becc18ec40",
+      "sha256": "59de54d210f910090152312f6c16cd77d8fbeb5e56bbfa28a142306239e4eb87",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {

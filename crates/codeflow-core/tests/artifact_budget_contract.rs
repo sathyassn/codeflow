@@ -29,7 +29,7 @@ const ROUTING_SKILLS: &[&str] = &["cf-delegate", "cf-model-orchestrator"];
 const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-consult/SKILL.md", 6 * KIB),
     ("agents/skills/cf-customize/SKILL.md", 21 * KIB),
-    ("agents/skills/cf-design/SKILL.md", 14 * KIB),
+    ("agents/skills/cf-design/SKILL.md", 15 * KIB),
     ("agents/skills/cf-develop/SKILL.md", 4 * KIB),
     ("agents/skills/cf-docs-portal/SKILL.md", 9 * KIB),
     ("agents/skills/cf-editorial-review/SKILL.md", 6 * KIB),

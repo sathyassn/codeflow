@@ -365,6 +365,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-design/references/composition-and-design-system.md"
+dest = ".claude/skills/cf-design/references/composition-and-design-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-design/references/design-sourcing-and-revision.md"
 dest = ".claude/skills/cf-design/references/design-sourcing-and-revision.md"
 ownership = "managed"
@@ -636,6 +642,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-design/references/design-choice-audit.md"
 dest = ".agents/skills/cf-design/references/design-choice-audit.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-design/references/composition-and-design-system.md"
+dest = ".agents/skills/cf-design/references/composition-and-design-system.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
