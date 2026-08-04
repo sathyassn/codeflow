@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,35 @@ if (remnants.length > 0) {
   throw new Error(`Injected failure left task-owned temporary roots: ${remnants.join(", ")}`);
 }
 
-process.stdout.write("cf-present injected failure cleanup passed: primary error preserved, no owned root remained\n");
+const fallbackEvidence = await mkdtemp(join(tmpdir(), `cf-present-close-fallback-${process.pid}-`));
+try {
+  const fallback = spawnSync(process.execPath, [qualification, "--inject-close-timeout"], {
+    env: {
+      ...process.env,
+      CF_PRESENT_RUN_PREFIX: `${runPrefix}-close-timeout`,
+      CF_PRESENT_EVIDENCE_DIR: fallbackEvidence,
+    },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 210_000,
+  });
+  if (fallback.error) throw fallback.error;
+  if (fallback.status !== 0) {
+    throw new Error(
+      `Injected close timeout did not recover\nstdout: ${fallback.stdout}\nstderr: ${fallback.stderr}`,
+    );
+  }
+  const results = JSON.parse(await readFile(join(fallbackEvidence, "output", "results.json"), "utf8"));
+  if (results.checks?.browser_close_fallbacks !== 1) {
+    throw new Error(`Injected close timeout did not use one exact-owned fallback: ${JSON.stringify(results)}`);
+  }
+} finally {
+  await rm(fallbackEvidence, { recursive: true, force: false });
+}
+
+process.stdout.write(
+  "cf-present cleanup passed: primary failure preserved and exact-owned close timeout recovered\n",
+);
 
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));

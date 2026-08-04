@@ -23,8 +23,18 @@ if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(runPrefix)) {
   throw new Error(`Invalid qualification run prefix: ${runPrefix}`);
 }
 const injectCleanupFailure = process.argv.includes("--inject-cleanup-failure");
+const injectCloseTimeout = process.argv.includes("--inject-close-timeout");
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
+const BROWSER_CLOSE_TIMEOUT_MS = 15_000;
+const BROWSER_TERMINATION_GRACE_MS = 2_500;
+
+class BoundedTimeoutError extends Error {
+  constructor(timeout, phase) {
+    super(`Timed out after ${timeout}ms: ${phase}`);
+    this.name = "BoundedTimeoutError";
+  }
+}
 const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
 const windowsProfileConfinement = qualifyWindowsEnvironment();
 const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
@@ -84,6 +94,8 @@ let serviceFingerprint;
 let result;
 let primaryError;
 let tracingStarted = false;
+let browserCloseFallbacks = 0;
+let closeTimeoutInjectionPending = injectCloseTimeout;
 const requests = [];
 const responses = [];
 const consoleErrors = [];
@@ -181,7 +193,7 @@ try {
     "stop revision-one trace",
   );
   tracingStarted = false;
-  await closeBrowser(context, browserProfileV1, browserProcessesV1);
+  browserCloseFallbacks += await closeBrowser(context, browserProfileV1, browserProcessesV1);
   context = undefined;
   const shown = run(codeflow, ["present", "show", sessionId, "--no-launch"], project);
   const secondBootstrapPath = shown.match(/owner-private bootstrap file (.+?) in the isolated profile/u)?.[1];
@@ -228,8 +240,13 @@ try {
     "stop revision-two trace",
   );
   tracingStarted = false;
-  await closeBrowser(context, browserProfileV2, browserProcessesV2);
+  browserCloseFallbacks += await closeBrowser(context, browserProfileV2, browserProcessesV2);
   context = undefined;
+  if (!injectCloseTimeout && browserCloseFallbacks > 0) {
+    throw new Error(
+      `Browser close required ${browserCloseFallbacks} exact-owned termination fallback(s)`,
+    );
+  }
   run(codeflow, ["present", "close", sessionId], project);
   await assertPortClosed(port);
   await waitForProcessIdentityToDisappear(servicePid, serviceFingerprint);
@@ -268,6 +285,7 @@ try {
       service_port_teardown: "pass",
       service_process_identity_teardown: "pass",
       browser_process_and_profile_teardown: "pass",
+      browser_close_fallbacks: browserCloseFallbacks,
       session_clear: "pass",
       windows_profile_confinement: windowsProfileConfinement ? "pass" : "not applicable",
       windows_profile_or_vm_teardown: windowsProfileConfinement
@@ -311,7 +329,13 @@ try {
   }
   if (context) {
     await attempt("close failed browser context", async () => {
-      await bounded(context.close(), 15_000, "close failed browser context");
+      const closed = await closeBrowserContext(
+        context,
+        [browserProfileV1, browserProfileV2],
+        ownedBrowserProcesses,
+        "close failed browser context",
+      );
+      ownedBrowserProcesses = mergeProcesses(ownedBrowserProcesses, closed.processes);
       context = undefined;
     });
   }
@@ -552,13 +576,57 @@ function observeContext(
 }
 
 async function closeBrowser(openContext, profile, knownProcesses) {
-  let ownedProcesses = mergeProcesses(knownProcesses, browserProcessTree(profile));
-  await bounded(openContext.close(), 15_000, `close browser using ${profile}`);
-  ownedProcesses = mergeProcesses(ownedProcesses, browserProcessTree(profile));
-  await waitForProcessIdentitiesToDisappear(ownedProcesses, `browser using ${profile}`);
-  await waitForNoProfileProcesses(profile);
+  const closed = await closeBrowserContext(
+    openContext,
+    [profile],
+    knownProcesses,
+    `close browser using ${profile}`,
+  );
   await rm(profile, { recursive: true, force: false });
   if (await pathExists(profile)) throw new Error(`Owned browser profile remained after cleanup: ${profile}`);
+  return closed.usedFallback ? 1 : 0;
+}
+
+async function closeBrowserContext(openContext, profiles, knownProcesses, phase) {
+  let ownedProcesses = mergeProcesses(
+    knownProcesses,
+    ...profiles.map((profile) => browserProcessTree(profile)),
+  );
+  const injectTimeout = closeTimeoutInjectionPending && phase.startsWith("close browser using ");
+  if (injectTimeout) closeTimeoutInjectionPending = false;
+  const closePromise = injectTimeout ? new Promise(() => {}) : openContext.close();
+  let usedFallback = false;
+  try {
+    await bounded(closePromise, BROWSER_CLOSE_TIMEOUT_MS, phase);
+  } catch (error) {
+    ownedProcesses = mergeProcesses(
+      ownedProcesses,
+      ...profiles.map((profile) => browserProcessTree(profile)),
+    );
+    let terminationError;
+    try {
+      await terminateOwnedProcessIdentities(ownedProcesses, phase);
+    } catch (candidate) {
+      terminationError = candidate;
+    }
+    usedFallback = true;
+    if (terminationError) {
+      throw new AggregateError(
+        [error, terminationError],
+        `${phase} failed and exact-owned browser termination also failed`,
+        { cause: error },
+      );
+    }
+    if (!(error instanceof BoundedTimeoutError)) throw error;
+    await Promise.race([closePromise.catch(() => undefined), delay(1_000)]);
+  }
+  ownedProcesses = mergeProcesses(
+    ownedProcesses,
+    ...profiles.map((profile) => browserProcessTree(profile)),
+  );
+  await waitForProcessIdentitiesToDisappear(ownedProcesses, phase);
+  for (const profile of profiles) await waitForNoProfileProcesses(profile);
+  return { processes: ownedProcesses, usedFallback };
 }
 
 async function waitForProfileProcess(profile) {
@@ -615,8 +683,8 @@ function mergeProcesses(...groups) {
   ])).values()];
 }
 
-function processFingerprint(pid) {
-  const process = processInventory().find((candidate) => candidate.pid === pid);
+function processFingerprint(pid, inventory = processInventory()) {
+  const process = inventory.find((candidate) => candidate.pid === pid);
   return process ? `${process.created}|${process.command}` : null;
 }
 
@@ -634,14 +702,54 @@ async function waitForProcessIdentitiesToDisappear(processes, label) {
     `${process.created}|${process.command}`,
   ]));
   const deadline = Date.now() + 10_000;
-  let remaining = [...identities].filter(([pid, fingerprint]) => processFingerprint(pid) === fingerprint);
+  let remaining = matchingProcessIdentities(identities);
   while (remaining.length > 0) {
     if (Date.now() >= deadline) {
       throw new Error(`Owned ${label} process identities remained: ${JSON.stringify(remaining)}`);
     }
     await delay(100);
-    remaining = [...identities].filter(([pid, fingerprint]) => processFingerprint(pid) === fingerprint);
+    remaining = matchingProcessIdentities(identities);
   }
+}
+
+async function terminateOwnedProcessIdentities(processes, label) {
+  const identities = new Map(processes.map((process) => [
+    process.pid,
+    `${process.created}|${process.command}`,
+  ]));
+  signalMatchingProcessIdentities(identities, "SIGTERM", label);
+  // Node maps SIGTERM to TerminateProcess on Windows; this bounded grace period
+  // is meaningful only on platforms where the browser can handle SIGTERM.
+  const gracefulDeadline = Date.now() + BROWSER_TERMINATION_GRACE_MS;
+  let remaining = matchingProcessIdentities(identities);
+  while (remaining.length > 0 && Date.now() < gracefulDeadline) {
+    await delay(100);
+    remaining = matchingProcessIdentities(identities);
+  }
+  if (remaining.length > 0) {
+    signalMatchingProcessIdentities(new Map(remaining), "SIGKILL", label);
+  }
+  await waitForProcessIdentitiesToDisappear(processes, label);
+}
+
+function signalMatchingProcessIdentities(identities, signal, label) {
+  for (const [pid, fingerprint] of identities) {
+    if (processFingerprint(pid) !== fingerprint) continue;
+    try {
+      process.kill(pid, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw new Error(`Could not ${signal} exact-owned ${label} process ${pid}: ${error.message}`);
+      }
+    }
+  }
+}
+
+function matchingProcessIdentities(identities) {
+  const inventory = processInventory();
+  return [...identities].filter(
+    ([pid, fingerprint]) => processFingerprint(pid, inventory) === fingerprint,
+  );
 }
 
 function processInventory() {
@@ -771,7 +879,7 @@ async function bounded(promise, timeout, phase) {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out after ${timeout}ms: ${phase}`)), timeout);
+        timer = setTimeout(() => reject(new BoundedTimeoutError(timeout, phase)), timeout);
       }),
     ]);
   } finally {
