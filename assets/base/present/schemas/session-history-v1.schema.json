@@ -84,17 +84,51 @@
       },
       "$comment": "The runtime requires end_utf16 > start_utf16, exact length equal to the UTF-16 range, and exact/prefix/suffix to match canonical block review text."
     },
+    "element_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["element_path", "tag_name", "label", "block_digest"],
+      "properties": {
+        "element_path": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^:scope$|^[a-z0-9-]+(?::nth-of-type\\([1-9][0-9]*\\))?(?: > [a-z0-9-]+(?::nth-of-type\\([1-9][0-9]*\\))?)*$"},
+        "tag_name": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9-]*$"},
+        "label": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S"},
+        "block_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "region_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "anchor_id", "block_digest", "x_ppm", "y_ppm", "width_ppm", "height_ppm", "capture_width_px", "capture_height_px"],
+      "properties": {
+        "scope": {"enum": ["block", "document"]},
+        "anchor_id": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S"},
+        "block_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "x_ppm": {"type": "integer", "minimum": 0, "maximum": 999999},
+        "y_ppm": {"type": "integer", "minimum": 0, "maximum": 999999},
+        "width_ppm": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "height_ppm": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "capture_width_px": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "capture_height_px": {"type": "integer", "minimum": 1, "maximum": 4294967295}
+      }
+    },
     "note": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {"not": {"required": ["selector", "element_selector"]}},
+        {"not": {"required": ["selector", "region_selector"]}},
+        {"not": {"required": ["element_selector", "region_selector"]}}
+      ],
       "required": ["id", "block_id", "block_label", "kind", "body"],
       "properties": {
         "id": {"$ref": "#/$defs/uuid"},
         "block_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "block_label": {"type": "string", "minLength": 1, "pattern": "\\S"},
-        "kind": {"enum": ["comment", "question", "decision", "suggestion"]},
+        "kind": {"enum": ["comment", "question", "decision", "suggestion", "adjustment"]},
         "body": {"type": "string", "minLength": 1, "pattern": "\\S"},
-        "selector": {"$ref": "#/$defs/selector"}
+        "selector": {"$ref": "#/$defs/selector"},
+        "element_selector": {"$ref": "#/$defs/element_selector"},
+        "region_selector": {"$ref": "#/$defs/region_selector"}
       }
     },
     "envelope": {

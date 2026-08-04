@@ -142,6 +142,8 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
     escape_attr_to(block.id(), output);
     output.push_str("\" data-cf-block-label=\"");
     escape_attr_to(&block.review_label(), output);
+    output.push_str("\" data-cf-block-digest=\"");
+    output.push_str(&crate::state::block_digest(block));
     output.push_str("\">");
     if options.interactive {
         output.push_str("<button class=\"anchor-button\" type=\"button\" data-anchor-block=\"");

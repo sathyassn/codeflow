@@ -147,6 +147,7 @@ pub enum FeedbackKind {
     Question,
     Decision,
     Suggestion,
+    Adjustment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +164,36 @@ pub struct TextSelector {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct ElementSelector {
+    pub element_path: String,
+    pub tag_name: String,
+    pub label: String,
+    pub block_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionScope {
+    Block,
+    Document,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RegionSelector {
+    pub scope: RegionScope,
+    pub anchor_id: String,
+    pub block_digest: String,
+    pub x_ppm: u32,
+    pub y_ppm: u32,
+    pub width_ppm: u32,
+    pub height_ppm: u32,
+    pub capture_width_px: u32,
+    pub capture_height_px: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct FeedbackNote {
     pub id: Uuid,
     pub block_id: String,
@@ -171,6 +202,10 @@ pub struct FeedbackNote {
     pub body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<TextSelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_selector: Option<ElementSelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_selector: Option<RegionSelector>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -213,10 +248,42 @@ pub enum FeedbackLifecycle {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum FeedbackAnchor {
-    Block { block_id: String },
-    Anchored { start_utf16: u32, end_utf16: u32 },
-    Reanchored { start_utf16: u32, end_utf16: u32 },
-    Orphaned { reason: String },
+    Block {
+        block_id: String,
+    },
+    Anchored {
+        start_utf16: u32,
+        end_utf16: u32,
+    },
+    Reanchored {
+        start_utf16: u32,
+        end_utf16: u32,
+    },
+    ElementAnchored {
+        element_path: String,
+    },
+    ElementReanchored {
+        element_path: String,
+    },
+    RegionAnchored {
+        scope: RegionScope,
+        anchor_id: String,
+        x_ppm: u32,
+        y_ppm: u32,
+        width_ppm: u32,
+        height_ppm: u32,
+    },
+    RegionReanchored {
+        scope: RegionScope,
+        anchor_id: String,
+        x_ppm: u32,
+        y_ppm: u32,
+        width_ppm: u32,
+        height_ppm: u32,
+    },
+    Orphaned {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2077,49 +2144,7 @@ fn validate_feedback(
                 "feedback note ids must be unique".to_string(),
             ));
         }
-        if note.body.trim().is_empty()
-            || note.block_id.trim().is_empty()
-            || note.block_label.trim().is_empty()
-        {
-            return Err(PresentError::InvalidDocument(
-                "feedback note body, block id, and block label are required".to_string(),
-            ));
-        }
-        if note.body.encode_utf16().count() > limits::MAX_FEEDBACK_TEXT_UTF16 {
-            return Err(PresentError::InvalidDocument(format!(
-                "feedback note exceeds {} UTF-16 units",
-                limits::MAX_FEEDBACK_TEXT_UTF16
-            )));
-        }
-        let block = content_block(content, &note.block_id).ok_or_else(|| {
-            PresentError::InvalidDocument(format!(
-                "feedback block {} is not present in the current revision",
-                note.block_id
-            ))
-        })?;
-        if note.block_label != block.review_label() {
-            return Err(PresentError::InvalidDocument(
-                "feedback block label does not match the current revision".to_string(),
-            ));
-        }
-        bytes += note.body.len() + note.block_id.len() + note.block_label.len();
-        if let Some(selector) = &note.selector {
-            let selected_units = selector.exact.encode_utf16().count();
-            let range_units = selector.end_utf16.saturating_sub(selector.start_utf16) as usize;
-            if selector.end_utf16 <= selector.start_utf16
-                || selector.exact.trim().is_empty()
-                || selected_units > limits::MAX_SELECTOR_EXACT_UTF16
-                || selected_units != range_units
-                || selector.prefix.encode_utf16().count() > 32
-                || selector.suffix.encode_utf16().count() > 32
-            {
-                return Err(PresentError::InvalidDocument(
-                    "feedback selector range or exact quote is invalid".to_string(),
-                ));
-            }
-            validate_selector_anchor(selector, &block.canonical_review_text())?;
-            bytes += selector.exact.len() + selector.prefix.len() + selector.suffix.len();
-        }
+        bytes += validate_feedback_note(note, content)?;
     }
     if bytes > limits::MAX_FEEDBACK_BYTES {
         return Err(PresentError::InvalidDocument(format!(
@@ -2128,6 +2153,78 @@ fn validate_feedback(
         )));
     }
     Ok(())
+}
+
+fn validate_feedback_note(note: &FeedbackNote, content: &RevisionContent) -> Result<usize> {
+    if note.body.trim().is_empty()
+        || note.block_id.trim().is_empty()
+        || note.block_label.trim().is_empty()
+    {
+        return Err(PresentError::InvalidDocument(
+            "feedback note body, block id, and block label are required".to_string(),
+        ));
+    }
+    if note.body.encode_utf16().count() > limits::MAX_FEEDBACK_TEXT_UTF16 {
+        return Err(PresentError::InvalidDocument(format!(
+            "feedback note exceeds {} UTF-16 units",
+            limits::MAX_FEEDBACK_TEXT_UTF16
+        )));
+    }
+    let block = content_block(content, &note.block_id).ok_or_else(|| {
+        PresentError::InvalidDocument(format!(
+            "feedback block {} is not present in the current revision",
+            note.block_id
+        ))
+    })?;
+    if note.block_label != block.review_label() {
+        return Err(PresentError::InvalidDocument(
+            "feedback block label does not match the current revision".to_string(),
+        ));
+    }
+    let selector_count = usize::from(note.selector.is_some())
+        + usize::from(note.element_selector.is_some())
+        + usize::from(note.region_selector.is_some());
+    if selector_count > 1 {
+        return Err(PresentError::InvalidDocument(
+            "a feedback note may target text, one element, or one region, not several".to_string(),
+        ));
+    }
+    Ok(note.body.len()
+        + note.block_id.len()
+        + note.block_label.len()
+        + validate_feedback_target(note, block)?)
+}
+
+fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block) -> Result<usize> {
+    if let Some(selector) = &note.selector {
+        let selected_units = selector.exact.encode_utf16().count();
+        let range_units = selector.end_utf16.saturating_sub(selector.start_utf16) as usize;
+        if selector.end_utf16 <= selector.start_utf16
+            || selector.exact.trim().is_empty()
+            || selected_units > limits::MAX_SELECTOR_EXACT_UTF16
+            || selected_units != range_units
+            || selector.prefix.encode_utf16().count() > 32
+            || selector.suffix.encode_utf16().count() > 32
+        {
+            return Err(PresentError::InvalidDocument(
+                "feedback selector range or exact quote is invalid".to_string(),
+            ));
+        }
+        validate_selector_anchor(selector, &block.canonical_review_text())?;
+        return Ok(selector.exact.len() + selector.prefix.len() + selector.suffix.len());
+    }
+    if let Some(selector) = &note.element_selector {
+        validate_element_selector(selector, block)?;
+        return Ok(selector.element_path.len()
+            + selector.tag_name.len()
+            + selector.label.len()
+            + selector.block_digest.len());
+    }
+    if let Some(selector) = &note.region_selector {
+        validate_region_selector(selector, block)?;
+        return Ok(selector.anchor_id.len() + selector.block_digest.len());
+    }
+    Ok(0)
 }
 
 fn content_block<'a>(content: &'a RevisionContent, id: &str) -> Option<&'a crate::document::Block> {
@@ -2240,6 +2337,12 @@ fn reanchor_note(
             reason: "the referenced block is absent from the current revision".to_string(),
         };
     };
+    if let Some(selector) = &note.element_selector {
+        return reanchor_element(selector, source_revision, current_revision, block);
+    }
+    if let Some(selector) = &note.region_selector {
+        return reanchor_region(selector, source_revision, current_revision, block);
+    }
     let Some(selector) = &note.selector else {
         return FeedbackAnchor::Block {
             block_id: note.block_id.clone(),
@@ -2251,6 +2354,73 @@ fn reanchor_note(
             end_utf16: selector.end_utf16,
         };
     }
+    reanchor_text(selector, block)
+}
+
+fn reanchor_element(
+    selector: &ElementSelector,
+    source_revision: u64,
+    current_revision: u64,
+    block: &crate::document::Block,
+) -> FeedbackAnchor {
+    if source_revision == current_revision {
+        return FeedbackAnchor::ElementAnchored {
+            element_path: selector.element_path.clone(),
+        };
+    }
+    if selector.block_digest == block_digest(block) {
+        FeedbackAnchor::ElementReanchored {
+            element_path: selector.element_path.clone(),
+        }
+    } else {
+        FeedbackAnchor::Orphaned {
+            reason: "the element's rendered block changed in the current revision".to_string(),
+        }
+    }
+}
+
+fn reanchor_region(
+    selector: &RegionSelector,
+    source_revision: u64,
+    current_revision: u64,
+    block: &crate::document::Block,
+) -> FeedbackAnchor {
+    let anchored = |reanchored: bool| {
+        if reanchored {
+            FeedbackAnchor::RegionReanchored {
+                scope: selector.scope.clone(),
+                anchor_id: selector.anchor_id.clone(),
+                x_ppm: selector.x_ppm,
+                y_ppm: selector.y_ppm,
+                width_ppm: selector.width_ppm,
+                height_ppm: selector.height_ppm,
+            }
+        } else {
+            FeedbackAnchor::RegionAnchored {
+                scope: selector.scope.clone(),
+                anchor_id: selector.anchor_id.clone(),
+                x_ppm: selector.x_ppm,
+                y_ppm: selector.y_ppm,
+                width_ppm: selector.width_ppm,
+                height_ppm: selector.height_ppm,
+            }
+        }
+    };
+    if source_revision == current_revision {
+        return anchored(false);
+    }
+    match selector.scope {
+        RegionScope::Block if selector.block_digest == block_digest(block) => anchored(true),
+        RegionScope::Block => FeedbackAnchor::Orphaned {
+            reason: "the selected region's block changed in the current revision".to_string(),
+        },
+        RegionScope::Document => FeedbackAnchor::Orphaned {
+            reason: "a document-wide visual region is pinned to its source revision".to_string(),
+        },
+    }
+}
+
+fn reanchor_text(selector: &TextSelector, block: &crate::document::Block) -> FeedbackAnchor {
     let canonical = block.canonical_review_text();
     let matches = canonical
         .match_indices(&selector.exact)
@@ -2289,6 +2459,95 @@ fn reanchor_note(
             reason: "the exact quote and context match more than once".to_string(),
         },
     }
+}
+
+pub(crate) fn block_digest(block: &crate::document::Block) -> String {
+    let bytes = serde_json::to_vec(block).expect("serializing a validated block cannot fail");
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    encoded
+}
+
+fn validate_element_selector(
+    selector: &ElementSelector,
+    block: &crate::document::Block,
+) -> Result<()> {
+    if selector.element_path.trim().is_empty()
+        || !is_safe_element_path(&selector.element_path)
+        || selector.tag_name.trim().is_empty()
+        || !selector
+            .tag_name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        || selector.label.trim().is_empty()
+        || selector.label.chars().any(char::is_control)
+        || selector.element_path.len() > limits::MAX_VISUAL_ANCHOR_BYTES
+        || selector.tag_name.len() > 64
+        || selector.label.len() > limits::MAX_VISUAL_ANCHOR_BYTES
+        || !is_sha256(&selector.block_digest)
+        || selector.block_digest != block_digest(block)
+    {
+        return Err(PresentError::InvalidDocument(
+            "feedback element selector is malformed or does not match its block".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_safe_element_path(path: &str) -> bool {
+    if path == ":scope" {
+        return true;
+    }
+    path.split(" > ").all(|segment| {
+        let (tag, ordinal) = match segment.split_once(":nth-of-type(") {
+            Some((tag, ordinal)) => (tag, Some(ordinal)),
+            None => (segment, None),
+        };
+        let valid_tag = !tag.is_empty()
+            && tag
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        let valid_ordinal = ordinal.is_none_or(|value| {
+            value.strip_suffix(')').is_some_and(|digits| {
+                !digits.starts_with('0') && digits.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        });
+        valid_tag && valid_ordinal
+    })
+}
+
+fn validate_region_selector(
+    selector: &RegionSelector,
+    block: &crate::document::Block,
+) -> Result<()> {
+    let end_x = selector.x_ppm.checked_add(selector.width_ppm);
+    let end_y = selector.y_ppm.checked_add(selector.height_ppm);
+    if selector.anchor_id.trim().is_empty()
+        || selector.anchor_id.len() > limits::MAX_VISUAL_ANCHOR_BYTES
+        || selector.width_ppm == 0
+        || selector.height_ppm == 0
+        || end_x.is_none_or(|value| value > limits::REGION_COORDINATE_SCALE)
+        || end_y.is_none_or(|value| value > limits::REGION_COORDINATE_SCALE)
+        || selector.capture_width_px == 0
+        || selector.capture_height_px == 0
+        || !is_sha256(&selector.block_digest)
+        || selector.block_digest != block_digest(block)
+        || (matches!(selector.scope, RegionScope::Block) && selector.anchor_id != block.id())
+        || (matches!(selector.scope, RegionScope::Document) && selector.anchor_id != "document")
+    {
+        return Err(PresentError::InvalidDocument(
+            "feedback region selector is malformed or does not match its coordinate space"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn validate_selector_anchor(selector: &TextSelector, canonical: &str) -> Result<()> {
@@ -3493,6 +3752,8 @@ mod tests {
                 start_utf16: 0,
                 end_utf16: 5,
             }),
+            element_selector: None,
+            region_selector: None,
         });
         assert_eq!(store.append_feedback(envelope).unwrap().sequence, 1);
         store.mark_delivered(session.id, &[event_id]).unwrap();
@@ -3880,6 +4141,8 @@ mod tests {
                 start_utf16: 1,
                 end_utf16: 4,
             }),
+            element_selector: None,
+            region_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
 
@@ -3889,6 +4152,106 @@ mod tests {
         envelope.notes[0].selector.as_mut().unwrap().exact = "ell".to_string();
         envelope.notes[0].block_label = "fabricated".to_string();
         assert!(store.append_feedback(envelope).is_err());
+    }
+
+    #[test]
+    fn visual_feedback_accepts_only_generated_element_paths_and_exact_block_digests() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let document = match parsed() {
+            ParsedDocument::Supported(document) => document,
+            ParsedDocument::Unsupported { .. } => unreachable!(),
+        };
+        let digest = block_digest(&document.blocks[0]);
+        let mut envelope = feedback(session.id, Uuid::new_v4());
+        envelope.notes.push(FeedbackNote {
+            id: Uuid::new_v4(),
+            block_id: "intro".to_string(),
+            block_label: "intro".to_string(),
+            kind: FeedbackKind::Adjustment,
+            body: "Align this element with the governing idea.".to_string(),
+            selector: None,
+            element_selector: Some(ElementSelector {
+                element_path: "p:nth-of-type(1) > strong:nth-of-type(2)".to_string(),
+                tag_name: "strong".to_string(),
+                label: "Important phrase".to_string(),
+                block_digest: digest.clone(),
+            }),
+            region_selector: None,
+        });
+        assert!(store.append_feedback(envelope.clone()).is_ok());
+
+        envelope.event_id = Uuid::new_v4();
+        envelope.notes[0]
+            .element_selector
+            .as_mut()
+            .unwrap()
+            .element_path = "p, body".to_string();
+        assert!(store.append_feedback(envelope.clone()).is_err());
+        envelope.notes[0]
+            .element_selector
+            .as_mut()
+            .unwrap()
+            .element_path = "p:nth-of-type(1)".to_string();
+        envelope.notes[0]
+            .element_selector
+            .as_mut()
+            .unwrap()
+            .block_digest = "0".repeat(64);
+        assert!(store.append_feedback(envelope).is_err());
+    }
+
+    #[test]
+    fn visual_regions_reanchor_only_when_their_coordinate_space_is_unchanged() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let document = match parsed() {
+            ParsedDocument::Supported(document) => document,
+            ParsedDocument::Unsupported { .. } => unreachable!(),
+        };
+        let digest = block_digest(&document.blocks[0]);
+        let event_id = Uuid::new_v4();
+        let mut envelope = feedback(session.id, event_id);
+        envelope.notes.push(FeedbackNote {
+            id: Uuid::new_v4(),
+            block_id: "intro".to_string(),
+            block_label: "intro".to_string(),
+            kind: FeedbackKind::Comment,
+            body: "This visual area needs more separation.".to_string(),
+            selector: None,
+            element_selector: None,
+            region_selector: Some(RegionSelector {
+                scope: RegionScope::Block,
+                anchor_id: "intro".to_string(),
+                block_digest: digest,
+                x_ppm: 100_000,
+                y_ppm: 200_000,
+                width_ppm: 300_000,
+                height_ppm: 400_000,
+                capture_width_px: 800,
+                capture_height_px: 600,
+            }),
+        });
+        store.append_feedback(envelope).unwrap();
+        store.update_document(session.id, parsed()).unwrap();
+        assert!(matches!(
+            store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
+            FeedbackAnchor::RegionReanchored { .. }
+        ));
+
+        let mut changed = parsed();
+        let ParsedDocument::Supported(document) = &mut changed else {
+            unreachable!()
+        };
+        let Block::Narrative { markdown, .. } = &mut document.blocks[0] else {
+            unreachable!()
+        };
+        *markdown = "Changed".to_string();
+        store.update_document(session.id, changed).unwrap();
+        assert!(matches!(
+            store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
+            FeedbackAnchor::Orphaned { .. }
+        ));
     }
 
     #[test]

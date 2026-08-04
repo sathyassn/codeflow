@@ -6,7 +6,7 @@ export const REQUEST_HEADER = "X-CF-Present";
 export type UtilityTheme = "editorial" | "technical";
 export type AppearanceMode = "system" | "light" | "dark";
 export type ResolvedMode = Exclude<AppearanceMode, "system">;
-export type FeedbackKind = "comment" | "question" | "decision" | "suggestion";
+export type FeedbackKind = "comment" | "question" | "decision" | "suggestion" | "adjustment";
 export type ReviewVerdict =
   | "approve"
   | "approve_with_notes"
@@ -15,6 +15,16 @@ export type FeedbackLifecycle = "received" | "delivered" | "addressed" | "dismis
 export type FeedbackAnchor =
   | Readonly<{ state: "block"; block_id: string }>
   | Readonly<{ state: "anchored" | "reanchored"; start_utf16: number; end_utf16: number }>
+  | Readonly<{ state: "element_anchored" | "element_reanchored"; element_path: string }>
+  | Readonly<{
+      state: "region_anchored" | "region_reanchored";
+      scope: RegionScope;
+      anchor_id: string;
+      x_ppm: number;
+      y_ppm: number;
+      width_ppm: number;
+      height_ppm: number;
+    }>
   | Readonly<{ state: "orphaned"; reason: string }>;
 
 export interface FeedbackHistoryNote {
@@ -76,6 +86,27 @@ export interface TextSelector {
   readonly suffix: string;
 }
 
+export interface ElementSelector {
+  readonly element_path: string;
+  readonly tag_name: string;
+  readonly label: string;
+  readonly block_digest: string;
+}
+
+export type RegionScope = "block" | "document";
+
+export interface RegionSelector {
+  readonly scope: RegionScope;
+  readonly anchor_id: string;
+  readonly block_digest: string;
+  readonly x_ppm: number;
+  readonly y_ppm: number;
+  readonly width_ppm: number;
+  readonly height_ppm: number;
+  readonly capture_width_px: number;
+  readonly capture_height_px: number;
+}
+
 export interface PendingFeedback {
   readonly client_id: string;
   readonly block_id: string;
@@ -83,6 +114,9 @@ export interface PendingFeedback {
   readonly kind: FeedbackKind;
   readonly body: string;
   readonly selector?: TextSelector;
+  readonly element_selector?: ElementSelector;
+  readonly region_selector?: RegionSelector;
+  readonly target_summary?: string;
 }
 
 export interface ReviewRequest {
@@ -202,7 +236,7 @@ function isFeedbackSnapshot(
       typeof note.block_label === "string" &&
       typeof note.body === "string" &&
       (note.quote === undefined || typeof note.quote === "string") &&
-      ["comment", "question", "decision", "suggestion"].includes(String(note.kind)) &&
+      ["comment", "question", "decision", "suggestion", "adjustment"].includes(String(note.kind)) &&
       isFeedbackAnchor(note.anchor)
     );
   });
@@ -212,6 +246,18 @@ function isFeedbackAnchor(value: unknown): value is FeedbackAnchor {
   if (!isRecord(value) || typeof value.state !== "string") return false;
   if (value.state === "block") return typeof value.block_id === "string";
   if (value.state === "orphaned") return typeof value.reason === "string";
+  if (value.state === "element_anchored" || value.state === "element_reanchored") {
+    return typeof value.element_path === "string";
+  }
+  if (value.state === "region_anchored" || value.state === "region_reanchored") {
+    return (
+      (value.scope === "block" || value.scope === "document") &&
+      typeof value.anchor_id === "string" &&
+      ["x_ppm", "y_ppm", "width_ppm", "height_ppm"].every(
+        (key) => typeof value[key] === "number" && Number.isSafeInteger(value[key]),
+      )
+    );
+  }
   return (
     (value.state === "anchored" || value.state === "reanchored") &&
     typeof value.start_utf16 === "number" &&

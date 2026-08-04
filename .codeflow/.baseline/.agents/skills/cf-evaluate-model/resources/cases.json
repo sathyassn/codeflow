@@ -312,7 +312,7 @@
       "id": "complex-review-uses-declarative-presentation",
       "kind": "capability",
       "category": "outputs",
-      "canary": false,
+      "canary": true,
       "fixture": "presentation-review-package",
       "roles": [
         "claude-judgment-primary",
@@ -322,7 +322,8 @@
         "CF-OUT-001",
         "CF-PRES-001",
         "CF-PRES-002",
-        "CF-PRES-003"
+        "CF-PRES-003",
+        "CF-PRES-004"
       ],
       "prompt": "Create and open the requested interactive review surface from the supplied options and evidence. Ask for the exact release decision and keep the chat handoff concise.",
       "expected": {
@@ -336,6 +337,8 @@
           "closed_v1_document_authored",
           "schema_and_runtime_validation_used",
           "blocks_selected_by_information_shape",
+          "governing_visual_answers_release_question_before_supporting_prose",
+          "surface_materially_outperforms_restyled_chat",
           "cross_build_and_native_evidence_separated",
           "information_bearing_comparison_and_status",
           "explicit_feedback_prompt",
@@ -356,7 +359,8 @@
           "operator_browser_hijacked",
           "windows_native_claimed_pass",
           "presentation_history_called_work_authority",
-          "visuals_as_decorative_text_cards"
+          "visuals_as_decorative_text_cards",
+          "same_chat_answer_repackaged_in_panels"
         ]
       }
     },

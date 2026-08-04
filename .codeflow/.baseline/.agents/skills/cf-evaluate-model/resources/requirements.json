@@ -350,7 +350,7 @@
           "path": ".agents/skills/cf-design/SKILL.md",
           "markers": [
             "A rendered candidate is evidence only if the render carries what its page",
-            "crop, not an affordance. Measure hidden overflow, out-of-frame drawing and",
+            "crop, not an affordance. Measure hidden overflow, out-of-frame drawing,",
             "from a render that fails. Key every information-bearing mark where the reader"
           ]
         },
@@ -1402,6 +1402,32 @@
             "without scripts, same-origin access, forms, navigation, or network",
             "orphaned annotations as visible unresolved context",
             "utility defaults never influence the product"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PRES-004",
+      "level": "hard",
+      "statement": "A warranted cf-present surface materially outperforms a restyled chat answer through a governing information-bearing visual at rest, while its review interaction supports exact text, semantic element, dragged area, whole-block, and whole-document notes with visible pending markers, generated bounded selectors, and fail-closed cross-revision anchoring.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-present/SKILL.md",
+          "markers": [
+            "restyling the same chat answer is a failed use",
+            "one primary visual form at rest",
+            "exact selected text, one semantic element",
+            "whole document",
+            "numbered marks visible"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/references/document-authoring.md",
+          "markers": [
+            "question the richer surface must answer better than ordinary chat",
+            "position, connection, scale, state, or actual image carries meaning",
+            "runtime-generated structural path",
+            "bounded normalized coordinates"
           ]
         }
       ]

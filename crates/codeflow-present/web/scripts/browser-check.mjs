@@ -196,7 +196,31 @@ async function checkInteractiveSurface(browser, origin) {
   if (await diagram.getAttribute("data-cf-diagram") !== "ready") {
     throw new Error(`Diagram did not render: ${await diagram.locator("[data-cf-diagram-status]").textContent()}`);
   }
-  await diagram.locator("svg[role='img']").waitFor();
+  const diagramSvg = diagram.locator("svg[role='img']");
+  await diagramSvg.waitFor();
+  const diagramEvidence = await diagramSvg.evaluate((svg) => ({
+    text: svg.textContent?.replace(/\s+/gu, " ").trim() ?? "",
+    foreignObjects: svg.querySelectorAll("foreignObject").length,
+    scripts: svg.querySelectorAll("script").length,
+    externalLinks: [...svg.querySelectorAll("a")].filter((link) => {
+      const href = link.getAttribute("href") ?? link.getAttribute("xlink:href") ?? "";
+      return /^(?:https?:)?\/\//iu.test(href);
+    }).length,
+    visibleLabels: [...svg.querySelectorAll("text")].filter((label) => {
+      const box = label.getBoundingClientRect();
+      const style = getComputedStyle(label);
+      return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    }).map((label) => label.textContent?.trim() ?? ""),
+  }));
+  if (!diagramEvidence.text.includes("Input") || !diagramEvidence.text.includes("Review")) {
+    throw new Error(`Diagram lost its semantic labels during rendering: ${JSON.stringify(diagramEvidence)}`);
+  }
+  if (!diagramEvidence.visibleLabels.includes("Input") || !diagramEvidence.visibleLabels.includes("Review")) {
+    throw new Error(`Diagram labels are present but not visibly rendered: ${JSON.stringify(diagramEvidence)}`);
+  }
+  if (diagramEvidence.foreignObjects || diagramEvidence.scripts || diagramEvidence.externalLinks) {
+    throw new Error(`Diagram hardening left an unsafe node: ${JSON.stringify(diagramEvidence)}`);
+  }
   const denseDiagram = page.locator("[data-cf-diagram-title='Dense flow']");
   const denseStarted = Date.now();
   await denseDiagram.scrollIntoViewIfNeeded();
@@ -268,6 +292,67 @@ async function checkInteractiveSurface(browser, origin) {
   if (await page.locator(".cf-notes li").count() !== 2) {
     throw new Error("Review note limit was not enforced before creating an unsendable review");
   }
+  await page.locator(".cf-notes .cf-text-action").first().click();
+  await page.locator(".cf-notes .cf-text-action").first().click();
+
+  await page.getByRole("button", { name: "Pick element" }).click();
+  await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
+  await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
+  await page.keyboard.press("Enter");
+  await page.getByText(/^Element: /u).waitFor();
+  if (await page.locator(".cf-region-marker").count() !== 1) {
+    throw new Error("Keyboard element feedback did not retain one visible numbered marker");
+  }
+  await page.getByRole("button", { name: "Pick element" }).click();
+  await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
+  const noteEditor = page.locator(".cf-notes textarea");
+  await noteEditor.focus();
+  await page.keyboard.press("ArrowLeft");
+  if (!await noteEditor.evaluate((element) => document.activeElement === element)) {
+    throw new Error("Element capture hijacked arrow keys outside the review document");
+  }
+  await page.keyboard.press("Escape");
+  await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
+  await page.getByRole("button", { name: /^Review /u }).click();
+  await page.locator(".cf-notes .cf-text-action").click();
+
+  await page.getByRole("button", { name: "Pick element" }).click();
+  await page.getByRole("button", { name: "Pick element" }).waitFor();
+  await page.getByRole("button", { name: "Close" }).click();
+  await page.locator("code[data-cf-language='rust']").click();
+  await page.getByText(/^Element: /u).waitFor();
+  if (await page.locator(".cf-region-marker").count() !== 1) {
+    throw new Error("Element feedback did not retain one visible numbered marker");
+  }
+  await page.locator(".cf-notes .cf-text-action").click();
+
+  await page.getByRole("button", { name: "Select area" }).click();
+  await page.locator("#cf-present-document[data-cf-capture-mode='region']").waitFor();
+  await page.keyboard.press("Escape");
+  await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
+  await page.getByRole("button", { name: /^Review /u }).click();
+  await page.getByRole("button", { name: "Select area" }).click();
+  await page.getByRole("button", { name: "Close" }).click();
+  const areaTarget = page.locator("[data-cf-diagram-title='Request flow']");
+  await areaTarget.scrollIntoViewIfNeeded();
+  const target = await areaTarget.boundingBox();
+  if (!target) throw new Error("Area-selection fixture is not visible");
+  await page.mouse.move(target.x + 8, target.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(target.x + Math.min(90, target.width - 8), target.y + Math.min(60, target.height - 8));
+  await page.mouse.up();
+  await page.getByText(/^Area: /u).waitFor();
+  if (await page.locator(".cf-region-marker").count() !== 1) {
+    throw new Error("Area feedback did not retain one visible numbered marker");
+  }
+  await page.locator(".cf-notes .cf-text-action").click();
+
+  await page.getByRole("button", { name: "Whole document" }).click();
+  await page.locator(".cf-notes blockquote").getByText("Whole document", { exact: true }).waitFor();
+  if (await page.locator(".cf-region-marker").count() !== 1) {
+    throw new Error("Whole-document feedback did not retain one visible numbered marker");
+  }
+  await page.locator(".cf-notes .cf-text-action").click();
   await page.getByLabel("Theme").selectOption("technical");
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
@@ -337,12 +422,12 @@ function fixtureHtml(proseOnly) {
   const denseSource = denseDiagramSource(300);
   const enhancements = proseOnly
     ? ""
-    : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation">
+    : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
         <h2 id="implementation">Implementation</h2>
         <div data-cf-review-text-root><p id="selection-target">Review this exact sentence before approval.</p></div>
         <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
       </section>
-      <section class="block block--diagram" data-cf-block-id="block-flow" data-cf-block-label="Flow">
+      <section class="block block--diagram" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
         <h2 id="flow">Flow</h2>
         <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Request flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Request flow" data-cf-diagram-description="A request moves from input to review.">
           <template data-cf-diagram-source>flowchart LR
@@ -423,7 +508,7 @@ function fixtureHtml(proseOnly) {
   <div id="cf-present-chrome" data-session-id="019f9b53-a341-7fa7-84c2-5f198ceea001"></div>
   <main id="cf-present-document">
     <header><p>Outcome</p><h1>${proseOnly ? "A focused explanation" : "A bounded review runtime"}</h1></header>
-    <section data-cf-block-id="block-summary" data-cf-block-label="Summary">
+    <section data-cf-block-id="block-summary" data-cf-block-label="Summary" data-cf-block-digest="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc">
       <h2 id="summary">Summary</h2>
       <div data-cf-review-text-root><p>The document remains readable without its review controls.</p></div>
     </section>

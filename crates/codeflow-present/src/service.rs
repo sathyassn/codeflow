@@ -38,8 +38,9 @@ use crate::{
     platform::is_link_like,
     render::{render_document, render_unsupported, sandbox_id, RenderIdentity, RenderOptions},
     state::{
-        create_private_dir_all, write_json_atomic, FeedbackEnvelope, FeedbackKind, FeedbackNote,
-        FeedbackVerdict, RevisionContent, SessionStatus, SessionStore, TextSelector,
+        create_private_dir_all, write_json_atomic, ElementSelector, FeedbackEnvelope, FeedbackKind,
+        FeedbackNote, FeedbackVerdict, RegionSelector, RevisionContent, SessionStatus,
+        SessionStore, TextSelector,
     },
 };
 
@@ -187,6 +188,10 @@ struct ReviewNote {
     body: String,
     #[serde(default)]
     selector: Option<TextSelector>,
+    #[serde(default)]
+    element_selector: Option<ElementSelector>,
+    #[serde(default)]
+    region_selector: Option<RegionSelector>,
 }
 
 #[derive(Debug, Serialize)]
@@ -627,6 +632,8 @@ async fn submit_review(
             kind: note.kind,
             body: note.body,
             selector: note.selector,
+            element_selector: note.element_selector,
+            region_selector: note.region_selector,
         });
     }
     let Ok(event_id) = Uuid::parse_str(&request.event_id) else {

@@ -56,6 +56,16 @@ diagram needs `acc_title` and `acc_description`; media needs meaningful `alt`.
 Colour is never the only carrier of state. Keep the first reading path complete
 without opening disclosures or switching tabs.
 
+Before authoring, state the question the richer surface must answer better than
+ordinary chat and choose one primary carrier for it. A successful first view
+lets the reader perceive the governing relationship before reading supporting
+paragraphs. A sequence of headings, prose, status pills, and text cards is still
+an illustrated document—not a visual explanation—when their geometry encodes
+nothing. Use diagrams, trees, tables, diffs, media, or a justified bounded HTML
+composition only when their position, connection, scale, state, or actual image
+carries meaning. If removing the sentences leaves no useful relationship, the
+surface has not earned its visual claim.
+
 ## Useful shapes
 
 ### Narrative and bullets
@@ -139,9 +149,13 @@ for product runtime code. Prefer a standard block over equivalent custom HTML.
 ## Feedback and revision integrity
 
 Text annotations bind to one block, immutable revision, exact quote, bounded
-prefix/suffix context, and UTF-16 offsets. Do not recreate or rewrite selectors
-by hand. Preserve user feedback exactly and treat orphaned annotations as
-visible unresolved context, never as permission to guess a new anchor.
+prefix/suffix context, and UTF-16 offsets. Element annotations use a
+runtime-generated structural path and exact block digest. Area annotations use
+bounded normalized coordinates within an exact block or the source document;
+whole-document feedback uses that document coordinate space. Do not recreate
+or rewrite selectors by hand. Pending markers remain visible and numbered while
+notes are edited. Preserve user feedback exactly and treat orphaned annotations
+as visible unresolved context, never as permission to guess a new anchor.
 
 Revision updates change document content only. Feedback lifecycle changes
 through review events. Accepted decisions are summarized to their canonical

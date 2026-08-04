@@ -89,6 +89,17 @@ Document-chrome updates occur in a separate DOM root so feedback and theme
 changes preserve live document node identity and selection. A revision update
 captures or cancels the pending selection before changing document content.
 
+The same review envelope may instead target a semantic element or a visual
+region. Element targets contain only the runtime's closed structural-path
+grammar plus the exact rendered-block digest; arbitrary CSS selectors are
+rejected. Regions use integer normalized coordinates in an exact block or the
+source document, with capture dimensions retained as evidence. A block-scoped
+element or region may re-anchor only while that block digest is unchanged. A
+changed block or document-wide region in a later revision becomes visibly
+orphaned. Whole-block and whole-document notes use these same boundaries.
+While a review remains pending, the browser keeps numbered marks over the
+selected targets so the note list and document stay mutually legible.
+
 ### Feedback delivery
 
 Feedback lifecycle states are `received`, `delivered`, `addressed`, and
@@ -102,7 +113,10 @@ the CLI may claim a bounded envelope for delivery, but records `delivered` only
 after the complete envelope has been written and flushed to its stdout
 protocol. Interruption before that acknowledgement causes at-least-once
 redelivery of the same stable event ID, not loss. Consumers deduplicate by event
-ID. Address/dismiss transitions require the current event version and reject
+ID. `delivered` therefore proves receipt by the invoking command consumer, not
+that a later model has understood or acted on the review. The active harness
+must include the envelope in its current model turn before resolving it.
+Address/dismiss transitions require the current event version and reject
 stale or cross-session updates.
 
 One replayed ledger is the feedback-lifecycle authority. It requires exactly

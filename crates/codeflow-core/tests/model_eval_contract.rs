@@ -1744,6 +1744,19 @@ fn presentation_canaries_pin_proportionate_complete_visuals() {
                     "redundant_recap",
                 ][..],
             ),
+            (
+                "complex-review-uses-declarative-presentation",
+                &[
+                    "governing_visual_answers_release_question_before_supporting_prose",
+                    "surface_materially_outperforms_restyled_chat",
+                    "information_bearing_comparison_and_status",
+                    "explicit_feedback_prompt",
+                ][..],
+                &[
+                    "visuals_as_decorative_text_cards",
+                    "same_chat_answer_repackaged_in_panels",
+                ][..],
+            ),
         ],
     );
 }

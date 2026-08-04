@@ -184,11 +184,51 @@ try {
       `Authenticated review controls did not mount; console=${JSON.stringify(consoleErrors)}, responses=${JSON.stringify(responses)}`,
     );
   }
-  await page.getByLabel("Verdict").selectOption("approve");
+
+  await page.getByRole("button", { name: "Pick element" }).click();
+  await page.locator("code[data-cf-language='rust']").click();
+  await page.getByText(/^Element: /u).waitFor();
+
+  await page.getByRole("button", { name: "Select area" }).click();
+  const regionTarget = page.locator("[data-cf-diagram-title='Qualification flow']");
+  await regionTarget.scrollIntoViewIfNeeded();
+  const regionBox = await regionTarget.boundingBox();
+  if (!regionBox) throw new Error("Real-browser region target is not visible");
+  await page.mouse.move(regionBox.x + 12, regionBox.y + 12);
+  await page.mouse.down();
+  await page.mouse.move(
+    regionBox.x + Math.min(120, regionBox.width - 12),
+    regionBox.y + Math.min(80, regionBox.height - 12),
+  );
+  await page.mouse.up();
+  await page.getByText(/^Area: /u).waitFor();
+
+  await page.getByRole("button", { name: "Whole document" }).click();
+  await page.locator(".cf-notes blockquote").getByText("Whole document", { exact: true }).waitFor();
+  const pendingMarkers = await page.locator(".cf-region-marker").count();
+  if (pendingMarkers !== 3) {
+    throw new Error(`Real review retained ${pendingMarkers} target markers, expected 3`);
+  }
+  const noteEditors = page.locator(".cf-notes textarea");
+  await noteEditors.nth(0).fill("Keep the implementation example aligned with the verified contract.");
+  await noteEditors.nth(1).fill("Preserve this visual relationship in the next revision.");
+  await noteEditors.nth(2).fill("Review the complete document hierarchy before approval.");
+  await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByRole("button", { name: "Submit review" }).click();
   await page.getByRole("status").getByText(/Review received/u).waitFor();
   const delivered = JSON.parse(run(codeflow, ["present", "feedback", sessionId], project).trim());
-  if (delivered.verdict !== "approve") throw new Error("The real browser review was not delivered");
+  if (delivered.verdict !== "approve_with_notes" || delivered.notes?.length !== 3) {
+    throw new Error(`The real browser review was incomplete: ${JSON.stringify(delivered)}`);
+  }
+  const targets = delivered.notes.map((note) => (
+    note.element_selector ? "element" : note.region_selector ? "region" : note.selector ? "text" : "block"
+  ));
+  if (targets.join(",") !== "element,region,region") {
+    throw new Error(`The real browser review delivered unexpected target types: ${targets.join(",")}`);
+  }
+  if (delivered.notes[2].region_selector.scope !== "document") {
+    throw new Error("Whole-document feedback did not retain document scope");
+  }
   run(codeflow, [
     "present", "resolve", sessionId, delivered.event_id,
     "--event-version", "2", "--status", "addressed",
@@ -292,6 +332,7 @@ try {
       declarative_rendering: "pass",
       accessibility_light_dark: "pass",
       syntax_and_diagram: "pass",
+      element_region_and_document_feedback_delivery: "pass",
       feedback_delivery_and_resolution: "pass",
       immutable_revision_update: "pass",
       offline_export: "pass",

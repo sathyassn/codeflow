@@ -24,7 +24,9 @@ export async function renderDiagram(element: HTMLElement): Promise<void> {
       maxEdges: MAX_DIAGRAM_EDGES,
       theme: "base",
       suppressErrorRendering: true,
-      flowchart: { htmlLabels: false, useMaxWidth: true },
+      htmlLabels: false,
+      markdownAutoWrap: false,
+      flowchart: { useMaxWidth: true },
       themeVariables: diagramThemeVariables(),
     });
     const id = `cf-present-diagram-${++sequence}`;
