@@ -68,6 +68,36 @@
   </section>
 
   <section>
+    <h2>P3 — review convergence</h2>
+    <p class="q">Which findings needed more than one round to close, and which single one of them was re-opened by
+      something outside the harness rather than by the previous fix?</p>
+    <p class="meta">The question registered in <code>NEXT.md</code> was corrected before authoring: it presumed one
+      re-opened finding and one defect-introducing round, and the history has three and two. The correction and its
+      reason are in <a href="answer-key.md">answer-key.md</a> and <a href="content-inventory.md">content-inventory.md</a>.</p>
+    <div class="strip" id="p3"></div>
+    <div class="decision"><b>Operator decision:</b> which encoding should <code>cf-present</code> use for findings across
+      review iterations? &nbsp;<span class="meta">a-finding-anchored-delta / b-convergence-ledger / none of these</span></div>
+  </section>
+
+  <section>
+    <h2>D1 — portal Orient</h2>
+    <p class="q">Before starting a task on this repository, what must already be true, and which gate refuses you if it
+      is not?</p>
+    <div class="strip" id="d1"></div>
+    <div class="decision"><b>Operator decision:</b> how should a documentation portal bring a reader into this system?
+      &nbsp;<span class="meta">a-concept-dependency-path / b-task-first-entry / c-contract-map / none of these</span></div>
+  </section>
+
+  <section>
+    <h2>D2 — portal Record</h2>
+    <p class="q">Which decision governs this record now, and what evidence backs its central claim?</p>
+    <p class="meta">The record under the lens is <code>project-management/specs/SPC-004.md</code>.</p>
+    <div class="strip" id="d2"></div>
+    <div class="decision"><b>Operator decision:</b> how should a record expose its authority and evidence?
+      &nbsp;<span class="meta">a-chain-in-place / b-evidence-adjacent-margin / none of these</span></div>
+  </section>
+
+  <section>
     <h2>Implementation feasibility</h2>
     <p class="meta">What each encoding would cost inside the accepted document contract. Basis: the closed block
       catalogue in <code>.codeflow/schemas/present/document-v1.schema.json</code> — <code>narrative, bullets, callout,
@@ -88,14 +118,25 @@
           <td><code>table</code> plus per-cell text; the four cell states are content, and the absence shading is a renderer style over an existing state value.</td></tr>
         <tr><td>p2-b provenance rail</td><td><b>needs one new typed block</b></td>
           <td>A per-claim rail with a travelled extent, a stopping point and untravelled remainder has no analogue. <code>tree</code> cannot express a stop, and <code>status</code> is a flat item list. The sandboxed <code>html</code> escape could carry it, but SPC-004 §11 scopes that to one session-local escape, not a reusable evidence form.</td></tr>
+        <tr><td>p3-a finding-anchored delta</td><td><b>needs one new typed block</b></td>
+          <td><code>diff</code> carries one raw unified-diff string plus an optional caption — no per-hunk annotation, no verdict state, no round marker, and no way to bind a finding to the region it concerns. <code>code</code> has the same shape. A <code>table</code> placed beside a <code>diff</code> would separate every annotation from the region it judges, which is the entire encoding.</td></tr>
+        <tr><td>p3-b convergence ledger</td><td><b>expressible today, with the transitions flattened</b></td>
+          <td><code>table</code> carries findings × rounds and derived cell text, so "re-opened, answers R5" survives as words, and the off-axis origin is just one more column with a header. What does not survive is the drawing: the return arcs, and the dashed arrival entering the round a cause landed in, are renderer geometry with no schema equivalent. <code>columns</code> being a flat array of strings also flattens the <em>rounds / not a round</em> spanning header, so the one column deliberately off the axis reads as another round. Without those, the difference between <em>answered</em> and merely <em>extended</em> — and between a self-caused and an outside re-opening — stops being visible and has to be read. The secondary diffs fit <code>disclosure</code> wrapping <code>diff</code>.</td></tr>
+        <tr><td>d1-a concept dependency path</td><td><b>expressible today — as the baseline it is measured against</b></td>
+          <td>One <code>narrative</code> of nested Markdown carries the chain, and nesting supplies indentation. But <code>tree_node</code> is <code>label</code> plus <code>children</code> with no detail field, so the per-concept quotation and the right-hand unlocks column both collapse into ordinary nested prose — which is the ordinary-Markdown baseline. Expressible, and expressible only by giving up what distinguishes it.</td></tr>
+        <tr><td>d1-b task-first entry</td><td><b>partly expressible today</b></td>
+          <td><code>diagram.kind: flowchart</code> is Mermaid and can carry the path-with-refusal-branches topology directly. It cannot carry the fan's six verbatim error strings, the first-versus-repeat distinction, or the typographic weight that makes the widest branch the answer; those would fall back to a <code>table</code>, splitting one composition into two blocks.</td></tr>
+        <tr><td>d1-c contract map</td><td><b>expressible today, with the zone header flattened</b></td>
+          <td><code>table</code> carries rules × planes, the marks and the refuses column; the boundary division, the hatched unarmed column and the narrow re-wrap that keeps all five plane cells with each rule are renderer behaviour over the same block and the same cell values. <code>columns</code> is a flat array of strings with no column-group, so the <em>feedback / perimeter</em> spanning header — the thing that makes the boundary a boundary rather than a border — has to be folded into each column label, and it is the only part of this encoding the contract cannot carry.</td></tr>
+        <tr><td>d2-a chain in place</td><td><b>needs one new typed block</b></td>
+          <td>No block carries a claim with a per-authority reach extent. <code>comparison</code> takes 2–4 independent columns of Markdown, not brackets over one claim; <code>status</code> is a flat item list. <code>disclosure</code> does supply the progressive part. The bracket extent — reach shown rather than asserted — has no analogue.</td></tr>
+        <tr><td>d2-b evidence-adjacent margin</td><td><b>expressible today at material loss</b></td>
+          <td>A two-column <code>table</code> row-aligns each claim with its artifact, which is the adjacency. What it cannot do is render <em>reserved empty space</em>: an unbacked claim becomes an empty cell, indistinguishable from a cell nobody filled in, and the record's own prose stops reading as prose. <code>comparison</code> is worse — its columns are independent lists with no row alignment at all.</td></tr>
       </tbody>
     </table>
-  </section>
-
-  <section>
-    <h2>P3, D1, D2</h2>
-    <p class="meta">Not authored. Exact continuation boundary: <a href="NEXT.md">NEXT.md</a>. No placeholder stands in
-      for an unauthored candidate.</p>
+    <p class="meta">Feasibility is not visual approval. A verdict of <em>expressible today</em> says only that the
+      accepted contract could carry the encoding; it says nothing about whether the encoding communicates, which is what
+      G1–G8 exist to test and what the operator decides.</p>
   </section>
 </main>
 
@@ -112,6 +153,22 @@
       { id: "p2-a-evidence-grid", label: "a — claim × lane coverage", src: "cases/p2/a-evidence-grid/index.html" },
       { id: "p2-b-provenance-rail", label: "b — provenance rails and where they stop", src: "cases/p2/b-provenance-rail/index.html" },
       { id: "p2-baseline", label: "baseline — ordinary Markdown", src: "baselines/p2/baseline.html", baseline: true },
+    ],
+    p3: [
+      { id: "p3-a-finding-anchored-delta", label: "a — the change, with the verdict beside the region it concerns", src: "cases/p3/a-finding-anchored-delta/index.html" },
+      { id: "p3-b-convergence-ledger", label: "b — findings × rounds, with the return arcs", src: "cases/p3/b-convergence-ledger/index.html" },
+      { id: "p3-baseline", label: "baseline — ordinary Markdown", src: "baselines/p3/baseline.html", baseline: true },
+    ],
+    d1: [
+      { id: "d1-a-concept-dependency-path", label: "a — the one order the repository can be read in", src: "cases/d1/a-concept-dependency-path/index.html" },
+      { id: "d1-b-task-first-entry", label: "b — one path, and every branch off it is a refusal", src: "cases/d1/b-task-first-entry/index.html" },
+      { id: "d1-c-contract-map", label: "c — rule × plane ownership, with the boundary drawn", src: "cases/d1/c-contract-map/index.html" },
+      { id: "d1-baseline", label: "baseline — ordinary Markdown", src: "baselines/d1/baseline.html", baseline: true },
+    ],
+    d2: [
+      { id: "d2-a-chain-in-place", label: "a — how far the governing decision reaches", src: "cases/d2/a-chain-in-place/index.html" },
+      { id: "d2-b-evidence-adjacent-margin", label: "b — evidence in the margin, empty where there is none", src: "cases/d2/b-evidence-adjacent-margin/index.html" },
+      { id: "d2-baseline", label: "baseline — ordinary Markdown", src: "baselines/d2/baseline.html", baseline: true },
     ],
   };
   const state = { mode: "light", vp: "desktop" };

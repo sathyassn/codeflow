@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D1-c — which plane owns which rule, and where the boundary actually is</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --owned: #16181d; --edge: #8a3a12; --off: #b9bfc9; --quiet: #eceef1; --anchor: #8a3a12;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --owned: #e9ebf0; --edge: #f0b073; --off: #4b5261; --quiet: #1c1f26; --anchor: #f0b073; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 78rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.5rem; color: var(--dim); max-width: 48rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  table { border-collapse: collapse; width: 100%; font-size: .76rem; }
+  caption { text-align: left; font-size: .72rem; color: var(--muted); padding-bottom: .5rem; }
+  th, td { padding: .3rem .4rem; text-align: left; vertical-align: baseline; }
+  thead .zone th { font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
+    padding-bottom: .1rem; font-weight: 700; }
+  thead .zone th.perimeter { color: var(--edge); }
+  thead .cols th { font-size: .7rem; color: var(--ink); font-weight: 600; border-bottom: 2px solid var(--ink);
+    padding-bottom: .3rem; }
+  thead .cols th.plane { text-align: center; width: 6.6rem; }
+  thead .cols th.plane small { display: block; font-weight: 400; color: var(--muted); font-size: .88em; }
+  thead .cols th.disarmed { color: var(--muted); }
+  thead .cols th.disarmed s { text-decoration-thickness: 1px; }
+
+  /* The boundary is a real division in the drawing, not a colour: everything
+     left of it is feedback, everything right of it is the perimeter. */
+  .brink { border-left: 3px solid var(--edge) !important; }
+  .disarmed { background: repeating-linear-gradient(
+    135deg, transparent 0 5px, var(--quiet) 5px 10px); }
+
+  tbody th[scope="rowgroup"] { font-size: .64rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; padding-top: .9rem; }
+  tbody th[scope="row"] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500;
+    font-size: .73rem; color: var(--ink); border-top: 1px solid var(--line); white-space: nowrap; }
+  tbody td { border-top: 1px solid var(--line); }
+  tbody td.mark { text-align: center; font-size: .9rem; line-height: 1; color: var(--owned); }
+  tbody td.mark[data-owns="false"] { color: var(--off); }
+  tbody td.refuses { color: var(--dim); font-size: .72rem; white-space: nowrap; }
+  tbody tr[data-anchor="true"] th[scope="row"] { color: var(--anchor); font-weight: 700; }
+  tbody tr[data-anchor="true"] td.refuses { color: var(--anchor); font-weight: 650; }
+  tbody tr[data-anchor="true"] td { border-top-color: var(--anchor); }
+  tbody td.what { color: var(--dim); font-size: .72rem; }
+
+  .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+  /* Narrow: the same rule x plane incidence, wrapped rather than re-cut. Each
+     rule keeps all five plane cells together, so which planes own a rule stays
+     readable at rest without scrolling sideways or holding a column in mind.
+     The perimeter division and the unarmed plane are drawn in every strip. */
+  .stack { display: none; }
+  .stack .group { border-top: 1px solid var(--line); padding: .9rem 0 0; }
+  .stack .group > h2 { font-size: .64rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin: 0 0 .5rem; }
+  .five { display: grid; grid-template-columns: repeat(5, 1fr); }
+  .zones span { font-size: .55rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 700;
+    color: var(--dim); padding-bottom: .15rem; }
+  .zones .feed { grid-column: 1 / 4; }
+  .zones .perim { grid-column: 4 / 6; color: var(--edge); padding-left: .35rem; }
+  .planekey span { font-size: .55rem; line-height: 1.25; color: var(--ink); align-self: end;
+    padding: 0 .2rem .2rem; border-bottom: 2px solid var(--ink); }
+  .planekey span.off { color: var(--muted); }
+  .planekey span.off s { text-decoration-thickness: 1px; }
+  .stack ul { list-style: none; margin: 0; padding: 0; }
+  .stack li { padding: .45rem 0 .3rem; border-bottom: 1px solid var(--line); }
+  .stack li .rid { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .72rem; color: var(--ink); }
+  .stack li[data-anchor="true"] .rid { color: var(--anchor); font-weight: 700; }
+  .stack li[data-anchor="true"] { border-bottom-color: var(--anchor); }
+  .marks { margin: .25rem 0 .2rem; }
+  .marks span { text-align: center; font-size: .82rem; line-height: 1.4; color: var(--owned); }
+  .marks span[data-owns="false"] { color: var(--off); }
+  .stack li .what { display: block; font-size: .72rem; color: var(--dim); }
+  .stack li[data-anchor="true"] .what { color: var(--anchor); font-weight: 650; }
+  .planegist { margin: .7rem 0 0; font-size: .68rem; color: var(--muted); display: grid; gap: .15rem; }
+  .planegist b { color: var(--dim); font-weight: 650; }
+
+  .brinknote { margin: 1.2rem 0 0; border-left: 3px solid var(--edge); padding: .3rem 0 .3rem .7rem;
+    font-size: .8rem; max-width: 52rem; }
+  .brinknote b { font-weight: 650; }
+  blockquote { margin: .5rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
+    color: var(--dim); font-size: .76rem; max-width: 50rem; }
+  blockquote cite { display: block; font-style: normal; font-size: .66rem; color: var(--muted); margin-top: .1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .legend { margin-top: 1.3rem; border-top: 1px solid var(--line); padding-top: .8rem;
+    font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; max-width: 56rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { tbody tr { transition: background .1s ease; } }
+
+  @media (max-width: 980px) {
+    table, caption { display: none; }
+    .stack { display: block; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>One policy document, five planes — and only one of them is a boundary here</h1>
+  <p class="lede">Rows are the rules that can refuse you. Columns are the planes that read the same
+    <code>.codeflow/policy.json</code>. The heavy division is not decoration: everything left of it is
+    <strong>fast feedback you could work around</strong>; everything right of it is the perimeter. On this repository one
+    of the two perimeter planes is <strong>not armed at all</strong>, which is why the column is struck out rather than
+    omitted.</p>
+
+  <table id="map">
+    <caption id="cap"></caption>
+    <thead>
+      <tr class="zone" id="zone"></tr>
+      <tr class="cols" id="cols"></tr>
+    </thead>
+    <tbody id="body"></tbody>
+  </table>
+
+  <div class="stack" id="stack"></div>
+
+  <div class="brinknote" id="brink"></div>
+
+  <div class="legend">
+    <div><b>&#9632;</b> the plane enforces that rule. <b>&#183;</b> it does not. A mark means <em>this plane refuses it</em> — not that the rule is optional elsewhere.</div>
+    <div><b>The division</b> shows where a refusal can be avoided and where it cannot. It says nothing about severity: every rule here blocks in the plane that owns it.</div>
+    <div><b>Hatched</b> means the plane exists in the design and is not armed on this repository. It is drawn so its absence is visible rather than silently missing.</div>
+    <div><b>refuses n of 9</b> counts the preconditions of starting a task that this rule alone would stop. The gate of record is the largest.</div>
+  </div>
+  <p class="src">Source: <code>AGENTS.md</code>,
+    <code>crates/codeflow-core/src/hooks/git_hook.rs</code>,
+    <code>crates/codeflow-core/src/hooks/git_guard.rs</code>,
+    <code>crates/codeflow-cli/src/cmd/ci.rs</code> and
+    <code>crates/codeflow-core/src/workgraph/work_start.rs</code>, through the shared subject source
+    <code>shared/repo-entry.js</code>. Every rule id is checked against the source that emits it by
+    <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/repo-entry.js"></script>
+<script>
+(() => {
+  const model = window.repoEntry;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const md = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+
+  const feedback = model.planes.filter((p) => p.kind !== "authoritative");
+  const perimeter = model.planes.filter((p) => p.kind === "authoritative");
+  const columns = [...feedback, ...perimeter];
+  const brinkIndex = feedback.length;
+
+  // Rows: the rules that refuse a precondition of starting, then the rules that
+  // refuse the mutation, banded by the step they belong to.
+  const startRules = [...model.byRule.entries()].map(([rule, ids]) => ({
+    rule, planes: model.preconditions.find((e) => e.rule === rule).planes,
+    count: ids.length, what: `${ids.length} of ${model.preconditions.length} preconditions`,
+  })).sort((a, b) => b.count - a.count);
+  const stepOrder = ["commit", "rewrite", "push", "pull request", "merge"];
+  const bands = [
+    { name: "starting a task", rows: startRules },
+    ...stepOrder.map((step) => ({
+      name: step,
+      rows: model.mutationGates.filter((g) => g.step === step)
+        .map((g) => ({ rule: g.rule, planes: g.planes, count: 0, what: g.refuses, note: g.note })),
+    })).filter((b) => b.rows.length),
+  ];
+
+  document.getElementById("cap").textContent =
+    `${bands.reduce((n, b) => n + b.rows.length, 0)} rules, ${columns.length} planes. ` +
+    `The same policy document is read by every column.`;
+
+  document.getElementById("zone").innerHTML =
+    `<td></td>` +
+    `<th colspan="${feedback.length}" scope="colgroup">fast feedback &mdash; skippable</th>` +
+    `<th colspan="${perimeter.length}" scope="colgroup" class="perimeter brink">the perimeter &mdash; not skippable</th>` +
+    `<td></td>`;
+
+  document.getElementById("cols").innerHTML =
+    `<th scope="col">rule</th>` +
+    columns.map((p, index) => {
+      const cls = ["plane", index === brinkIndex ? "brink" : "", p.armedHere ? "" : "disarmed"].filter(Boolean).join(" ");
+      const name = p.armedHere ? esc(p.name) : `<s>${esc(p.name)}</s>`;
+      return `<th scope="col" class="${cls}">${name}<small>${esc(p.kind)}</small></th>`;
+    }).join("") +
+    `<th scope="col">refuses</th>`;
+
+  document.getElementById("body").innerHTML = bands.map((band) =>
+    `<tr><th colspan="${columns.length + 2}" scope="rowgroup">${esc(band.name)}</th></tr>` +
+    band.rows.map((row) => {
+      const anchor = row.rule === model.anchorRule;
+      return `<tr data-anchor="${anchor}"><th scope="row">${row.rule}</th>` +
+        columns.map((p, index) => {
+          const owns = row.planes.includes(p.id) && p.armedHere;
+          const cls = ["mark", index === brinkIndex ? "brink" : "", p.armedHere ? "" : "disarmed"].filter(Boolean).join(" ");
+          return `<td class="${cls}" data-owns="${owns}">${owns ? "&#9632;" : "&#183;"}` +
+            `<span class="visually-hidden">${owns ? "enforced by" : "not enforced by"} ${esc(p.name)}</span></td>`;
+        }).join("") +
+        `<td class="${row.count ? "refuses" : "what"}">${row.count ? esc(row.what) : md(row.note ? `${row.what} — ${row.note}` : row.what)}</td></tr>`;
+    }).join("")).join("");
+
+  // ------------------------------------------------- rule strips (narrow)
+  // The narrow layout keeps the matrix's own relationship: every rule still
+  // carries all five plane cells, in the same column order, with the same
+  // division drawn through them. Nothing is dropped and nothing moves sideways.
+  const cellsOf = (row, cls) => `<div class="five ${cls}">` + columns.map((p, index) => {
+    const owns = row.planes.includes(p.id) && p.armedHere;
+    const klass = [index === brinkIndex ? "brink" : "", p.armedHere ? "" : "disarmed"].filter(Boolean).join(" ");
+    return `<span class="${klass}" data-owns="${owns}">${owns ? "&#9632;" : "&#183;"}` +
+      `<span class="visually-hidden">${owns ? "enforced by" : "not enforced by"} ${esc(p.name)}</span></span>`;
+  }).join("") + `</div>`;
+
+  // The key repeats per group so no column ever has to be held in mind, and it
+  // is hidden from assistive technology because every mark already names its
+  // plane in full.
+  const key = `<div class="five zones" aria-hidden="true">` +
+    `<span class="feed">fast feedback &mdash; skippable</span>` +
+    `<span class="perim brink">the perimeter</span></div>` +
+    `<div class="five planekey" aria-hidden="true">` +
+    columns.map((p, index) => {
+      const klass = [index === brinkIndex ? "brink" : "", p.armedHere ? "" : "disarmed off"].filter(Boolean).join(" ");
+      return `<span class="${klass}">${p.armedHere ? esc(p.short) : `<s>${esc(p.short)}</s>`}</span>`;
+    }).join("") + `</div>`;
+
+  document.getElementById("stack").innerHTML = bands.map((band, index) =>
+    `<section class="group" aria-labelledby="group-${index}">` +
+    `<h2 id="group-${index}">${esc(band.name)}</h2>${key}<ul>` +
+    band.rows.map((row) => {
+      const anchor = row.rule === model.anchorRule;
+      return `<li data-anchor="${anchor}"><span class="rid">${row.rule}</span>` +
+        cellsOf(row, "marks") +
+        `<span class="what">${row.count ? esc(row.what) : md(row.note ? `${row.what} — ${row.note}` : row.what)}</span>` +
+        `</li>`;
+    }).join("") + `</ul></section>`).join("") +
+    `<div class="planegist">` + columns.map((p) =>
+      `<div><b>${esc(p.short)}</b> &mdash; ${esc(p.kind)}${p.armedHere ? "" : " &middot; not armed here"}: ${md(p.gist)}</div>`
+    ).join("") + `</div>`;
+
+  // ------------------------------------------------------------ the brink
+  const remote = model.planes.find((p) => !p.armedHere);
+  const ci = model.planeById.get("ci");
+  document.getElementById("brink").innerHTML =
+    `<p style="margin:0 0 .3rem"><b>Where the boundary actually is on this repository:</b> ` +
+    `${model.realBoundary.map((id) => model.planeById.get(id).name).join(" and ")}, plus a human merge. ` +
+    `${esc(remote.name)} is ${md(remote.gist)}, so the drawn perimeter is one column wide, not two.</p>` +
+    `<blockquote>${md(ci.quote.text)}<cite>${ci.quote.source}</cite></blockquote>` +
+    `<blockquote>${md(remote.quote.text)}<cite>${remote.quote.source}</cite></blockquote>` +
+    `<p style="margin:.6rem 0 0;font-size:.8rem">Of the ${model.preconditions.length} things that must already be true ` +
+    `before a task starts, <b>${model.answer.refusedByGate.length}</b> are refused by one rule &mdash; ` +
+    `<code>${model.anchorRule}</code> &mdash; and it is the only row marked in ` +
+    `${model.answer.planes.length} planes at once.</p>`;
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

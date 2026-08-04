@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D2-a — how far the governing decision actually reaches into SPC-004</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --holds: #16181d; --partial: #6b3fa0; --absent: #8a3a12; --bounded: #4a6fa5; --quiet: #eceef1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --holds: #e9ebf0; --partial: #c4a6f0; --absent: #f0b073; --bounded: #8fb4e8; --quiet: #1c1f26; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.2rem; color: var(--dim); }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .head { border-bottom: 1px solid var(--ink); padding-bottom: .7rem; margin-bottom: 1.6rem;
+    display: flex; flex-wrap: wrap; gap: .2rem 1.4rem; align-items: baseline; font-size: .78rem; }
+  .head b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; font-weight: 650; }
+  .head span { color: var(--dim); }
+  .head span i { font-style: normal; color: var(--ink); font-weight: 600; }
+
+  .claim { margin: 0 0 2.4rem; }
+  .claim > .at { margin: 0; font-size: .66rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  .claim > .said { margin: .15rem 0 .8rem; font-size: .92rem; }
+
+  /* The authority bar is the claim's own width. A bracket beneath it shows how
+     much of the claim a decision reaches — so a partial supersession is read as
+     covering less, not as the word "partial". */
+  .bar { position: relative; height: 3px; background: var(--quiet); border-radius: 2px; }
+  .reach { display: flex; gap: 2px; margin-top: 3px; }
+  .reach > div { position: relative; padding-top: .55rem; font-size: .74rem; }
+  .reach > div::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px;
+    border: 2px solid var(--holds); border-bottom: 0; }
+  .reach > div[data-relation="supersedes-mechanism"]::before { border-color: var(--partial); }
+  .reach > div[data-relation="process"]::before { border-color: var(--muted); border-style: dashed; }
+  .reach .who { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; }
+  .reach > div[data-relation="supersedes-mechanism"] .who { color: var(--partial); }
+  .reach > div[data-relation="process"] .who { color: var(--muted); }
+  .reach .how { display: block; color: var(--dim); font-size: .72rem; }
+
+  details { margin-top: .55rem; font-size: .76rem; }
+  summary { cursor: pointer; color: var(--dim); }
+  summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  blockquote { margin: .45rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
+    color: var(--dim); font-size: .78rem; }
+  blockquote cite { display: block; font-style: normal; font-size: .66rem; color: var(--muted); margin-top: .12rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+
+  /* Evidence closes the segment, in one line, in the same reading flow. */
+  .ev { margin: .9rem 0 0; font-size: .78rem; border-left: 3px solid var(--holds); padding: .1rem 0 .1rem .7rem; }
+  .ev[data-state="bounded"] { border-left-color: var(--bounded); }
+  .ev[data-state="absent"] { border-left-color: var(--absent); border-left-style: dashed; }
+  .ev .state { font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; color: var(--dim); }
+  .ev[data-state="bounded"] .state { color: var(--bounded); }
+  .ev[data-state="absent"] .state { color: var(--absent); }
+  .ev .what { display: block; color: var(--ink); }
+  .ev .bound { display: block; color: var(--dim); font-size: .74rem; margin-top: .1rem; }
+  .ev .at { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .68rem;
+    color: var(--muted); margin-top: .1rem; word-break: break-all; }
+
+  .verdict { margin-top: 1.4rem; border-top: 1px solid var(--ink); padding-top: 1rem; }
+  .verdict h2 { font-size: 1rem; margin: 0 0 .4rem; font-weight: 650; }
+  /* A heading, and any prose resuming after a quotation, needs its own air:
+     a blockquote that ends flush against the next line reads as one block. */
+  .verdict blockquote + h2 { margin-top: 1.4rem; }
+  .verdict blockquote + p { margin-top: .7rem; }
+  .verdict p { margin: 0 0 .55rem; font-size: .86rem; color: var(--dim); }
+  .verdict p:last-child { margin-bottom: 0; }
+  .verdict b { color: var(--ink); }
+  .verdict code.p { color: var(--partial); font-weight: 650; }
+  .still { list-style: none; margin: .3rem 0 .6rem; padding: 0; display: grid; gap: .25rem; font-size: .8rem; }
+  .still b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .still span { color: var(--dim); }
+
+  .legend { margin-top: 1.3rem; border-top: 1px solid var(--line); padding-top: .8rem;
+    font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { details { transition: opacity .12s ease; } }
+
+  @media (max-width: 760px) {
+    /* Side-by-side brackets would compress to slivers, so reach becomes vertical
+       extent instead: each bracket keeps its own left rule and its label, and the
+       narrow one is visibly the short one. The relationship survives; only its
+       axis changes. */
+    .reach { display: grid; gap: .55rem; }
+    .reach > div { padding-top: 0; padding-left: .7rem; }
+    .reach > div::before { top: 0; bottom: 0; left: 0; right: auto; width: 5px; height: auto;
+      border: 2px solid var(--holds); border-right: 0; }
+    .reach > div[data-relation="supersedes-mechanism"] { margin-left: 2.2rem; }
+    .reach > div[data-relation="supersedes-mechanism"]::before { border-color: var(--partial); }
+    .reach > div[data-relation="process"]::before { border-color: var(--muted); border-style: dashed; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>SPC-004, claim by claim — and how far the governing decision reaches into each one</h1>
+  <p class="lede">The record's own sentences run down the page. Under each one, a bracket shows <strong>how much of that
+    claim a decision actually reaches</strong>. One decision reaches only a named mechanism inside two earlier ones —
+    which is why the frontmatter cannot answer this question: <code>superseded_by</code> is <code>null</code> on all
+    three.</p>
+
+  <div class="head" id="head"></div>
+  <div id="claims"></div>
+  <div class="verdict" id="verdict"></div>
+
+  <div class="legend">
+    <div><b>Bracket width shows reach, not size.</b> A narrow bracket means the decision reaches one named mechanism, not a measured fraction of the text.</div>
+    <div><b>governs</b> — the decision's scope covers the claim. <b>supersedes one mechanism</b> — it replaces a named detail inside an earlier decision and nothing else. <b>process</b> — it governs the process the claim depends on, not the claim's content.</div>
+    <div><b>Evidence</b> closes each segment: <em>executed</em> at the exact candidate, <em>bounded</em> and explicitly not promoted, or <em>absent</em> with the reason. A dashed edge means absent.</div>
+  </div>
+  <p class="src">Source: the frontmatter and bodies of <code>project-management/specs/SPC-004.md</code>,
+    <code>docs/decisions/ADR-0049…ADR-0052</code>, <code>project-management/tasks/TSK-011.md</code> and
+    <code>TSK-014.md</code>, through the shared subject source <code>shared/record-authority.js</code>. Every
+    frontmatter value and every quotation is checked against those files by <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/record-authority.js"></script>
+<script>
+(() => {
+  const model = window.recordAuthority;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const md = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+  const quote = (q) => `<blockquote>${md(q.text)}<cite>${q.source}</cite></blockquote>`;
+
+  const s = model.subject;
+  const tsk011 = model.recordById.get("TSK-011");
+  document.getElementById("head").innerHTML =
+    `<b>${s.id}</b><span>${esc(s.title)}</span>` +
+    `<span>status <i>${s.frontmatter.status}</i></span>` +
+    `<span>created <i>${s.frontmatter.created}</i></span>` +
+    `<span>not <i>implemented</i>: ${esc(s.whyNotImplemented)} &mdash; ${tsk011.id} is ` +
+    `<i>${tsk011.frontmatter.status}</i> on ${esc(tsk011.frontmatter.depends_on)}</span>`;
+
+  const how = {
+    "governs": "governs this claim",
+    "supersedes-mechanism": "supersedes one named mechanism inside it",
+    "process": "governs the process, not the content",
+  };
+  // Reach is ordinal, not measured: a decision that covers the claim gets the
+  // wide bracket, one that reaches a single mechanism gets the narrow one.
+  const flexOf = (relation) => (relation === "supersedes-mechanism" ? 1 : relation === "process" ? 2 : 3);
+
+  document.getElementById("claims").innerHTML = model.claims.map((c) => {
+    const ev = c.evidence;
+    return `<section class="claim"><p class="at">${esc(c.where)} &middot; ${c.id}</p>` +
+      `<p class="said">&ldquo;${md(c.quote.text)}&rdquo;</p>` +
+      `<div class="bar" aria-hidden="true"></div>` +
+      `<div class="reach">${c.authority.map((a) => {
+        const rec = model.recordById.get(a.record);
+        return `<div data-relation="${a.relation}" style="flex:${flexOf(a.relation)}">` +
+          `<span class="who">${a.record}</span>` +
+          `<span class="how">${how[a.relation]}</span>` +
+          `<span class="how">${esc(rec.frontmatter.date)} &middot; ${esc(rec.frontmatter.status)} &middot; ` +
+          `superseded_by ${esc(rec.frontmatter.superseded_by)}</span></div>`;
+      }).join("")}</div>` +
+      `<details><summary>What each decision actually says here</summary>` +
+      c.authority.map((a) => quote(a.quote) + (a.scope ? quote(a.scope) : "")).join("") +
+      `</details>` +
+      `<div class="ev" data-state="${ev.state}"><span class="state">evidence &mdash; ${ev.state}</span>` +
+      (ev.what ? `<span class="what">${md(ev.what)}</span>` : `<span class="what">none.</span>`) +
+      `<span class="bound">${md(ev.bound)}</span>` +
+      (ev.at ? `<span class="at">at ${esc(ev.at)}</span>` : "") +
+      `<details><summary>the record's own words</summary>${quote(ev.quote)}` +
+      (ev.alsoQuote ? quote(ev.alsoQuote) : "") + `</details></div></section>`;
+  }).join("");
+
+  const a = model.answer;
+  const governing = model.recordById.get(a.governing);
+  const central = model.central;
+  document.getElementById("verdict").innerHTML =
+    `<h2>Which decision governs this record now</h2>` +
+    `<p><b>${a.governing}</b> &mdash; ${esc(governing.title)} &mdash; and its reach is <code class="p">${a.reach}</code>. ` +
+    `It reaches exactly one claim on this page, and inside that claim exactly one mechanism.</p>` +
+    quote(model.partialScope) +
+    `<p>So these remain in force, unsuperseded, with <code>superseded_by: null</code> intact:</p>` +
+    `<ul class="still">${a.stillInForce.map((id) => {
+      const r = model.recordById.get(id);
+      return `<li><b>${id}</b> <span>${esc(r.title)} &mdash; ${esc(r.frontmatter.date)}, ${esc(r.frontmatter.status)}</span></li>`;
+    }).join("")}</ul>` +
+    quote(model.noOutcomeChange) +
+    `<h2>What backs its central claim</h2>` +
+    `<p><b>Nothing does.</b> ${central.id}, the design claim at ${esc(central.where)}, is the one segment on this page ` +
+    `whose evidence bracket is empty. ${a.backed.length} claims are backed at the exact candidate, ` +
+    `${a.bounded.length} are bounded and explicitly not promoted, and this one is absent.</p>` +
+    `<p>${model.verdicts.map((v) => `<b>${esc(v.lane)}</b>: ${esc(v.state)} &mdash; ${esc(v.what)}`).join(". ")}.</p>`;
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

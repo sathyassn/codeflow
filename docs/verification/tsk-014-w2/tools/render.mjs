@@ -59,8 +59,21 @@ const CANDIDATES = [
   "cases/p1/c-critical-ribbon/index.html",
   "cases/p2/a-evidence-grid/index.html",
   "cases/p2/b-provenance-rail/index.html",
+  "cases/p3/a-finding-anchored-delta/index.html",
+  "cases/p3/b-convergence-ledger/index.html",
+  "cases/d1/a-concept-dependency-path/index.html",
+  "cases/d1/b-task-first-entry/index.html",
+  "cases/d1/c-contract-map/index.html",
+  "cases/d2/a-chain-in-place/index.html",
+  "cases/d2/b-evidence-adjacent-margin/index.html",
 ];
-const BASELINES = ["baselines/p1/baseline.html", "baselines/p2/baseline.html"];
+const BASELINES = [
+  "baselines/p1/baseline.html",
+  "baselines/p2/baseline.html",
+  "baselines/p3/baseline.html",
+  "baselines/d1/baseline.html",
+  "baselines/d2/baseline.html",
+];
 const slugOf = (page) => page
   .replace(/^cases\//, "").replace(/\/index\.html$/, "")
   .replace(/^baselines\//, "").replace(/\/baseline\.html$/, "-baseline")
@@ -258,7 +271,15 @@ try {
 
   context = await chromium.launchPersistentContext(profile, {
     executablePath, headless: true, env, viewport: VIEWPORTS.desktop,
-    args: ["--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync"],
+    // The determinism flags exist so two consecutive normal runs can be compared
+    // by digest. Without them Chromium's tiled raster path re-rasterises a
+    // handful of anti-aliased edge and glyph pixels differently between runs —
+    // no layout or content change, but enough to move every digest.
+    args: ["--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync",
+      "--disable-lcd-text", "--disable-partial-raster", "--disable-checker-imaging",
+      "--disable-threaded-animation", "--disable-threaded-scrolling",
+      "--disable-new-content-rendering-timeout", "--run-all-compositor-stages-before-draw",
+      "--disable-image-animation-resync", "--force-device-scale-factor=1"],
   });
   refreshOwned(taskRoot);
   if (!ownedById.size) throw new Error("no task-owned browser process could be identified");
@@ -320,6 +341,14 @@ try {
     await page.waitForFunction(
       () => document.documentElement.dataset.ready === "true" || !document.querySelector("script"),
       null, { timeout: NAV_TIMEOUT_MS });
+    // A page that says it is ready has still only queued its layout. Without a
+    // settle, a small number of anti-aliased edge pixels rasterise differently
+    // between otherwise identical runs, so two consecutive normal runs cannot be
+    // compared by digest. Wait for fonts, then for two committed frames.
+    await page.evaluate(async () => {
+      await (document.fonts?.ready ?? Promise.resolve());
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
     await page.screenshot({ path: join(rendersDir, `${name}.png`), fullPage: true });
 
     const answer = await page.evaluate(() => document.documentElement.dataset.answer ?? null);

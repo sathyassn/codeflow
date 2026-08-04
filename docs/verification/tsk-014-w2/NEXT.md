@@ -1,75 +1,71 @@
 # Exact continuation boundary
 
-This pass authored the study frame and the five P1/P2 candidates in full. Seven
-candidates remain. They are absent, not sketched — nothing in this directory
-stands in for them.
+The board is complete: five baselines, twelve candidates, seventy renders, all
+deterministic checks green. Nothing below is authored work waiting to be done.
+What remains is an observation this session structurally cannot perform.
 
-## Remaining work, in order
+## The boundary
 
-### 1. P3 — review convergence (2 candidates)
+**G1–G8 have not been run, and cannot be run from here.** Every gate in
+`rubric.md` needs an observer who authored none of the candidates and has not
+read `answer-key.md`. The author fails the first condition; the pass-1 integrity
+reviewer failed the second. See `observer-state.md`.
 
-Content inventory to extract first, into `content-inventory.md`:
+Nothing in this directory records an author observation, an operator selection,
+or a production-readiness judgement. The deterministic checks say the study is
+internally consistent and accessible. They say nothing about whether any
+composition communicates.
 
-- the six review findings and their resolution across rounds, from
-  `project-management/tasks/TSK-014.md` closeout paragraphs;
-- the harness changes each round produced, from
-  `crates/codeflow-present/web/scripts/real-browser-check.mjs` and
-  `real-browser-cleanup-check.mjs` git history on this branch;
-- the exact iteration in which each finding was raised, fixed, and re-verified.
+## What the next session does
 
-Then author:
+1. Open `board.html` in a fresh session with an observer who authored none of
+   the candidates and has not read `answer-key.md`. That session receives the
+   board and the five task questions only.
+2. Run G1–G8 as written in `rubric.md`, per case, recording each result and
+   each *not run* as *not run*. The rubric is byte-pinned by `rubric.lock.json`
+   and must not be edited: if a gate genuinely needs to change, that is a new
+   dated rubric and a new lock, never an edit in place.
+3. Report the observed results. **The operator selects the direction**, from
+   the observed results plus the neutral implementation-feasibility record in
+   `board.html`. No session before that point may narrow the set.
 
-- `cases/p3/a-finding-anchored-delta/index.html` — the diff is primary; findings
-  attach to the hunk they concern, carrying verdict state and iteration marker.
-- `cases/p3/b-convergence-ledger/index.html` — findings × iterations, cells
-  showing verdict transitions; the diff is secondary. Encodes whether a later
-  iteration actually answered an earlier finding.
+## Rerunning the study
 
-Task question to register in `answer-key.md` before rendering: *which finding
-was raised, addressed, and then re-opened by a later round, and which round
-introduced a defect that a previous round had not caught?*
+```sh
+node docs/verification/tsk-014-w2/tools/render.mjs
+node docs/verification/tsk-014-w2/tools/selftest.mjs            # --only=C,F,G,H,I,J without a browser
+node docs/verification/tsk-014-w2/tools/verify.mjs --update
+node docs/verification/tsk-014-w2/tools/verify.mjs
+```
 
-### 2. D1 — portal Orient (3 candidates)
-
-Content inventory: `docs/product.md`, `AGENTS.md` (six-layer table, git rules,
-worktree doctrine), `docs/capabilities.md`.
-
-- `cases/d1/a-concept-dependency-path/index.html`
-- `cases/d1/b-task-first-entry/index.html`
-- `cases/d1/c-contract-map/index.html`
-
-Task question: *before starting a task on this repository, what must already be
-true, and which gate refuses you if it is not?*
-
-### 3. D2 — portal Record (2 candidates)
-
-Content inventory: `docs/decisions/ADR-0052`, `project-management/tasks/TSK-014.md`,
-`project-management/specs/SPC-004.md` frontmatter and their real relationships.
-
-- `cases/d2/a-chain-in-place/index.html`
-- `cases/d2/b-evidence-adjacent-margin/index.html`
-
-Task question: *which decision governs this record now, and what evidence backs
-its central claim?*
+`render.mjs` needs host state the repository sandbox denies — process
+inventory (`ps`), signal delivery, and a profile socket directory. Under the
+sandbox it fails closed at launch, retains its marked root and deletes nothing,
+which is the designed behaviour, not a defect. Run it in a session where those
+are available. Never substitute a manual `rm -rf`, a broad process match, or
+any deletion outside the harness: the ownership contract in `render.mjs` is the
+only sanctioned deletion path, and a retained root is evidence, not permission.
 
 ## Constraints that carry forward
 
+- If a candidate is added or changed, it needs an entry in `CANDIDATES`
+  (`tools/render.mjs`), in the per-case lists (`tools/verify.mjs`), in `cases`
+  and in the implementation-feasibility table (`board.html`). All of those
+  iterate lists; no other structural change is needed.
+- A new fact belongs in its case's shared subject source with a matching rule in
+  `tools/verify.mjs`, never inline in a candidate. A candidate may not carry a
+  claim the sources cannot bind.
+- A shared source is data. It is evaluated in a bounded context with no Node
+  globals, and every path, revision and pathspec it declares goes through
+  `tools/source-authority.mjs`. A source that needs to quote one of the study's
+  own records adds it to `STUDY_OWNED_SOURCES` in `tools/verify.mjs`
+  deliberately — there is no fallback that would find it by accident, and adding
+  `answer-key.md` there would let a candidate quote the answers.
 - D1 and D2 must not contradict the TSK-008 `system-atlas` boundary/legend/
   evidence-chain idea; it is a conformance input, not a reopened question.
-- Add the new page paths to `CANDIDATES` in `tools/render.mjs` and to `cases`
-  in `board.html`, and to the `P1`/`P2`-style lists in `tools/verify.mjs`. All
-  three iterate lists; no other structural change is needed.
-- Each new case needs a shared subject source under `shared/` on the pattern of
-  `plan-model.js` (derivation) or `tsk007-facts.js` (quotation registry), plus
-  the matching rule in `tools/verify.mjs`, so those candidates cannot drift from
-  their sources or from each other.
-- Register each new candidate in the implementation-feasibility table in
-  `board.html`, citing the block catalogue in
-  `.codeflow/schemas/present/document-v1.schema.json` and SPC-004 §2/§11.
-- Re-run `render.mjs`, then `verify.mjs --update`, then `verify.mjs`. The rubric
-  is pinned by `rubric.lock.json`: it must not be edited when the remaining
-  candidates land. If a gate genuinely needs to change, that is a new dated
-  rubric and a new lock, never an edit in place.
-- G1–G8 run only after the full board exists, in a fresh session with an
-  observer who authored none of the candidates and has not read
-  `answer-key.md`.
+- Siblings must stay structurally distinct. P3-a locates change in source and P3-b
+  puts state transitions on a round axis; D1-a orders concepts by what cannot be
+  read before what, D1-b is one path with refusal branches and D1-c is rule ×
+  plane ownership with a boundary drawn through it; D2-a shows how far a decision
+  reaches and D2-b pairs each claim with its evidence at eye level. Converging any
+  two of them into one structure destroys what G6 exists to test.

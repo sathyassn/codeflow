@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D1-a — the one order in which this repository can be read</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --spine: #16181d; --gate: #8a3a12; --other: #4a6fa5; --quiet: #eceef1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --spine: #e9ebf0; --gate: #f0b073; --other: #8fb4e8; --quiet: #1c1f26; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 76rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.6rem; color: var(--dim); max-width: 46rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  /* Depth is horizontal position: each concept starts where its prerequisite
+     ended, so the chain cannot be read out of order without the indentation
+     going backwards. Nothing is enclosed. */
+  .path { list-style: none; margin: 0; padding: 0; }
+  .node { position: relative; padding: 0 0 0 1.1rem; }
+  .node::before { content: ""; position: absolute; left: 0; top: .55rem; width: .5rem; height: .5rem;
+    border-radius: 50%; background: var(--spine); }
+  .node::after { content: ""; position: absolute; left: .23rem; top: 1.1rem; bottom: -.1rem;
+    border-left: 2px solid var(--line); }
+  .node:last-child::after { display: none; }
+  .node > .row { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: 0 1.4rem; align-items: start; }
+  .node .body { padding-bottom: 1.5rem; }
+  .node .step { font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .node h2 { font-size: .96rem; margin: 0 0 .15rem; font-weight: 650; }
+  .node .gist { margin: 0; color: var(--dim); font-size: .82rem; max-width: 34rem; }
+
+  /* The dependency edge carries the reason, not an arrowhead. */
+  .edge { margin: .5rem 0 0; font-size: .74rem; color: var(--ink); border-left: 2px solid var(--spine);
+    padding: .05rem 0 .05rem .55rem; max-width: 33rem; }
+  .edge b { font-weight: 650; }
+
+  blockquote { margin: .45rem 0 0; padding-left: .6rem; border-left: 2px solid var(--line);
+    color: var(--dim); font-size: .74rem; max-width: 34rem; }
+  blockquote cite { display: block; font-style: normal; font-size: .66rem; color: var(--muted); margin-top: .1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+
+  /* What becomes readable at this depth — and only at this depth. */
+  .unlocks { border-top: 1px solid var(--line); padding-top: .35rem; }
+  .unlocks[hidden] { display: none; }
+  .unlocks > p { margin: 0 0 .4rem; font-size: .64rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); }
+  .unlocks ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+  .unlocks li { font-size: .76rem; }
+  .unlocks .must { display: block; color: var(--ink); }
+  .unlocks .eid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650;
+    font-size: .72rem; color: var(--muted); margin-right: .3rem; }
+  .unlocks .rule { display: block; margin-top: .12rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .68rem; color: var(--other); }
+  .unlocks li[data-anchor="true"] .rule { color: var(--gate); font-weight: 650; }
+  .unlocks .err { display: block; margin-top: .1rem; font-size: .68rem; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .terminus { margin-top: .4rem; border: 1px solid var(--gate); border-left-width: 5px; padding: .8rem .9rem;
+    max-width: 52rem; }
+  .terminus h2 { font-size: .95rem; margin: 0 0 .3rem; font-weight: 650; }
+  .terminus p { margin: 0 0 .4rem; font-size: .82rem; color: var(--dim); }
+  .terminus p:last-child { margin-bottom: 0; }
+  .terminus b { color: var(--ink); }
+  .terminus code { color: var(--gate); font-weight: 650; }
+  .planes { list-style: none; margin: .3rem 0 0; padding: 0; display: grid; gap: .25rem; font-size: .78rem; }
+  .planes b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .planes span { color: var(--dim); }
+
+  .scale { margin: 1.6rem 0 0; font-size: .74rem; color: var(--muted); border-top: 1px solid var(--line);
+    padding-top: .7rem; }
+  .legend { margin-top: .8rem; font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; max-width: 54rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { .node .row { transition: opacity .12s ease; } }
+
+  @media (max-width: 900px) {
+    /* The right column has nowhere to go, so it stops being a column: what a
+       depth unlocks moves directly under the concept that unlocks it, still
+       inside the same node, so the chain and the attachment both survive. */
+    .node > .row { grid-template-columns: 1fr; gap: .7rem; }
+    .node .body { padding-bottom: .8rem; }
+    .unlocks { border-top: 1px dashed var(--line); padding-bottom: 1.3rem; }
+    .node .gist, .edge, blockquote { max-width: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Before you start a task here, read these eight things in this order</h1>
+  <p class="lede">This is not a menu. Each step below is a <strong>prerequisite for the next one being intelligible</strong>,
+    and the reason is stated on the connector. The right-hand column shows what each step makes readable — the nine
+    things that must already be true, and the rule that refuses each one.</p>
+
+  <ol class="path" id="path"></ol>
+
+  <div class="terminus" id="terminus"></div>
+
+  <p class="scale" id="scale"></p>
+  <div class="legend">
+    <div><b>Depth</b> — how many earlier concepts this one needs. Nothing here is optional reading order.</div>
+    <div><b>Unlocks</b> — a precondition is listed at the first depth where its refusal message makes sense.</div>
+    <div><b>Rule</b> — the policy rule that refuses it, as emitted by the enforcement plane. The gate of record is marked.</div>
+  </div>
+  <p class="src">Source: <code>AGENTS.md</code>, <code>docs/product.md</code>,
+    <code>crates/codeflow-core/src/workgraph/work_start.rs</code> and
+    <code>crates/codeflow-cli/src/cmd/ci.rs</code>, through the shared subject source
+    <code>shared/repo-entry.js</code>. Every quotation and every rule id is checked against those files by
+    <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/repo-entry.js"></script>
+<script>
+(() => {
+  const model = window.repoEntry;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const md = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const ordered = [...model.concepts].sort((a, b) => model.depth(a.id) - model.depth(b.id));
+
+  document.getElementById("path").innerHTML = ordered.map((c, index) => {
+    const unlocks = model.preconditions.filter((e) => e.concept === c.id);
+    const next = ordered[index + 1];
+    return `<li class="node"><div class="row"><div class="body">` +
+      `<p class="step">depth ${model.depth(c.id)}${c.needs.length ? ` &middot; needs ${c.needs.join(", ")}` : " &middot; start here"}</p>` +
+      `<h2>${md(c.name)}</h2><p class="gist">${md(c.gist)}</p>` +
+      `<blockquote>${md(c.quote.text)}<cite>${c.quote.source}</cite></blockquote>` +
+      (next ? `<p class="edge"><b>Read ${next.name} next, not first:</b> ${md(next.why)}</p>` : "") +
+      `</div>` +
+      `<div class="unlocks"${unlocks.length ? "" : " hidden"}>` +
+      (unlocks.length
+        ? `<p>readable from here &mdash; ${unlocks.length} of ${model.preconditions.length}</p><ul>` +
+          unlocks.map((e) => `<li data-anchor="${e.rule === model.anchorRule}">` +
+            `<span class="must"><span class="eid">${e.id}</span>${md(e.must)}</span>` +
+            `<span class="rule">${e.rule}</span>` +
+            `<span class="err">${esc(e.error.text)}</span></li>`).join("") + `</ul>`
+        : "") +
+      `</div></div></li>`;
+  }).join("");
+
+  const { gate, refusedByGate, planes, siblingRules } = model.answer;
+  const planeOf = (id) => model.planeById.get(id);
+  document.getElementById("terminus").innerHTML =
+    `<h2>The gate at the end of the chain</h2>` +
+    `<p><b>${refusedByGate.length} of the ${model.preconditions.length}</b> preconditions are refused by one rule, ` +
+    `<code>${gate}</code> — because they are one check: the merge-base anchor of step ${model.depth("C5") + 1}. ` +
+    `The other ${model.preconditions.length - refusedByGate.length} are refused by ` +
+    `${siblingRules.map((r) => `<code>${r}</code>`).join(", ")} and <code>git.branch_naming</code>.</p>` +
+    `<p>The same read-only check runs in three places. Which one catches you changes nothing about what is wrong:</p>` +
+    `<ul class="planes">${planes.map((id) => `<li><b>${planeOf(id).name}</b> &mdash; <span>${md(planeOf(id).gist)}</span></li>`).join("")}</ul>` +
+    `<p>Only <b>${model.realBoundary.map((id) => planeOf(id).name).join(" and ")}</b> is a boundary here. ` +
+    `${model.planes.filter((p) => !p.armedHere).map((p) => `${p.name} is ${p.gist}`).join("; ")}.</p>`;
+
+  document.getElementById("scale").textContent =
+    `Scale, for orientation: ${model.scale.capabilitiesShipped} capabilities shipped, ` +
+    `${model.scale.capabilitiesBuilding} building (${model.scale.buildingIds.join(", ")}).`;
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

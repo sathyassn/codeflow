@@ -16,6 +16,19 @@
 //      marked non-temp root are all refused, with canaries left byte-identical.
 //   F  containment unit table   — pure path semantics, including the Windows
 //      drive and UNC cases this host cannot execute.
+//   G  shared-source sandbox    — a subject source cannot reach Node globals,
+//      generate code, import a module, hang the verifier, leak into the host
+//      realm, or lie about its own snapshot.
+//   H  source authority (I/O)   — only a canonical regular file inside one
+//      named root is readable; traversal, absolute paths, symlink escape,
+//      directories, missing files and empty files are each refused by reason,
+//      and no root falls back to another.
+//   I  declared-value tables    — the pure lexical path and revision contracts,
+//      including the Windows spellings this host cannot execute.
+//   J  verifier wiring          — verify.mjs really applies G/H/I: a tampered
+//      shared source escaping its root, naming an option as a revision, hiding
+//      pathspec magic in a diff path, reaching for a Node global, or pointing a
+//      repository claim at a study file all fail the run.
 //
 // Every test writes only inside its own owner-only temporary root (or, for E3,
 // a self-created directory inside the study that it removes again). The only
@@ -31,8 +44,19 @@ import { tmpdir } from "node:os";
 import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isContained, CONTAINMENT_CASES } from "./path-containment.mjs";
+import {
+  DECLARED_PATH_CASES, REVISION_CASES, classifyDeclaredPath, evaluateSharedSource,
+  isQualifiedRevision, literalPathspec, readInsideRoot,
+} from "./source-authority.mjs";
 
 const studyRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Sections are selectable — `--only=G,H,I,J` — because A, B, B2, D, E and E4 drive
+// render.mjs, which needs process inventory, signal delivery and a profile
+// socket directory that a restrictive host may deny. A selected run says so in
+// its own summary; it never implies the unselected sections passed.
+const only = (process.argv.find((a) => a.startsWith("--only=")) ?? "").slice("--only=".length)
+  .split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+const runs = (section) => only.length === 0 || only.includes(section);
 const repoRoot = resolve(studyRoot, "../../..");
 const render = join(studyRoot, "tools/render.mjs");
 const failures = [];
@@ -76,7 +100,7 @@ const liveCommandsContaining = (needle) => {
 };
 
 // ------------------------------------------------- A. post-close survivor path
-{
+if (runs("A")) {
   const { dir, token } = await markedRoot("cf-w2-selftest-a-");
   const result = runNode("A", [render, "--inject-post-close-survivor",
     "--page", "cases/p1/c-critical-ribbon/index.html", "--output-root", dir, "--output-token", token], {}, { status: 1 });
@@ -95,7 +119,7 @@ const liveCommandsContaining = (needle) => {
 }
 
 // ---------------------------------------------------- B. file: containment
-{
+if (runs("B")) {
   const { dir, token } = await markedRoot("cf-w2-selftest-b-");
   const result = runNode("B", [render, "--page", "tools/fixtures/outside-file-probe.html",
     "--output-root", dir, "--output-token", token], {}, { status: 1 });
@@ -114,7 +138,7 @@ const liveCommandsContaining = (needle) => {
 }
 
 // -------------------------------------------------------- B2. symlink escape
-if (process.platform !== "win32") {
+if (runs("B2") && process.platform !== "win32") {
   const { dir, token } = await markedRoot("cf-w2-selftest-b2-");
   const link = join(studyRoot, "tools/fixtures/escape-link.md");
   try {
@@ -132,12 +156,12 @@ if (process.platform !== "win32") {
     await rm(link, { force: true });
     await rm(dir, { recursive: true, force: true });
   }
-} else {
+} else if (runs("B2")) {
   notes.push("B2: symlink escape not executed on this host (win32); no claim made");
 }
 
 // -------------------------------------------------------- C. update guard
-{
+if (runs("C")) {
   const out = await mkdtemp(join(await realpath(tmpdir()), "cf-w2-selftest-c-"));
   const copy = join(out, "study");
   await cp(studyRoot, copy, { recursive: true });
@@ -151,7 +175,7 @@ if (process.platform !== "win32") {
 }
 
 // ------------------------------------------------- D. unprovable cleanup path
-{
+if (runs("D")) {
   const { dir, token } = await markedRoot("cf-w2-selftest-d-");
   const result = runNode("D", [render, "--inject-inventory-failure",
     "--page", "cases/p1/c-critical-ribbon/index.html", "--output-root", dir, "--output-token", token], {}, { status: 1 });
@@ -172,7 +196,7 @@ if (process.platform !== "win32") {
 }
 
 // ------------------------------------------ E. output-root ownership contract
-{
+if (runs("E")) {
   const canary = "do-not-touch\n";
   const cases = [];
 
@@ -208,7 +232,7 @@ if (process.platform !== "win32") {
 }
 
 // ------------------------------- E4. unexpected file blocks any known deletion
-{
+if (runs("E4")) {
   const { dir, token } = await markedRoot("cf-w2-selftest-e4-");
   // A known owned output in one directory, an unexpected sentinel in the other:
   // a single-pass reset would delete the known render before it ever reached
@@ -234,7 +258,7 @@ if (process.platform !== "win32") {
 }
 
 // ------------------------------------------------ F. containment unit table
-{
+if (runs("F")) {
   let bad = 0;
   for (const testCase of CONTAINMENT_CASES) {
     const flavor = testCase.flavor === "win32" ? path.win32 : path.posix;
@@ -247,6 +271,219 @@ if (process.platform !== "win32") {
     `(evaluated as pure path logic; native Windows runtime was not exercised)`);
 }
 
+// ------------------------------------------- G. shared-source sandbox
+// Each case is a source this study would never write, run through exactly the
+// loader verify.mjs uses. `refused` asserts the failure and names it.
+if (runs("G")) {
+  const refused = (label, code, expect, globalName = "probe") => {
+    const result = evaluateSharedSource(code, globalName, { timeoutMs: 2_000, filename: "probe.js" });
+    if (result.ok) { failures.push(`G: ${label} was NOT refused`); return; }
+    check(expect.test(result.reason), `G: ${label} is refused — ${result.reason}`);
+  };
+
+  refused("reading a Node global", "window.probe = { pid: process.pid };", /ReferenceError.*process/u);
+  refused("calling require", 'window.probe = require("node:fs").readFileSync("/etc/hosts");', /ReferenceError.*require/u);
+  refused("eval", 'window.probe = { v: eval("1 + 1") };', /EvalError|not allowed/u);
+  refused("the Function constructor", 'window.probe = { v: new Function("return 1")() };', /EvalError|not allowed/u);
+  refused("defining nothing", "const x = 1;", /did not define window\.probe/u);
+  refused("a non-object global", 'window.probe = "text";', /did not define window\.probe/u);
+  refused("a circular structure", "const a = {}; a.self = a; window.probe = a;", /could not be snapshotted/u);
+
+  // A module can never load into this context: the runtime refuses one without
+  // --experimental-vm-modules, so `import()` puts nothing in the snapshot. That
+  // an unattended refusal fails the whole run is checked end to end in J.
+  const imported = evaluateSharedSource(
+    'window.probe = { started: true };\n'
+    + 'import("node:fs").then((m) => { window.probe.loaded = typeof m.readFileSync; }, () => {});',
+    "probe", { timeoutMs: 2_000 });
+  check(imported.ok && imported.value.started === true && imported.value.loaded === undefined,
+    "G: a dynamic import delivers no module into the snapshot");
+
+  // An infinite loop must fail the run within its bound rather than hang it.
+  const started = process.hrtime.bigint();
+  const looping = evaluateSharedSource("while (true) {} window.probe = {};", "probe", { timeoutMs: 500 });
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  check(!looping.ok && /timed out|Script execution/iu.test(looping.reason),
+    `G: an infinite loop is refused by the wall clock — ${looping.reason}`);
+  check(elapsedMs < 10_000, `G: the infinite loop returned in ${Math.round(elapsedMs)}ms, inside its bound`);
+
+  // Nothing the source does reaches this realm.
+  const leak = evaluateSharedSource(
+    'globalThis.__cfLeaked = "escaped"; window.probe = { ok: true };', "probe", { timeoutMs: 2_000 });
+  check(leak.ok, "G: a source that writes its own context global still loads");
+  check(globalThis.__cfLeaked === undefined, "G: a context global does not appear on the host globalThis");
+
+  // The snapshot is pristine data: live references are dropped, and a source
+  // that replaces JSON.stringify cannot change what is read back out.
+  const shaped = evaluateSharedSource(
+    'window.probe = { a: [1, 2], f: () => 1, m: new Map([["k", "v"]]) };', "probe", { timeoutMs: 2_000 });
+  check(shaped.ok && shaped.value.f === undefined && JSON.stringify(shaped.value.m) === "{}"
+    && JSON.stringify(shaped.value.a) === "[1,2]",
+    "G: the snapshot carries plain data only — functions and Maps do not cross back");
+  const lying = evaluateSharedSource(
+    'JSON.stringify = () => JSON.stringify; window.probe = { real: true };', "probe", { timeoutMs: 2_000 });
+  check(lying.ok && lying.value.real === true,
+    "G: replacing JSON.stringify inside the context does not change the snapshot");
+  const trapped = evaluateSharedSource(
+    "window.probe = { get boom() { while (true) {} } };", "probe", { timeoutMs: 500 });
+  check(!trapped.ok, `G: a looping getter is bounded at snapshot time, not on host property access — ${trapped.reason}`);
+}
+
+// ------------------------------------------------- H. source authority (I/O)
+if (runs("H")) {
+  const base = await mkdtemp(join(await realpath(tmpdir()), "cf-w2-selftest-h-"));
+  const root = join(base, "root");
+  const outside = join(base, "outside");
+  try {
+    await mkdir(join(root, "sub"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(root, "ok.md"), "a real sentence inside the root\n");
+    await writeFile(join(root, "empty.md"), "   \n");
+    await writeFile(join(outside, "secret.md"), "a sentence outside the root\n");
+    let symlinksExercised = false;
+    if (process.platform !== "win32") {
+      await symlink(join(outside, "secret.md"), join(root, "escape.md"));
+      await symlink(join(root, "ok.md"), join(root, "inside-link.md"));
+      symlinksExercised = true;
+    }
+
+    const attempt = async (rel) => readInsideRoot(root, rel);
+    const good = await attempt("ok.md");
+    check(good.ok && good.raw.includes("inside the root"), "H: a canonical regular file inside the root is read");
+
+    const cases = [
+      ["../outside/secret.md", /walks upward/u, "traversal out of the root"],
+      [join(outside, "secret.md"), /absolute path/u, "an absolute path"],
+      ["sub", /not a regular file/u, "a directory"],
+      ["missing.md", /could not be resolved on disk/u, "a missing file"],
+      ["empty.md", /is empty/u, "an empty file"],
+      [":(glob)**", /pathspec magic/u, "pathspec magic"],
+      ["--output=/tmp/x", /git would read as an option/u, "an option-shaped path"],
+    ];
+    for (const [rel, pattern, why] of cases) {
+      const result = await attempt(rel);
+      if (result.ok) { failures.push(`H: ${why} was NOT refused (${rel})`); continue; }
+      check(pattern.test(result.reason), `H: ${why} is refused — ${result.reason}`);
+    }
+
+    if (symlinksExercised) {
+      const escaped = await attempt("escape.md");
+      check(!escaped.ok && /through a link/u.test(escaped.reason),
+        `H: a symlink inside the root pointing outside it is refused — ${escaped.reason}`);
+      const linked = await attempt("inside-link.md");
+      check(linked.ok, "H: a symlink that stays inside the root is still readable, so the rule is containment, not links");
+    } else {
+      notes.push("H: symlink escape not executed on this host (win32); no claim made");
+    }
+
+    // No fallback: a name that exists only in the *other* root is not found by
+    // asking this one.
+    const crossRoot = await readInsideRoot(outside, "ok.md");
+    check(!crossRoot.ok, `H: a file of the other root is not reachable from this one — ${crossRoot.reason}`);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+}
+
+// --------------------------------------------- I. declared-value unit tables
+if (runs("I")) {
+  let bad = 0;
+  for (const testCase of DECLARED_PATH_CASES) {
+    if (classifyDeclaredPath(testCase.value).ok !== testCase.ok) {
+      failures.push(`I: declared-path qualification wrong for ${testCase.why} (${String(testCase.value)})`);
+      bad += 1;
+    }
+  }
+  for (const testCase of REVISION_CASES) {
+    if (isQualifiedRevision(testCase.value) !== testCase.ok) {
+      failures.push(`I: revision qualification wrong for ${testCase.why} (${String(testCase.value)})`);
+      bad += 1;
+    }
+  }
+  if (bad === 0) {
+    notes.push(`I: ${DECLARED_PATH_CASES.length} declared-path and ${REVISION_CASES.length} revision cases hold, ` +
+      `including the Windows spellings this host cannot execute`);
+  }
+  check(literalPathspec("a/b.mjs") === ":(literal,top)a/b.mjs",
+    "I: a qualified path reaches git pinned to a literal, root-relative pathspec");
+}
+
+// ------------------------------------------------------- J. verifier wiring
+// One disposable copy of the study, tampered one way at a time. Each scenario
+// must fail the real verify.mjs with its own reason — the unit contracts above
+// are only worth their claim if the verifier actually applies them.
+if (runs("J")) {
+  const out = await mkdtemp(join(await realpath(tmpdir()), "cf-w2-selftest-j-"));
+  const copy = join(out, "study");
+  try {
+    await cp(studyRoot, copy, { recursive: true });
+    const target = join(copy, "shared/p3-convergence.js");
+    const pristine = await readFile(target, "utf8");
+    const recordLine = 'const record = "project-management/tasks/TSK-014.md";';
+    const harnessLine = 'const harness = "crates/codeflow-present/web/scripts/real-browser-check.mjs";';
+    const firstRound = '{ id: "R1", sha: "86582dc0",';
+    const writeTarget = join(out, "git-should-never-write-this");
+
+    const scenarios = [
+      { label: "a source escaping the repository root",
+        from: recordLine, to: 'const record = "../../../../../../etc/hosts";',
+        expect: /declared repository source \.\.\/.*walks upward/u },
+      { label: "a repository claim pointed at a study file",
+        from: recordLine, to: 'const record = "answer-key.md";',
+        expect: /declared repository source answer-key\.md could not be resolved on disk/u },
+      { label: "an option as a revision",
+        from: firstRound, to: `{ id: "R1", sha: "--output=${writeTarget}",`,
+        expect: /is not an abbreviated or full object id/u },
+      { label: "pathspec magic as a diff path",
+        from: harnessLine, to: 'const harness = ":(glob)**";',
+        expect: /declared diff path .* starts with ':'/u },
+      { label: "a source reaching for a Node global",
+        from: "window.p3Convergence = (() => {",
+        to: 'window.p3Convergence = (() => { globalThis.stolen = process.env;',
+        expect: /did not evaluate inside the bounded context/u },
+      // No module can load into the context, and leaving that refusal
+      // unattended ends the run rather than letting it continue quietly.
+      { label: "a source importing a module",
+        from: "window.p3Convergence = (() => {",
+        to: 'import("node:fs");\nwindow.p3Convergence = (() => {',
+        expect: /dynamic import|DYNAMIC_IMPORT/u },
+    ];
+
+    for (const scenario of scenarios) {
+      if (!pristine.includes(scenario.from)) {
+        failures.push(`J: the fixture anchor for “${scenario.label}” is gone; the scenario proves nothing`);
+        continue;
+      }
+      await writeFile(target, pristine.replace(scenario.from, scenario.to));
+      const result = runNode(`J ${scenario.label}`, [join(copy, "tools/verify.mjs")],
+        { CF_W2_REPO_ROOT: repoRoot }, { status: 1 });
+      check(scenario.expect.test(result.stdout + result.stderr),
+        `J: ${scenario.label} fails the verifier with its own reason`);
+    }
+    await writeFile(target, pristine);
+
+    check(!existsSync(writeTarget), "J: no revision reached git, so nothing was written by an injected git option");
+
+    // Control. A copy can never pass outright — the recorded file: containment
+    // root belongs to the real study, so that one check always fails here — but
+    // it must report none of the reasons above, which is what shows each
+    // refusal came from the tampering and not from the harness.
+    const control = runNode("J restored copy", [join(copy, "tools/verify.mjs")], { CF_W2_REPO_ROOT: repoRoot });
+    const controlOutput = control.stdout + control.stderr;
+    check(!scenarios.some((scenario) => scenario.expect.test(controlOutput)),
+      "J: the restored copy reports none of those reasons, so each refusal was the tampering");
+    check(/P3 convergence: 8 rounds matched against git log/.test(controlOutput),
+      "J: the restored copy binds P3 to git again, so the fixture was left exactly as it was found");
+  } finally {
+    await rm(out, { recursive: true, force: true });
+  }
+}
+
+if (only.length) {
+  const skipped = ["A", "B", "B2", "C", "D", "E", "E4", "F", "G", "H", "I", "J"]
+    .filter((section) => !runs(section));
+  notes.push(`sections ${only.join(", ")} selected; ${skipped.join(", ")} NOT run and therefore not claimed`);
+}
 notes.forEach((n) => process.stdout.write(`ok   ${n}\n`));
 failures.forEach((f) => process.stdout.write(`FAIL ${f}\n`));
 process.stdout.write(failures.length ? `\n${failures.length} self-test check(s) failed\n` : `\nall W2 harness self-tests passed\n`);

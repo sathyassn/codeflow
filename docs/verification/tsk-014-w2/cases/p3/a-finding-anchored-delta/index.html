@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P3-a — the qualification harness, region by region, round after round</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --add: #1d5b3f; --addbg: #eff6f2; --del: #8a3a12; --delbg: #fdf2ee;
+    --reopen: #8a3a12; --extend: #4a6fa5; --settle: #16181d; --outside: #6b3fa0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --add: #7fd6ab; --addbg: #16251d; --del: #f0b073; --delbg: #2a1a16;
+            --reopen: #f0b073; --extend: #8fb4e8; --settle: #e9ebf0; --outside: #c4a6f0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 84rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 .9rem; color: var(--dim); max-width: 48rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+  .readout { margin: 0 0 2rem; font-size: .82rem; color: var(--dim);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: .6rem 0; }
+  .readout b { color: var(--ink); font-weight: 650; }
+
+  /* One region per code location. Rounds stack downward inside it, so a region
+     rewritten three times is three deltas at the same place on the page —
+     that repetition is the finding, not a label about it. */
+  .region { margin: 0 0 2.6rem; }
+  .region > h2 { font-size: .95rem; margin: 0 0 .1rem; font-weight: 650; }
+  .region .at { margin: 0 0 .1rem; font-size: .72rem; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  .region .fkey { margin: 0 0 .8rem; font-size: .76rem; color: var(--dim); }
+  .region .fkey b { color: var(--ink); font-weight: 650; }
+
+  .delta { display: grid; grid-template-columns: 3.4rem minmax(0, 1fr) 15rem;
+    gap: 0 .9rem; align-items: start; padding-top: .55rem; }
+  .delta + .delta { border-top: 1px dashed var(--line); margin-top: .55rem; }
+
+  /* Round marker: a rail, not a badge. Its repetition down a region is the
+     count of attempts at that region. */
+  .round { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .78rem; font-weight: 650; color: var(--ink);
+    border-left: 3px solid var(--line); padding: .1rem 0 .1rem .45rem; }
+  .round small { display: block; font-size: .62rem; font-weight: 400; color: var(--muted);
+    font-family: inherit; letter-spacing: .02em; }
+  .delta[data-lead="reopened"] .round { border-left-color: var(--reopen); }
+  .delta[data-lead="extended"] .round { border-left-color: var(--extend); }
+  .delta[data-lead="closed"] .round { border-left-color: var(--settle); border-left-width: 5px; }
+
+  figure { margin: 0; min-width: 0; }
+  figcaption { font-size: .66rem; color: var(--muted); letter-spacing: .04em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-bottom: .2rem; }
+  .hunk { overflow-x: auto; border: 1px solid var(--line); border-radius: 2px; background: var(--page); }
+  .hunk:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .72rem; line-height: 1.55; }
+  pre .l { display: block; padding: 0 .55rem 0 .4rem; white-space: pre; border-left: 3px solid transparent; }
+  pre .l.add { background: var(--addbg); border-left-color: var(--add); }
+  pre .l.del { background: var(--delbg); border-left-color: var(--del); }
+  pre .l.add .g { color: var(--add); font-weight: 700; }
+  pre .l.del .g { color: var(--del); font-weight: 700; }
+  pre .l.ctx { color: var(--muted); }
+
+  /* The margin is where the verdict lives. It sits beside the exact region it
+     concerns, and its arrow points back up this same column to the round it
+     answers — so the re-opening is read as a return, not as a status word. */
+  .verdict { font-size: .74rem; border-left: 2px solid var(--line); padding: .05rem 0 .05rem .6rem; }
+  .verdict .state { display: block; font-size: .68rem; letter-spacing: .05em; text-transform: uppercase;
+    font-weight: 700; color: var(--dim); }
+  .verdict .what { display: block; color: var(--dim); margin-top: .25rem; }
+  .verdict .back { display: block; margin-top: .3rem; font-weight: 650; }
+  .verdict .residual { display: block; margin-top: .35rem; color: var(--muted); font-size: .7rem;
+    border-top: 1px solid var(--line); padding-top: .25rem; }
+  .delta[data-lead="reopened"] .verdict { border-left-color: var(--reopen); }
+  .delta[data-lead="reopened"] .verdict .state { color: var(--reopen); }
+  .delta[data-lead="reopened"] .verdict .back { color: var(--reopen); }
+  .delta[data-lead="extended"] .verdict { border-left-color: var(--extend); }
+  .delta[data-lead="extended"] .verdict .state { color: var(--extend); }
+  .delta[data-lead="closed"] .verdict { border-left-color: var(--settle); }
+  .delta[data-outside="true"] .verdict { border-left-color: var(--outside); }
+  .delta[data-outside="true"] .verdict .state,
+  .delta[data-outside="true"] .verdict .back { color: var(--outside); }
+
+  details { margin-top: .7rem; font-size: .76rem; }
+  summary { cursor: pointer; color: var(--dim); }
+  summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  blockquote { margin: .5rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
+    color: var(--dim); font-size: .76rem; }
+  blockquote cite { display: block; font-style: normal; font-size: .68rem; color: var(--muted); margin-top: .15rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+
+  .legend { margin-top: 1.4rem; border-top: 1px solid var(--line); padding-top: .9rem;
+    font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; max-width: 56rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1.1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { details { transition: opacity .12s ease; } }
+
+  @media (max-width: 900px) {
+    /* The margin cannot survive as a margin, so it stops being one: the verdict
+       moves directly above the delta it judges, keeping the attachment while the
+       diff takes the full width and scrolls in its own channel. */
+    .delta { grid-template-columns: 1fr; gap: .45rem; }
+    .round { border-left: 0; border-top: 3px solid var(--line); padding: .35rem 0 0; }
+    .delta[data-lead="reopened"] .round { border-top-color: var(--reopen); }
+    .delta[data-lead="extended"] .round { border-top-color: var(--extend); }
+    .delta[data-lead="closed"] .round { border-top-color: var(--settle); border-top-width: 5px; }
+    .round small { display: inline; margin-left: .5rem; }
+    .verdict { order: -1; }
+    figure { order: 1; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>The qualification harness, region by region — and how many rounds each region took</h1>
+  <p class="lede">Every delta below is a real commit hunk. Regions are stacked by <strong>code location</strong>, rounds
+    run downward inside a region, and the verdict beside each delta says whether it settled the region or was answered
+    again later. A region that appears three times <strong>was rewritten three times</strong>.</p>
+  <p class="readout" id="readout"></p>
+
+  <div id="regions"></div>
+
+  <div class="legend">
+    <div><b>Round</b> — one commit on <code>task/TSK-014-design-recovery</code>. R3 is the exact candidate TSK-007 was qualified at.</div>
+    <div><b>Re-opened</b> — the previous fix did not hold. The arrow names the round it answers.</div>
+    <div><b>Extended</b> — a later round widened what the check proves. The earlier fix did <em>not</em> fail, so this is not a re-opening.</div>
+    <div><b>Cause outside the harness</b> — the re-opening was not caused by the previous fix. Its closing delta is in a different file, which is visible above rather than asserted.</div>
+  </div>
+  <p class="src">Source: <code>git show</code> of each round, through the shared subject source
+    <code>shared/p3-convergence.js</code>. Every diff line is checked character for character against the real commit,
+    and every quotation against <code>project-management/tasks/TSK-014.md</code>, by <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/p3-convergence.js"></script>
+<script>
+(() => {
+  const model = window.p3Convergence;
+  const { rounds, findings } = model;
+  const roundById = new Map(rounds.map((r) => [r.id, r]));
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // Region order follows the reading, not the clock: the region rewritten most
+  // comes first, so the governing idea is visible before any detail.
+  const order = ["F5", "F1", "F6", "F3", "F2", "F4", "F7"];
+  const regionName = {
+    F5: "opening the authenticated presentation",
+    F1: "the child environment allow-list",
+    F6: "closing the browser context",
+    F3: "proving an injected failure still cleans up",
+    F2: "the cleanup block itself",
+    F4: "recording what the Windows guard does not prove",
+    F7: "reading the process inventory",
+  };
+  const leadOf = (cell) =>
+    cell.states.includes("reopened") ? "reopened"
+      : cell.states.includes("extended") ? "extended"
+        : cell.states.includes("closed") ? "closed" : "opened";
+  const stateWords = (cell) => {
+    const words = [];
+    if (cell.states.includes("reopened")) words.push(`re-opened at ${cell.round}`);
+    else if (cell.states.includes("extended")) words.push(`extended at ${cell.round}`);
+    else if (cell.states.includes("opened")) words.push(`raised and fixed at ${cell.round}`);
+    if (cell.states.includes("closed") && !cell.states.includes("reopened")) words.push("closed here");
+    else if (cell.states.includes("closed")) words.push("and closed here");
+    return words.join(" · ");
+  };
+
+  const host = document.getElementById("regions");
+  order.forEach((id) => {
+    const finding = findings.find((f) => f.id === id);
+    const section = document.createElement("section");
+    section.className = "region";
+    const cells = finding.cells.filter((c) => c.hunk);
+    const paths = [...new Set(cells.map((c) => c.hunk.path))];
+    const attempts = cells.length;
+    section.innerHTML =
+      `<h2>${regionName[id]} — ${attempts} delta${attempts === 1 ? "" : "s"} across ` +
+        `${new Set(cells.map((c) => c.round)).size} round${new Set(cells.map((c) => c.round)).size === 1 ? "" : "s"}</h2>` +
+      paths.map((p) => `<p class="at">${p}</p>`).join("") +
+      `<p class="fkey"><b>${finding.id}</b> — ${finding.title}</p>`;
+
+    cells.forEach((cell) => {
+      const round = roundById.get(cell.round);
+      const lead = leadOf(cell);
+      const wrap = document.createElement("div");
+      wrap.className = "delta";
+      wrap.dataset.lead = lead;
+      wrap.dataset.outside = String(cell.cause === "outside-harness");
+
+      const lines = cell.hunk.lines.map((line) => {
+        const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+        return `<span class="l ${kind}"><span class="g">${esc(line.slice(0, 1))}</span>${esc(line.slice(1))}</span>`;
+      }).join("");
+
+      const back = cell.answers
+        ? `<span class="back">&uarr; answers ${cell.answers}${cell.cause === "outside-harness"
+            ? " — cause outside the harness" : " — caused by that fix"}</span>`
+        : "";
+      const residual = cell.states.includes("residual") && finding.residual
+        ? `<span class="residual">still open: ${finding.residual}</span>` : "";
+
+      wrap.innerHTML =
+        `<div class="round">${round.id}<small>${round.sha}</small><small>${round.date}</small></div>` +
+        `<figure><figcaption>${cell.hunk.path.split("/").pop()} &nbsp;${cell.hunk.header}</figcaption>` +
+        `<div class="hunk" tabindex="0" role="group" aria-label="${round.id} diff at ${cell.hunk.path}, ${cell.hunk.header}">` +
+        `<pre>${lines}</pre></div></figure>` +
+        `<div class="verdict"><span class="state">${stateWords(cell)}</span>` +
+        `<span class="what">${cell.what}.</span>${back}${residual}</div>`;
+      section.append(wrap);
+    });
+
+    if (finding.quotes.length) {
+      const det = document.createElement("details");
+      det.innerHTML = `<summary>What the record says about ${finding.id} (${finding.quotes.length} quotation${finding.quotes.length === 1 ? "" : "s"})</summary>` +
+        finding.quotes.map((q) => `<blockquote>${esc(q.text)}<cite>${q.source}</cite></blockquote>`).join("");
+      section.append(det);
+    }
+    host.append(section);
+  });
+
+  const { multiRound, external } = model.answer;
+  const externalFinding = findings.find((f) => f.id === external[0]);
+  const externalCell = model.reopenings(externalFinding).find((c) => c.cause === "outside-harness");
+  document.getElementById("readout").innerHTML =
+    `<b>${multiRound.length} of ${findings.length}</b> regions took more than one round: ` +
+    `${multiRound.join(", ")}. <b>${external.join(", ")}</b> is the only one whose re-opening was not caused by the ` +
+    `previous fix — its closing delta is in <code>${externalCell.hunk.path.split("/").pop()}</code>, not in the harness ` +
+    `at all. ${model.extensions.join(", ")} was <b>extended</b>, not re-opened.`;
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

@@ -27,13 +27,17 @@ The TSK-008 `system-atlas` boundary/legend/evidence-chain idea is a
 
 ## Status
 
-Authored and verified: the study frame, the pre-registered rubric and its lock,
-the real-content inventory and answer key, the P1 and P2 baselines, and five
-candidates — `p1/{a-wave-lanes,b-blocking-matrix,c-critical-ribbon}` and
-`p2/{a-evidence-grid,b-provenance-rail}` — with renders and checks.
+**The board is complete.** All five baselines and all twelve candidates are
+authored, rendered and verified: `p1/{a-wave-lanes,b-blocking-matrix,c-critical-ribbon}`,
+`p2/{a-evidence-grid,b-provenance-rail}`, `p3/{a-finding-anchored-delta,b-convergence-ledger}`,
+`d1/{a-concept-dependency-path,b-task-first-entry,c-contract-map}` and
+`d2/{a-chain-in-place,b-evidence-adjacent-margin}`. Each case renders from one
+shared subject source, and each publishes a derived answer that `tools/verify.mjs`
+recomputes independently from the repository.
 
-Not authored: P3 ×2, D1 ×3, D2 ×2. Exact boundary in `NEXT.md`. No placeholder
-stands in for an unauthored candidate.
+What remains is **G1–G8**, which this session cannot run: see `observer-state.md`
+and `NEXT.md`. Nothing here records an author observation, an operator selection,
+or a production-readiness judgement, and nothing here is a direction.
 
 ## Layout
 
@@ -49,10 +53,17 @@ baselines/<case>/      chat.md, markdown.md, baseline.html — authored before c
 cases/<case>/<candidate>/index.html   one self-contained page per candidate
 shared/plan-model.js   the P1 subject derivation (waves, chain, room) — no styling
 shared/tsk007-facts.js the P2 fact registry, every claim carrying a verbatim quotation
+shared/p3-convergence.js  the P3 rounds/findings ledger, bound to real commits and diff lines
+shared/repo-entry.js   the D1 concepts, preconditions, planes and mutation gates
+shared/record-authority.js the D2 record, decision links and evidence states
 board.html             neutral comparison surface + implementation-feasibility record
 tools/render.mjs       exact-owned sequential headless render + axe + network + lifecycle
 tools/verify.mjs       integrity, content binding, checksums (`--update` to refresh)
-tools/selftest.mjs     proves the survivor, file-containment and update-guard paths
+tools/source-authority.mjs  the bounded evaluation of a shared source and the one
+                       contract every path, revision and pathspec it declares must pass
+tools/path-containment.mjs  pure platform-correct containment, shared by both
+tools/selftest.mjs     proves the survivor, containment, update-guard, sandbox,
+                       source-authority and verifier-wiring paths (`--only=` to select)
 tools/fixtures/        self-test inputs only — never candidates, never rendered by a normal run
 renders/               <case>-<candidate>-<mode>-<viewport>.png
 checks/                axe, network, answers and lifecycle records
@@ -66,15 +77,47 @@ its own markup. A shared stylesheet would become a premature system and would
 make candidates converge on one house look — the exact failure this study exists
 to avoid.
 
-**Subject derivation is shared, on purpose.** `shared/plan-model.js` computes
-waves, the longest chain and room; `shared/tsk007-facts.js` holds the P2 facts.
-Sharing these guarantees that candidates differ only in encoding, never in
-content, and it lets `tools/verify.mjs` prove it: the P1 dataset is byte-identical
-across all three candidates and matches `project-management/tasks/*.md`
-frontmatter; every P1 candidate publishes its derived answer at runtime and all
-three must agree with an answer recomputed independently from the repository;
-every material P2 claim carries a quotation checked verbatim against
-`docs/verification/tsk-007-presentation/README.md`.
+**Subject derivation is shared, on purpose.** Each case has exactly one subject
+source, and every sibling loads it. Sharing these guarantees that candidates
+differ only in encoding, never in content, and it lets `tools/verify.mjs` prove
+it — for every case, not just P1:
+
+| Case | Source | What is bound to the repository |
+|---|---|---|
+| P1 | `shared/plan-model.js` | the dataset is byte-identical across all three candidates and matches `project-management/tasks/*.md` frontmatter |
+| P2 | `shared/tsk007-facts.js` | every material claim carries a quotation checked verbatim against `docs/verification/tsk-007-presentation/README.md` |
+| P3 | `shared/p3-convergence.js` | every round matches `git log`; every quoted diff line matches `git show` character for character; a re-opening that came from off the round axis must name its origin, and the origin's identifying tokens must appear in its own verbatim quotation |
+| D1 | `shared/repo-entry.js` | every rule id is emitted by a named enforcement source; every quotation is verbatim; a plane's narrow-viewport label may only use words from its full name |
+| D2 | `shared/record-authority.js` | every frontmatter value matches the real record file and every quotation is verbatim |
+
+On top of that, **every candidate publishes its derived answer at runtime**, and
+`verify.mjs` recomputes that answer from the repository rather than reading it
+off the page — so a candidate cannot display an answer the sources do not
+support, and two siblings cannot quietly disagree. Every recorded render is
+compared, not one per page.
+
+**A shared source is data, not trusted code.** It is repository-controlled, and
+everything it declares reaches an interpreter, the filesystem or `git`, so
+`tools/source-authority.mjs` qualifies all three before they do:
+
+- it is evaluated in a fresh `node:vm` context with no Node globals and code
+  generation disabled, bounded by a wall clock, and only a JSON snapshot taken
+  inside that same context crosses back — so nothing it defines ever runs in the
+  verifier, and every check recomputes from its raw fact arrays rather than
+  calling anything it exports;
+- a declared source path is read from exactly one root — the repository, or the
+  study for its own records, named explicitly and with no fallback between them
+  — and only when it is a canonical regular file inside that root. Traversal, an
+  absolute path, a symlink leading out, a directory, a missing file and an empty
+  file are each refused by name, so a repository claim can never be quietly
+  satisfied by a file this study wrote;
+- a revision reaches `git` only as a hex object id and a diff path only as a
+  `:(literal,top)` pathspec, so neither can become an option (`--output=<file>`
+  alone makes `git log` write a file) and neither can widen a diff past the one
+  path the page names.
+
+`tools/selftest.mjs` sections G, H, I and J prove each of those refusals,
+including that `verify.mjs` really applies them.
 
 ## Running the study
 
@@ -85,9 +128,29 @@ node docs/verification/tsk-014-w2/tools/verify.mjs --update    # refresh SHA256S
 node docs/verification/tsk-014-w2/tools/verify.mjs             # compare, fail on drift
 ```
 
+Sections A, B, B2, D, E and E4 of `selftest.mjs` drive `render.mjs` and need the
+same host state it does. On a host that denies it, run the rest with
+`--only=C,F,G,H,I,J`; a selected run names the sections it did not run and
+claims nothing for them.
+
 `render.mjs` uses the repository's already-locked `playwright-core` and
 `axe-core`. It **resolves the browser and those modules before touching any
 owned output**, so a missing browser cannot destroy the previous evidence set.
+
+It renders **reproducibly**: every page is settled for fonts and two committed
+frames before the shot, and Chromium is launched with its tiled-raster and
+threaded-compositing paths disabled. Without that, a run re-rasterises a few
+dozen anti-aliased edge and glyph pixels differently each time — no layout or
+content change, but enough to move a digest and make two consecutive runs
+incomparable. With it, two consecutive normal runs produce all 70 renders
+byte-identical, which is what makes `SHA256SUMS` a drift check rather than a
+timestamp.
+
+`render.mjs` needs host state a restrictive sandbox denies: process inventory
+(`ps`), signal delivery, and a profile socket directory. Denied any of them it
+fails closed at launch, retains its marked root and deletes nothing. That is the
+ownership contract working, not a defect — never substitute a manual `rm -rf` or
+a broad process match for it.
 It then creates one marked task root holding the profile and every redirected
 environment root — `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP` and
 an owner-only `XDG_RUNTIME_DIR`, so the operator's runtime directory and sockets
