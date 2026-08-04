@@ -1,10 +1,14 @@
 # Observer state
 
-## G1–G8 are not run
+## The first blind observation is preserved but confounded
 
 The eight protocol gates in `rubric.md` require an observer who has not authored
-the candidates and has not seen the expected answers. Neither condition is
-currently satisfiable:
+the candidates and has not seen the expected answers. A fresh native Codex CLI
+session met that boundary and inspected only the registered PNGs, questions and
+rubric. Its exact record is
+`observations/codex-sol-high-2026-08-04.md`.
+
+The following earlier reviews remain evidence rather than observations:
 
 - **The author cannot observe.** Every self-assessment in this directory and in
   the TSK-014 closeout is the author's own critique. It is evidence for the
@@ -46,16 +50,30 @@ inventories were byte-identical and retained the clean lifecycle, network,
 console and axe results.
 
 A clean deterministic pass says the study is internally consistent and
-accessible. It says nothing about whether a composition communicates. That is
-exactly what G1–G8 exist to test, and it remains untested.
+accessible. It says nothing about whether a composition communicates. The
+blind run separately tested whether each composition
+communicates. It recovered every pre-registered material answer, while finding
+candidate-specific proportionality, mobile and sibling-distinctness failures.
+Those findings are not erased by an overall direction recommendation.
 
-## When the gates can run
+## What remains
 
-Now, as far as the board is concerned: P3, D1 and D2 are authored and rendered,
-so G3 differential and G6 sibling-interchangeability can finally be run across
-the whole set the operator will actually decide on. The only remaining condition
-is the observer: a fresh session that authored none of the candidates and has
-not read `answer-key.md`, receiving the board and the questions only.
+The observer did not and could not test motion from stills, so no motion claim
+exists. G2 records immediate versus scan-required recovery but not a stopwatch
+measurement.
 
-Until that session reports, every gate stands at **not run** — which is a
-result, not a gap to be filled by anyone who has already seen the answers.
+After that record was fixed, an independent native Claude Opus 5/high design
+review inspected the sources as well as the renders. It found that multiple
+candidates visibly state material parts of the registered answer in prose even
+though the verifier already receives the answer through an invisible machine
+channel. The observer therefore could recover those answers without decoding
+the composition. G2 cannot qualify and G3 is confounded for this board version.
+The review also found that still-image G8 preserved labels while several mobile
+variants lost the spatial idea, and that no tablet evidence exists.
+
+The exact design judgment and required corrections are recorded in
+`observations/claude-opus-high-design-judgment-2026-08-04.md`. The blind record
+is not deleted or rewritten; it remains evidence about what the rendered pages
+made readable and which defects the observer found. It is not selection
+evidence. A corrected, versioned rubric and board require a fresh observer,
+fresh Claude judgment and operator direction.

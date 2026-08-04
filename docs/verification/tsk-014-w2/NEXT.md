@@ -1,71 +1,39 @@
 # Exact continuation boundary
 
-The board is complete: five baselines, twelve candidates, seventy renders, all
-deterministic checks green. Nothing below is authored work waiting to be done.
-What remains is an observation this session structurally cannot perform.
+The original board is complete and deterministically qualified, and its first
+blind observation is preserved. It is not valid selection evidence: independent
+Claude design judgment found that visible prose gives away material answers,
+responsive checks preserve text rather than the governing idea, tablet evidence
+is absent, D1 asks the wrong question, and D2 siblings are not distinct.
 
-## The boundary
+## What happens next
 
-**G1–G8 have not been run, and cannot be run from here.** Every gate in
-`rubric.md` needs an observer who authored none of the candidates and has not
-read `answer-key.md`. The author fails the first condition; the pass-1 integrity
-reviewer failed the second. See `observer-state.md`.
+1. Amend `cf-design` and its evals for answer-channel separation, question
+   fitness, idea survival across applicable viewports, pre-authored sibling
+   distinction, early carrier feasibility, cross-candidate primitive harvest,
+   compound questions and non-web evidence.
+2. Version the rubric rather than editing the pinned original in place.
+3. Remove visible answer prose while retaining the invisible derived-answer
+   verification channel.
+4. Add an intermediate/tablet viewport and explicit narrow compositions that
+   preserve the selected relationship rather than only its labels.
+5. Re-register D1 against the portal's orientation job and re-explore it.
+6. Preserve promising inputs without treating them as selected: P1-C's critical
+   path/slack geometry; P2-B's stopped provenance with explicit platform
+   coverage; P3-B overview with P3-A row evidence; D1's useful sub-ideas; and
+   D2-B's evidence absence combined with explicit decision reach. Treat the
+   repeated absence treatment as a hypothesis only; one study does not earn a
+   shared primitive.
+7. Re-run deterministic checks, a fresh answer-blind observation, independent
+   Claude design judgment, and then operator selection.
 
-Nothing in this directory records an author observation, an operator selection,
-or a production-readiness judgement. The deterministic checks say the study is
-internally consistent and accessible. They say nothing about whether any
-composition communicates.
+No production renderer, schema or portal direction is promoted before those
+steps. The first observation and Claude review are append-only evidence; never
+rewrite them into a pass.
 
-## What the next session does
+## Safety and rerun boundary
 
-1. Open `board.html` in a fresh session with an observer who authored none of
-   the candidates and has not read `answer-key.md`. That session receives the
-   board and the five task questions only.
-2. Run G1–G8 as written in `rubric.md`, per case, recording each result and
-   each *not run* as *not run*. The rubric is byte-pinned by `rubric.lock.json`
-   and must not be edited: if a gate genuinely needs to change, that is a new
-   dated rubric and a new lock, never an edit in place.
-3. Report the observed results. **The operator selects the direction**, from
-   the observed results plus the neutral implementation-feasibility record in
-   `board.html`. No session before that point may narrow the set.
-
-## Rerunning the study
-
-```sh
-node docs/verification/tsk-014-w2/tools/render.mjs
-node docs/verification/tsk-014-w2/tools/selftest.mjs            # --only=C,F,G,H,I,J without a browser
-node docs/verification/tsk-014-w2/tools/verify.mjs --update
-node docs/verification/tsk-014-w2/tools/verify.mjs
-```
-
-`render.mjs` needs host state the repository sandbox denies — process
-inventory (`ps`), signal delivery, and a profile socket directory. Under the
-sandbox it fails closed at launch, retains its marked root and deletes nothing,
-which is the designed behaviour, not a defect. Run it in a session where those
-are available. Never substitute a manual `rm -rf`, a broad process match, or
-any deletion outside the harness: the ownership contract in `render.mjs` is the
-only sanctioned deletion path, and a retained root is evidence, not permission.
-
-## Constraints that carry forward
-
-- If a candidate is added or changed, it needs an entry in `CANDIDATES`
-  (`tools/render.mjs`), in the per-case lists (`tools/verify.mjs`), in `cases`
-  and in the implementation-feasibility table (`board.html`). All of those
-  iterate lists; no other structural change is needed.
-- A new fact belongs in its case's shared subject source with a matching rule in
-  `tools/verify.mjs`, never inline in a candidate. A candidate may not carry a
-  claim the sources cannot bind.
-- A shared source is data. It is evaluated in a bounded context with no Node
-  globals, and every path, revision and pathspec it declares goes through
-  `tools/source-authority.mjs`. A source that needs to quote one of the study's
-  own records adds it to `STUDY_OWNED_SOURCES` in `tools/verify.mjs`
-  deliberately — there is no fallback that would find it by accident, and adding
-  `answer-key.md` there would let a candidate quote the answers.
-- D1 and D2 must not contradict the TSK-008 `system-atlas` boundary/legend/
-  evidence-chain idea; it is a conformance input, not a reopened question.
-- Siblings must stay structurally distinct. P3-a locates change in source and P3-b
-  puts state transitions on a round axis; D1-a orders concepts by what cannot be
-  read before what, D1-b is one path with refusal branches and D1-c is rule ×
-  plane ownership with a boundary drawn through it; D2-a shows how far a decision
-  reaches and D2-b pairs each claim with its evidence at eye level. Converging any
-  two of them into one structure destroys what G6 exists to test.
+All existing source authority, repository binding, process identity, temporary
+root, network, accessibility, checksum and cleanup contracts carry forward.
+Use the study's own render, self-test and verify tools; never replace their
+bounded ownership proof with broad process matching or recursive deletion.

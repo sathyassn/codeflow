@@ -123,6 +123,11 @@ material content to buy calm. Form families are examples, never defaults; when
 none fits the subject, design one and justify it inside the product's own
 system.
 
+Decide which viewports, input modes, and platforms are applicable, and choose
+form for all of them: the **governing idea** must survive each, not merely the
+information. A context that cannot carry the idea gets its own declared
+composition, never a compressed copy of another.
+
 ## 5. Explore encodings when the composition is open
 
 When the direction, primary composition, or experience is materially open,
@@ -130,10 +135,17 @@ compare two or three candidates that differ in what they encode, and render the
 ones a reviewer or the operator must judge instead of describing them — a
 described composition is no evidence that it reads. Use the lightest medium
 that shows the behavior at issue, with the product's real content, at
-representative viewports and applicable modes. The same content in different
-furniture, a palette or typeface swap, a familiar template refilled, a
-generically generated diagram, or a variant differing only in ornament are not
-materially different candidates.
+representative viewports and applicable modes, including the intermediate ones
+where composition actually changes. The same content in different furniture, a palette or
+typeface swap, a familiar template refilled, a generically generated diagram, or
+a variant differing only in ornament are not materially different candidates.
+
+Qualify the comparison before authoring it. The question must fit the surface's
+real job, be answerable from each candidate's encoding, and discriminate. Each
+candidate declares its primary unit, axis, and encoded relationship up front,
+and names what would carry it in the product's real technical contract and at
+what loss. A compound question is decomposed, or the part the direction
+optimises and what carries the other are both named.
 
 Collapse this rung when the brief, an accepted system, or a settled direction
 already governs the composition; record the constraint and why alternatives
@@ -155,6 +167,14 @@ recurring or subject-specific components, copy states, platform behavior,
 localization, and fidelity controls. Follow the reference's evidence and
 stopping rules; neither abstract one consumer nor hard-code a recurring pattern.
 
+Mine rejected candidates for transferable primitives. But convergence between
+candidates is a **hypothesis, not recurrence** — test it against subject
+independence, whether those surfaces will really coexist and last, and a reuse
+need in accepted product surfaces. Convergence alone earns nothing: shipped
+recurrence still decides, and the evidence still stops where it stops. If a
+layer is earned, take the primitive and its state vocabulary, never the
+subject-specific forms built on it.
+
 ## 7. Settle `DESIGN_INTENT`
 
 Record the result in the existing versioned plan contract, not in a mandatory
@@ -168,15 +188,20 @@ DESIGN_INTENT:
   EXPERIENCE_TARGET:
   LANGUAGE_AND_VOICE: <authority, applicable copy states | collapsed>
   APPEARANCE_MODES: <modes, preference/persistence | collapsed>
+  VIEWPORTS_AND_PLATFORMS: <applicable sizes, input modes, platforms, where
+    composition changes | collapsed>
   SYSTEMS_AND_CONSTRAINTS:
   OPERATOR_DIRECTION:
   RESEARCH_OR_REFERENCES: <evidence or proportionate N/A>
-  COMPOSITION: <subject, governing idea, user action, primary form | collapsed>
-  DIRECTIONS_CONSIDERED: <rendered candidates and rationale | valid waiver>
+  COMPOSITION: <subject, governing idea, user action, primary form, unit and
+    axis | collapsed>
+  DIRECTIONS_CONSIDERED: <rendered candidates, declared encodings, carrier
+    feasibility, rationale | valid waiver>
   SETTLED_DIRECTION:
   SYSTEM_SCOPE: <earned layers with recurrence evidence | conform | none>
   ACCESSIBILITY_TARGET:
-  REVIEW_RUBRIC: <pre-registered gates and expected results | collapsed>
+  REVIEW_RUBRIC: <qualified question, pre-registered gates, expected
+    results | collapsed>
   FIDELITY_EVIDENCE_PLAN:
 ```
 
@@ -212,8 +237,14 @@ Apply the reference protocols that fit: five-second governing idea,
 thirty-second mechanics, form match, primary-form inventory, progressive depth,
 and no-box where a figure is the primary explanatory form. For a surface family
 or richer medium, add sibling distinctiveness and plain-baseline differential.
-Observed results decide these gates, never numeric scores; semantic containers
-remain valid.
+Where the surface adapts, add adaptation, which tests idea survival rather than
+information presence. Observed results decide these gates, never numeric scores;
+semantic containers remain valid.
+
+Machine channels carrying a derived answer, a digest, or provenance stay out of
+the visible composition. A candidate that renders its own registered answer
+tests the sentence, not the encoding: any comprehension or baseline-differential
+result read from it is **void, not merely weak**.
 
 Judge everything else contextually: brief and audience fit, interaction and
 states, coherence, restraint, system fit, accessibility, craft, and platform
@@ -238,10 +269,20 @@ a stronger or different surface-appropriate target with its rationale.
 Accessibility is a design input and a verification obligation; automated checks
 are partial evidence, never proof of conformance.
 
+Outside the browser the obligation is identical and the vocabulary is not: a
+native mobile, tablet, or desktop surface is verified against the conventions
+its own platform defines, with evidence collected there. A web render is not
+evidence for a native one, and neither is a description of the convention. Name
+the applicable conventions and the evidence method in the intent; an evidenced
+`N/A` is valid where a platform is out of scope, and an unavailable platform is
+recorded as unverified rather than inferred.
+
 Compare the rendered implementation with the settled `DESIGN_INTENT` using
 evidence appropriate to the claim: structured interaction assertions,
 accessibility state, relevant viewports, same-environment screenshots or visual
-comparisons, console/network evidence, and failure traces where material.
+comparisons, console/network evidence, and failure traces where material. Where
+responsive or cross-platform composition is material, the evidence covers the
+intermediate contexts where composition changes and shows the idea intact.
 Fidelity review inspects the surface as it actually renders and behaves; an
 approval statement, a green build, a passing schema check, or a description of
 the intended result is not fidelity evidence. Review only the dimensions the

@@ -132,6 +132,25 @@ viewed; the observer is never the artefact's author; a threshold invented at
 review time is not a review. Each gate is decided by its protocol and the
 observed result, never by a numeric score.
 
+Two conditions decide whether these gates measure anything at all, and both are
+settled before authoring rather than at review time.
+
+**The registered question must be qualified.** Check that it matches the
+surface's actual job, that each candidate's encoding can answer it, and that the
+answers differ between candidates. A question aimed at a different job than the
+surface serves, or one an ordinary sentence or list already answers optimally,
+decides the comparison by its own shape before any candidate is drawn — the
+result then looks like a finding and is an artefact. Requalify and re-observe
+instead of reinterpreting the result.
+
+**The visible composition must not carry the answer.** Where a harness verifies
+a candidate against its source, the derived answer, digest, or provenance is
+published to a machine channel the reader does not see. A candidate that also
+states its registered answer in visible prose has tested the sentence, not the
+encoding — the observer reads it, and the plain baseline contains the same
+sentence. A governing-idea, mechanics, or baseline-differential result taken from
+such a candidate is **void, not weak**, and cannot be repaired by discounting it.
+
 - **Governing idea (five seconds).** The author records the intended idea
   first. An observer sees only the at-rest composition for about five seconds
   and states what it claims. Pass when the statement matches the recorded idea
@@ -159,10 +178,22 @@ observed result, never by a numeric score.
 - **Sibling distinctiveness and baseline differential**, where a family of
   surfaces or a richer medium is at issue. Siblings must be identifiable by
   their own content-bearing structure rather than a swapped tint or slot, and a
-  richer surface must materially beat the plain baseline it replaces.
+  richer surface must materially beat the plain baseline it replaces. Each
+  sibling's primary unit, axis, and encoded relationship were declared before
+  authoring; this gate confirms the rendered result against that declaration
+  rather than discovering the overlap after both were built.
+- **Adaptation**, where the surface adapts across viewports, input modes, or
+  platforms. The observer compares each applicable context against the primary
+  one and states whether the *governing idea* still arrives — which is a
+  stricter question than whether the information is still present. A context
+  that keeps every fact while losing the encoding that carried the point fails,
+  and fails as a form problem, not a styling one. Where the intent declares a
+  separate composition for a context, that composition is what this gate
+  observes.
 
-Record for each applied gate what was tested, at which viewport, mode, and
-state, who observed it, and the evidence. An untested gate is untested, not a
+Record for each applied gate what was tested, at which viewport, mode, platform,
+and state, who observed it, and the evidence. An untested gate is untested, not a
+pass; a gate whose preconditions above were not met is void, which is also not a
 pass. Everything outside these protocols is contextual judgment, graded by
 materiality, with the operator as final authority on an operator-owned
 direction.

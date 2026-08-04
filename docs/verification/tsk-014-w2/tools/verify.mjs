@@ -1,6 +1,6 @@
 // Integrity checks for the TSK-014 W2 study. Deterministic only: a clean run
 // says the study is internally consistent, never that a composition reads.
-// G1-G8 remain not run — see observer-state.md.
+// Observation qualification is separate — see observer-state.md.
 //
 //   node tools/verify.mjs            compare against SHA256SUMS, fail on drift
 //   node tools/verify.mjs --update   regenerate SHA256SUMS (explicit only)
@@ -648,5 +648,5 @@ notes.forEach((n) => process.stdout.write(`ok   ${n}\n`));
 failures.forEach((f) => process.stdout.write(`FAIL ${f}\n`));
 process.stdout.write(failures.length
   ? `\n${failures.length} check(s) failed\n`
-  : `\nall W2 deterministic checks passed — G1-G8 remain not run (observer-state.md)\n`);
+  : `\nall W2 deterministic checks passed — observation qualification is recorded separately (observer-state.md)\n`);
 process.exitCode = failures.length ? 1 : 0;

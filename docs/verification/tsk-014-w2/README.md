@@ -8,9 +8,11 @@ Nothing here is production authority. No file in this directory is referenced by
 the renderer, the schema, the documentation portal, the scaffold, or any managed
 artifact.
 
-> **G1–G8 are not run.** Deterministic checks pass; that means the study is
-> internally consistent and accessible, not that any composition reads. The
-> author's self-critique is evidence, not a verdict. See `observer-state.md`.
+> **The first blind observation is preserved but does not qualify the board.**
+> Claude's independent design review found that visible prose states material
+> parts of the expected answers, confounding the comprehension comparison. The
+> board must be corrected and re-observed before selection. See
+> `observer-state.md` and `observations/`.
 
 ## What is being decided
 
@@ -35,9 +37,11 @@ authored, rendered and verified: `p1/{a-wave-lanes,b-blocking-matrix,c-critical-
 shared subject source, and each publishes a derived answer that `tools/verify.mjs`
 recomputes independently from the repository.
 
-What remains is **G1–G8**, which this session cannot run: see `observer-state.md`
-and `NEXT.md`. Nothing here records an author observation, an operator selection,
-or a production-readiness judgement, and nothing here is a direction.
+The first blind G1–G8 observation and the independent Claude design judgment are
+recorded under `observations/`; see `observer-state.md` for their exact limits.
+The observation exposed useful candidate failures, but its comprehension gates
+are confounded by visible answer prose. Correction, a fresh blind run, Claude
+re-review and operator selection remain open.
 
 ## Layout
 
@@ -45,7 +49,8 @@ or a production-readiness judgement, and nothing here is a direction.
 README.md              this index
 rubric.md              pre-registered gates (byte-pinned; never edited in place)
 rubric.lock.json       the rubric digest plus an honest record of how ordering was observed
-observer-state.md      why G1-G8 are not run and when they can be
+observer-state.md      observation qualification, invalidation and next gate
+observations/          qualified blind rendered-observation records
 content-inventory.md   every fact used, with its repository source path
 answer-key.md          the exact task question per case and its verifiable answer
 NEXT.md                the precise continuation boundary

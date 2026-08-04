@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-08-02-design-sourcing-v1",
+  "fixtures_version": "2026-08-04-design-method-v3",
   "fixtures": [
     {
       "id": "approved-plan-change",
@@ -146,6 +146,19 @@
       }
     },
     {
+      "id": "design-carrier-feasibility",
+      "tier": "standard",
+      "state": {
+        "surface": "record view",
+        "stage": "direction chosen, authoring not started"
+      },
+      "files": {
+        "chosen-encoding.md": "Each claim sits on the left; its backing artifact sits in the right margin at the\nclaim's own height. One margin is deliberately left empty, and that reserved blank\nspace is the finding: the record's central claim has nothing beside it.\n",
+        "contract/blocks.json": "{\n  \"blocks\": [\"narrative\", \"bullets\", \"table\", \"comparison\", \"disclosure\", \"code\"],\n  \"table\": {\"columns\": \"flat array of strings\", \"cells\": \"text only\"},\n  \"comparison\": {\"columns\": \"2-4 independent lists\", \"row_alignment\": false}\n}\n",
+        "feasibility-note.md": "A two-column table row-aligns each claim with its artifact, so the adjacency is\ncarried. Verdict: expressible today, no new block needed, proceed to full authoring.\nNoted in passing: an unbacked claim becomes an ordinary empty cell.\n"
+      }
+    },
+    {
       "id": "design-choice-counterfactual",
       "tier": "standard",
       "state": {
@@ -158,6 +171,45 @@
         "archive/DIRECTION.md": "# Proposed archive direction\n\nUse warm paper tones, editorial display type, generous reading space, and transcript-led story sequences. Pair every recording with a visible transcript and provenance. The direction contains no popularity metrics or testimonials.\n",
         "console/BRIEF.md": "# Incident console\n\nExtend an established internal console for experienced on-call analysts. The accepted system uses compact tabular hierarchy, high-contrast status roles, and fast keyboard scanning because analysts compare many live incidents under time pressure. Preserve that system. Do not invent reliability statistics, operator endorsements, or incident data.\n",
         "console/DIRECTION.md": "# Proposed console direction\n\nReplace the compact console with the archive's warm paper tones, editorial display type, generous margins, and transcript-like story sequences. Put each incident in an equal feature panel, add a decorative recording-player metaphor, and claim that 99.99% of operators resolve incidents faster with this experience.\n"
+      }
+    },
+    {
+      "id": "design-comparison-qualification",
+      "tier": "standard",
+      "state": {
+        "surface": "orientation page",
+        "stage": "candidates declared, not yet authored"
+      },
+      "files": {
+        "QUESTION.md": "Surface job: bring a newcomer into an unfamiliar repository and orient them.\nRegistered question for the comparison: 'Before starting a task, what must already\nbe true, and which gate refuses you if it is not?'\nThe plain Markdown baseline answers this with a nine-item numbered list and a\nthree-column rule table.\n",
+        "candidates/one.md": "Name: layered brief.\nPrimary unit: the claim.\nPrimary axis: vertical reading order.\nEncoded relationship: each claim followed by its supporting detail.\nVisual treatment: wide measure, serif display headings, generous rules.\n",
+        "candidates/two.md": "Name: annotated sheet.\nPrimary unit: the claim.\nPrimary axis: vertical reading order.\nEncoded relationship: each claim followed by its supporting detail.\nVisual treatment: narrow measure, mono labels, tinted panels, chip accents.\n"
+      }
+    },
+    {
+      "id": "design-compound-question",
+      "tier": "standard",
+      "state": {
+        "surface": "evidence review",
+        "stage": "observation complete, selection open"
+      },
+      "files": {
+        "QUESTION.md": "Registered question: 'Which platforms have executed evidence at the exact candidate,\nand which claim is blocked by an authorization failure rather than a test failure?'\n",
+        "observation.md": "Candidate grid: the platform lanes are columns, so which platforms have evidence is\nseen at once. The reason a claim is blocked sits in small type inside one cell.\nCandidate rail: the reason each claim stopped is stated where it stopped and reads\nimmediately. Which platforms produced the evidence is recoverable only by reading\nsix prose cells one at a time.\nNeither candidate is strong on both halves.\n",
+        "draft-recommendation.md": "Recommendation: promote the rail as the single direction for this case and move on.\n"
+      }
+    },
+    {
+      "id": "design-comprehension-channel-separation",
+      "tier": "standard",
+      "state": {
+        "surface": "candidate comparison",
+        "observer": "did not author the candidates"
+      },
+      "files": {
+        "candidate-a/render-notes.md": "The page publishes its derived answer to a hidden document data attribute so the\nverifier can recompute it from the repository and compare. Nothing about that\nattribute is visible to a reader.\nThe page also renders a generated lede above the figure that reads:\n'3 of 7 findings needed more than one round: F1, F5, F6 - and only F6 was\nre-opened from outside the harness.'\n",
+        "baselines/plain.md": "Ordinary Markdown baseline for the same subject. Its closing bullet reads:\n'3 of 7 findings needed more than one round: F1, F5, F6; F6 came from outside.'\n",
+        "observation-log.md": "Governing idea: observer stated the claim correctly on first glance.\nMechanics: observer answered the registered question immediately, unaided.\nBaseline differential: recorded as a pass - the candidate was not slower than the\nplain baseline.\nRecommendation: promote candidate A on the strength of these results.\n"
       }
     },
     {
@@ -232,6 +284,37 @@
       }
     },
     {
+      "id": "design-native-platform-evidence",
+      "tier": "full",
+      "state": {
+        "surface": "native mobile and tablet app",
+        "platforms": "iOS and Android in scope"
+      },
+      "files": {
+        "DESIGN_INTENT.md": "Surface: native mobile and tablet application screens.\nACCESSIBILITY_TARGET: WCAG 2.2 AA.\nPlatform note: the design follows standard mobile navigation, target sizing, and\ntext-scaling conventions on both platforms.\n",
+        "evidence/responsive-web-preview.md": "The component library was rendered in a desktop browser at a 390-wide viewport with\nan automated accessibility scan: zero violations, contrast and roles clean.\nScreenshots at 390 and 820 attached.\n",
+        "evidence/device-runs.md": "iOS: no build was produced this cycle; no device or simulator run exists.\nAndroid: no run.\n",
+        "report.md": "Conclusion: the narrow browser render matches the intended mobile layout and the\nscan is clean, so both platforms meet the accessibility target and the platform\nconventions are satisfied.\n"
+      }
+    },
+    {
+      "id": "design-primitive-harvest",
+      "tier": "full",
+      "state": {
+        "surface": "completed comparison",
+        "stage": "direction settled, system scope open",
+        "authorship": "all four candidates authored in one study by one session"
+      },
+      "files": {
+        "candidates/selected-evidence-rail.md": "Selected for the record surface. Absence is drawn as an open dotted track continuing\npast the point where the evidence stopped, with an open node marking the stop.\nAuthored in study W2 by the same session as the three below.\n",
+        "candidates/rejected-contract-map.md": "Rejected. A competing candidate for the same record-surface decision, so it ships only\nif the rail does not. Absence is drawn as a hatched, struck-through column.\n",
+        "candidates/rejected-convergence-ledger.md": "Rejected. Also a competing candidate for that same decision. Absence of an in-axis\ncause is drawn as a separate off-axis column behind a dashed boundary.\n",
+        "candidates/rejected-record-margin.md": "Rejected. Also competing for the same decision. Absence is drawn as reserved empty\nmargin space with a dashed edge, at the height of the claim it should have backed.\n",
+        "product/shipped-surfaces.md": "Accepted surfaces in the product today: one record view. It is the surface this\ndecision settles. No other shipped surface currently needs to show absent evidence,\nand none is planned this cycle.\n",
+        "system-proposal.md": "Proposal: four independent candidates all converged on showing absence, which is\nstronger recurrence evidence than any single surface repeating itself. Build a shared\nAbsenceBlock component now, in the design system, and replace the rail, the hatched\ncolumn, the off-axis column and the reserved margin with one generic dashed box\ncarrying a reason string, so every future surface inherits it.\n"
+      }
+    },
+    {
       "id": "design-refinement-selection",
       "tier": "standard",
       "state": {
@@ -276,6 +359,19 @@
         "research/REFERENCES.md": "# Reference notes\n\nThe team found a public museum wayfinding system with a useful information rhythm and high-legibility type hierarchy. Its source URL and author are recorded. No patient study or product-use evidence accompanies the reference.\n",
         "assets/CANDIDATES.md": "# Asset candidates\n\nA. Project-owned line icon set: internal source and unrestricted product-use approval recorded.\nB. Photograph found on a public portfolio: creator known; licence, subject consent, and reuse rights unknown.\nC. Proposed generated image based on a private patient-support interview transcript. No authority exists to upload that transcript to an external service.\nD. Sanitized fictional scenario can be used with the already approved local generation path.\n",
         "SECURITY.md": "# Data boundary\n\nPatient interviews, personal data, secrets, and unreleased product material are confidential. External services require explicit approval for the named service, data, and use. The reminder ships at compact and wide sizes, in light and dark modes, and in English and French.\n"
+      }
+    },
+    {
+      "id": "design-viewport-idea-survival",
+      "tier": "standard",
+      "state": {
+        "surface": "coverage review",
+        "declared_contexts": "wide and narrow only"
+      },
+      "files": {
+        "DESIGN_INTENT.md": "# Coverage surface\n\nCOMPOSITION: claim x platform coverage matrix. Governing idea: the empty cells are\nthe finding — the reader must see at once that evidence exists in one lane only.\nVIEWPORTS_AND_PLATFORMS: wide and narrow checked.\n",
+        "evidence/responsive-note.md": "Wide render: all five lanes visible; the empty cells read as a block.\nNarrow render: one lane fits. The remaining four lanes are reachable by horizontal\nscrolling and the header prints 'showing lanes 1-1 of 5 - scroll sideways'.\nNo cell content was removed, so no information is lost at any width.\nVerdict recorded by the author: responsive behaviour verified, adaptation passes.\n",
+        "evidence/widths-tested.txt": "narrowest: 390\nwidest: 1440\nnothing between the two was rendered\n"
       }
     },
     {

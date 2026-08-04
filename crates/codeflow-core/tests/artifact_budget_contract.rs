@@ -29,7 +29,14 @@ const ROUTING_SKILLS: &[&str] = &["cf-delegate", "cf-model-orchestrator"];
 const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-consult/SKILL.md", 6 * KIB),
     ("agents/skills/cf-customize/SKILL.md", 21 * KIB),
-    ("agents/skills/cf-design/SKILL.md", 15 * KIB),
+    // Raised from 15 KiB by the TSK-014 design-method recovery. The nine added
+    // obligations (idea survival across applicable contexts, comprehension
+    // channel separation, pre-authoring qualification, carrier feasibility,
+    // recurrence harvest, non-browser platform evidence, compound-question
+    // decomposition) keep only their trigger and rule here; every worked
+    // explanation lives in the on-demand composition and audit references.
+    // Still well inside the 24 KiB non-routing class ceiling.
+    ("agents/skills/cf-design/SKILL.md", 17 * KIB),
     ("agents/skills/cf-develop/SKILL.md", 4 * KIB),
     ("agents/skills/cf-docs-portal/SKILL.md", 9 * KIB),
     ("agents/skills/cf-editorial-review/SKILL.md", 6 * KIB),

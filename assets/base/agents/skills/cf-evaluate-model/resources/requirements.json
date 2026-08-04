@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-03-design-method-v2",
+  "requirements_version": "2026-08-04-design-method-v3",
   "requirements": [
     {
       "id": "CF-DES-001",
@@ -164,6 +164,179 @@
           "markers": [
             "source/rights/consent/transformation and product-use evidence",
             "never send private material to an external service without explicit authority"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-008",
+      "level": "hard",
+      "statement": "Applicable viewports, input modes, and platforms are decided when form is chosen, and the governing idea rather than the information inventory is confirmed to survive each; encodings resting on simultaneity, position, or reserved space are checked at the intermediate contexts where composition changes, and a context that cannot carry the idea gets its own declared composition rather than a compressed copy.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "the **governing idea** must survive each, not merely the information",
+            "A context that cannot carry the idea gets its own declared composition, never a compressed copy of another",
+            "including the intermediate ones where composition actually changes"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "the governing idea — not the fact inventory — as the thing that must survive",
+            "A declared alternate composition is a design decision"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/design-choice-audit.md",
+          "markers": [
+            "stricter question than whether the information is still present"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-009",
+      "level": "hard",
+      "statement": "Machine channels carrying a derived answer, digest, or provenance for verification stay out of the visible composition; a candidate that renders its own registered answer in visible prose has tested the sentence rather than the encoding, and any comprehension or baseline-differential result read from it is void rather than merely weakened, requiring a re-run instead of reinterpretation.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Machine channels carrying a derived answer, a digest, or provenance stay out of the visible composition",
+            "void, not merely weak"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/design-choice-audit.md",
+          "markers": [
+            "The visible composition must not carry the answer",
+            "void, not weak"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "Keep the reader's channel and the machine's channel apart",
+            "Verification integrity and comprehension evidence are\ndifferent obligations and must not share a surface"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-010",
+      "level": "hard",
+      "statement": "A candidate comparison is qualified before authoring: the registered question is checked against the surface's real job, against each candidate's ability to answer it from its encoding, and for its power to discriminate, and each candidate declares its primary unit, primary axis, and encoded relationship up front so sibling collision is a pre-authoring check rather than a post-render discovery.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Qualify the comparison before authoring it",
+            "must fit the surface's real job, be answerable from each candidate's encoding, and discriminate",
+            "Each candidate declares its primary unit, axis, and encoded relationship up front"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/design-choice-audit.md",
+          "markers": [
+            "The registered question must be qualified",
+            "Requalify and re-observe\ninstead of reinterpreting the result"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "a question all candidates answer identically discriminates nothing",
+            "turns sibling\n  distinctness into a check, rather than something discovered after both are\n  built"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-011",
+      "level": "hard",
+      "statement": "Before high-fidelity authoring, each candidate encoding names what would carry it in the product's real technical contract and what is lost if the contract cannot express it; a contract that can hold the content but flattens the encoding is recorded as material loss rather than as feasibility, so the selection is not made blind to unplanned contract work or a silently degraded ship.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "names what would carry it in the product's real technical contract and at what loss"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "**What would carry it.**",
+            "Discovering after selection that the\n  contract flattens the chosen encoding"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-012",
+      "level": "hard",
+      "statement": "Rejected candidates are mined for transferable primitives, but convergence between candidates is a hypothesis rather than recurrence evidence, tested against subject independence, expected coexistence and lifetime, and a real reuse need in accepted product surfaces. Convergence among speculative or mutually exclusive candidates never outweighs recurrence in shipped surfaces, never earns a system layer alone, and never overrides stopping where the evidence stops; an earned layer takes the primitive and its state vocabulary without flattening the subject-specific forms built on them.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Mine rejected candidates for transferable primitives",
+            "convergence between candidates is a **hypothesis, not recurrence**",
+            "Convergence alone earns nothing: shipped recurrence still decides, and the evidence still stops where it stops",
+            "never the subject-specific forms built on it"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "What that mining produces is a **hypothesis, not recurrence evidence**",
+            "Alternatives that never coexist",
+            "Convergence among discarded artefacts never outweighs a pattern the shipped product actually repeats",
+            "Convergence alone never earns a system layer",
+            "the evidence still stops where it stops"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-013",
+      "level": "hard",
+      "statement": "Non-browser surfaces carry the same verification obligation in their own platform vocabulary: applicable mobile, tablet, desktop, or other native conventions and the method of observing them on that platform are named in the intent, a browser render is never generalized into native evidence, describing a convention is not conforming to it, and an unexercised platform is recorded as unverified, not inferred.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "Outside the browser the obligation is identical and the vocabulary is not",
+            "A web render is not evidence for a native one, and neither is a description of the convention",
+            "an unavailable platform is recorded as unverified rather than inferred"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "A browser render is evidence about the browser",
+            "inferring its behavior from another platform's render converts a gap into a\nfalse claim"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-014",
+      "level": "hard",
+      "statement": "A compound design question is settled by decomposing it and settling each part, or by stating which part the selected direction optimizes and what carries the other; forcing a single winner across both parts of a question whose halves are best served by different encodings selects an unchosen compromise.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "A compound question is decomposed, or the part the direction optimises and what carries the other are both named"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "**Whether the question is compound.**",
+            "Forcing one winner\n  across both parts selects a compromise nobody chose"
           ]
         }
       ]
