@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-02-design-sourcing-v1",
+  "requirements_version": "2026-08-03-design-method-v2",
   "requirements": [
     {
       "id": "CF-DES-001",
@@ -10,7 +10,7 @@
         {
           "path": ".agents/skills/cf-design/SKILL.md",
           "markers": [
-            "Choose the lightest path that still resolves material design uncertainty",
+            "Choose the lightest path that resolves material uncertainty",
             "binding constraint owed honest counsel",
             "Never fabricate research, users, personas"
           ]
@@ -32,8 +32,8 @@
         {
           "path": ".agents/skills/cf-design/SKILL.md",
           "markers": [
-            "two or three directions that differ in meaningful structure or experience",
-            "never supplies formats, bans, or a replacement house style"
+            "compare two or three candidates that differ in what they encode",
+            "supplies no formats, bans, or house style"
           ]
         },
         {
@@ -98,8 +98,8 @@
           "markers": [
             "Language and voice",
             "Appearance modes",
-            "CodeFlow supplies no product palette or preset",
-            "utility defaults never flow back as product authority"
+            "CodeFlow supplies no preset and no house style",
+            "runtime choices never become a product's direction"
           ]
         },
         {
@@ -128,10 +128,10 @@
         {
           "path": ".agents/skills/cf-design/SKILL.md",
           "markers": [
-            "while one named typography, colour, imagery",
-            "stop when the choice is settled",
-            "exact design version the operator reviewed",
-            "accepted and rejected rationale in the new Plan vN+1"
+            "reopen a bounded comparison only for a named choice",
+            "stop when it is settled",
+            "produces Plan vN+1 carrying the exact reviewed version",
+            "accepted and rejected rationale"
           ]
         },
         {
