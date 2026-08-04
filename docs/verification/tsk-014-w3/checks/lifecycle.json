@@ -1,0 +1,17 @@
+{
+  "task_root": "/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/cf-w3-render-QZKcMG",
+  "owned_process_identities": 6,
+  "survivor_injected": false,
+  "inventory_failure_injected": false,
+  "close_fallback_used": false,
+  "cleanup_proven": true,
+  "surviving_process_identities": 0,
+  "task_root_removed": true,
+  "task_root_state": "absent",
+  "task_root_remains": false,
+  "xdg_runtime_dir_redirected": true,
+  "page_errors": 0,
+  "remote_requests": 0,
+  "outside_study_file_requests": 0,
+  "cleanup_errors": []
+}

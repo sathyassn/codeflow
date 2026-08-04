@@ -1,0 +1,527 @@
+{
+  "purpose": "Re-measure the W3 pages with a containment probe that maps each node bounding box through getCTM() before comparing it with the root viewBox. The W3 harness compared the two directly.",
+  "what_is_unaffected": "Hidden-overflow findings (scrollWidth vs clientWidth) and document overflow are coordinate-system independent and were never at issue. Composition failures recorded as machine_visible:false were never probe results at all.",
+  "w3_is_not_edited": "../tsk-014-w3 is append-only and nothing here writes to it.",
+  "rows": [
+    {
+      "render": "p3-a-convergence-with-source-depth-light-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 2,
+      "corrected_out_of_viewbox": 2,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "g",
+          "text": "F6the browser context close timed out wit…R1",
+          "overshoot_css_px": 8.3
+        },
+        {
+          "tag": "text",
+          "text": "Playwright 1.55",
+          "overshoot_css_px": 8.3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 2,
+      "corrected_out_of_viewbox": 2,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "g",
+          "text": "F6the browser context close timed out wit…R1",
+          "overshoot_css_px": 8.3
+        },
+        {
+          "tag": "text",
+          "text": "Playwright 1.55",
+          "overshoot_css_px": 8.3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-b-source-region-history-light-desktop",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 10,
+      "corrected_out_of_viewbox": 10,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "text",
+          "text": "R8",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R2",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R3",
+          "overshoot_css_px": 3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-b-source-region-history-light-tablet",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 10,
+      "corrected_out_of_viewbox": 10,
+      "hidden_overflow_containers": 2,
+      "hidden_overflow_px": 36,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "text",
+          "text": "R8",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R2",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R3",
+          "overshoot_css_px": 3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-b-source-region-history-light-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 10,
+      "corrected_out_of_viewbox": 10,
+      "hidden_overflow_containers": 13,
+      "hidden_overflow_px": 3171,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "text",
+          "text": "R8",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R2",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R3",
+          "overshoot_css_px": 3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-b-source-region-history-dark-desktop",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 10,
+      "corrected_out_of_viewbox": 10,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "text",
+          "text": "R8",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R2",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R3",
+          "overshoot_css_px": 3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-b-source-region-history-dark-tablet",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 10,
+      "corrected_out_of_viewbox": 10,
+      "hidden_overflow_containers": 2,
+      "hidden_overflow_px": 36,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "text",
+          "text": "R8",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R2",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R3",
+          "overshoot_css_px": 3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p3-b-source-region-history-dark-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 10,
+      "corrected_out_of_viewbox": 10,
+      "hidden_overflow_containers": 13,
+      "hidden_overflow_px": 3171,
+      "document_overflow_px": 0,
+      "corrected_worst": [
+        {
+          "tag": "text",
+          "text": "R8",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R2",
+          "overshoot_css_px": 3
+        },
+        {
+          "tag": "text",
+          "text": "R3",
+          "overshoot_css_px": 3
+        }
+      ],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-baseline-light-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-baseline-light-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-baseline-light-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 85,
+      "corrected_worst": [],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "p2-baseline-dark-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-baseline-dark-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "p2-baseline-dark-mobile",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 85,
+      "corrected_worst": [],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "d1-baseline-light-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "d1-baseline-light-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "d1-baseline-light-mobile",
+      "w3_registered_invalid": true,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 87,
+      "corrected_worst": [],
+      "verdict": "containment failure confirmed under the corrected probe"
+    },
+    {
+      "render": "d1-baseline-dark-desktop",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "d1-baseline-dark-tablet",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 0,
+      "corrected_worst": [],
+      "verdict": "no containment failure measured"
+    },
+    {
+      "render": "d1-baseline-dark-mobile",
+      "w3_registered_invalid": false,
+      "naive_out_of_viewbox": 0,
+      "corrected_out_of_viewbox": 0,
+      "hidden_overflow_containers": 0,
+      "hidden_overflow_px": 0,
+      "document_overflow_px": 87,
+      "corrected_worst": [],
+      "verdict": "containment failure confirmed under the corrected probe"
+    }
+  ],
+  "summary": {
+    "registered_bands_rechecked": 14,
+    "confirmed": 10,
+    "artefacts": 0,
+    "clean": 4
+  }
+}

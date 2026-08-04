@@ -1,0 +1,14 @@
+{
+  "rubric": "rubric.v3.md",
+  "sha256": "3aeaf19a510dddd84b326cc0155f5055ebd06e8dcbf90ea8026201a883d029d0",
+  "locked_on": "2026-08-04",
+  "supersedes": "rubric.v2.md",
+  "supersedes_note": "Version 3 governs the W3 board. rubric.v2.md is not edited, not moved and not relocked; tools/verify.mjs recomputes both digests on every run, and the W2 rubric against its own lock, so a changed gate has to be a new version rather than an edit.",
+  "ordering_evidence": {
+    "method": "none — this rubric pre-registers nothing",
+    "observed": "rubric.v3.md was written AFTER the v2 board was rendered, by an independent Claude design-primary audit of those renders.",
+    "what_can_be_said_instead": "A statement about method, not about priority. A7 and A8 were derived from defects already found in the rendered board and then implemented as machine checks rather than fitted to a wanted result: A7 fails ten of the eighty-one existing renders and A8 failed the registry as it stood. No render was redrawn to satisfy either.",
+    "honest_scope": "The pre-registration claim in this study belongs to rubric.v2.md, and — more weakly, and disproved for two of a-critical-path-and-room's fields — to registry.json. See rubric.v3.md, 'What the ordering evidence is worth'."
+  },
+  "rule": "tools/verify.mjs recomputes the digest of rubric.v3.md on every run and fails if it differs. Changing a gate means adding a new versioned rubric and a new lock, never editing these bytes in place."
+}

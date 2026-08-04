@@ -1,0 +1,595 @@
+// Sequential, exact-owned, headless render + accessibility + network + visible
+// text + motion evidence for the TSK-014 W3 study.
+//
+// The lifecycle contract is carried over from the reviewed W2 harness unchanged,
+// because its contract still fits: the browser and locked modules resolve BEFORE
+// any owned output is touched; an alternate --output-root is accepted only under
+// a positive ownership contract; one marked task root holds the profile and every
+// redirected environment root including an owner-only XDG_RUNTIME_DIR; owned
+// identities are captured after launch and refreshed during cleanup; a still-live
+// exact identity after the bounded close triggers a fingerprint-rechecked
+// TERM/KILL fallback; the marked root is removed ONLY on positive proof; only
+// ENOENT proves removal; `file:` is admitted only for canonical descendants of the
+// canonical study root.
+//
+// What W3 adds, and why:
+//   - three viewports, not two. The intermediate one is where a composition
+//     first stops fitting, and W2 never rendered it;
+//   - the visible text of every render is captured, so tools/verify.mjs can
+//     decide whether a candidate states its own answer where the reader can see
+//     it. Verification integrity and comprehension evidence are different
+//     obligations, and W2 let them share a surface;
+//   - motion is PROVEN ABSENT rather than screenshotted. W2 shot a
+//     reduced-motion frame per candidate and every one was byte-identical to
+//     its normal frame, which is evidence about the screenshot. Here each page
+//     is probed under both prefers-reduced-motion settings for a running
+//     animation or a non-zero transition duration, and the probe is the
+//     evidence.
+//
+// Self-test flags: --output-root <dir> --output-token <token>, --page <rel>,
+// --pages <n>, --inject-post-close-survivor, --inject-inventory-failure.
+
+import { access, chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import path, { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import { isContained } from "./path-containment.mjs";
+
+const studyRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(studyRoot, "../../..");
+const webModules = join(repoRoot, "crates/codeflow-present/web/node_modules");
+const SELFTEST_MARKER = ".cf-w3-selftest-root";
+
+const argOf = (name) => {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? null : process.argv[index + 1];
+};
+const requestedOutputRoot = argOf("--output-root");
+const outputToken = argOf("--output-token");
+const pageLimit = argOf("--pages") ? Number(argOf("--pages")) : Infinity;
+const onlyPage = argOf("--page");
+const injectSurvivor = process.argv.includes("--inject-post-close-survivor");
+const injectInventoryFailure = process.argv.includes("--inject-inventory-failure");
+
+const CLOSE_TIMEOUT_MS = 15_000;
+const NAV_TIMEOUT_MS = 20_000;
+const TERMINATION_GRACE_MS = 2_500;
+const INVENTORY_TIMEOUT_MS = 10_000;
+const IDENTITY_DEADLINE_MS = 10_000;
+// The intermediate width is not a convention. registry.json requires it to fall
+// strictly between every candidate's own two declared breakpoints, and
+// tools/verify.mjs enforces that, so this frame always shows a composition
+// neither of the other two frames shows.
+const VIEWPORTS = {
+  desktop: { width: 1440, height: 900 },
+  tablet: { width: 900, height: 1200 },
+  mobile: { width: 390, height: 844 },
+};
+
+const CANDIDATES = [
+  "cases/p1/a-critical-path-and-room/index.html",
+  "cases/p1/b-paths-to-the-sink/index.html",
+  "cases/p2/a-stopped-provenance/index.html",
+  "cases/p2/b-absence-by-cause/index.html",
+  "cases/p3/a-convergence-with-source-depth/index.html",
+  "cases/p3/b-source-region-history/index.html",
+  "cases/d1/a-layers-by-change-rate/index.html",
+  "cases/d1/b-the-spine/index.html",
+  "cases/d1/c-write-authority-map/index.html",
+  "cases/d2/a-decision-reach/index.html",
+  "cases/d2/b-evidence-margin/index.html",
+];
+const BASELINES = [
+  "baselines/p1/baseline.html",
+  "baselines/p2/baseline.html",
+  "baselines/p3/baseline.html",
+  "baselines/d1/baseline.html",
+  "baselines/d2/baseline.html",
+];
+const slugOf = (page) => page
+  .replace(/^cases\//, "").replace(/\/index\.html$/, "")
+  .replace(/^baselines\//, "").replace(/\/baseline\.html$/, "-baseline")
+  .replace(/^tools\/fixtures\//, "fixture-").replace(/\.html$/, "")
+  .replace(/\//g, "-");
+const fullPlan = [
+  ...CANDIDATES.flatMap((page) => ["light", "dark"].flatMap((mode) =>
+    Object.keys(VIEWPORTS).map((viewport) => ({ page, mode, viewport })))),
+  ...BASELINES.flatMap((page) =>
+    Object.keys(VIEWPORTS).map((viewport) => ({ page, mode: "light", viewport }))),
+];
+const plan = (onlyPage
+  ? Object.keys(VIEWPORTS).map((viewport) => ({ page: onlyPage, mode: "light", viewport }))
+  : fullPlan).slice(0, pageLimit);
+const nameOf = (job) => `${slugOf(job.page)}-${job.mode}-${job.viewport}`;
+
+const refuse = (message) => { process.stderr.write(`REFUSED ${message}\n`); process.exit(2); };
+
+// ---------------------------------- positive ownership contract for an output root
+async function resolveOutputRoot() {
+  if (!requestedOutputRoot) return studyRoot;
+  if (!outputToken || !/^[0-9a-f-]{16,}$/u.test(outputToken)) {
+    refuse("--output-root requires a --output-token issued by tools/selftest.mjs");
+  }
+  let canonical;
+  try { canonical = await realpath(requestedOutputRoot); }
+  catch { refuse(`--output-root does not exist: ${requestedOutputRoot}`); }
+  const canonicalTemp = await realpath(tmpdir());
+  if (!isContained(canonicalTemp, canonical, path)) {
+    refuse(`--output-root is not inside the host temporary directory: ${canonical}`);
+  }
+  const info = await stat(canonical);
+  if (!info.isDirectory()) refuse(`--output-root is not a directory: ${canonical}`);
+  if (process.platform !== "win32") {
+    if ((info.mode & 0o077) !== 0) refuse(`--output-root is not owner-only: ${canonical}`);
+    if (info.uid !== process.getuid()) refuse(`--output-root is not owned by this user: ${canonical}`);
+  }
+  const markerPath = join(canonical, SELFTEST_MARKER);
+  const markerInfo = await lstat(markerPath).catch(() => null);
+  if (!markerInfo || !markerInfo.isFile()) refuse(`--output-root carries no ${SELFTEST_MARKER} marker: ${canonical}`);
+  const recorded = (await readFile(markerPath, "utf8")).trim();
+  if (recorded !== outputToken) refuse(`--output-root marker token does not match this invocation: ${canonical}`);
+  return canonical;
+}
+
+// ------------------------------------------------------- process identities
+let inventoryFailureArmed = false;
+function processInventory() {
+  if (inventoryFailureArmed) throw new Error("injected process-inventory failure (self-test)");
+  try {
+    if (process.platform === "win32") {
+      const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+      const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+      const raw = execFileSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        "Get-CimInstance Win32_Process | Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress"],
+        { encoding: "utf8", timeout: INVENTORY_TIMEOUT_MS });
+      const parsed = JSON.parse(raw || "[]");
+      return (Array.isArray(parsed) ? parsed : [parsed]).map((e) => ({
+        pid: Number(e.ProcessId), created: String(e.CreationDate ?? ""), command: String(e.CommandLine ?? ""),
+      }));
+    }
+    const raw = execFileSync("/bin/ps", ["-axo", "pid=,lstart=,command="],
+      { encoding: "utf8", timeout: INVENTORY_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 });
+    return raw.split("\n").flatMap((line) => {
+      const match = line.match(/^\s*(\d+)\s+((?:\S+\s+){4}\d{4})\s+(.+)$/u);
+      return match ? [{ pid: Number(match[1]), created: match[2], command: match[3] }] : [];
+    });
+  } catch (error) {
+    throw new Error(`Could not inspect owned process identities: ${error.message}`);
+  }
+}
+const fingerprint = (pid, inventory = processInventory()) => {
+  const found = inventory.find((p) => p.pid === pid);
+  return found ? `${found.created}|${found.command}` : null;
+};
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const ownedById = new Map();
+function refreshOwned(marker) {
+  for (const p of processInventory()) {
+    if (!p.command.includes(marker)) continue;
+    ownedById.set(`${p.pid}|${p.created}|${p.command}`, { pid: p.pid, print: `${p.created}|${p.command}` });
+  }
+  return [...ownedById.values()];
+}
+function liveOwned() {
+  const inventory = processInventory();
+  return [...ownedById.values()].filter((o) => fingerprint(o.pid, inventory) === o.print);
+}
+async function terminateOwned(targets) {
+  const signal = (list, sig) => {
+    for (const o of list) {
+      // Exact identity re-verified immediately before signalling; only the
+      // precise pid is signalled, never a process group.
+      if (fingerprint(o.pid) !== o.print) continue;
+      try { process.kill(o.pid, sig); }
+      catch (error) { if (error?.code !== "ESRCH") throw new Error(`could not ${sig} ${o.pid}: ${error.message}`); }
+    }
+  };
+  signal(targets, "SIGTERM");
+  const grace = Date.now() + TERMINATION_GRACE_MS;
+  let remaining = liveOwned();
+  while (remaining.length && Date.now() < grace) { await delay(100); remaining = liveOwned(); }
+  if (remaining.length) signal(remaining, "SIGKILL");
+  const deadline = Date.now() + IDENTITY_DEADLINE_MS;
+  while (liveOwned().length) {
+    if (Date.now() >= deadline) throw new Error("exact-owned browser identities survived TERM and KILL");
+    await delay(100);
+  }
+}
+
+async function findBrowser() {
+  for (const candidate of [
+    process.env.CF_W3_BROWSER,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    process.env.ProgramFiles && join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
+    "/usr/bin/google-chrome", "/usr/bin/chromium",
+  ].filter(Boolean)) {
+    try { await access(candidate); return candidate; } catch { /* next */ }
+  }
+  throw new Error("No local Chrome or Chromium is available for the W3 render");
+}
+
+// ------------------------------------------- 1. discovery, before any mutation
+const outputRoot = await resolveOutputRoot();
+const executablePath = await findBrowser();
+const playwright = await import(pathToFileURL(join(webModules, "playwright-core/index.js")).href);
+const { chromium } = playwright.chromium ? playwright : playwright.default;
+const axeSource = readFileSync(join(webModules, "axe-core/axe.min.js"), "utf8");
+const playwrightVersion = JSON.parse(readFileSync(join(webModules, "playwright-core/package.json"), "utf8")).version;
+const axeVersion = JSON.parse(readFileSync(join(webModules, "axe-core/package.json"), "utf8")).version;
+const canonicalStudyRoot = await realpath(studyRoot);
+
+// --------------------------------- 2. owned-output reset over a closed name set
+const rendersDir = join(outputRoot, "renders");
+const checksDir = join(outputRoot, "checks");
+const knownChecks = new Set(["axe.json", "network.json", "answers.json", "lifecycle.json", "text.json",
+  "motion.json", "frame.json"]);
+const clearableRenders = new Set([...fullPlan, ...plan].map(nameOf).map((n) => `${n}.png`));
+// Two phases, deliberately. Both directories are inventoried in full before
+// anything is removed, so an unexpected file in one cannot be discovered only
+// after known outputs in the other have already been deleted.
+const inventory = [];
+for (const [label, dir, allowed] of [["renders", rendersDir, clearableRenders], ["checks", checksDir, knownChecks]]) {
+  await mkdir(dir, { recursive: true });
+  for (const name of await readdir(dir)) inventory.push({ label, dir, name, known: allowed.has(name) });
+}
+const unexpected = inventory.filter((entry) => !entry.known);
+if (unexpected.length) {
+  process.stderr.write(`refusing to touch files this run does not own (nothing was deleted):\n  ` +
+    `${unexpected.map((e) => `${e.label}/${e.name}`).join("\n  ")}\n`);
+  process.exit(1);
+}
+for (const entry of inventory) await rm(join(entry.dir, entry.name), { force: true });
+
+// ----------------------------------------------------------------- 3. render
+const taskRoot = await mkdtemp(join(tmpdir(), "cf-w3-render-"));
+const marker = join(taskRoot, ".cf-w3-render-root");
+const profile = join(taskRoot, "profile");
+const results = [];
+const texts = [];
+const frames = [];
+const motion = [];
+const remoteRequests = [];
+const outsideStudyRequests = [];
+const pageErrors = [];
+const cleanupErrors = [];
+let closeFallbackUsed = false;
+let survivorInjected = false;
+let cleanupProven = false;
+let rootRemoved = false;
+let failure;
+let context;
+
+// Motion is a claim, so it is measured. `getAnimations` catches a CSS animation
+// or transition that is actually running at capture time; the computed-style
+// sweep catches one that is declared and merely idle, which a still frame would
+// never reveal. Both are read under each prefers-reduced-motion setting.
+// A still render is the study's whole evidence channel, so anything a reader
+// would have to scroll or resize to reach is simply not on the page. Two ways a
+// composition loses content without any other check noticing:
+//   - a scroll container clips its own content horizontally. `overflow-x: auto`
+//     is an interaction affordance, and a screenshot has no interaction, so the
+//     line just stops mid-token with nothing saying it did;
+//   - drawn SVG content extends past its own `viewBox` and is cropped by the
+//     frame, which is how an unmeasured label runs off the edge of a figure.
+// Both are measured here rather than left to the eye, because the eye has to
+// look at 81 renders and will miss one.
+const FRAME_PROBE = `(() => {
+  const out = { document_overflow: null, clipped: [], out_of_frame: [] };
+  const de = document.documentElement;
+  if (de.scrollWidth > de.clientWidth + 1) {
+    out.document_overflow = { scroll_width: de.scrollWidth, client_width: de.clientWidth };
+  }
+  const label = (el) => {
+    const cls = typeof el.className === "string" ? el.className
+      : el.className?.baseVal ?? "";
+    return el.tagName.toLowerCase() + (el.id ? "#" + el.id : "")
+      + (cls.trim() ? "." + cls.trim().split(/\\s+/).join(".") : "");
+  };
+  for (const el of document.querySelectorAll("*")) {
+    if (el.namespaceURI !== "http://www.w3.org/1999/xhtml") continue;
+    const hidden = el.scrollWidth - el.clientWidth;
+    if (hidden <= 1) continue;
+    const overflowX = getComputedStyle(el).overflowX;
+    if (overflowX !== "auto" && overflowX !== "scroll" && overflowX !== "hidden") continue;
+    out.clipped.push({ element: label(el), overflow_x: overflowX, hidden_px: hidden,
+      client_width: el.clientWidth, sample: (el.innerText ?? "").trim().slice(0, 90) });
+  }
+  for (const svg of document.querySelectorAll("svg")) {
+    const box = svg.viewBox?.baseVal;
+    if (!box || !box.width) continue;
+    for (const node of svg.querySelectorAll("text, tspan, rect, circle, ellipse, line, path, polyline, polygon")) {
+      let b;
+      try { b = node.getBBox(); } catch { continue; }
+      if (!b.width && !b.height) continue;
+      const overshootX = Math.max(box.x - b.x, (b.x + b.width) - (box.x + box.width));
+      const overshootY = Math.max(box.y - b.y, (b.y + b.height) - (box.y + box.height));
+      if (overshootX <= 0.5 && overshootY <= 0.5) continue;
+      out.out_of_frame.push({ element: label(node), text: (node.textContent ?? "").trim().slice(0, 70),
+        overshoot_x: Math.round(Math.max(0, overshootX) * 10) / 10,
+        overshoot_y: Math.round(Math.max(0, overshootY) * 10) / 10 });
+    }
+  }
+  return out;
+})()`;
+
+const MOTION_PROBE = `(() => {
+  const running = document.getAnimations().length;
+  let declaredAnimation = 0, declaredTransition = 0;
+  for (const element of document.querySelectorAll("*")) {
+    const style = getComputedStyle(element);
+    if (style.animationName && style.animationName !== "none") declaredAnimation += 1;
+    for (const duration of style.transitionDuration.split(",")) {
+      if (parseFloat(duration) > 0) { declaredTransition += 1; break; }
+    }
+    if (style.scrollBehavior === "smooth") declaredAnimation += 1;
+  }
+  return { running, declaredAnimation, declaredTransition };
+})()`;
+
+try {
+  await writeFile(marker, `${taskRoot}\n`, { mode: 0o600 });
+  for (const sub of ["profile", "home", "appdata", "localappdata", "temp", "xdg-runtime"]) {
+    await mkdir(join(taskRoot, sub), { recursive: true });
+  }
+  await chmod(join(taskRoot, "xdg-runtime"), 0o700);
+
+  const allowed = ["PATH", "LANG", "LC_ALL", "SystemRoot", "WINDIR"];
+  const env = Object.fromEntries(allowed.flatMap((k) => (process.env[k] === undefined ? [] : [[k, process.env[k]]])));
+  Object.assign(env, {
+    HOME: join(taskRoot, "home"), USERPROFILE: join(taskRoot, "home"),
+    APPDATA: join(taskRoot, "appdata"), LOCALAPPDATA: join(taskRoot, "localappdata"),
+    TMPDIR: join(taskRoot, "temp"), TMP: join(taskRoot, "temp"), TEMP: join(taskRoot, "temp"),
+    XDG_RUNTIME_DIR: join(taskRoot, "xdg-runtime"),
+    XDG_CONFIG_HOME: join(taskRoot, "home"), XDG_CACHE_HOME: join(taskRoot, "temp"),
+    XDG_DATA_HOME: join(taskRoot, "home"), XDG_STATE_HOME: join(taskRoot, "home"),
+  });
+
+  context = await chromium.launchPersistentContext(profile, {
+    executablePath, headless: true, env, viewport: VIEWPORTS.desktop,
+    // The determinism flags exist so two consecutive normal runs can be compared
+    // by digest. Without them Chromium's tiled raster path re-rasterises a
+    // handful of anti-aliased edge and glyph pixels differently between runs.
+    args: ["--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync",
+      "--disable-lcd-text", "--disable-partial-raster", "--disable-checker-imaging",
+      "--disable-threaded-animation", "--disable-threaded-scrolling",
+      "--disable-new-content-rendering-timeout", "--run-all-compositor-stages-before-draw",
+      "--disable-image-animation-resync", "--force-device-scale-factor=1"],
+  });
+  refreshOwned(taskRoot);
+  if (!ownedById.size) throw new Error("no task-owned browser process could be identified");
+
+  if (injectSurvivor) {
+    // Self-test only. The marker stays in the survivor's own argv: a shell
+    // wrapper would exec away and lose it, which is how a real late child can
+    // escape an identity set captured only once.
+    const child = spawn(process.execPath, ["-e", `setTimeout(() => {}, 120000); // ${taskRoot}`],
+      { detached: true, stdio: "ignore" });
+    child.unref();
+    await delay(400);
+    refreshOwned(taskRoot);
+    survivorInjected = true;
+  }
+
+  const browserVersion = context.browser()?.version() ?? "unknown";
+  const page = context.pages()[0] ?? await context.newPage();
+  page.setDefaultTimeout(NAV_TIMEOUT_MS);
+  page.on("pageerror", (error) => pageErrors.push({ kind: "pageerror", text: error.message, at: page.url() }));
+  page.on("console", (message) => {
+    if (message.type() === "error") pageErrors.push({ kind: "console", text: message.text(), at: page.url() });
+  });
+
+  // file: is admitted only for canonical descendants of the canonical study
+  // root. fileURLToPath gives platform-correct decoding; realpath collapses
+  // symlinks, so a link inside the study that points outside it is rejected.
+  await page.route("**/*", async (route) => {
+    const url = route.request().url();
+    if (url === "about:blank") return route.continue();
+    if (!url.startsWith("file:")) {
+      remoteRequests.push({ url, page: page.url() });
+      return route.abort();
+    }
+    let requested;
+    try { requested = fileURLToPath(url); }
+    catch (error) {
+      outsideStudyRequests.push({ url, page: page.url(), reason: `undecodable file URL: ${error.message}` });
+      return route.abort();
+    }
+    let canonical;
+    try { canonical = await realpath(requested); }
+    catch {
+      outsideStudyRequests.push({ url, page: page.url(), reason: "path does not resolve to an existing file" });
+      return route.abort();
+    }
+    if (!isContained(canonicalStudyRoot, canonical, path)) {
+      outsideStudyRequests.push({ url, page: page.url(), reason: "outside the canonical study root", canonical });
+      return route.abort();
+    }
+    return route.continue();
+  });
+
+  const settle = () => page.evaluate(async () => {
+    await (document.fonts?.ready ?? Promise.resolve());
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  });
+
+  for (const job of plan) {
+    const name = nameOf(job);
+    await page.setViewportSize(VIEWPORTS[job.viewport]);
+    await page.emulateMedia({ colorScheme: job.mode, reducedMotion: "no-preference" });
+    await page.goto(pathToFileURL(join(studyRoot, job.page)).href, { waitUntil: "load" });
+    await page.waitForFunction(
+      () => document.documentElement.dataset.ready === "true" || !document.querySelector("script"),
+      null, { timeout: NAV_TIMEOUT_MS });
+    // A page that says it is ready has still only queued its layout. Wait for
+    // fonts, then for two committed frames, so two consecutive runs agree.
+    await settle();
+    await page.screenshot({ path: join(rendersDir, `${name}.png`), fullPage: true });
+
+    // The reader's channel, captured exactly as the reader sees it. innerText
+    // reflects rendering, so a closed disclosure and a display:none alternate
+    // composition are correctly absent from it.
+    texts.push({ render: name, page: job.page, mode: job.mode, viewport: job.viewport,
+      text: await page.evaluate(() => document.body.innerText) });
+
+    frames.push({ render: name, page: job.page, mode: job.mode, viewport: job.viewport,
+      ...await page.evaluate(FRAME_PROBE) });
+
+    for (const setting of ["no-preference", "reduce"]) {
+      await page.emulateMedia({ colorScheme: job.mode, reducedMotion: setting });
+      await settle();
+      motion.push({ render: name, page: job.page, viewport: job.viewport, reduced_motion: setting,
+        ...await page.evaluate(MOTION_PROBE) });
+    }
+    await page.emulateMedia({ colorScheme: job.mode, reducedMotion: "no-preference" });
+
+    const answer = await page.evaluate(() => document.documentElement.dataset.answer ?? null);
+    await page.addScriptTag({ content: axeSource });
+    const axeResult = await page.evaluate(async () => globalThis.axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"] },
+    }));
+    results.push({
+      render: name, page: job.page, mode: job.mode, viewport: job.viewport,
+      answer: answer ? JSON.parse(answer) : null,
+      violations: axeResult.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length })),
+    });
+    process.stdout.write(`${name}: ${results.at(-1).violations.length ? "AXE VIOLATION" : "axe clean"}\n`);
+    await page.goto("about:blank");
+  }
+
+  await writeFile(join(checksDir, "axe.json"), `${JSON.stringify({
+    browser_version: browserVersion, playwright_core_version: playwrightVersion, axe_core_version: axeVersion,
+    results: results.map(({ answer, ...rest }) => rest),
+  }, null, 2)}\n`);
+  await writeFile(join(checksDir, "network.json"), `${JSON.stringify({
+    policy: "file: admitted only for canonical descendants of the canonical study root; everything else aborted",
+    study_root: studyRoot, canonical_study_root: canonicalStudyRoot,
+    remote_requests: remoteRequests, outside_study_file_requests: outsideStudyRequests, page_errors: pageErrors,
+  }, null, 2)}\n`);
+  await writeFile(join(checksDir, "answers.json"), `${JSON.stringify({
+    note: "the answer each candidate published into the non-visible machine channel; verify.mjs recomputes the expected answer from the repository",
+    answers: results.filter((r) => r.answer).map((r) => ({ render: r.render, page: r.page, answer: r.answer })),
+  }, null, 2)}\n`);
+  await writeFile(join(checksDir, "text.json"), `${JSON.stringify({
+    note: "document.body.innerText per render — the reader's channel. verify.mjs checks it against each case's registered forbidden phrases and patterns.",
+    renders: texts,
+  }, null, 2)}\n`);
+  await writeFile(join(checksDir, "frame.json"), `${JSON.stringify({
+    note: "per render: horizontal scroll containers that clip their own content, and drawn SVG content that extends past its own viewBox. A still render has no interaction, so clipped content is content the reader never gets.",
+    renders: frames,
+  }, null, 2)}\n`);
+  await writeFile(join(checksDir, "motion.json"), `${JSON.stringify({
+    note: "no candidate declares motion, so motion is proven absent rather than screenshotted. A running animation or a non-zero transition duration under either prefers-reduced-motion setting fails the run.",
+    probes: motion,
+  }, null, 2)}\n`);
+} catch (error) {
+  failure = error;
+} finally {
+  if (injectInventoryFailure) inventoryFailureArmed = true;   // proof boundary only
+
+  if (context) {
+    try {
+      await Promise.race([
+        context.close(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("bounded close expired")), CLOSE_TIMEOUT_MS)),
+      ]);
+    } catch (closeError) { cleanupErrors.push(closeError); }
+  }
+
+  // Positive proof only: the root is removed when an inventory completed and
+  // showed zero live exact identities. Any inventory failure is uncertainty.
+  let survivors = [];
+  try {
+    refreshOwned(taskRoot);
+    survivors = liveOwned();
+    if (survivors.length) {
+      closeFallbackUsed = true;
+      process.stderr.write(`${survivors.length} exact-owned identities outlived the close; terminating\n`);
+      await terminateOwned(survivors);
+      survivors = liveOwned();
+    }
+    cleanupProven = survivors.length === 0;
+  } catch (cleanupError) {
+    cleanupErrors.push(cleanupError);
+    cleanupProven = false;
+  }
+
+  if (cleanupProven) {
+    try { await rm(taskRoot, { recursive: true, force: true }); rootRemoved = true; }
+    catch (removeError) { cleanupErrors.push(removeError); }
+  } else {
+    process.stderr.write(`retaining ${taskRoot}: task-owned process exit could not be proven\n`);
+  }
+
+  // Only ENOENT proves removal; anything else is uncertainty, never success.
+  let rootState;
+  try { await stat(taskRoot); rootState = "present"; }
+  catch (error) {
+    if (error.code === "ENOENT") rootState = "absent";
+    else { rootState = "unknown"; cleanupErrors.push(new Error(`could not stat the task root: ${error.message}`)); }
+  }
+
+  let lifecycleWritten = true;
+  try {
+    await writeFile(join(checksDir, "lifecycle.json"), `${JSON.stringify({
+      task_root: taskRoot,
+      owned_process_identities: ownedById.size,
+      survivor_injected: survivorInjected,
+      inventory_failure_injected: injectInventoryFailure,
+      close_fallback_used: closeFallbackUsed,
+      cleanup_proven: cleanupProven,
+      surviving_process_identities: survivors.length,
+      task_root_removed: rootRemoved,
+      task_root_state: rootState,
+      task_root_remains: rootState !== "absent",
+      xdg_runtime_dir_redirected: true,
+      page_errors: pageErrors.length,
+      remote_requests: remoteRequests.length,
+      outside_study_file_requests: outsideStudyRequests.length,
+      cleanup_errors: cleanupErrors.map((e) => e.message),
+    }, null, 2)}\n`);
+  } catch (writeError) {
+    lifecycleWritten = false;
+    process.stderr.write(`FAIL could not write lifecycle evidence: ${writeError.message}\n`);
+  }
+
+  const problems = [];
+  if (failure) problems.push(`run failed: ${failure.message}`);
+  cleanupErrors.forEach((e) => problems.push(`cleanup failed: ${e.message}`));
+  if (!lifecycleWritten) problems.push("lifecycle evidence could not be written");
+  if (!cleanupProven) problems.push("task-owned process exit could not be proven; the marked root was retained");
+  if (closeFallbackUsed) problems.push("a normal render needed the exact-owned termination fallback");
+  if (survivors.length) problems.push(`${survivors.length} task-owned process identities survived`);
+  if (rootState !== "absent") problems.push(`the marked task root is ${rootState}`);
+  if (pageErrors.length) problems.push(`${pageErrors.length} console or page error(s)`);
+  if (remoteRequests.length) problems.push(`${remoteRequests.length} non-file request(s)`);
+  if (outsideStudyRequests.length) problems.push(`${outsideStudyRequests.length} file request(s) outside the study root`);
+  const violating = results.filter((r) => r.violations.length);
+  if (violating.length) problems.push(`axe violations in ${violating.map((r) => r.render).join(", ")}`);
+  const moving = motion.filter((m) => m.running || m.declaredAnimation || m.declaredTransition);
+  if (moving.length) problems.push(`${moving.length} motion probe(s) found movement on a page registered as motionless`);
+  // Reported, not decided. A7 is verify.mjs's gate because only verify.mjs
+  // reads registry.json, and a band that has been registered as invalidated is
+  // a recorded outcome rather than a render failure. Failing here as well would
+  // make the sanctioned render command permanently red over a known, recorded
+  // defect, which is how people learn to ignore an exit code.
+  const framed = frames.filter((f) => f.document_overflow || f.clipped.length || f.out_of_frame.length);
+  if (framed.length) {
+    process.stderr.write(`WARN ${framed.length} render(s) clip content or draw outside their own frame; `
+      + `tools/verify.mjs A7 decides whether each is registered as invalidated:\n  `
+      + `${framed.map((f) => f.render).join("\n  ")}\n`);
+  }
+
+  process.stdout.write(`\n${results.length} renders · ${ownedById.size} owned identities, ${survivors.length} survivors · ` +
+    `cleanup ${cleanupProven ? "proven" : "UNPROVEN"} · root ${rootState} · ` +
+    `${pageErrors.length} page errors · ${remoteRequests.length} remote · ${outsideStudyRequests.length} outside-study · ` +
+    `${motion.length} motion probes, ${moving.length} moving · ${framed.length} frame problems\n`);
+  if (problems.length) {
+    problems.forEach((p) => process.stderr.write(`FAIL ${p}\n`));
+    process.exitCode = 1;
+  }
+}

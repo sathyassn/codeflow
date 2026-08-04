@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direction D — authored SVG under a runtime service contract</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W4 · contract altitude · direction D</p>
+<h1>Authored SVG under a runtime service contract</h1>
+<p class="sh-lede">Authorship stays with the agent. The document carries inline SVG it drew, and
+the runtime supplies what the sandboxed escape block cannot: token substitution, mode
+resolution, a declared responsive variant set, viewBox sizing, and an enforced legend and
+description.</p>
+
+<p>Expressive reach is maximal — anything an agent can draw. Both figures below are the
+agent's own SVG, qualified and token-substituted by <code>service.js</code> at load.</p>
+
+<hr class="sh-rule">
+
+<h2>The plan, drawn by hand</h2>
+<div class="sh-figure" id="fig-plan"></div>
+<p class="sh-caption">Two variants were authored: a wide one and a narrow one. The service picks
+between them and follows the document's mode. Nothing about the composition was decided by the
+product.</p>
+
+<div class="sh-note" id="drift"></div>
+
+<h2>What it cannot express — and why that is the wrong question</h2>
+<p>There is no subject this direction refuses. That is not a strength on its own: the contract
+has no model of what a figure means, so it cannot tell a good encoding from a bad one, cannot
+check that every drawn mark is keyed, cannot detect a collision, and cannot reuse anything
+between two documents. The three refusals it <em>can</em> make are structural, and they are
+attempted below rather than described.</p>
+
+<div class="sh-note" id="refusals"></div>
+
+<h3>Nothing accumulates</h3>
+<p>The same subject, authored a second time under the same contract by the same rules. Both are
+valid. Neither constrains the other, and a reader moving between two documents has to learn the
+encoding twice.</p>
+
+<div class="sh-figure" id="fig-second"></div>
+<p class="sh-caption">Two authors, one contract, two encodings, no shared authority. Multiply by
+every explanation the product ever produces.</p>
+
+<h3>The security delta, stated rather than assumed</h3>
+<p>Today an <code>html</code> block is served into a bare-sandbox iframe at an opaque origin
+under <code>default-src 'none'</code>. This direction moves author-supplied SVG into the
+<em>parent</em> document, because that is the only way it can reach the document's tokens and
+resolved mode. That is a real change in blast radius — same-origin DOM, the review page's own
+stylesheet, and the feedback surface all become reachable by a markup bug rather than by a
+sandbox escape. The qualifier above is a parser-level allowlist, which is where the existing
+<code>safe_html.rs</code> boundary already sits; whether it is sufficient at the new origin is a
+security question this board raises and does not answer.</p>
+
+<hr class="sh-rule">
+<p class="sh-src">Subject: <code>shared/plan-data.js</code> + <code>shared/plan-model.js</code>.
+Mechanism: <code>directions/d-authored-svg/service.js</code>. The SVG is literal, in this file.
+Chrome: <code>shared/shell.css</code>, byte-identical across every direction on this board.</p>
+
+</div>
+
+<script src="../../shared/plan-data.js"></script>
+<script src="../../shared/plan-model.js"></script>
+<script src="./service.js"></script>
+<script>
+(() => {
+  const BREAKPOINTS = { wide: 1100, narrow: 720 };
+  const model = window.planModel(window.planData);
+
+  /* Literal SVG. Every coordinate here was worked out by the author and typed in.
+   * That is what this direction costs, and the drift check below is what it risks. */
+  const WIDE = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 392">
+  <g stroke="token(line-soft)" stroke-width="1">
+    <line x1="270" y1="50" x2="270" y2="378"/><line x1="487" y1="50" x2="487" y2="378"/>
+    <line x1="705" y1="50" x2="705" y2="378"/><line x1="922" y1="50" x2="922" y2="378"/>
+    <line x1="1140" y1="50" x2="1140" y2="378"/>
+  </g>
+  <g font-size="12" fill="token(ink-muted)" text-anchor="middle" dominant-baseline="middle">
+    <text x="378" y="48">wave 1</text><text x="596" y="48">wave 2</text>
+    <text x="814" y="48">wave 3</text><text x="1031" y="48">wave 4</text>
+  </g>
+  <text x="14" y="48" font-size="11.5" fill="token(ink-muted)" dominant-baseline="middle">open now</text>
+  <text x="1140" y="48" font-size="11.5" fill="token(ink-muted)" text-anchor="end" dominant-baseline="middle">epic finishes</text>
+  <g font-family="ui-monospace, monospace" font-size="12.5" font-weight="620" fill="token(ink)" dominant-baseline="middle">
+    <text x="14" y="85">TSK-013</text><text x="14" y="129">TSK-014</text><text x="14" y="173">TSK-009</text>
+    <text x="14" y="217">TSK-011</text><text x="14" y="261">TSK-007</text><text x="14" y="305">TSK-010</text>
+  </g>
+  <g font-size="11.5" fill="token(ink-muted)" dominant-baseline="middle">
+    <text x="14" y="100">prepare the v3 release…</text><text x="14" y="144">recover the design method…</text>
+    <text x="14" y="188">build and qualify the…</text><text x="14" y="232">build the interactive…</text>
+    <text x="14" y="276">verify and qualify the…</text><text x="14" y="320">integrate and release the…</text>
+  </g>
+  <g stroke="token(warn)" stroke-width="2" stroke-dasharray="5 3">
+    <line x1="379" y1="92" x2="814" y2="92"/>
+    <line x1="596" y1="180" x2="814" y2="180"/>
+  </g>
+  <g stroke="token(warn)" stroke-width="3">
+    <line x1="814" y1="81" x2="814" y2="103"/>
+    <line x1="379" y1="125" x2="379" y2="147"/>
+    <line x1="814" y1="169" x2="814" y2="191"/>
+    <line x1="596" y1="213" x2="596" y2="235"/>
+    <line x1="814" y1="257" x2="814" y2="279"/>
+    <line x1="1031" y1="301" x2="1031" y2="323"/>
+  </g>
+  <path d="M379 136L379 224L596 224L596 268L814 268L814 312L1031 312"
+        fill="none" stroke="token(line)" stroke-width="4" stroke-linecap="round"/>
+  <g transform="translate(0 358)">
+    <line x1="14" y1="0" x2="40" y2="0" stroke="token(line)" stroke-width="4" stroke-linecap="round"/>
+    <text x="48" y="4" font-size="11.5" fill="token(ink-muted)">one unbroken run</text>
+    <line x1="300" y1="0" x2="326" y2="0" stroke="token(warn)" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="334" y="4" font-size="11.5" fill="token(ink-muted)">how much later it could start</text>
+    <line x1="640" y1="-8" x2="640" y2="8" stroke="token(warn)" stroke-width="3"/>
+    <text x="652" y="4" font-size="11.5" fill="token(ink-muted)">the wave that limits it</text>
+  </g>
+</svg>`;
+
+  const NARROW = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 344 348">
+  <g font-size="11" fill="token(ink-muted)">
+    <text x="8" y="14">earliest wave · later start</text>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="12" font-weight="620" fill="token(ink)" dominant-baseline="middle">
+    <text x="8" y="44">TSK-013</text><text x="8" y="92">TSK-014</text><text x="8" y="140">TSK-009</text>
+    <text x="8" y="188">TSK-011</text><text x="8" y="236">TSK-007</text><text x="8" y="284">TSK-010</text>
+  </g>
+  <g font-size="11" fill="token(ink-muted)" dominant-baseline="middle">
+    <text x="76" y="44">wave 1</text><text x="76" y="92">wave 1</text><text x="76" y="140">wave 2</text>
+    <text x="76" y="188">wave 2</text><text x="76" y="236">wave 3</text><text x="76" y="284">wave 4</text>
+  </g>
+  <g stroke="token(warn)" stroke-width="2" stroke-dasharray="5 3">
+    <line x1="140" y1="44" x2="290" y2="44"/><line x1="140" y1="140" x2="215" y2="140"/>
+  </g>
+  <g stroke="token(warn)" stroke-width="3">
+    <line x1="290" y1="34" x2="290" y2="54"/><line x1="140" y1="82" x2="140" y2="102"/>
+    <line x1="215" y1="130" x2="215" y2="150"/><line x1="140" y1="178" x2="140" y2="198"/>
+    <line x1="140" y1="226" x2="140" y2="246"/><line x1="140" y1="274" x2="140" y2="294"/>
+  </g>
+  <path d="M64 92L64 188L64 236L64 284" fill="none" stroke="token(line)" stroke-width="4" stroke-linecap="round"/>
+  <g transform="translate(0 312)">
+    <line x1="8" y1="0" x2="34" y2="0" stroke="token(line)" stroke-width="4" stroke-linecap="round"/>
+    <text x="42" y="4" font-size="11" fill="token(ink-muted)">one unbroken run</text>
+    <line x1="8" y1="20" x2="34" y2="20" stroke="token(warn)" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="42" y="24" font-size="11" fill="token(ink-muted)">how much later it could start</text>
+  </g>
+</svg>`;
+
+  /* A second authoring of the same subject under the same contract. */
+  const SECOND = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 230">
+  <g font-size="11.5" fill="token(ink-muted)"><text x="14" y="20">tasks with room, sized by how much</text></g>
+  <g fill="token(warn-soft)" stroke="token(warn)" stroke-width="1.5">
+    <rect x="14" y="40" width="420" height="40" rx="3"/>
+    <rect x="14" y="96" width="210" height="40" rx="3"/>
+  </g>
+  <g fill="token(fill)" stroke="token(line)" stroke-width="1.5">
+    <rect x="14" y="152" width="60" height="40" rx="3"/><rect x="90" y="152" width="60" height="40" rx="3"/>
+    <rect x="166" y="152" width="60" height="40" rx="3"/><rect x="242" y="152" width="60" height="40" rx="3"/>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="12" fill="token(ink)" dominant-baseline="middle">
+    <text x="24" y="60">TSK-013</text><text x="24" y="116">TSK-009</text>
+    <text x="24" y="172">TSK-014</text><text x="100" y="172">TSK-011</text>
+    <text x="176" y="172">TSK-007</text><text x="252" y="172">TSK-010</text>
+  </g>
+  <text x="14" y="214" font-size="11.5" fill="token(ink-muted)">tasks with no room, in run order</text>
+</svg>`;
+
+  window.w4authored.mount(document.getElementById('fig-plan'), {
+    id: 'd-plan',
+    title: 'The unfinished EPC-005 tasks on a wave axis',
+    description: 'Six unfinished tasks positioned on a wave axis, with a dashed track for a later start and a cap at its limit.',
+    legend: [
+      { mark: 'a heavy unbroken line', means: 'one unbroken run' },
+      { mark: 'a dashed track', means: 'how much later a task could start' },
+      { mark: 'a vertical cap', means: 'the wave that limits it' },
+    ],
+    variants: { wide: WIDE, intermediate: WIDE, narrow: NARROW },
+  }, BREAKPOINTS);
+
+  window.w4authored.mount(document.getElementById('fig-second'), {
+    id: 'd-second',
+    title: 'The same six tasks, authored a second time',
+    description: 'Tasks with room drawn as sized bands, and tasks without room as a row of equal blocks in run order.',
+    legend: [
+      { mark: 'a sized band', means: 'a task with room, sized by how much' },
+      { mark: 'an equal block', means: 'a task with no room' },
+    ],
+    variants: { wide: SECOND, intermediate: SECOND, narrow: SECOND },
+  }, BREAKPOINTS);
+
+  /* The drift check. The figure's numbers were transcribed once; the model is live. */
+  const transcribed = { 'TSK-013': 2, 'TSK-009': 1, 'TSK-014': 0, 'TSK-011': 0, 'TSK-007': 0, 'TSK-010': 0 };
+  const live = Object.fromEntries(model.open.map((t) => [t.id, model.room[t.id] ?? 0]));
+  const drift = Object.keys(transcribed).filter((id) => transcribed[id] !== live[id]);
+  document.getElementById('drift').innerHTML = drift.length
+    ? `<strong>The drawing and the subject disagree.</strong> ${drift.join(', ')} moved since the SVG was typed, and the figure still shows the old value. Nothing in the contract noticed.`
+    : '<strong>The drawing and the subject agree today.</strong> Every number in that SVG was transcribed by hand from the model. Nothing in the contract binds them, so the next change to a task record makes this figure wrong silently — the check that just ran is this page\'s own, not the runtime\'s.';
+
+  const attempts = [
+    ['a figure with no keyed marks', { id: 'x', title: 't', description: 'd', legend: [], variants: { wide: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5"/></svg>' } }],
+    ['a token outside the vocabulary', { id: 'x', title: 't', description: 'd', legend: [{ mark: 'm', means: 'n' }], variants: { wide: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5" fill="token(brand)"/></svg>' } }],
+    ['an external resource reference', { id: 'x', title: 't', description: 'd', legend: [{ mark: 'm', means: 'n' }], variants: { wide: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5" fill="url(https://example.test/a.png)"/></svg>' } }],
+    ['a mark drawn on top of another, both meaning different things', { id: 'x', title: 't', description: 'd', legend: [{ mark: 'm', means: 'n' }], variants: { wide: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect x="5" y="5" width="10" height="10" fill="token(line)"/><rect x="5" y="5" width="10" height="10" fill="token(warn)"/></svg>' } }],
+  ];
+  const host = document.createElement('div');
+  const lines = attempts.map(([label, block]) => {
+    const probe = document.createElement('div');
+    window.w4authored.mount(probe, block, BREAKPOINTS);
+    const refused = probe.dataset.refused === 'true';
+    return `${label} — ${refused ? `refused: ${probe.textContent.replace('The service refused this figure: ', '')}` : 'ACCEPTED'}`;
+  });
+  document.getElementById('refusals').innerHTML =
+    `<strong>What the service can and cannot refuse, attempted at load.</strong><br>${lines.join('<br>')}<br><br>The last line is the finding: two marks with different meanings drawn in the same place is accepted, because the contract has no model of meaning to check it against.`;
+  host.remove();
+})();
+</script>
+</body>
+</html>

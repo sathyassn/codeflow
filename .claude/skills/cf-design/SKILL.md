@@ -147,6 +147,25 @@ and names what would carry it in the product's real technical contract and at
 what loss. A compound question is decomposed, or the part the direction
 optimises and what carries the other are both named.
 
+When the carrier verdict is negative for most candidates, the open decision is
+the **contract**, not the composition, and it is settled first — at its own
+altitude, on its own compared alternatives. The reference owns that rung.
+
+A declaration constrains a drawing only while it stays the declaration that
+preceded it. Pin it so its priority outlives the working tree, reconcile it
+against the finished drawing in both directions, and **record every divergence
+rather than editing the declaration to match**. Where a registration's priority
+cannot be shown from the artefacts, say so where it will be read.
+
+A rendered candidate is evidence only if the render carries what its page
+contains. A still frame has no interaction, so a scroll container is a silent
+crop, not an affordance. Measure hidden overflow, out-of-frame drawing,
+document overflow and the smallest rendered type — in the units the reader
+loses, off the rendered page — rather than trusting the eye; judge nothing from
+a render that fails. Key every information-bearing mark where the reader can see
+it and in the accessible description, and let every non-neutral colour name what
+it encodes.
+
 Collapse this rung when the brief, an accepted system, or a settled direction
 already governs the composition; record the constraint and why alternatives
 were waived. A bounded conformance change needs no exploration at all. After
@@ -231,15 +250,23 @@ implementation.
 
 Before viewing final renders, register the applicable gates, their questions,
 and acceptable results. The composition observer is never its author; a
-threshold invented during review is invalid.
+threshold invented during review is invalid. The seat judging a board does not
+repair the drawings on it either: a defect it fixes becomes a defect it authored.
+It records the defect and whether the fix is mechanical or a design decision, and
+hands it back to the author or the operator.
 
 Apply the reference protocols that fit: five-second governing idea,
 thirty-second mechanics, form match, primary-form inventory, progressive depth,
 and no-box where a figure is the primary explanatory form. For a surface family
-or richer medium, add sibling distinctiveness and plain-baseline differential.
-Where the surface adapts, add adaptation, which tests idea survival rather than
-information presence. Observed results decide these gates, never numeric scores;
-semantic containers remain valid.
+or richer medium, add sibling distinctiveness — observed with titles and
+captions masked, so identification comes from content-bearing structure and not
+from the words — and plain-baseline differential. Where the surface adapts, add
+adaptation, which tests idea survival rather than information presence. Observed
+results decide these gates, never numeric scores; semantic containers remain
+valid.
+
+After any change, re-review the whole surface rather than the edited region, and
+sweep the siblings a shared renderer, token, or component reaches.
 
 Machine channels carrying a derived answer, a digest, or provenance stay out of
 the visible composition. A candidate that renders its own registered answer

@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orient — the six layers, by how often they move</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #15181d;      --ink-2: #464e59;   --ink-3: #58606c;
+    --page: #fbfbfc;     --panel: #ffffff;   --rule: #dcdfe5;
+    --axis: #b9bfc8;     --axis-ink: #58606c;
+    --slow: #1f4d3d;     --fast: #7a3b12;
+    --chip: #f1f3f6;     --chip-ink: #2c333d;
+    --hatch: #96601f;    --dash: #4a5a86;    --gen: #6a4a86;
+    --shadow: 0 1px 2px rgba(21, 24, 29, .05), 0 12px 30px -20px rgba(21, 24, 29, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef0f4;     --ink-2: #b0b8c4;  --ink-3: #8a939f;
+      --page: #0d1014;    --panel: #15181e;  --rule: #282e37;
+      --axis: #4a525e;    --axis-ink: #8a939f;
+      --slow: #7fd3ae;    --fast: #f0ac6e;
+      --chip: #1e232b;    --chip-ink: #cdd5df;
+      --hatch: #e3b46e;   --dash: #9fb2e6;   --gen: #c6a6e6;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 30px -20px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 44px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 32px; line-height: 1.16; letter-spacing: -.018em; margin: 0 0 14px; font-weight: 640; }
+  .lede { margin: 0 0 36px; max-width: 62ch; color: var(--ink-2); font-size: 17px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  /* The axis is a real column, not a decoration: every stratum is placed on it,
+     and two layers the contract gives the same cadence share one position. */
+  .field { display: grid; grid-template-columns: 168px 1fr; gap: 0 26px; position: relative; }
+  .axis { position: relative; border-right: 2px solid var(--axis); }
+  .axis-cap { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--axis-ink);
+              position: absolute; right: 18px; text-align: right; width: 140px; }
+  .axis-cap.top { top: -4px; color: var(--slow); font-weight: 640; }
+  .axis-cap.bottom { bottom: -4px; color: var(--fast); font-weight: 640; }
+  .tiers { display: flex; flex-direction: column; gap: 22px; }
+
+  .tier { display: grid; grid-template-columns: 1fr; gap: 14px; position: relative; align-items: start; }
+  .tier.pair { grid-template-columns: 1fr 1fr; }
+  .tier-mark { position: absolute; left: -35px; top: 26px; width: 18px; height: 2px; background: var(--axis); }
+  .tier-when { position: absolute; left: -196px; top: 16px; width: 150px; text-align: right;
+               font-size: 13.5px; color: var(--ink); font-weight: 600; }
+  .tier-when em { display: block; font-style: normal; font-size: 11.5px; color: var(--ink-3); font-weight: 400; }
+
+  .layer { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px;
+           padding: 16px 18px 14px; box-shadow: var(--shadow); }
+  .layer h2 { margin: 0; font-size: 17px; letter-spacing: .04em; font-weight: 700; }
+  .layer .asks { margin: 2px 0 12px; font-size: 13.5px; color: var(--ink-2); }
+  .homes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .homes li { display: flex; align-items: center; gap: 7px; }
+  .path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+          background: var(--chip); color: var(--chip-ink); border: 1px solid var(--rule);
+          border-radius: 6px; padding: 3px 8px; }
+  .path.absent { background: none; border-style: dashed; color: var(--ink-3); }
+  /* Write authority is a mark on the layer, never colour alone: each class has
+     its own drawn edge. */
+  .auth { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-2); }
+  .auth i { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+  .auth[data-a="human-owned"] i { border: 2px solid var(--slow); }
+  .auth[data-a="project-owned"] i { border: 2px solid var(--slow); border-style: double; border-width: 4px; }
+  .auth[data-a="ship-flow-only"] i { border: 2px dotted var(--ink-2); }
+  .auth[data-a="tool-maintained"] i {
+    border: 1px solid var(--hatch);
+    background: repeating-linear-gradient(45deg, var(--hatch) 0 1.5px, transparent 1.5px 4.5px);
+  }
+  .auth[data-a="cli-allocated"] i { border: 2px dashed var(--dash); }
+  .auth[data-a="append-only"] i { border: 2px solid var(--dash); border-top-width: 6px; }
+  .auth[data-a="generated"] i { border: 2px solid var(--gen); text-decoration: line-through;
+                                 background: linear-gradient(to bottom right, transparent 45%, var(--gen) 45% 55%, transparent 55%); }
+  .split { margin: 11px 0 0; font-size: 12.5px; color: var(--ink-2); border-top: 1px dashed var(--rule);
+           padding-top: 9px; }
+  .split b { color: var(--ink); font-weight: 620; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 34px 0 0; font-size: 13px; color: var(--ink-2);
+            border-top: 1px solid var(--rule); padding-top: 16px; }
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .src { margin: 24px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  @media (max-width: 1080px) {
+    body { padding: 34px 26px 56px; }
+    h1 { font-size: 27px; }
+    /* The strata keep their order and their axis; the homes move inside the
+       stratum instead of sitting in their own column. */
+    .field { grid-template-columns: 132px 1fr; gap: 0 22px; }
+    .tier-when { left: -158px; width: 118px; font-size: 12.5px; }
+    .tier.pair { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 660px) {
+    body { padding: 24px 15px 48px; }
+    h1 { font-size: 22px; }
+    .lede { font-size: 15.5px; }
+    /* The axis moves from a column to a run of markers down the page. Order and
+       the shared position survive; the strata do not become six equal rows. */
+    .field { grid-template-columns: 1fr; gap: 0; }
+    .axis { display: none; }
+    .tier { border-left: 2px solid var(--axis); padding-left: 16px; }
+    .tier-mark { display: none; }
+    .tier-when { position: static; width: auto; text-align: left; margin: 0 0 10px; }
+    .tiers { gap: 26px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Orient · codeflow</p>
+  <h1>Six layers, ordered by how often they move</h1>
+  <p class="lede">This repository keeps its knowledge in six named layers. The operating contract lists
+    them <b>from the one that changes least to the one that changes with nobody touching it</b>, and
+    that order is the axis here. Each layer shows where it actually lives, and what may write there.</p>
+
+  <div class="field">
+    <div class="axis">
+      <span class="axis-cap top">changes least</span>
+      <span class="axis-cap bottom">changes on its own</span>
+    </div>
+    <div class="tiers" id="tiers"></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <details>
+    <summary>The contract's own table</summary>
+    <table id="facts">
+      <thead><tr><th>Layer</th><th>Lives in</th><th>Changes</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/repo-layers.js</code>. Every row is re-parsed out of the
+    organisation table in <code>AGENTS.md</code> and every authority rule is quoted from it verbatim.</p>
+</div>
+
+<script src="../../../shared/repo-layers.js"></script>
+<script>
+(() => {
+  const R = window.repoLayers;
+  const authById = new Map(R.authorities.map((a) => [a.id, a]));
+  const when = {
+    "rarely": { label: "rarely", note: "someone decides to" },
+    "every ship": { label: "every ship", note: "when an epic completes" },
+    "per decision": { label: "per decision", note: "when a decision is taken" },
+    "daily": { label: "daily", note: "as the work moves" },
+    "automatic": { label: "automatic", note: "nobody writes it" },
+  };
+  // Two layers carry the same cadence word, so they take the same place on the
+  // axis rather than being spread into six equal rows.
+  const keyOf = (layer) => layer.changes.split(";")[0].trim();
+  const tiers = [];
+  for (const layer of [...R.layers].sort((a, b) => a.cadence - b.cadence)) {
+    const key = keyOf(layer);
+    const last = tiers[tiers.length - 1];
+    if (last && last.key === key) last.layers.push(layer);
+    else tiers.push({ key, layers: [layer] });
+  }
+
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  const host = document.getElementById("tiers");
+  for (const tier of tiers) {
+    const block = el("div", `tier${tier.layers.length > 1 ? " pair" : ""}`);
+    const label = el("div", "tier-when");
+    label.append(document.createTextNode(when[tier.key].label), el("em", null, when[tier.key].note));
+    block.append(label, el("span", "tier-mark"));
+
+    for (const layer of tier.layers) {
+      const card = el("article", "layer");
+      card.append(el("h2", null, layer.name), el("p", "asks", layer.asks));
+      const homes = el("ul", "homes");
+      for (const home of layer.homes) {
+        const li = el("li");
+        const chip = el("code", `path${home.kind === "file" || home.kind === "dir" ? "" : " absent"}`, home.path);
+        const auth = el("span", "auth");
+        auth.dataset.a = home.authority;
+        auth.append(el("i"), document.createTextNode(authById.get(home.authority).label));
+        li.append(chip, auth);
+        homes.append(li);
+      }
+      card.append(homes);
+      const split = layer.homes.find((h) => h.split);
+      if (split) {
+        const p = el("p", "split");
+        p.append(el("b", null, `${split.path} is two things`),
+          document.createTextNode(` — ${split.splitNote}, and that part is ${authById.get(split.split).label}.`));
+        card.append(p);
+      }
+      const absent = layer.homes.filter((h) => h.kind !== "file" && h.kind !== "dir");
+      if (absent.length === layer.homes.length) {
+        const p = el("p", "split");
+        p.append(el("b", null, "nothing here is a path you can open"),
+          document.createTextNode(` — ${absent.map((h) => h.absentNote).join("; ")}.`));
+        card.append(p);
+      }
+      block.append(card);
+    }
+    host.append(block);
+  }
+
+  const legend = document.getElementById("legend");
+  for (const authority of R.authorities) {
+    const item = el("span", "auth");
+    item.dataset.a = authority.id;
+    item.append(el("i"), document.createTextNode(`${authority.label} — ${authority.rule}`));
+    legend.append(item);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const layer of R.layers) {
+    const tr = document.createElement("tr");
+    for (const value of [`${layer.name} — ${layer.asks}`, layer.livesIn, layer.changes]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(R.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,338 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-d-authored-svg-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-d-authored-svg-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-d-authored-svg-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-d-authored-svg-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-d-authored-svg-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-d-authored-svg-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-e-raster-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-e-raster-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-e-raster-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "dir-e-raster-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "dir-e-raster-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "dir-e-raster-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "p3-b-source-region-history-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "p3-b-source-region-history-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "p3-b-source-region-history-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "p3-b-source-region-history-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "p3-b-source-region-history-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "p3-b-source-region-history-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "violations": []
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "violations": []
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "violations": []
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "violations": []
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "violations": []
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "violations": []
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "violations": []
+  }
+]

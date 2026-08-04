@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal family — Orient, as a model</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W4 · documentation portal · page family 1 of 6</p>
+<h1>Orient — a model, not a link list</h1>
+<p class="sh-lede">A reader who has never seen this repository should leave the Orient layer with
+a usable model of <strong>where knowledge lives</strong> and <strong>what may be done to
+it</strong> — not with three links and a sentence.</p>
+
+<h2>What the shipped portal does today</h2>
+<p>The built portal renders <code>/orient/</code> as a one-line description, an unordered list of
+three links, and a "Next" card, with every ADR title dumped into the sidebar in file order. It is
+a correct index of the source tree and it carries no model at all.</p>
+
+<div class="sh-note"><strong>The control is a real capture, not a caricature.</strong> The
+shipped build was served from <code>docs-portal/dist</code> and captured headless at the same
+three viewports and both modes as this page. The capture is reproduced in
+<code>board.html</code>; the finding is that nothing on it encodes a relationship.</p></div>
+
+<h2>The family</h2>
+<p>Vertical order is the operating contract's own row order, which runs from the layer that
+changes most rarely to the one that changes with nobody touching it. Bar length is that cadence.
+Edge and fill carry write authority, from the contract's own three-band vocabulary. Each layer
+names the paths it really occupies, and a "path" that is not a file in the checkout says so
+rather than being quietly dropped.</p>
+
+<div class="sh-figure" id="fig-orient"></div>
+<p class="sh-caption">Emitted by <code>portal:orient-model</code> from
+<code>shared/repo-layers.js</code>, which re-parses the six-layer table out of
+<code>AGENTS.md</code> and quotes every authority rule verbatim from the sentence that states
+it. Resize: the spine detaches at the narrow band and the volatility axis stays an axis.</p>
+
+<details class="sh-detail"><summary>The same six layers as the contract's own table</summary>
+<table><thead><tr><th>Layer</th><th>Lives in</th><th>Changes</th></tr></thead>
+<tbody id="layer-rows"></tbody></table></details>
+
+<h2>What this family costs</h2>
+<div class="sh-note" id="gap"></div>
+
+<hr class="sh-rule">
+<p class="sh-src">Subject: <code>shared/repo-layers.js</code> over <code>AGENTS.md</code>.
+Mechanism: <code>portal/orient-model/orient.js</code>, in the position a portal generator
+emitter would occupy. Chrome: <code>shared/shell.css</code>, byte-identical across every
+direction and family on this board. Nothing here touches
+<code>docs-portal/</code>.</p>
+
+</div>
+
+<script src="../../shared/repo-layers.js"></script>
+<script src="./orient.js"></script>
+<script>
+(() => {
+  const model = window.repoLayers;
+  window.w4orient.mount(document.getElementById('fig-orient'), model, { wide: 1100, narrow: 720 });
+
+  document.getElementById('layer-rows').innerHTML = model.byCadence
+    .map((l) => `<tr><td>${l.name} — ${l.asks}</td><td>${l.livesIn.replace(/`/g, '')}</td><td>${l.changes}</td></tr>`)
+    .join('');
+
+  const inTree = model.paths.filter((p) => p.inTree).length;
+  document.getElementById('gap').innerHTML =
+    '<strong>The source-model gap, stated precisely.</strong><br>'
+    + `Cadence and write authority are derivable here — the contract's table row order gives the first and ${model.authorities.length} quoted sentences give the second — but they are derived by parsing one repository's prose, not read from a declared fact in the portal's source graph. `
+    + `Of ${model.paths.length} declared homes, ${inTree} resolve to a file or directory in this checkout and ${model.paths.length - inTree} deliberately do not. `
+    + 'For another repository this family needs a layer model in <code>portal.config.json</code> — cadence and authority per layer — before the generator could emit it. That is a configuration addition, not a new content pipeline, and it is the smallest thing that makes this family portable.';
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How this repository is organised — plain baseline</title>
+<style>
+/* The plain baseline. Deliberately ordinary: this is what the same facts look
+   like with no composition at all — a heading, some sentences, a table. It is
+   shared by all five baselines on purpose, because the baseline is not a design
+   and must not become one. Candidates never share a stylesheet. */
+:root {
+  color-scheme: light dark;
+  --ink: #1a1a1a; --ink-2: #4a4a4a; --page: #ffffff; --rule: #d4d4d4; --code: #f4f4f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e8e8e8; --ink-2: #b0b0b0; --page: #101010; --rule: #333333; --code: #1c1c1c; }
+}
+* { box-sizing: border-box; }
+html { background: var(--page); }
+body {
+  margin: 0 auto; padding: 40px 24px 64px; max-width: 46rem; color: var(--ink); background: var(--page);
+  font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; font-weight: 700; }
+.meta { margin: 0 0 24px; font-size: 13px; color: var(--ink-2);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+h2 { font-size: 17px; margin: 30px 0 8px; font-weight: 650; }
+p, li { font-size: 15.5px; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0 0; font-size: 14px; }
+th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 650; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px;
+       background: var(--code); padding: 1px 4px; border-radius: 3px; }
+blockquote { margin: 8px 0 0; padding-left: 12px; border-left: 3px solid var(--rule); color: var(--ink-2);
+             font-size: 14px; }
+.note { font-size: 13px; color: var(--ink-2); margin-top: 26px; }
+</style>
+</head>
+<body>
+<h1>How this repository is organised</h1>
+<p class="meta">AGENTS.md</p>
+
+<p>The operating contract organises the repository into six layers. This is the contract's own table,
+  with each layer's write authority added from the rules stated elsewhere in the same file.</p>
+
+<table id="layers">
+  <thead><tr><th>Layer</th><th>Lives in</th><th>Changes</th><th>Who may write it</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>The rules those authorities come from</h2>
+<ul id="rules"></ul>
+
+<h2>The one relationship the contract declares</h2>
+<blockquote id="spine"></blockquote>
+
+<p class="note">Derived from the same <code>shared/repo-layers.js</code> the candidates use, so the
+  facts are identical and only the presentation differs.</p>
+
+<script src="../../shared/repo-layers.js"></script>
+<script>
+(() => {
+  const R = window.repoLayers;
+  const authById = new Map(R.authorities.map((a) => [a.id, a]));
+  const body = document.querySelector("#layers tbody");
+  for (const layer of R.layers) {
+    const tr = document.createElement("tr");
+    const who = layer.homes
+      .map((h) => `${h.path}: ${authById.get(h.authority).label}${h.split ? ` (and ${authById.get(h.split).label} in part)` : ""}`)
+      .join("; ");
+    for (const value of [`${layer.name} — ${layer.asks}`, layer.livesIn, layer.changes, who]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+  const rules = document.getElementById("rules");
+  for (const authority of R.authorities) {
+    const li = document.createElement("li");
+    li.textContent = `${authority.label} — ${authority.rule}. `;
+    const q = document.createElement("blockquote");
+    q.textContent = `“${authority.quote.text}”`;
+    li.append(q);
+    rules.append(li);
+  }
+  document.getElementById("spine").textContent =
+    `“${R.spine.quote.text} ${R.spine.tail.text.split(".")[0]}.”`;
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

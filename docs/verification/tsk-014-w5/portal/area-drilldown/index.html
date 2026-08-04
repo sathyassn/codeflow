@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal family — monorepo area drill-down</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W5 · documentation portal · page family 4 of 6</p>
+<h1>Monorepo — enter an area by what it owns</h1>
+<p class="sh-lede">In a monorepo, a reader needs the whole system's shared boundaries
+<strong>before</strong> an area, and then needs to enter an area by <strong>what it owns</strong>
+rather than by which folder it happens to sit in.</p>
+
+<div class="sh-note"><strong>This one is a declared fixture, and that is stated here rather than
+buried.</strong> CodeFlow is a single project, so a monorepo family cannot be demonstrated
+against its real content graph without inventing one — and inventing one quietly is the exact
+failure this task exists to correct. The fixture below is named as a fixture on the page, in
+<code>registry.json</code>, and inside the figure's own accessible description. Every other
+family on this board renders from real repository facts.</div>
+
+<h2>The family</h2>
+<p>Areas are rows; shared contracts are columns. An area that <em>owns</em> a contract, an area
+that <em>consumes</em> one, and an area consuming an old version mid-migration are three
+different marks. A contract column with <em>no owner</em> is drawn with a broken head — the one
+thing a folder-per-package navigation dump can never show, because an unowned contract has no
+folder to put it in.</p>
+
+<div class="sh-figure" id="fig-area"></div>
+<p class="sh-caption">Emitted by <code>portal:area-drilldown</code>. The repository-wide band is
+drawn as the span it is, above every area, because the information-architecture contract already
+says global orientation sits above area drill-down and a sidebar cannot express "above".</p>
+
+<h2>What this family costs</h2>
+<div class="sh-note" id="gap"></div>
+
+<h2>The other three families, specified and not built</h2>
+<p>Recorded so the family set is honest rather than trimmed to what was finished in one pass.
+Each names its surface job and the form the subject wants; none has been demonstrated, and none
+should be counted as evidence.</p>
+<div class="sh-note" id="unbuilt"></div>
+
+<hr class="sh-rule">
+<p class="sh-src">Subject: a declared fixture in this file. Mechanism:
+<code>portal/area-drilldown/area.js</code>, in the position a portal generator emitter would
+occupy. Chrome: <code>shared/shell.css</code>. Nothing here touches
+<code>docs-portal/</code>.</p>
+
+</div>
+
+<script src="./area.js"></script>
+<script>
+(() => {
+  /* DECLARED FIXTURE. Not derived from any repository. */
+  const FIXTURE = {
+    fixture: true,
+    contracts: [
+      { id: 'auth', name: 'auth token schema' },
+      { id: 'events', name: 'event envelope' },
+      { id: 'catalog', name: 'product catalog API' },
+      { id: 'i18n', name: 'locale bundle format' },
+      { id: 'telemetry', name: 'telemetry field names' },
+      { id: 'design', name: 'design tokens' },
+    ],
+    areas: [
+      { name: 'web', root: 'apps/web', links: [
+        { contract: 'auth', kind: 'consumes' }, { contract: 'catalog', kind: 'consumes' },
+        { contract: 'i18n', kind: 'owns' }, { contract: 'telemetry', kind: 'consumes' },
+        { contract: 'design', kind: 'consumes' } ] },
+      { name: 'iOS', root: 'apps/ios', links: [
+        { contract: 'auth', kind: 'consumes' }, { contract: 'catalog', kind: 'migrating' },
+        { contract: 'i18n', kind: 'consumes' }, { contract: 'design', kind: 'consumes' } ] },
+      { name: 'Android', root: 'apps/android', links: [
+        { contract: 'auth', kind: 'consumes' }, { contract: 'catalog', kind: 'migrating' },
+        { contract: 'i18n', kind: 'consumes' } ] },
+      { name: 'identity service', root: 'services/identity', links: [
+        { contract: 'auth', kind: 'owns' }, { contract: 'events', kind: 'consumes' },
+        { contract: 'telemetry', kind: 'consumes' } ] },
+      { name: 'catalog service', root: 'services/catalog', links: [
+        { contract: 'catalog', kind: 'owns' }, { contract: 'events', kind: 'consumes' },
+        { contract: 'auth', kind: 'consumes' } ] },
+      { name: 'data platform', root: 'platform/data', links: [
+        { contract: 'events', kind: 'consumes' }, { contract: 'telemetry', kind: 'consumes' } ] },
+    ],
+  };
+  FIXTURE.unownedCount = FIXTURE.contracts.filter(
+    (c) => !FIXTURE.areas.some((a) => a.links.some((l) => l.contract === c.id && l.kind === 'owns')),
+  ).length;
+
+  window.w4area.mount(document.getElementById('fig-area'), FIXTURE, { wide: 1100, narrow: 720 });
+
+  const unowned = FIXTURE.contracts.filter((c) => !FIXTURE.areas.some((a) => a.links.some((l) => l.contract === c.id && l.kind === 'owns')));
+  document.getElementById('gap').innerHTML =
+    '<strong>The source-model gap, stated precisely.</strong><br>'
+    + `Ownership of a shared contract is not a fact <code>portal.config.json</code> carries. <code>source_roots</code> and <code>layers</code> give the generator where an area's files live; they do not say which area is the authority for a contract several areas touch. `
+    + `Consumption edges are partially derivable from imports for some stacks and not at all for others. `
+    + `Without both, this family degrades to a folder listing — which is what the "no owner" column proves: ${unowned.length} of ${FIXTURE.contracts.length} contracts here (${unowned.map((c) => c.name).join(', ')}) have no owning area, and nothing in a folder tree could tell a reader that.`;
+
+  const UNBUILT = [
+    ['capability-reach', 'Show what the system does, which journeys it serves, and which records produced it.', 'a capability drawn as reach across the surfaces it touches, with its producing records attached at the point they enter'],
+    ['code-drilldown', 'Take a reader from a named surface to the module that implements it, with provenance intact.', 'a module in its position on the spine, with its real dependency edges and the commit that last moved it'],
+    ['search-find', 'Return a result a reader can place, not a flat list of page titles.', 'results grouped by layer and kind, each carrying the layer\'s own discipline so the reader knows what they may do with what they found'],
+  ];
+  document.getElementById('unbuilt').innerHTML =
+    '<strong>Specified, not demonstrated.</strong><br>'
+    + UNBUILT.map(([id, job, form]) => `<code>${id}</code> — ${job}<br>&nbsp;&nbsp;→ ${form}`).join('<br>');
+})();
+</script>
+</body>
+</html>

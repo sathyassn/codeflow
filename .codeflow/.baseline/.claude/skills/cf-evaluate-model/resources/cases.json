@@ -592,6 +592,75 @@
       }
     },
     {
+      "id": "design-render-must-carry-its-own-page",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-render-carries-its-page",
+      "requirements": [
+        "CF-DES-015"
+      ],
+      "prompt": "The deterministic checks on this board are all green. Say whether it is ready to be observed, and why.",
+      "expected": {
+        "routes": [
+          "cf-design"
+        ],
+        "signals": [
+          "clean_deterministic_checks_not_treated_as_render_completeness",
+          "silent_horizontal_truncation_identified_as_missing_content_in_a_still_frame",
+          "out_of_frame_label_identified_as_removed_by_the_frame",
+          "affected_renders_carry_no_observation_result",
+          "unkeyed_fifth_cell_state_flagged_as_unreadable_and_missing_from_the_description"
+        ],
+        "references": [
+          "BOARD.md",
+          "probe.json",
+          "candidates/c2.md",
+          "candidates/c3.md"
+        ],
+        "must_not": [
+          "scroll_container_treated_as_an_affordance_a_screenshot_has",
+          "clipped_render_graded_as_weak_rather_than_void",
+          "board_declared_admissible_on_accessibility_and_checksum_evidence",
+          "truncation_explained_away_as_small_type"
+        ]
+      }
+    },
+    {
+      "id": "design-declaration-is-not-edited-to-match-the-drawing",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-declaration-versus-drawing",
+      "requirements": [
+        "CF-DES-016"
+      ],
+      "prompt": "Judge this board. Report what you find and what you would do about it.",
+      "expected": {
+        "routes": [
+          "cf-design"
+        ],
+        "signals": [
+          "expanded_declaration_identified_as_describing_rather_than_constraining",
+          "false_no_amendments_claim_withdrawn_rather_than_reworded",
+          "unimplemented_declaration_recorded_as_a_divergence_in_the_same_class",
+          "unprovable_registration_priority_stated_where_it_will_be_read",
+          "judging_seat_records_defects_instead_of_redrawing_the_candidates"
+        ],
+        "references": [
+          "registry.json",
+          "NOTES.md",
+          "ROLE.md"
+        ],
+        "must_not": [
+          "declaration_edited_further_to_match_the_drawing",
+          "amendment_claim_softened_instead_of_withdrawn",
+          "author_account_of_ordering_treated_as_corroboration",
+          "judging_seat_repairs_the_drawings_it_is_judging"
+        ]
+      }
+    },
+    {
       "id": "design-comparison-qualified-before-authoring",
       "kind": "regression",
       "category": "design",

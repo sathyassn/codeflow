@@ -1,0 +1,336 @@
+{
+  "study": "tsk-014-w5",
+  "supersedes_board": "docs/verification/tsk-014-w4",
+  "rubric": "rubric.v5.md",
+  "note": "Written before any W5 artefact was authored and pinned by registry.lock.json in that state. registry.json stays byte-frozen; every later divergence goes in amendments.json. W4 is not edited in any respect.",
+
+  "correction_history": [
+    {
+      "id": "C1",
+      "when": "before any W5 candidate artefact was authored",
+      "what_the_draft_said": "That the independent blind observer completed three turns; that a third turn closed the contract-direction gaps and returned one disposition per direction; that fifteen blind findings and five Part D defects each carried a completed `disposition: repaired/replaced/rejected`; and that the board-wide context-coverage finding was already `repaired`.",
+      "why_it_was_false": "The observer completed exactly two turns. The third-turn request was drafted and armed and never accepted, so it produced no report, no ranking and no direction disposition. Every repair named in the draft was a plan, not an observed outcome: no W5 artefact, render or check existed at the time. Coverage in particular cannot be repaired before renders exist.",
+      "how_it_was_caught": "Orchestration interrupted the authoring turn and supplied the ground truth. No drawing, render, check or report was ever produced against the false draft.",
+      "what_changed": "rubric.v5.md and this file were rewritten and re-pinned. Intent and outcome are now separate fields everywhere. The complete second-turn Part D list replaces the five-item summary. Gates A21 and A22 exist so the same class of error fails a check instead of depending on a reader noticing.",
+      "what_was_not_done": "The false draft is not preserved as historical evidence. This entry is the disclosure that replaces it."
+    }
+  ],
+
+  "evidence_provenance": {
+    "observer": "An independent answer-blind Claude observer working over an anonymised bundle of the W4 renders at /private/tmp/cf-w4-blind-observer-20260804-1040.",
+    "completed_turns": ["turn-1", "turn-2"],
+    "turn_1": {
+      "id": "turn-1",
+      "status": "completed",
+      "inspected": "first exposure, the twelve light-wide candidates only"
+    },
+    "turn_2": {
+      "id": "turn-2",
+      "status": "completed",
+      "inspected": [
+        "cases light-middle, light-narrow and dark-wide",
+        "portal light-middle, light-narrow and dark-wide",
+        "contract light-narrow",
+        "contract 1, 2, 4 and 5 dark-wide",
+        "the four available baselines"
+      ],
+      "explicitly_not_inspected": [
+        "contract light-middle",
+        "contract/3 dark-wide",
+        "every contract dark-middle corner",
+        "every contract dark-narrow corner"
+      ],
+      "note": "The uninspected corners were present in the bundle. They were not looked at. Availability is not observation, and an uninspected corner is recorded as unobserved, never as passing."
+    },
+    "not_evidence": {
+      "id": "turn-3",
+      "status": "drafted and armed, never accepted, never completed",
+      "produced": "no observer report, no ranking, no direction disposition, no selection",
+      "rule": "Nothing on this board cites it. There is no observer ranking of the directions and no observer-selected direction in existence."
+    },
+    "what_this_session_could_read": "The anonymised bundle itself, and the orchestration prompts supplied to this session.",
+    "what_this_session_could_not_read": "The observer's own narrative reports. They live in a transcript this session's permission settings deny; reads were attempted and refused.",
+    "consequence": "Every finding below is transcribed from the operator's enumeration supplied in the orchestration prompts, in the operator's wording, not the observer's. Where that enumeration is silent this board is silent and says so. Nothing here paraphrases, infers or reconstructs a report this session could not open.",
+    "anonymised_mapping": {
+      "established_by": "this session, firsthand, not inherited",
+      "method": "SHA-256 of every PNG in the bundle compared against the digests of ../tsk-014-w4/renders/*.png",
+      "result": "90 of the bundle's 96 PNGs match a W4 render exactly. contract/1..5 = a-primitives, b-scene, c-recipes, d-authored-svg, e-raster; portal/1..3 = orient-model, record-trust, area-drilldown; cases/p1, p2, p3a, p3b = the four candidate pages; cases/d1baseline and cases/p2baseline = the two W4 baselines.",
+      "the_six_that_do_not_match": "the p1 and p3 plain baselines, three renders each. W4 never rendered them; they were produced for the bundle from the W3 baseline sources. This is the same omission A17 now gates."
+    }
+  },
+
+  "pre_registration_evidence": {
+    "claim": "rubric.v5.md and this registry were written and pinned before any W5 artefact was authored.",
+    "seed_state_at_pin": "The W5 directory holds seed copies under cases/, directions/, portal/, shared/, baselines/, rejected/ and tools/. Every one is byte-identical to its W4 or W3 counterpart. They are a starting point, not authorship.",
+    "what_the_files_can_show": "Both pinned files are digest-locked. registry.lock.json and rubric.v5.lock.json each record, per seed file, the board it is byte-identical to. A seed file that stops matching its source is an authored file, and the lock is what makes that visible.",
+    "what_the_files_cannot_show": "The mtime ordering does not survive a checkout. The digests do, and they pin the bytes rather than the moment.",
+    "standing": "Read correction_history and amendments.json before weighing A2, A3, A4, A8, A9, A20, A21 or A22."
+  },
+
+  "thresholds": {
+    "viewports": {
+      "desktop": { "width": 1440, "height": 900 },
+      "tablet": { "width": 900, "height": 1200 },
+      "mobile": { "width": 390, "height": 844 }
+    },
+    "modes": ["light", "dark"],
+    "legibility_floor_px": 11,
+    "mark_floor_px": 9,
+    "mark_floor_scope": "the smallest information-bearing dimension of any mark that carries a distinction marked matters:true — a tick's length, a cell's side, a stroke's separation",
+    "narrow_elongation_max": 3.2,
+    "narrow_elongation_scope": "narrow render height divided by wide render height, per artefact",
+    "accessibility_target": "WCAG 2.2 AA; automated axe over the WCAG 2.0/2.1/2.2 A and AA tags is partial evidence, never proof of conformance"
+  },
+
+  "outcome_vocabulary": {
+    "pending": "the repair is planned and nothing supports it yet",
+    "achieved": "the artefact exists and a named check result or named observation supports it",
+    "partial": "the artefact exists and the supporting evidence covers some of the claim; the uncovered part is named",
+    "failed": "attempted and the evidence does not support it",
+    "withdrawn": "not attempted, and the candidate or claim is removed rather than repaired",
+    "rule": "This session may set outcome from deterministic checks only. Any outcome that depends on a human gate stays pending until an observer who authored nothing here records it."
+  },
+
+  "blind_findings": [
+    { "id": "F01", "source_turn": "turn-1", "artefact": "portal/orient-model", "severity": "truth", "finding": "The central traceability spine is factually ordered incorrectly and merges PR into capability.", "root_cause": "The spine's own declared order was forced onto the layers' volatility order by grouping spine nodes by layer. The contract declares capability, epic/task, ADR/spec, PR, ledger; the drawing produced capability+PR, ADR/spec, epic/task, ledger.", "target_disposition": "repair", "planned_repair": "Draw the spine as its own ordered descent on its own axis, in the declared order, and connect each node to the layer it belongs to by an edge. Stop forcing two orderings onto one y-axis.", "outcome": "pending", "gate_that_should_have_caught_it": "none existed; A18 is written for it" },
+    { "id": "F02", "source_turn": "turn-2", "artefact": "cases/p2", "severity": "decoding", "finding": "The five-state lane glyph vocabulary caused actual observer decoding errors in every inspected context.", "target_disposition": "replace", "planned_repair": "Reduce the vocabulary to four drawn states, each carrying two independently legible channels, and move the fifth distinction out of the figure into the disclosure with an explicit note that the figure does not draw it. Fewer marks, each readable, and the omission stated rather than hidden.", "outcome": "pending", "gate_that_should_have_caught_it": "none; A12 and A14 both passed. A15 and G11 are written for it" },
+    { "id": "F03", "source_turn": "turn-2", "artefact": "cases/p2 and directions/b-scene", "severity": "idea-survival", "finding": "Narrow p2 and contract/2 lose the categorical lane headers.", "target_disposition": "repair", "planned_repair": "Keep lane identity at the narrow band on both: a lane strip carrying per-lane initials, the full names in the figure description, and the lane order stated once at the head of the band.", "outcome": "pending" },
+    { "id": "F04", "source_turn": "turn-2", "artefact": "portal/record-trust", "severity": "idea-survival", "finding": "Loses its decision-reach gutter and governing idea at narrow.", "target_disposition": "repair", "planned_repair": "Rotate reach rather than dropping it: at narrow each governing decision becomes a measured horizontal span above the claims it covers, so partial reach is still drawn as extent.", "outcome": "pending" },
+    { "id": "F05", "source_turn": "turn-2", "artefact": "portal/orient-model", "severity": "idea-survival", "finding": "Loses its traceability spine at narrow.", "target_disposition": "repair", "planned_repair": "Let the spine lead at narrow instead of vanishing: it becomes the primary vertical descent and the layers attach to it, which is the same relationship read from the other side.", "outcome": "pending" },
+    { "id": "F06", "source_turn": "turn-2", "artefact": "cases/p3b", "severity": "wrong-answer", "finding": "Caused a wrong answer, has an unreadable roughly 6px hue-only channel, and merely elongates to 6279px.", "target_disposition": "repair and demote to probation", "planned_repair": "Give the rail marks a second channel that is not hue (mark shape and vertical offset from the rail), enforce the mark floor, and make the narrow band a real recomposition instead of a full-length wrap.", "probation_rule_registered_in_advance": "Retained for one further answer-blind trial only. If that trial reproduces a wrong answer, the candidate is withdrawn. This is registered now so it is not decided afterwards.", "outcome": "pending" },
+    { "id": "F07", "source_turn": "turn-2", "artefact": "portal/area-drilldown", "severity": "idea-survival", "finding": "Loses column identity at narrow and its unowned-contract mark is imperceptible.", "target_disposition": "repair", "planned_repair": "Name each contract per area at narrow instead of relying on a column position that is gone, and give the unowned mark a second channel: an open, broken column head plus a drawn gap in the ownership row, not a colour.", "outcome": "pending" },
+    { "id": "F08", "source_turn": "turn-2", "artefact": "cases/p3a", "severity": "decoding", "finding": "Conflates return and external-cause channels and leaves residual marks unlegended.", "target_disposition": "repair", "planned_repair": "Give a return to an earlier round and an arrival from outside the review different geometry, not different hues: the return an arc below the row, the external arrival a straight entry from a reserved column with a distinct terminal. Key every residual mark the page draws.", "outcome": "pending" },
+    { "id": "F09", "source_turn": "turn-2", "artefact": "cases/p2", "severity": "fact-loss", "finding": "Omits the actual root cause carried by its plain baseline.", "target_disposition": "repair", "planned_repair": "Carry the record's own root cause at the stop, not only the cause class. The class stays as the axis; the specific reason is drawn at the stop.", "outcome": "pending" },
+    { "id": "F10", "source_turn": "turn-2", "artefact": "portal/orient-model", "severity": "truth", "finding": "Silently collapses seven authority kinds into three.", "target_disposition": "repair", "planned_repair": "Draw and name all seven, banded by the three, so the banding is visible as a grouping rather than performed as a substitution.", "outcome": "pending" },
+    { "id": "F11", "source_turn": "turn-2", "artefact": "directions/d-authored-svg", "severity": "direction-level", "finding": "The narrow variant abandons its positional axis.", "target_disposition": "reject", "planned_repair": "None. The direction's whole claim is that composition authority sits with the authoring agent, so the author's own narrow variant is the direction's evidence about itself — and it replaced a positional axis with printed labels. Repairing the drawing would show that this author can produce a better narrow band on a second attempt, which is not the question the direction was posed. Retained on the board as a rejection record with its W4 render and no repair.", "outcome": "pending", "decided_by": "the author of this board, on the finding. Not an observer selection — no observer ranking exists." },
+    { "id": "F12", "source_turn": "turn-2", "artefact": "directions/e-raster", "severity": "direction-level", "finding": "Demonstrates a hard ceiling: reject it; do not cosmetically repair it.", "target_disposition": "reject", "planned_repair": "None. Retained on the board as a rejection record with its W4 renders, explicitly not a candidate.", "outcome": "pending", "decided_by": "the operator, who directed rejection over cosmetic repair" },
+    { "id": "F13", "source_turn": "turn-2", "artefact": "directions/c-recipes", "severity": "unproven-claim", "finding": "The independent reuse proof has zero variance and proves nothing.", "target_disposition": "replace", "planned_repair": "The second binding had every instance at the same stage, so five identical rails were drawn. Re-prove reuse on two materially different subjects with real variance, bind a third recipe W4 never demonstrated, and show the extension cost by actually writing a recipe for a form the library lacked and recording what it took.", "outcome": "pending" },
+    { "id": "F14", "source_turn": "turn-2", "artefact": "cases/p1", "severity": "polish-to-material", "finding": "The dependency arcs are weak at wide and collide at narrow.", "target_disposition": "repair", "planned_repair": "Give the arcs contrast and a routing lane of their own at both bands, so an edge is legible at wide and no two edges share a path at narrow.", "outcome": "pending" },
+    { "id": "F15", "source_turn": "turn-2", "artefact": "board-wide", "severity": "coverage", "finding": "The uninspected mode and width corners remain unqualified.", "target_disposition": "render and probe the complete matrix; leave observation coverage open", "planned_repair": "A16 requires the complete width-by-mode product per artefact, and checks/coverage.json must list the matrix with no gap. That closes the rendering and probing gap only.", "outcome": "pending", "explicit_limit": "Rendering coverage is not observation coverage. The W4 corners the observer never inspected stay unobserved, and the W5 corners will stay unobserved until a fresh answer-blind observer looks at them. This session cannot close this finding, and A16 does not claim to." }
+  ],
+
+  "part_d_defects": {
+    "source": "turn-2, Part D, complete as enumerated by the operator",
+    "blocking": [
+      { "id": "D01", "artefact": "cases/p2", "defect": "narrow loses all lane headers", "also_recorded_as": "F03", "target_disposition": "repair", "outcome": "pending" },
+      { "id": "D02", "artefact": "directions/b-scene", "defect": "narrow has the same loss of lane headers", "also_recorded_as": "F03", "target_disposition": "repair", "outcome": "pending" },
+      { "id": "D03", "artefact": "portal/record-trust", "defect": "narrow loses the decision-reach gutter", "also_recorded_as": "F04", "target_disposition": "repair", "outcome": "pending" },
+      { "id": "D04", "artefact": "portal/orient-model", "defect": "narrow loses the traceability spine", "also_recorded_as": "F05", "target_disposition": "repair", "outcome": "pending" },
+      { "id": "D05", "artefact": "portal/area-drilldown", "defect": "narrow has six rotated headers colliding into an illegible block", "also_recorded_as": "F07", "target_disposition": "repair", "planned_repair": "no rotated headers at narrow; each area names its own contracts on their own lines", "outcome": "pending" },
+      { "id": "D06", "artefact": "cases/p2", "defect": "middle overprints the row label `Cross-lineage review of the exact candidate` on its glyph strip", "target_disposition": "repair", "planned_repair": "row labels get their own reserved column at middle; no label shares space with the glyph strip", "outcome": "pending" },
+      { "id": "D07", "artefact": "cases/p3b", "defect": "narrow and middle merely elongate, to 6279px and 4445px", "also_recorded_as": "F06", "target_disposition": "repair", "planned_repair": "a real narrow and middle recomposition inside the declared elongation ceiling", "outcome": "pending" },
+      { "id": "D08", "artefact": "directions/e-raster", "defect": "dark shows a full-width light raster slab", "also_recorded_as": "F12", "target_disposition": "reject, not repair", "outcome": "pending" },
+      { "id": "D09", "artefact": "directions/d-authored-svg", "defect": "narrow replaces the wave axis with text and leaves slack bars without scale or grid", "also_recorded_as": "F11", "target_disposition": "reject, not repair", "outcome": "pending" }
+    ],
+    "channel_integrity": [
+      { "id": "D10", "artefact": "cases/p3a", "defect": "draws F6's return arc in the external-cause colour even though the legend assigns return a different geometry and channel", "also_recorded_as": "F08", "target_disposition": "repair", "planned_repair": "the return channel is geometry, and the colour follows the geometry rather than contradicting it", "outcome": "pending" },
+      { "id": "D11", "artefact": "cases/p3a", "defect": "draws meaningful residual marks under F4/R3 and F6/R8 and keys neither", "also_recorded_as": "F08", "target_disposition": "repair", "planned_repair": "every residual mark is keyed, or it is not drawn", "outcome": "pending" }
+    ],
+    "context_and_polish_material_to_qualification": [
+      { "id": "D12", "artefact": "portal/record-trust", "defect": "middle and dark overlap rotated ADR-0050 and ADR-0051 labels", "target_disposition": "repair", "planned_repair": "the decision heads are no longer rotated; they stack in their own column head with the span beneath each", "outcome": "pending" },
+      { "id": "D13", "artefact": "portal/orient-model", "defect": "middle places `split authority` labels on bar edges", "target_disposition": "repair", "planned_repair": "the label moves inside the bar's own row on a reserved shoulder, so a short bar cannot push it onto an edge or into the next column", "outcome": "pending" },
+      { "id": "D14", "artefact": "cases/p3a", "defect": "narrow clips the external label and truncates titles and code strips", "target_disposition": "repair", "outcome": "pending" },
+      { "id": "D15", "artefact": "cases/p3a", "defect": "narrow repeats an empty exterior region seven times for one datum", "target_disposition": "repair", "planned_repair": "the exterior column is drawn once for the band, not once per row", "outcome": "pending" },
+      { "id": "D16", "artefact": "directions/b-scene", "defect": "dark makes dependency edges near-invisible", "also_recorded_as": "F14", "target_disposition": "repair", "planned_repair": "edge contrast is derived per mode against the drawn background, not inherited from light", "outcome": "pending" },
+      { "id": "D17", "artefact": "board-wide", "defect": "the five-state lane vocabulary is below the legibility floor in every inspected width and mode and caused real decode errors", "also_recorded_as": "F02", "target_disposition": "replace", "outcome": "pending" }
+    ]
+  },
+
+  "part_e_source_defect": {
+    "id": "E1",
+    "artefact": "portal/orient-model",
+    "kind": "factual, in the source the figure draws from",
+    "finding": "The spine order is wrong, PR is merged into capability, and seven write-authority kinds are collapsed into three without disclosing the loss.",
+    "also_recorded_as": ["F01", "F10"],
+    "why_it_is_listed_separately": "F01 and F10 are composition dispositions. E1 records that the defect is a statement about the repository, not a drawing preference — which is why A18 re-derives it from the source instead of checking the drawing against itself.",
+    "target_disposition": "repair the source binding and the drawing, and gate it with A18",
+    "outcome": "pending"
+  },
+
+  "positive_evidence_preserved": [
+    "cases/p1 materially outperforms its plain baseline: position on a wave axis plus a drawn extent lets a reader separate a task with room from one without, which the baseline's table does not.",
+    "cases/p3a materially outperforms its plain baseline: an ordered round axis with a drawn return separates a re-opening from an ordinary later edit.",
+    "Neither result excuses the remaining defects on those two candidates, and neither is carried forward as a pass. They are recorded so a repair does not accidentally remove what worked."
+  ],
+
+  "contexts": {
+    "rule": "every artefact is rendered at all three widths in both modes — the complete product, not a diagonal",
+    "motion": { "policy": "none-authored", "evidence": "checks/motion.json, both prefers-reduced-motion settings" }
+  },
+
+  "carrier_contracts": {
+    "cf_present": {
+      "schema": ".codeflow/schemas/present/document-v1.schema.json",
+      "closed_block_types": ["narrative", "bullets", "callout", "comparison", "decision", "table", "status", "code", "diff", "tree", "diagram", "media", "disclosure", "tabs", "feedback_prompt", "html"],
+      "verbatim_constraint": "if lower.contains('@')",
+      "verbatim_constraint_source": "crates/codeflow-present/src/safe_html.rs"
+    }
+  },
+
+  "downstream_requirements": [
+    {
+      "id": "R1",
+      "title": "Feedback anchoring over visual content, and feedback delivery back to the originating task",
+      "status": "recorded as a requirement and a qualification case. Not implemented, not designed, not in scope for this turn.",
+      "confirmed_gap": {
+        "what_exists": [
+          "Block anchors: FeedbackNote carries block_id and block_label — crates/codeflow-present/src/state.rs:166-174.",
+          "Exact text-selection anchors: FeedbackNote.selector is an optional TextSelector of start_utf16/end_utf16, and FeedbackAnchor resolves to Block, Anchored, Reanchored or Orphaned with quote-and-context re-anchoring — crates/codeflow-present/src/state.rs:157-219, re-anchor logic at 2238-2290."
+        ],
+        "what_does_not_exist": [
+          "Any coordinate, region, shape or element anchor over an image, a diagram or a rendered figure. FeedbackAnchor has exactly four variants and all four are block- or text-offset based. A reader cannot point at a mark in a figure; they can only point at the block that contains it.",
+          "Any automatic delivery of feedback into the originating Codex or Claude task. `codeflow present feedback --follow` writes newline-delimited JSON envelopes to stdout and marks them delivered in the store — crates/codeflow-cli/src/cmd/present.rs:557-574. Nothing carries an envelope into a harness conversation."
+        ],
+        "the_naming_hazard": "FeedbackLifecycle::Delivered (state.rs:203-209) is set by mark_delivered when an envelope is written to stdout. That is storage and transport state. It is not evidence that any harness, agent or human received the feedback, and it must never be reported as chat delivery."
+      },
+      "constraints_on_any_eventual_direction": [
+        "Anchoring must survive a revision. Whatever a visual anchor points at needs the equivalent of the existing quote-and-context re-anchor: a stable visual-element or region identity, with an explicit orphaned state when the figure changes underneath it, not a raw pixel coordinate that silently drifts.",
+        "The feedback envelope stays harness-neutral. Delivery is an adapter behind it, each adapter separately qualified, each with a declared fallback, and the fallback is what happens when no adapter is present — not a silent success.",
+        "Storage is never reported as delivery. A lifecycle that cannot distinguish 'written to stdout' from 'received by the task' is the defect, not the transport."
+      ],
+      "why_it_is_here_and_not_in_production": "The visual and content direction is unsettled and operator-owned. An anchor model that points at visual elements is a consequence of how figures are composed and what identity a mark carries — which is exactly what this board is trying to settle. Building a host adapter first would fix the anchor model to whatever the first adapter happened to need.",
+      "qualification_case": "Once a direction is selected, the selected composition must be able to name its own information-bearing marks stably enough to anchor to, and the board's own figures are the fixture for testing that. A direction that cannot give a mark a durable identity cannot support visual feedback, and that is a scoring input, not an afterthought.",
+      "scope_boundary_for_this_turn": "No runtime, schema, portal or CLI change was made for R1. Only this record."
+    }
+  ],
+
+  "fidelity_assertions": [
+    { "id": "spine-order", "artefact": "portal/orient-model", "asserts": "the traceability spine is drawn in the order the operating contract declares", "source": "shared/repo-layers.js spine.nodes, itself quoted from AGENTS.md", "check": "the sequence of spine node ids in the rendered markup equals the declared sequence" },
+    { "id": "spine-distinct", "artefact": "portal/orient-model", "asserts": "no two spine nodes are merged into one drawn position", "source": "same", "check": "the count of drawn spine nodes equals the declared count" },
+    { "id": "authority-kinds", "artefact": "portal/orient-model", "asserts": "every authority kind the contract declares is drawn and named", "source": "shared/repo-layers.js authorities", "check": "the set of authority ids in the rendered markup equals the declared set" },
+    { "id": "layer-cadence", "artefact": "portal/orient-model", "asserts": "the layers are ordered by the contract table's own row order", "source": "shared/repo-layers.js byCadence", "check": "the drawn layer sequence equals the derived sequence" },
+    { "id": "claim-count", "artefact": "portal/record-trust", "asserts": "every claim in the record is drawn", "source": "shared/record-authority.js claims", "check": "drawn claim ids equal declared claim ids" },
+    { "id": "stop-causes", "artefact": "cases/p2", "asserts": "every claim that stops short carries the record's own root cause", "source": "shared/tsk007-facts.js stops and causes", "check": "each drawn stop names a cause id in the closed set and the cause's own detail text appears in the figure" }
+  ],
+
+  "channels": [
+    { "artefact": "cases/p2", "distinction": "lane evidence state", "matters": true, "states": ["executed", "bounded", "notrun", "outofscope"], "channel_a": "fill level — solid, hatched, empty", "channel_b": "an overlaid stroke — none, a dashed perimeter, a single slash", "hue_only": false, "fifth_state_note": "the difference between a lane that does not apply and a lane the claim does not reach is not drawn; it is stated in the disclosure and named in the figure description" },
+    { "artefact": "cases/p3a", "distinction": "how a finding re-opened", "matters": true, "states": ["return", "external"], "channel_a": "geometry — an arc below the row against a straight entry from a reserved column", "channel_b": "terminal shape — an arrowhead against an open square", "hue_only": false },
+    { "artefact": "cases/p3b", "distinction": "how often a region was rewritten", "matters": true, "states": ["once", "again", "outside"], "channel_a": "mark height above the rail", "channel_b": "mark shape — a tick, a stacked pair, an open square", "hue_only": false },
+    { "artefact": "portal/area-drilldown", "distinction": "contract ownership", "matters": true, "states": ["owns", "consumes", "migrating", "unowned"], "channel_a": "mark form — filled disc, open ring, dashed ring, and for unowned an absent disc in a broken column", "channel_b": "column head — closed against broken", "hue_only": false },
+    { "artefact": "portal/orient-model", "distinction": "write authority band", "matters": true, "states": ["yours", "conditional", "refuses"], "channel_a": "bar edge — solid, dashed, hatched fill", "channel_b": "a named authority kind printed in the bar's shoulder", "hue_only": false }
+  ],
+
+  "directions": [
+    {
+      "id": "a-primitives",
+      "title": "Curated semantic primitives",
+      "target_status": "retain",
+      "outcome": "pending",
+      "composition_authority": "product code",
+      "mechanism": "directions/a-primitives/primitives.js",
+      "reach": "exactly the relationships the shipped primitives model, rendered consistently and accessibly every time",
+      "cannot_express": "any relationship no primitive models; two relationships composed in one frame",
+      "extension_path": "new product code — a block type, a schema version, a renderer, tests, a release",
+      "author_intent": "carry forward for a fresh answer-blind trial. No observer ranking of the directions exists."
+    },
+    {
+      "id": "b-scene",
+      "title": "Bounded declarative scene grammar",
+      "target_status": "retain, repaired",
+      "outcome": "pending",
+      "composition_authority": "the document",
+      "mechanism": "directions/b-scene/scene.js",
+      "targets": ["F03 — the narrow evidence scene keeps categorical lane identity", "D16 — per-mode edge contrast"],
+      "reach": "any composition expressible as marks placed by declared scales",
+      "cannot_express": "anything needing a layout algorithm the grammar does not implement",
+      "extension_path": "a new subject form is a new scene; a new mark kind is product code",
+      "author_intent": "carry forward for a fresh answer-blind trial after the repairs land."
+    },
+    {
+      "id": "c-recipes",
+      "title": "Project-neutral recipe library",
+      "target_status": "retain, reuse claim re-proved",
+      "outcome": "pending",
+      "composition_authority": "a reviewed library versioned with the skill",
+      "mechanism": "directions/c-recipes/recipes.js",
+      "targets": ["F13 — the reuse proof is replaced with two materially different subjects that vary, a third recipe W4 never demonstrated, and a real extension exercise"],
+      "reach": "whatever the library covers, uniformly, with a name a later reader can look up",
+      "cannot_express": "a genuinely novel relationship until a recipe for it is written and reviewed",
+      "extension_path": "contribute a recipe — a managed asset review, no binary release",
+      "author_intent": "the reuse claim is currently unproven, not disproven. It must be re-proved before it is carried into any trial."
+    },
+    {
+      "id": "d-authored-svg",
+      "title": "Authored SVG under a runtime service contract",
+      "target_status": "reject",
+      "outcome": "pending",
+      "rejected_on": "F11, D09",
+      "decided_by": "the author of this board, on the finding. No observer ranking or selection exists.",
+      "why": "The direction's claim is that composition authority belongs with the authoring agent. Its own narrow variant replaced a positional axis with printed labels — the failure the whole board exists to correct — and the contract has no model of meaning with which to notice. Repairing the drawing would demonstrate that this author can produce a better narrow band on a second attempt, which is not the question the direction was posed. It is retained on the board as a rejection record with its W4 renders and no repair.",
+      "what_survives_the_rejection": "Any winning direction still needs a documented escape path for a subject it cannot express. That requirement is inherited; this mechanism is not."
+    },
+    {
+      "id": "e-raster",
+      "title": "Pre-rendered raster through the existing media block",
+      "target_status": "reject",
+      "outcome": "pending",
+      "rejected_on": "F12, D08",
+      "decided_by": "the operator, who directed rejection over cosmetic repair",
+      "why": "Its own evidence demonstrates a hard ceiling: one width, one mode, no reflow, no selectable or searchable text, no machine-readable structure, and one alt string as the entire accessible account.",
+      "what_survives_the_rejection": "It remains the honest zero-cost floor any direction must beat, and its renders are kept as that reference."
+    }
+  ],
+
+  "portal_families": [
+    { "id": "orient-model", "demonstrated": true, "scorable": true, "targets": ["F01", "F05", "F10", "D04", "D13", "E1"], "outcome": "pending", "surface_job": "Bring a reader who has never seen this repository into it with a usable model of where knowledge lives, what may be done to it, and how to trace why something exists.", "narrow_composition": "the spine leads and the layers attach to it, which is the same relationship read from the other side" },
+    { "id": "record-trust", "demonstrated": true, "scorable": true, "targets": ["F04", "D03", "D12"], "outcome": "pending", "surface_job": "Let a reader trust or distrust the record in front of them: which decision governs it, how far that decision reaches, and which claims have nothing behind them.", "narrow_composition": "reach rotates to a measured horizontal span above the claims it covers" },
+    { "id": "area-drilldown", "demonstrated": true, "scorable": true, "fixture": true, "targets": ["F07", "D05"], "outcome": "pending", "surface_job": "In a monorepo, show the shared boundaries before an area, and enter an area by what it owns.", "narrow_composition": "each area names its own contracts; ownership keeps two channels" },
+    { "id": "capability-reach", "demonstrated": false, "scorable": false, "why_not": "specified and not built in this turn" },
+    { "id": "code-drilldown", "demonstrated": false, "scorable": false, "why_not": "specified and not built in this turn" },
+    { "id": "search-find", "demonstrated": false, "scorable": false, "why_not": "specified and not built in this turn" }
+  ],
+
+  "cases": [
+    {
+      "id": "p1", "surface": "cf-present", "scorable": true,
+      "question": "If exactly one unfinished EPC-005 task slipped by one wave, which tasks would move the finish and which would not?",
+      "shared_source": "shared/plan-model.js",
+      "targets": ["F14"],
+      "outcome": "pending",
+      "forbidden_phrases": ["moves the finish", "move the finish", "sets the finish", "critical chain", "longest chain", "longest path", "can wait", "could wait", "start today"],
+      "forbidden_patterns": [
+        { "pattern": "TSK-\\d{3}\\s*(?:→|->|>)\\s*TSK-\\d{3}", "why": "the chain written out states the relationship the geometry exists to show" },
+        { "pattern": "TSK-\\d{3}[^\\n]{0,60}\\b(?:one|two|three|1|2|3)\\s+waves?\\s+of\\s+room", "why": "attaches a room quantity to a named task in prose" },
+        { "pattern": "\\b(?:four|4)[- ]task\\b", "why": "names the length of the chain the reader is asked to find" }
+      ],
+      "candidates": ["a-critical-path-and-room"]
+    },
+    {
+      "id": "p2", "surface": "cf-present", "scorable": true,
+      "question": "Which platforms carry executed evidence for the exact candidate, and for each platform that does not, what kind of thing stopped it?",
+      "shared_source": "shared/tsk007-facts.js",
+      "targets": ["F02", "F03", "F09", "D01", "D06", "D17"],
+      "outcome": "pending",
+      "forbidden_phrases": ["only macOS", "macOS arm64 only", "one platform deep", "four of six", "two of six"],
+      "forbidden_patterns": [
+        { "pattern": "\\b(?:four|4|six|6)\\s+of\\s+(?:four|4|six|6)\\b", "why": "a counted summary is the answer" },
+        { "pattern": "no\\s+(?:other\\s+)?platform[^\\n]{0,40}(?:evidence|run|executed)", "why": "states the coverage finding in prose" }
+      ],
+      "candidates": ["a-stopped-provenance"]
+    },
+    {
+      "id": "p3", "surface": "cf-present", "scorable": true,
+      "question": "Which findings took more than one round to close, and which of those was re-opened by something that did not come from the review itself?",
+      "shared_source": "shared/p3-convergence.js",
+      "targets": ["F06", "F08", "D07", "D10", "D11", "D14", "D15"],
+      "outcome": "pending",
+      "forbidden_phrases": ["needed more than one round", "took more than one round", "three findings", "re-opened from outside", "reopened from outside"],
+      "forbidden_patterns": [
+        { "pattern": "F\\d[^\\n]{0,30}F\\d[^\\n]{0,30}F\\d", "why": "the answer set enumerated in one line" },
+        { "pattern": "F\\d[^\\n]{0,60}outside", "why": "names which finding the external cause belongs to instead of placing it" }
+      ],
+      "candidates": ["a-convergence-with-source-depth", "b-source-region-history"],
+      "sibling_distinctness_scorable": false,
+      "why_not_scorable": "b-source-region-history is retained on probation after producing a wrong answer, so the pair is not a live sibling comparison. The P3 differential this board can settle is candidate against plain baseline, not candidate against candidate."
+    }
+  ],
+
+  "amendments": [],
+  "invalidated_bands": [],
+
+  "convergence_hypotheses": {
+    "note": "Recorded as hypothesis only. One study, one author and mutually exclusive artefacts earn no system layer.",
+    "observed": ["reserved-absence — several artefacts draw a deliberate absence as occupied space. Untested against subject independence or a real product reuse need."]
+  }
+}

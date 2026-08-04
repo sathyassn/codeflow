@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EPC-005 remaining tasks — plain baseline</title>
+<style>
+/* The plain baseline. Deliberately ordinary: this is what the same facts look
+   like with no composition at all — a heading, some sentences, a table. It is
+   shared by all five baselines on purpose, because the baseline is not a design
+   and must not become one. Candidates never share a stylesheet. */
+:root {
+  color-scheme: light dark;
+  --ink: #1a1a1a; --ink-2: #4a4a4a; --page: #ffffff; --rule: #d4d4d4; --code: #f4f4f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e8e8e8; --ink-2: #b0b0b0; --page: #101010; --rule: #333333; --code: #1c1c1c; }
+}
+* { box-sizing: border-box; }
+html { background: var(--page); }
+body {
+  margin: 0 auto; padding: 40px 24px 64px; max-width: 46rem; color: var(--ink); background: var(--page);
+  font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; font-weight: 700; }
+.meta { margin: 0 0 24px; font-size: 13px; color: var(--ink-2);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+h2 { font-size: 17px; margin: 30px 0 8px; font-weight: 650; }
+p, li { font-size: 15.5px; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0 0; font-size: 14px; }
+th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 650; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px;
+       background: var(--code); padding: 1px 4px; border-radius: 3px; }
+blockquote { margin: 8px 0 0; padding-left: 12px; border-left: 3px solid var(--rule); color: var(--ink-2);
+             font-size: 14px; }
+.note { font-size: 13px; color: var(--ink-2); margin-top: 26px; }
+</style>
+</head>
+<body>
+<h1>EPC-005 — the unfinished tasks</h1>
+<p class="meta">project-management/tasks/TSK-*.md</p>
+
+<p>Six tasks in EPC-005 are not finished. Each row below gives its status, the dependencies
+  of its own that are still open, the earliest wave it could start in, and the latest wave it
+  could start in without the epic finishing later.</p>
+
+<table id="tasks">
+  <thead><tr><th>Task</th><th>Status</th><th>Open dependencies</th><th>Earliest wave</th><th>Latest wave</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>How the waves are computed</h2>
+<ul>
+  <li>A task's <strong>earliest wave</strong> is one more than the latest wave of any dependency
+    of its own that is still open; a task with none is in wave 1.</li>
+  <li>A task's <strong>latest wave</strong> is the last wave of the epic minus the longest run of
+    tasks that still has to follow it.</li>
+</ul>
+
+<p class="note">Derived from the same <code>shared/plan-model.js</code> the candidates use, so the
+  facts are identical and only the presentation differs.</p>
+
+<script type="application/json" id="plan-data">
+{
+  "tasks": [
+    { "id": "TSK-005", "title": "strengthen editorial and product design contracts", "status": "complete", "deps": [], "specs": ["SPC-003"], "target": "main" },
+    { "id": "TSK-006", "title": "research and prototype the presentation experience", "status": "complete", "deps": ["TSK-005"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-007", "title": "verify and qualify the presentation utility", "status": "blocked", "deps": ["TSK-011"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-008", "title": "research and prototype documentation portals", "status": "complete", "deps": ["TSK-005"], "specs": ["SPC-005"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-009", "title": "build and qualify the documentation portal utility", "status": "blocked", "deps": ["TSK-008", "TSK-014"], "specs": ["SPC-005"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-010", "title": "integrate and release the CodeFlow system", "status": "todo", "deps": ["TSK-007", "TSK-009", "TSK-013", "TSK-014"], "specs": [], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-011", "title": "build the interactive presentation utility", "status": "blocked", "deps": ["TSK-006", "TSK-014"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-012", "title": "refine design exploration, sourcing, and revision contracts", "status": "cancelled", "deps": ["TSK-005"], "specs": ["SPC-006"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-013", "title": "prepare the v3 release candidate", "status": "in_progress", "deps": [], "specs": [], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-014", "title": "recover the design method and utility directions", "status": "in_progress", "deps": ["TSK-005", "TSK-006", "TSK-008"], "specs": ["SPC-004", "SPC-005", "SPC-006"], "target": "integration/EPC-005-presentation-system" }
+  ]
+}
+</script>
+<script src="../../shared/plan-model.js"></script>
+<script>
+(() => {
+  const model = window.planModel(JSON.parse(document.getElementById("plan-data").textContent));
+  const body = document.querySelector("#tasks tbody");
+  for (const task of model.open.slice().sort((a, b) => model.wave(a.id) - model.wave(b.id))) {
+    const tr = document.createElement("tr");
+    const open = task.deps.filter((d) => !model.done(model.byId.get(d)));
+    for (const value of [task.id, task.status, open.join(", ") || "none",
+      String(model.wave(task.id)), String(model.latest(task.id))]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

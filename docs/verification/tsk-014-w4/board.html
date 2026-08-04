@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSK-014 W4 — the decision board</title>
+<link rel="stylesheet" href="shared/shell.css">
+<style>
+/* Board chrome only. Every demonstration on this board is styled by
+   shared/shell.css and nothing else; these rules style the index, which is not
+   under test. */
+.b-grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin: 1rem 0 0; }
+.b-card { border: 1px solid var(--sh-rule); border-radius: 7px; background: var(--sh-surface); padding: 1rem 1.1rem 1.2rem; }
+.b-card h3 { margin: 0 0 0.15rem; font-size: 15px; }
+.b-card .b-sub { margin: 0 0 0.7rem; font-size: 12.5px; color: var(--sh-ink-muted); }
+.b-card p { font-size: 13px; margin: 0 0 0.5rem; }
+.b-card a { color: var(--sh-ink); }
+/* Every thumbnail on this index is the TOP of a full-page render, cropped by a
+   fixed-height window and labelled as such, with the whole render one click
+   away. A crop with no affordance is a defect; a crop that says it is one, next
+   to the link that undoes it, is a thumbnail. */
+.b-window { display: block; max-height: 300px; overflow: hidden; border: 1px solid var(--sh-rule);
+            border-radius: 4px; margin: 0.4rem 0 0.15rem; position: relative; }
+.b-window img { display: block; width: 100%; height: auto; }
+.b-window::after { content: ""; position: absolute; inset: auto 0 0 0; height: 42px;
+                   background: linear-gradient(to bottom, transparent, var(--sh-surface)); }
+.b-crop { font-size: 11px; color: var(--sh-ink-muted); margin: 0 0 0.7rem; }
+.b-row { display: grid; gap: 0.6rem; grid-template-columns: 1fr 1fr 0.85fr; align-items: start; margin: 0.5rem 0 0; }
+.b-row .b-window { max-height: 470px; }
+.b-row figcaption { font-size: 11.5px; color: var(--sh-ink-muted); margin-top: 0.25rem; }
+table.b-tab { border-collapse: collapse; width: 100%; font-size: 12.5px; margin: 0.6rem 0 0; }
+table.b-tab th, table.b-tab td { border: 1px solid var(--sh-rule); padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
+table.b-tab th { font-weight: 620; }
+.b-ask { border: 2px solid var(--sh-rule-strong); border-radius: 7px; padding: 1rem 1.1rem; margin: 1.2rem 0 0; }
+.b-ask h3 { margin: 0 0 0.4rem; font-size: 15px; }
+@media (max-width: 760px) { .b-row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 · W4 · operator decision board</p>
+<h1>Two decisions, and the evidence for each</h1>
+<p class="sh-lede">Nothing on this board is a selection. It exists so the direction can be settled
+by someone who is not a model, from artefacts that were rendered rather than described.</p>
+
+<div class="sh-note">
+<strong>What this board is not.</strong> No composition here has been shown to communicate. The
+observation gates in <code>rubric.v4.md</code> need someone who authored nothing in this
+directory and has read no answer, and no such session has looked. Every green result below is a
+deterministic one: internally consistent, accessible to the automated checks, contained in its
+own frame. That is admissibility, not approval.
+</div>
+
+<hr class="sh-rule">
+
+<h2>Decision 1 — what should carry a drawn explanation at all</h2>
+<p>W3 qualified eleven candidate compositions against the product's real technical contract and
+<strong>ten came back negative</strong>. That is not a result about compositions. The closed
+<code>cf-present</code> block catalogue cannot express the relationships this product's own
+subjects have: <code>diagram</code> cannot place a mark at a computed position or size anything
+to a quantity, and the <code>html</code> escape renders in a sandboxed frame whose inline CSS
+may not contain <code>@</code> — so no media query, no <code>prefers-color-scheme</code>, no
+self-sizing.</p>
+
+<p>Five content models are demonstrated below. Each renders real CodeFlow content through
+<strong>its own mechanism</strong>, at three widths in both modes, and each ships one subject it
+genuinely cannot carry. They differ on one axis: <strong>where composition authority sits</strong>,
+and therefore what a new subject form costs.</p>
+
+<div class="b-grid" id="directions"></div>
+
+<h3>The trade, side by side</h3>
+<table class="b-tab" id="trade"></table>
+<p class="sh-caption">Cost, safety and extensibility are here rather than beside each figure on
+purpose: the figures are the evidence, and a column of prose next to them would decide the
+contest by volume.</p>
+
+<h2>Decision 2 — what the documentation portal's pages should be</h2>
+<p>The shipped portal does not implement its accepted prototypes. It is a correct Starlight
+index over the repository's Markdown: a link list at <code>/orient/</code>, every ADR title in
+the sidebar in file order, and each record rendered as its own file with a provenance line. Three
+page families are demonstrated against the real content graph; three more are specified and not
+built, and say so.</p>
+
+<div class="b-grid" id="portal"></div>
+
+<h2>The composition board, corrected</h2>
+<p>Fourteen W3 render bands failed. Every one carries a disposition, the W3 record is untouched,
+and each repaired band was re-rendered under one browser build. The two that needed a design
+decision rather than a repair had their narrow composition <em>declared in
+<code>registry.json</code> before it was drawn</em> — which is the specific discipline W3 broke.</p>
+
+<div id="dispositions"></div>
+
+<h2>What was verified, and what was not</h2>
+<div id="verified"></div>
+
+<div class="b-ask">
+<h3>What is being asked of the operator</h3>
+<p><strong>1.</strong> Which content model should carry drawn explanation in <code>cf-present</code>
+— A, B, C, D, E, or a composition of them? This decides whether TSK-011 builds a block catalogue,
+a compiler, a library, a service, or nothing.</p>
+<p><strong>2.</strong> Which portal page families are in scope, and is the source-model work each
+needs acceptable? This decides what TSK-009 resumes with.</p>
+<p><strong>3.</strong> The balance between authored composition and any earned reusable
+primitive. Nothing has been extracted from this study, and nothing should be until the product
+repeats a pattern.</p>
+<p class="sh-caption" style="margin-top:0.6rem">Model agreement is not this decision and has
+never been. Two seats agreeing on a direction is two seats agreeing.</p>
+</div>
+
+<hr class="sh-rule">
+<p class="sh-src">Rubric: <code>rubric.v4.md</code> (pinned). Registration:
+<code>registry.json</code> (pinned, byte-frozen; divergences in <code>amendments.json</code>).
+Band dispositions: <code>dispositions.json</code>. Evidence: <code>checks/</code>,
+<code>renders/</code>, <code>SHA256SUMS</code>. The W3 board at
+<code>../tsk-014-w3/</code> is append-only and is not edited by this study.</p>
+
+</div>
+
+<script src="registry.json" type="application/json" id="noop"></script>
+<script>
+(async () => {
+  const registry = await (await fetch('registry.json')).json();
+  const dispositions = await (await fetch('dispositions.json')).json();
+  const shot = (id) => `renders/${id}-light-desktop.png`;
+
+  const dirHost = document.getElementById('directions');
+  for (const d of registry.directions) {
+    const card = document.createElement('div');
+    card.className = 'b-card';
+    card.innerHTML = `
+      <h3>${d.title}</h3>
+      <p class="b-sub">authority: ${d.composition_authority}</p>
+      <a class="b-window" href="${shot(`dir-${d.id}`)}"><img alt="The top of the ${d.title} demonstration at 1440px in light mode" src="${shot(`dir-${d.id}`)}"></a>
+      <p class="b-crop">the top of the render — <a href="${shot(`dir-${d.id}`)}">whole page</a></p>
+      <p>${d.one_line}</p>
+      <p><strong>Cannot express:</strong> ${d.cannot_express}</p>
+      <p><a href="directions/${d.id}/index.html">Open the demonstration →</a></p>`;
+    dirHost.append(card);
+  }
+
+  const trade = document.getElementById('trade');
+  trade.innerHTML = `<thead><tr><th>Direction</th><th>Reach</th><th>A new subject form costs</th><th>Safety delta</th></tr></thead><tbody>${
+    registry.directions.map((d) => `<tr><td><strong>${d.title}</strong></td><td>${d.reach}</td><td>${d.extension_path}</td><td>${d.security_delta ?? 'none beyond the current contract'}</td></tr>`).join('')
+  }</tbody>`;
+
+  const portalHost = document.getElementById('portal');
+  for (const f of registry.portal_families) {
+    const card = document.createElement('div');
+    card.className = 'b-card';
+    card.innerHTML = f.demonstrated
+      ? `<h3>${f.id}</h3><p class="b-sub">demonstrated against real repository content</p>
+         <a class="b-window" href="${shot(`portal-${f.id}`)}"><img alt="The top of the ${f.id} page family at 1440px in light mode" src="${shot(`portal-${f.id}`)}"></a>
+         <p class="b-crop">the top of the render — <a href="${shot(`portal-${f.id}`)}">whole page</a></p>
+         <p>${f.surface_job}</p>
+         <p><strong>Needs from the source model:</strong> ${(f.source_facts_needed ?? []).join('; ') || 'nothing new'} — ${f.source_facts_status ?? ''}</p>
+         <p><a href="portal/${f.id}/index.html">Open the family →</a></p>`
+      : `<h3>${f.id}</h3><p class="b-sub">specified, not built</p>
+         <p>${f.surface_job}</p><p><strong>Form the subject wants:</strong> ${f.subject_native_form}</p>
+         <p class="b-sub">${f.why_not_demonstrated}</p>`;
+    portalHost.append(card);
+  }
+
+  const dispHost = document.getElementById('dispositions');
+  for (const entry of dispositions.entries) {
+    const row = document.createElement('div');
+    row.className = 'b-row';
+    row.innerHTML = `
+      <figure style="margin:0">
+        <a class="b-window" href="../tsk-014-w3/renders/${entry.w3_render}.png"><img alt="The top of the W3 render of ${entry.w3_render}" src="../tsk-014-w3/renders/${entry.w3_render}.png"></a>
+        <figcaption>before — ${entry.before.failure_kind}, ${entry.before.failure_severity} · <a href="../tsk-014-w3/renders/${entry.w3_render}.png">whole render</a></figcaption>
+      </figure>
+      <figure style="margin:0">
+        <a class="b-window" href="renders/${entry.w3_render}.png"><img alt="The top of the W4 render of ${entry.w3_render}" src="renders/${entry.w3_render}.png"></a>
+        <figcaption>after — ${entry.after.disposition}, ${entry.after.kind} · <a href="renders/${entry.w3_render}.png">whole render</a></figcaption>
+      </figure>
+      <div><p style="font-size:12px;margin:0 0 0.4rem"><strong>${entry.w3_render}</strong></p>
+      <p style="font-size:11.5px;color:var(--sh-ink-muted);margin:0">${entry.after.what_changed}</p></div>`;
+    dispHost.append(row);
+  }
+
+  const verified = document.getElementById('verified');
+  verified.innerHTML = `
+    <table class="b-tab">
+      <thead><tr><th>Established deterministically</th><th>Not established</th></tr></thead>
+      <tbody><tr><td>
+        84 renders across three widths and both modes, every one carrying what its page contains
+        (no hidden overflow, nothing outside its own frame, no document overflow).<br>
+        Zero WCAG 2.0/2.1/2.2 A and AA violations, zero requests off the study's own loopback
+        origin, zero console or page errors.<br>
+        Every figure emitted by the mechanism its direction claims. Every page served the
+        byte-identical comparison shell. Every drawn state keyed. No figure text below the
+        declared legibility floor. Motion probed under both reduced-motion settings and absent
+        as declared.<br>
+        Rubric and registration pinned by digest in locks written before the first artefact
+        existed; every divergence since recorded rather than edited away.
+      </td><td>
+        <strong>Whether any composition communicates.</strong> G1–G10 are not run and need an
+        observer who authored nothing here and has read no answer.<br>
+        <strong>Whether the intermediate and narrow bands keep the governing idea</strong> rather
+        than merely the facts. That is G8, and it needs the same observer.<br>
+        <strong>Whether a direction is buildable at production quality</strong> — these are
+        demonstrations, not implementations, and none has been security-reviewed.<br>
+        <strong>Native behaviour on any platform other than this Chromium build.</strong><br>
+        <strong>Anything about the operator's preference.</strong>
+      </td></tr></tbody>
+    </table>`;
+})();
+</script>
+</body>
+</html>

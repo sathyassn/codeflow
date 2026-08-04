@@ -1,0 +1,20 @@
+{
+  "file": "rubric.v4.md",
+  "sha256": "e2d35653341bffb7ea852997796a2c48bdc3bc972e19168af45c4d786a6b0742",
+  "bytes": 15871,
+  "mtime_iso": "2026-08-04T12:49:25.652Z",
+  "pinned_at_state": "the only files in this directory were rubric.v4.md, registry.json and tools/pin.mjs; no authored candidate, direction demonstration, portal page, baseline or render existed",
+  "directories_absent_when_pinned": [
+    "cases",
+    "directions",
+    "portal",
+    "baselines",
+    "renders",
+    "checks",
+    "shared"
+  ],
+  "what_this_proves": "the bytes. The digest survives a checkout, a copy and a commit; the mtime does not, and is recorded here because this lock is the only witness that will survive one.",
+  "what_this_does_not_prove": "that the author intended this before drawing. Only that these bytes preceded every artefact. A later change to the pinned file is a lock failure, not a silent edit.",
+  "governs": "the W4 board",
+  "supersedes_nothing": "rubric.v2.md and rubric.v3.md stay byte-identical under their own locks in ../tsk-014-w3/"
+}

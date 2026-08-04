@@ -36,7 +36,25 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     // decomposition) keep only their trigger and rule here; every worked
     // explanation lives in the on-demand composition and audit references.
     // Still well inside the 24 KiB non-routing class ceiling.
-    ("agents/skills/cf-design/SKILL.md", 17 * KIB),
+    //
+    // Raised again from 17 KiB by the TSK-014 design-primary audit of the W3
+    // board, which evidenced three more obligations: a rendered candidate is
+    // evidence only if the render carries what its page contains, a declaration
+    // is pinned and reconciled against its drawing with divergences recorded
+    // rather than edited away, and the seat judging a board does not repair the
+    // drawings on it. Each keeps only its trigger and rule here; the worked
+    // explanation is in the on-demand composition reference.
+    //
+    // Raised again from 18 KiB by the TSK-014 W4 board, which evidenced a rung
+    // the skill did not have: when carrier qualification comes back negative for
+    // most candidates the open decision is the contract, not the composition, and
+    // it is settled first. Two smaller obligations came with it — sibling
+    // distinctness is observed with titles and captions masked, and a change is
+    // re-reviewed across the whole surface and the siblings a shared renderer
+    // reaches. Each keeps only its trigger and rule here; the worked comparison
+    // of content models lives in the on-demand composition reference, which grew
+    // by more than the skill did. Still inside the 24 KiB non-routing ceiling.
+    ("agents/skills/cf-design/SKILL.md", 19 * KIB),
     ("agents/skills/cf-develop/SKILL.md", 4 * KIB),
     ("agents/skills/cf-docs-portal/SKILL.md", 9 * KIB),
     ("agents/skills/cf-editorial-review/SKILL.md", 6 * KIB),

@@ -1,0 +1,14 @@
+{
+  "rubric": "rubric.v2.md",
+  "sha256": "60d2cb953584e94595c782a5ac5f905f54fe9ef619912f073b622ef29dfd8008",
+  "locked_on": "2026-08-04",
+  "supersedes": "../tsk-014-w2/rubric.md",
+  "supersedes_note": "Version 2 governs the W3 board only. The W2 rubric is not edited, not moved and not relocked; tools/verify.mjs recomputes its digest against its own lock on every run and fails if those bytes have changed.",
+  "ordering_evidence": {
+    "method": "authoring order, observed live in the session that produced both files",
+    "observed": "rubric.v2.md and registry.json were written before the first W3 candidate existed; the first render in renders/ was produced afterwards, in the same session",
+    "limitation": "modification time does not survive a fresh Git checkout, so the ordering cannot be re-observed later from the files alone. This lock is what replaces it: the rubric bytes are pinned by digest, and every render is produced against exactly these bytes.",
+    "honest_scope": "This records that the ordering was observed once, by the author, in the session that created both files. It is not independent corroboration, and a reader who was not present should treat it as the author's account."
+  },
+  "rule": "tools/verify.mjs recomputes the digest of rubric.v2.md on every run and fails if it differs. Changing a gate means adding a new versioned rubric and a new lock, never editing these bytes in place."
+}

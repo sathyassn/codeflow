@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orient — the spine everything hangs off</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #15181d;      --ink-2: #464e59;   --ink-3: #58606c;
+    --page: #fbfbfc;     --panel: #ffffff;   --rule: #dcdfe5;
+    --spine: #1d3a52;    --spine-face: #eaf0f5;
+    --hang: #7c8798;     --up: #6a4a86;
+    --chip: #f1f3f6;     --chip-ink: #2c333d;
+    --grow: #1f4d3d;     --rewrite: #7a3b12;
+    --shadow: 0 1px 2px rgba(21, 24, 29, .05), 0 12px 30px -20px rgba(21, 24, 29, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef0f4;     --ink-2: #b0b8c4;  --ink-3: #8a939f;
+      --page: #0d1014;    --panel: #15181e;  --rule: #282e37;
+      --spine: #a7c9e2;   --spine-face: #182430;
+      --hang: #737e8d;    --up: #c6a6e6;
+      --chip: #1e232b;    --chip-ink: #cdd5df;
+      --grow: #7fd3ae;    --rewrite: #f0ac6e;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 30px -20px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 44px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 32px; line-height: 1.16; letter-spacing: -.018em; margin: 0 0 14px; font-weight: 640; }
+  .lede { margin: 0 0 8px; max-width: 62ch; color: var(--ink-2); font-size: 17px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  .quoted { margin: 0 0 34px; max-width: 62ch; font-size: 14px; color: var(--ink-3);
+            border-left: 2px solid var(--rule); padding-left: 14px; }
+
+  /* The spine explains derivation, not governance. Two layers genuinely do not
+     sit on it, and that is drawn as a place rather than left out. */
+  .offspine { border: 1px dashed var(--hang); border-radius: 12px; padding: 14px 18px 16px;
+              margin: 0 0 30px; max-width: 720px; }
+  .offspine-head { margin: 0 0 12px; font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+                   color: var(--ink-3); }
+  .offspine-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .offspine-cards .card h2 { font-size: 14.5px; letter-spacing: .05em; font-weight: 700; }
+  .offspine-cards .card p { margin: 3px 0 9px; font-size: 13px; color: var(--ink-2); }
+  @media (max-width: 700px) { .offspine-cards { grid-template-columns: 1fr; } }
+
+  .descent { position: relative; margin: 0 0 8px; }
+  .node-row {
+    display: grid; grid-template-columns: 1fr 280px 1fr; align-items: center;
+    column-gap: 26px; padding: 0 0 34px;
+  }
+  .rail { position: relative; display: flex; flex-direction: column; align-items: center; }
+  /* One continuous descent: the segment is part of the rail cell, so the spine
+     is unbroken through every node rather than restarting at each one. */
+  .rail::before {
+    content: ""; position: absolute; inset: -34px auto -34px 50%;
+    width: 4px; transform: translateX(-2px); background: var(--spine);
+  }
+  .node-row:first-child .rail::before { top: 50%; }
+  .node-row:last-child .rail::before { bottom: 50%; }
+  .node {
+    position: relative; background: var(--spine-face); border: 3px solid var(--spine);
+    border-radius: 999px; padding: 11px 22px; font-weight: 660; font-size: 16px; color: var(--ink);
+    text-align: center; min-width: 190px;
+  }
+  .node small { display: block; font-weight: 400; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+
+  .hang { position: relative; }
+  .hang .card {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 12px;
+    padding: 13px 16px 12px; box-shadow: var(--shadow);
+  }
+  .hang h2 { margin: 0; font-size: 14.5px; letter-spacing: .05em; font-weight: 700; }
+  .hang p { margin: 3px 0 9px; font-size: 13px; color: var(--ink-2); }
+  .homes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+          background: var(--chip); color: var(--chip-ink); border: 1px solid var(--rule);
+          border-radius: 6px; padding: 2px 7px; }
+  .path.absent { background: none; border-style: dashed; color: var(--ink-3); }
+  /* The attachment is the encoding: a layer that only ever grows clasps the
+     spine with a one-way arrow; one a person rewrites clasps it openly. */
+  .clasp { position: absolute; top: 50%; width: 26px; height: 2px; background: var(--hang); }
+  .left .clasp { right: -26px; } .right .clasp { left: -26px; }
+  .clasp::after {
+    content: ""; position: absolute; top: 50%; width: 9px; height: 9px;
+    transform: translateY(-50%) rotate(45deg);
+  }
+  .left .clasp::after { right: 0; } .right .clasp::after { left: 0; }
+  .grow-only .clasp { background: var(--grow); }
+  .grow-only .clasp::after { border-top: 2px solid var(--grow); border-right: 2px solid var(--grow); }
+  .left.grow-only .clasp::after { transform: translateY(-50%) rotate(45deg); }
+  .right.grow-only .clasp::after { transform: translateY(-50%) rotate(-135deg); }
+  .rewritten .clasp { background: var(--rewrite); }
+  .rewritten .clasp::after {
+    border: 2px dashed var(--rewrite); border-radius: 2px; transform: translateY(-50%) rotate(0deg);
+  }
+  .hang .kind { display: block; margin-top: 8px; font-size: 11.5px; color: var(--ink-3); }
+  .empty { visibility: hidden; }
+
+  .walkup {
+    display: flex; align-items: center; gap: 12px; margin: 6px 0 0; padding: 14px 18px;
+    border: 1px dashed var(--up); border-radius: 12px; color: var(--ink-2); font-size: 13.5px;
+    max-width: 640px;
+  }
+  .walkup .arrow { color: var(--up); font-size: 22px; line-height: 1; }
+  .walkup b { color: var(--ink); font-weight: 620; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 30px 0 0; font-size: 13px;
+            color: var(--ink-2); border-top: 1px solid var(--rule); padding-top: 16px; }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend i { width: 26px; height: 2px; flex: none; position: relative; }
+  .legend i.g { background: var(--grow); } .legend i.r { background: var(--rewrite); }
+  .legend i.s { background: var(--spine); height: 4px; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .src { margin: 24px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  @media (max-width: 1080px) {
+    body { padding: 34px 26px 56px; }
+    h1 { font-size: 27px; }
+    /* The descent keeps its full length; the layers alternate sides instead of
+       all hanging right, so nothing compresses. */
+    .node-row { grid-template-columns: 1fr 220px 1fr; column-gap: 18px; }
+    .node { min-width: 150px; font-size: 14.5px; padding: 10px 14px; }
+  }
+  @media (max-width: 700px) {
+    body { padding: 24px 15px 48px; }
+    h1 { font-size: 22px; }
+    .lede { font-size: 15.5px; }
+    /* The spine stays vertical and full length. What changes is where the
+       layers hang: beneath their own link rather than beside it, so the
+       descent and its attachment points both survive. The row stops being a
+       three-column grid — at this width the middle column would squeeze a node
+       to one word per line. */
+    .node-row { display: block; position: relative; padding: 0 0 24px 30px; }
+    .rail { position: static; display: block; }
+    .rail::before { inset: 0 auto 0 13px; left: 13px; }
+    .node-row:first-child .rail::before { top: 22px; }
+    .node-row:last-child .rail::before { bottom: auto; height: 24px; }
+    .node { min-width: 0; border-radius: 11px; text-align: left; padding: 9px 14px; display: block; }
+    /* Every hanging layer keeps its place under its own link — none is dropped
+       to make the column fit. */
+    .node-row > .hang { margin: 10px 0 0 16px; }
+    .node-row > .hang.empty { display: none; }
+    .clasp, .left .clasp, .right .clasp { left: -16px; right: auto; width: 16px; top: 20px; }
+    .left .clasp::after, .right .clasp::after { left: 0; right: auto; }
+    /* Every clasp is now on the same side, so every one-way arrow points the
+       same way; keeping the wide layout's mirrored pair here would read as two
+       different kinds of attachment. */
+    .left.grow-only .clasp::after, .right.grow-only .clasp::after {
+      transform: translateY(-50%) rotate(-135deg);
+    }
+    .walkup { max-width: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Orient · codeflow</p>
+  <h1>One spine, and everything hanging off it</h1>
+  <p class="lede">The contract declares exactly one relationship between the parts of this repository,
+    and it <b>runs downward</b>. Every layer joins it at the point it enters. Read down to see how work
+    reaches the record of itself; read up from anywhere to find why something is the way it is.</p>
+  <p class="quoted" id="spine-quote"></p>
+
+  <div class="offspine" id="offspine">
+    <p class="offspine-head">Two layers join nothing here</p>
+    <div class="offspine-cards" id="offspine-cards"></div>
+  </div>
+
+  <div class="descent" id="descent"></div>
+
+  <div class="walkup">
+    <span class="arrow" aria-hidden="true">↑</span>
+    <span><b>Reading upward is the answer to “why is this the way it is”</b> — every step up names
+      the thing that decided the step below it.</span>
+  </div>
+
+  <div class="legend">
+    <span><i class="s"></i>the spine itself</span>
+    <span><i class="g"></i>hangs on, and only ever grows</span>
+    <span><i class="r"></i>hangs on, and gets rewritten in place</span>
+  </div>
+
+  <details>
+    <summary>The contract's own table</summary>
+    <table id="facts">
+      <thead><tr><th>Layer</th><th>Lives in</th><th>Changes</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/repo-layers.js</code>. The spine sentence and every layer row
+    are quoted verbatim from <code>AGENTS.md</code>.</p>
+</div>
+
+<script src="../../../shared/repo-layers.js"></script>
+<script>
+(() => {
+  const R = window.repoLayers;
+  const layerById = new Map(R.layers.map((l) => [l.id, l]));
+  const GROWS = new Set(["append-only", "generated", "cli-allocated"]);
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  document.getElementById("spine-quote").textContent =
+    `“${R.spine.quote.text} ${R.spine.tail.text.split(".")[0]}.” — ${R.contract}`;
+
+  const card = (layer, grows) => {
+    const box = el("div", "card");
+    box.append(el("h2", null, layer.name), el("p", null, layer.asks));
+    const homes = el("ul", "homes");
+    for (const home of layer.homes) {
+      const li = el("li");
+      li.append(el("code", `path${home.kind === "file" || home.kind === "dir" ? "" : " absent"}`, home.path));
+      homes.append(li);
+    }
+    box.append(homes);
+    box.append(el("span", "kind", grows
+      ? "only ever grows — a change here is a new entry"
+      : "rewritten in place, by whoever owns it"));
+    return box;
+  };
+
+  // Each spine node carries the layer that enters there. A layer that appears
+  // at more than one node hangs at the first, so nothing is drawn twice.
+  const used = new Set();
+  const host = document.getElementById("descent");
+  R.spine.nodes.forEach((node, i) => {
+    const row = el("div", "node-row");
+    const layer = used.has(node.layer) ? null : layerById.get(node.layer);
+    if (layer) used.add(node.layer);
+
+    const left = el("div", `hang left${i % 2 === 0 ? "" : " empty"}`);
+    const right = el("div", `hang right${i % 2 === 0 ? " empty" : ""}`);
+    const target = i % 2 === 0 ? left : right;
+
+    if (layer) {
+      const authorities = R.authoritiesOf(layer);
+      const grows = authorities.every((a) => GROWS.has(a));
+      target.classList.add(grows ? "grow-only" : "rewritten");
+      target.append(card(layer, grows), el("span", "clasp"));
+    } else {
+      target.classList.add("empty");
+    }
+
+    const rail = el("div", "rail");
+    const dot = el("div", "node");
+    dot.append(document.createTextNode(node.label), el("small", null, node.holds));
+    rail.append(dot);
+
+    row.append(left, rail, right);
+    host.append(row);
+  });
+
+  // Whatever the spine never reached is shown, not dropped.
+  const offHost = document.getElementById("offspine-cards");
+  for (const layer of R.layers.filter((l) => !used.has(l.id))) {
+    const box = card(layer, R.authoritiesOf(layer).every((a) => GROWS.has(a)));
+    // These layers carry no attachment, so the attachment note does not apply
+    // to them; replacing it keeps one statement per card rather than two.
+    box.querySelector(".kind").textContent = "it governs the spine rather than sitting on it";
+    offHost.append(box);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const layer of R.layers) {
+    const tr = document.createElement("tr");
+    for (const value of [`${layer.name} — ${layer.asks}`, layer.livesIn, layer.changes]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(R.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

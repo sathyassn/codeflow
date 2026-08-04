@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direction C — project-neutral recipe library</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W5 · contract altitude · direction C</p>
+<h1>Project-neutral recipe library</h1>
+<p class="sh-lede">The runtime executes the same primitives as direction A. What moves is where
+composition authority sits: a versioned library of named, parameterised <strong>recipes</strong>
+ships as a managed skill asset. A document names a recipe and binds real data to its declared
+slots.</p>
+
+<p>Adding a new subject form becomes a reviewed managed asset — no binary release, no schema
+version, no renderer change — but still a review, not a document. Every figure below is emitted
+at load by <code>recipes.js</code> resolving a named recipe into a primitive call.</p>
+
+<hr class="sh-rule">
+
+<h2>A recipe, bound to the plan</h2>
+<div class="sh-figure" id="fig-plan"></div>
+<p class="sh-caption">Emitted by <code>c-recipes:schedule-room@1.0.0</code>. The document names
+a recipe and binds four slots; it carries no primitive name, no geometry and no vocabulary the
+recipe did not declare.</p>
+<details class="sh-detail"><summary>The block the document carries</summary>
+<div class="sh-input" id="src-plan"></div></details>
+
+<h2>The same recipe, a different subject</h2>
+<p>This is the claim a library makes that a bare primitive set does not: the recipe is the unit
+of reuse, and a second author gets the reviewed composition rather than re-deciding it. Below,
+<code>derivation-stop</code> is bound twice — once to the TSK-007 qualification evidence, and
+once to the five content-model directions on this very board against the stages a direction has
+to pass to be decidable.</p>
+
+<div class="sh-figure" id="fig-evidence"></div>
+<p class="sh-caption">Emitted by <code>c-recipes:derivation-stop@1.2.0</code>, bound to the
+qualification evidence.</p>
+
+<div class="sh-figure" id="fig-directions"></div>
+<p class="sh-caption">The same recipe at the same version, bound to a completely different
+subject. Neither binding knows the other exists.</p>
+
+<h2>What it cannot express</h2>
+<p>The record-authority subject has no recipe. The refusal names the library, its versions, and
+the path a new form actually takes — which is the difference this direction is asking the
+operator to buy.</p>
+
+<div class="sh-figure" id="fig-negative"></div>
+<p class="sh-caption">A managed asset review is materially cheaper than a binary release and
+materially slower than writing a document. Whether that is the right place for the boundary is
+the decision.</p>
+
+<hr class="sh-rule">
+<p class="sh-src">Subjects: <code>shared/plan-data.js</code> + <code>shared/plan-model.js</code>,
+<code>shared/tsk007-facts.js</code>, and <code>registry.json</code> → <code>directions</code>.
+Mechanism: <code>directions/c-recipes/recipes.js</code> over
+<code>directions/a-primitives/primitives.js</code>. Chrome: <code>shared/shell.css</code>,
+byte-identical across every direction on this board.</p>
+
+</div>
+
+<script src="../../shared/svg.js"></script>
+<script src="../../shared/plan-data.js"></script>
+<script src="../../shared/plan-model.js"></script>
+<script src="../../shared/tsk007-facts.js"></script>
+<script src="../a-primitives/primitives.js"></script>
+<script src="./recipes.js"></script>
+<script>
+(() => {
+  const BREAKPOINTS = { wide: 1100, narrow: 720 };
+  const model = window.planModel(window.planData);
+  const facts = window.tsk007Facts;
+  const short = (title) => {
+    const words = title.split(' ');
+    let out = '';
+    for (const word of words) { if (out && `${out} ${word}`.length > 30) break; out = out ? `${out} ${word}` : word; }
+    return out.length < title.length ? `${out}…` : out;
+  };
+  const open = model.open.slice().sort((a, b) => model.wave(a.id) - model.wave(b.id) || a.id.localeCompare(b.id));
+
+  const planBlock = {
+    recipe: 'schedule-room',
+    id: 'c-plan',
+    bind: {
+      items: open.map((t) => ({ id: t.id, label: short(t.title), at: model.wave(t.id), extent: model.room[t.id] ?? 0 })),
+      axis: { from: 1, to: model.maxWave + 1, label: 'wave', tickPrefix: 'wave', startLabel: 'open now', endLabel: 'epic finishes' },
+      run: model.chain,
+      vocabulary: {
+        title: 'The unfinished EPC-005 tasks on a wave axis',
+        description: 'The six unfinished tasks of EPC-005.',
+        unit: 'task',
+        runLabel: 'one unbroken run',
+        extentLabel: 'how much later it could start',
+        capLabel: 'the wave that limits it',
+      },
+    },
+  };
+
+  const evidenceBlock = {
+    recipe: 'derivation-stop',
+    id: 'c-evidence',
+    bind: {
+      stages: facts.stages,
+      items: facts.claims.map((claim) => {
+        const cause = facts.causes.find((c) => c.id === facts.stops[claim.id]);
+        return { label: claim.claim, reached: facts.reachOf(claim), cause: cause ? cause.label : null };
+      }),
+      vocabulary: { title: 'How far each claim travelled', description: 'The eight claims made about the exact qualification candidate.', unit: 'claim' },
+    },
+  };
+
+  /* A genuinely different subject, bound to the same recipe at the same version.
+   *
+   * F13. The W4 binding gave all five directions `reached: 4` with no cause, so
+   * the recipe drew five identical rails. That is not a reuse proof — it proves
+   * the mechanism runs, not that it carries anything, because a binding with no
+   * variance cannot show the recipe responding to its data. Worse, it was not
+   * even true: the five directions are demonstrably not all at the same stage.
+   *
+   * The stages below are this board's own evidence ladder, and each direction
+   * sits where the board's evidence actually puts it. The figure now varies
+   * because the subject varies, which is the only kind of reuse proof worth
+   * having — and it costs nothing extra, because the honest values were already
+   * on the board. */
+  const DIRECTION_STAGES = [
+    'registered',
+    'built',
+    'demonstrated',
+    'reuse proved',
+    'read answer-blind',
+  ];
+  const DIRECTIONS = [
+    { label: 'A · curated primitives', reached: 4, cause: 'not yet read answer-blind' },
+    { label: 'B · scene grammar', reached: 4, cause: 'not yet read answer-blind' },
+    { label: 'C · recipe library', reached: 3, cause: 'its second binding had no variance' },
+    { label: 'D · authored SVG under a service', reached: 3, cause: 'rejected: narrow band lost its axis' },
+    { label: 'E · pre-rendered raster', reached: 2, cause: 'rejected: one width, one mode' },
+  ];
+  const directionsBlock = {
+    recipe: 'derivation-stop',
+    id: 'c-directions',
+    bind: {
+      stages: DIRECTION_STAGES,
+      items: DIRECTIONS,
+      vocabulary: { title: 'How far each content-model direction on this board travelled', description: 'The five directions the operator is being asked to choose between, each at the stage this board\u2019s own evidence puts it.', unit: 'direction' },
+    },
+  };
+
+  const negativeBlock = { recipe: 'record-reach', id: 'c-negative', bind: {} };
+
+  window.w4recipes.mount(document.getElementById('fig-plan'), planBlock, BREAKPOINTS);
+  window.w4recipes.mount(document.getElementById('fig-evidence'), evidenceBlock, BREAKPOINTS);
+  window.w4recipes.mount(document.getElementById('fig-directions'), directionsBlock, BREAKPOINTS);
+  window.w4recipes.mount(document.getElementById('fig-negative'), negativeBlock, BREAKPOINTS);
+
+  document.getElementById('src-plan').textContent = JSON.stringify(
+    { recipe: planBlock.recipe, id: planBlock.id, bind: { ...planBlock.bind, items: planBlock.bind.items.slice(0, 2).concat([`… ${planBlock.bind.items.length - 2} more`]) } }, null, 1,
+  );
+})();
+</script>
+</body>
+</html>

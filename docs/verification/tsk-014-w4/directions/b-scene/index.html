@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direction B — bounded declarative scene grammar</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W4 · contract altitude · direction B</p>
+<h1>Bounded declarative scene grammar</h1>
+<p class="sh-lede">One new typed block carries a <strong>scene</strong>: named scales over declared
+domains, a closed vocabulary of marks positioned through those scales, guides, per-band
+recomposition, states with non-colour channels, a legend and an accessible description.
+The runtime compiles it. The document composes it.</p>
+
+<p>Every figure below is emitted at load by <code>scene.js</code> from a scene document built in
+<code>scenes.js</code> out of real repository facts. No figure on this page contains a
+coordinate the compiler did not derive from a declared scale, and no figure contains
+hand-authored geometry. That is what <code>A9</code> checks.</p>
+
+<hr class="sh-rule">
+
+<h2>The same subject W3 built by hand</h2>
+<p>The unfinished EPC-005 task graph. Horizontal position is the earliest wave a task could
+occupy; the heavy line threads the tasks it passes through; a dashed track is how much later
+a task could start, ending in a cap on the wave that limits it. A task with no later start
+carries its cap against its own wave, so having none is drawn rather than left out.</p>
+
+<div class="sh-figure" id="fig-plan"></div>
+<p class="sh-caption">Compiled from a scene of 3 scales and <span data-count="plan"></span> marks.
+Resize the window: the composition is re-picked at the two widths the scene declares, and the
+narrow band is a different scene, not a smaller one.</p>
+
+<details class="sh-detail"><summary>What the document actually carries, at this width</summary>
+<div class="sh-input" id="src-plan"></div></details>
+
+<h2>A different subject, the same grammar, no new product code</h2>
+<p>The TSK-007 qualification evidence. Each claim runs along its own rail through four
+derivation stages; the rail stays drawn, open and dashed, across the stages it never reached;
+five distinct cell shapes carry what each claim has on each platform lane.</p>
+
+<div class="sh-figure" id="fig-evidence"></div>
+<p class="sh-caption">Compiled from a scene of 4 scales and <span data-count="evidence"></span> marks,
+by the same compiler, with nothing added to it.</p>
+
+<h2>What it cannot express</h2>
+<p>The grammar has no layout operator — no force layout, no treemap, no packing, no automatic
+label de-collision. Asked for a dependency graph, it can only draw the positions the document
+gives it. Below, every position was chosen by hand in <code>scenes.js</code>: the document
+computed the layout and the model contributed nothing.</p>
+
+<div class="sh-figure" id="fig-negative"></div>
+<p class="sh-caption">This is the honest limit, rendered rather than described. A grammar that
+silently accepted this would let a document smuggle arbitrary geometry back in through a
+coordinate scale, which is exactly the escape hatch the direction exists to replace.</p>
+
+<div class="sh-note" id="refusals"></div>
+
+<hr class="sh-rule">
+<p class="sh-src">Subjects: <code>shared/plan-data.js</code> + <code>shared/plan-model.js</code> over the
+frontmatter of <code>project-management/tasks/TSK-*.md</code>, and <code>shared/tsk007-facts.js</code>
+over <code>docs/verification/tsk-007-presentation/README.md</code>. Mechanism:
+<code>directions/b-scene/scene.js</code>. Document: <code>directions/b-scene/scenes.js</code>.
+Chrome: <code>shared/shell.css</code>, byte-identical across every direction on this board.</p>
+
+</div>
+
+<script src="../../shared/svg.js"></script>
+<script src="../../shared/plan-data.js"></script>
+<script src="../../shared/plan-model.js"></script>
+<script src="../../shared/tsk007-facts.js"></script>
+<script src="./scene.js"></script>
+<script src="./scenes.js"></script>
+<script>
+(() => {
+  const BREAKPOINTS = { wide: 1100, narrow: 720 };
+  const model = window.planModel(window.planData);
+  const planDoc = window.w4scenes.planScene(model);
+  const evidenceDoc = window.w4scenes.evidenceScene(window.tsk007Facts);
+  const negativeDoc = window.w4scenes.forceLayoutAttempt(model);
+
+  const repaint = window.w4scene.mount(document.getElementById('fig-plan'), planDoc, BREAKPOINTS);
+  window.w4scene.mount(document.getElementById('fig-evidence'), evidenceDoc, BREAKPOINTS);
+  document.getElementById('fig-negative').replaceChildren(window.w4scene.compile(negativeDoc, 'wide'));
+
+  document.querySelector('[data-count="plan"]').textContent = planDoc.marks.length;
+  document.querySelector('[data-count="evidence"]').textContent = evidenceDoc.marks.length;
+
+  const showSource = () => {
+    const band = document.getElementById('fig-plan').dataset.band;
+    const merged = band === 'wide' ? planDoc : { ...planDoc, ...planDoc.bands[band] };
+    const sample = {
+      scales: merged.scales,
+      marks: merged.marks.slice(0, 4).concat([`… ${merged.marks.length - 4} more marks`]),
+    };
+    document.getElementById('src-plan').textContent = JSON.stringify(sample, null, 1);
+  };
+  showSource();
+  window.addEventListener('resize', () => { showSource(); });
+
+  // The refusals are proved, not asserted: each of these is attempted and the
+  // compiler's own reason is printed.
+  const attempts = [
+    ['a mark kind outside the grammar', { kind: 'sparkle', at: { gx: 0, gy: 0 } }],
+    ['a state that is drawn and not keyed', { kind: 'segment', from: { gx: 0, gy: 0 }, to: { gx: 1, gy: 1 }, state: 'invented' }],
+    ['a coordinate no scale derived', { kind: 'label', at: { gx: 0, gy: 0, dx: 400 }, text: 'x' }],
+  ];
+  const lines = attempts.map(([label, mark]) => {
+    try {
+      window.w4scene.compile({ ...negativeDoc, marks: [mark] }, 'wide');
+      return `${label} — ACCEPTED (this is a defect)`;
+    } catch (error) {
+      return `${label} — refused: ${error.message}`;
+    }
+  });
+  document.getElementById('refusals').innerHTML =
+    `<strong>The boundary, proved at load rather than claimed.</strong><br>${lines.join('<br>')}`;
+})();
+</script>
+</body>
+</html>

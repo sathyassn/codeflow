@@ -1,0 +1,542 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d2-baseline-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d2-baseline-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d2-baseline-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d2-baseline-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d2-baseline-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d2-baseline-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d3-baseline-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d3-baseline-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d3-baseline-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d3-baseline-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d3-baseline-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "d3-baseline-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-baseline-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-baseline-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-baseline-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-baseline-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-baseline-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p1-baseline-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-baseline-light-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-baseline-light-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-baseline-light-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-baseline-dark-desktop",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-baseline-dark-tablet",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  },
+  {
+    "render": "p3-baseline-dark-mobile",
+    "hiddenOverflow": [],
+    "outsideViewBox": [],
+    "documentOverflow": 0
+  }
+]

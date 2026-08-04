@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSK-014 W3 — the rendered board</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #14171c; --ink-2: #454d58; --ink-3: #5a626e; --page: #f7f8fa; --panel: #ffffff;
+    --rule: #d9dde4; --chip: #eef1f5; --warn: #7b1f4b; --ok: #1f4d3d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef1f5; --ink-2: #b1b9c5; --ink-3: #8a939f; --page: #0d1015; --panel: #151920;
+      --rule: #282f38; --chip: #1d232b; --warn: #f0a6c1; --ok: #7fd3ae;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 44px 40px 72px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 32px; line-height: 1.16; margin: 0 0 14px; font-weight: 650; letter-spacing: -.018em; }
+  .lede { margin: 0 0 12px; max-width: 70ch; color: var(--ink-2); font-size: 16.5px; }
+  .banner {
+    border: 2px solid var(--warn); border-radius: 12px; padding: 14px 18px; margin: 22px 0 34px;
+    color: var(--ink); font-size: 14.5px; max-width: 80ch;
+  }
+  .banner b { color: var(--warn); }
+  h2 { font-size: 20px; margin: 40px 0 6px; font-weight: 650; }
+  h2 .cid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-3);
+            font-size: 14px; margin-right: 8px; }
+  .job { margin: 0 0 4px; color: var(--ink-2); font-size: 14.5px; max-width: 80ch; }
+  .q { margin: 8px 0 16px; padding: 10px 14px; background: var(--chip); border-radius: 9px;
+       font-size: 15px; max-width: 80ch; }
+  .q b { font-weight: 640; }
+  .compound { font-size: 13px; color: var(--ink-2); margin: -8px 0 16px; max-width: 80ch; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--rule); border-radius: 13px; padding: 16px 18px 18px; }
+  .card h3 { margin: 0 0 2px; font-size: 15.5px; font-weight: 660; }
+  .card h3 a { color: inherit; }
+  .card dl { margin: 12px 0 0; display: grid; grid-template-columns: 96px 1fr; gap: 6px 12px; font-size: 13px; }
+  .card dt { color: var(--ink-3); }
+  .card dd { margin: 0; color: var(--ink); }
+  .verdict { display: inline-block; margin-top: 12px; font-size: 12px; font-weight: 650;
+             border: 1.5px solid var(--warn); color: var(--warn); border-radius: 6px; padding: 2px 8px; }
+  .verdict[data-v="needs-generator-work"] { border-color: var(--ok); color: var(--ok); }
+  .loss { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2); }
+  .renders { margin: 12px 0 0; font-size: 12.5px; }
+  .renders a { display: inline-block; margin: 0 10px 4px 0;
+               font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+  .nav { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 0 0 8px; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 0; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; font-weight: 620; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .foot { margin-top: 44px; border-top: 1px solid var(--rule); padding-top: 16px; font-size: 13px; color: var(--ink-2); }
+  @media (max-width: 720px) { body { padding: 28px 16px 56px; } h1 { font-size: 25px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">TSK-014 · W3 rendered composition study</p>
+  <h1>The board</h1>
+  <p class="lede">Eleven candidates across five cases, each rendered at three widths in two modes from
+    real repository content. This page is the neutral index: it states what each case asks, what each
+    candidate claims to encode, and what would carry it in the product's real technical contract. It
+    does not rank them.</p>
+
+  <div class="banner">
+    <b>Nothing here is a selection.</b> The observation gates in <code>rubric.v2.md</code> have not been
+    run: they need someone who authored nothing here and has read no answer. A clean deterministic pass
+    means the gates are <em>admissible</em> — see <code>observer-state.md</code> for exactly what has and
+    has not been established.
+  </div>
+
+  <p class="nav">
+    <a href="README.md">README</a>
+    <a href="rubric.v2.md">rubric v2</a>
+    <a href="registry.json">registry</a>
+    <a href="observer-state.md">observer state</a>
+    <a href="hypotheses.md">hypotheses</a>
+    <a href="NEXT.md">what happens next</a>
+  </p>
+
+  <h2>Bands that failed, and cannot be observed</h2>
+  <p class="job">An independent Claude design-primary audit of the rendered board recorded these. Each
+    entry says two things. First, the render is <strong>inadmissible</strong> as comparison evidence — it
+    does not carry what its page contains, so no observation gate may be recorded from it. Second, the
+    <strong>failure that made it inadmissible</strong>, with its severity. Inadmissible is not neutral and
+    does not mean unjudged: every band here is inadmissible because something failed. What none of them
+    claims is a rubric gate result, because the audit read the answer key — but a measured clip and two
+    marks in one position do not need a blind observer to be true. Nothing was redrawn: the seat that
+    judges a board does not repair the drawings it is judging. See
+    <code>registry.invalidated_bands</code> and <a href="rubric.v3.md">rubric.v3.md</a>.</p>
+  <table id="invalidated">
+    <thead><tr><th>Render</th><th>Failure</th><th>Severity</th><th>Seen by</th><th>What fails</th><th>Fixing it is</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="cases"></div>
+
+  <h2>Carrier, across the whole board</h2>
+  <p class="job">What it would cost to build each candidate in the product's real contract, registered
+    before any of them was authored.</p>
+  <table id="carrier">
+    <thead><tr><th>Candidate</th><th>Surface</th><th>Verdict</th><th>What is lost</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <p class="foot">This directory is disposable evidence, retained until the operator records a decision.
+    No file in it is referenced by the renderer, the schema, the documentation portal, the scaffold, or
+    any managed artifact.</p>
+</div>
+
+<!-- shared/registry.js is registry.json byte for byte, wrapped in one assignment
+     so the board can read it without a network call. tools/verify.mjs proves the
+     wrapper's payload is identical to registry.json, so there is one authority. -->
+<script src="shared/registry.js"></script>
+<script>
+(() => {
+  const registry = window.__w3registry;
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const viewports = Object.keys(registry.contexts.viewports);
+  const slug = (c) => `${c.case}-${c.id}`;
+
+  const host = document.getElementById("cases");
+  for (const kase of registry.cases) {
+    const h2 = el("h2");
+    h2.append(el("span", "cid", kase.id.toUpperCase()), document.createTextNode(kase.subject));
+    host.append(h2);
+    host.append(el("p", "job", kase.surface_job));
+    const q = el("p", "q");
+    q.append(el("b", null, "The question: "), document.createTextNode(kase.question));
+    host.append(q);
+    if (kase.compound.is_compound) {
+      host.append(el("p", "compound",
+        `Compound — ${kase.compound.parts.join(" and ")}. Handled by ${kase.compound.handling.replace("-", " ")}: `
+        + (kase.compound.why_decomposed ?? kase.compound.why_not_decomposed)));
+    }
+
+    const cards = el("div", "cards");
+    for (const candidate of registry.candidates.filter((c) => c.case === kase.id)) {
+      const card = el("div", "card");
+      const h3 = el("h3");
+      const link = el("a", null, candidate.id);
+      link.href = `cases/${candidate.case}/${candidate.id}/index.html`;
+      h3.append(link);
+      card.append(h3);
+      const dl = el("dl");
+      const rows = [
+        ["unit", candidate.primary_unit],
+        ["axis", candidate.primary_axis],
+        ["encodes", candidate.encoded_relationship],
+      ];
+      if (candidate.optimises && candidate.optimises !== "n/a") {
+        rows.push(["optimises", candidate.optimises], ["carries", candidate.carries_other_by]);
+      }
+      rows.push(["intermediate", candidate.intermediate_composition], ["narrow", candidate.narrow_composition]);
+      for (const [term, def] of rows) {
+        dl.append(el("dt", null, term), el("dd", null, def));
+      }
+      card.append(dl);
+      const verdict = el("span", "verdict", candidate.carrier.verdict);
+      verdict.dataset.v = candidate.carrier.verdict;
+      card.append(verdict);
+      card.append(el("p", "loss", candidate.carrier.loss));
+      const renders = el("p", "renders");
+      for (const mode of registry.contexts.modes) {
+        for (const viewport of viewports) {
+          const a = el("a", null, `${mode}/${viewport}`);
+          a.href = `renders/${slug(candidate)}-${mode}-${viewport}.png`;
+          renders.append(a);
+        }
+      }
+      card.append(renders);
+      cards.append(card);
+    }
+    host.append(cards);
+
+    const base = el("p", "renders");
+    base.append(document.createTextNode("plain baselines: "));
+    for (const name of ["baseline.html", "chat.md", "markdown.md"]) {
+      const a = el("a", null, name);
+      a.href = `baselines/${kase.id}/${name}`;
+      base.append(a);
+    }
+    host.append(base);
+  }
+
+  // Invalidated bands come first on the page for the same reason they come first
+  // in the reading: a board with holes in it should say so before it offers
+  // anything to choose between.
+  const invalid = document.querySelector("#invalidated tbody");
+  // Severity carries the weight here, so it is sorted on rather than left in
+  // registry order: a reader scanning this table should meet the disqualifying
+  // failures first, not whichever render happened to be listed first.
+  const rank = { disqualifying: 0, material: 1, minor: 2 };
+  const bands = [...(registry.invalidated_bands ?? [])]
+    .sort((a, b) => rank[a.failure.severity] - rank[b.failure.severity]);
+  for (const band of bands) {
+    const tr = document.createElement("tr");
+    const link = el("a", null, band.render);
+    link.href = `renders/${band.render}.png`;
+    const first = document.createElement("td");
+    first.append(link);
+    tr.append(first);
+    for (const value of [
+      `${band.failure.kind} — ${band.failure.failing_axes.join(" and ")}`,
+      band.failure.severity,
+      band.machine_visible === false ? "design judgement; no probe sees it" : "measured by the frame probe",
+      band.failure.what_fails,
+      band.fix_is,
+    ]) {
+      tr.append(el("td", null, value));
+    }
+    invalid.append(tr);
+  }
+
+  const body = document.querySelector("#carrier tbody");
+  for (const candidate of registry.candidates) {
+    const tr = document.createElement("tr");
+    for (const value of [`${candidate.case} · ${candidate.id}`, candidate.carrier.surface, candidate.carrier.verdict]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    tr.append(el("td", null, candidate.carrier.loss));
+    body.append(tr);
+  }
+
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+/* W4 neutral comparison shell.
+ *
+ * A10: every direction demonstration and every portal page family loads this
+ * file byte-identically and adds no styling to the comparison chrome. The
+ * figure is the thing under test; if one direction arrives in nicer furniture,
+ * the board measures furniture.
+ *
+ * It styles the page, the headings, the prose, the caption, the notes and the
+ * frame the figure sits in. It also declares one neutral token set that every
+ * figure consumes, so no direction wins on palette. It styles nothing inside a
+ * figure, and it defines no mark, no scale and no composition.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --sh-canvas: #f7f6f4;
+  --sh-surface: #ffffff;
+  --sh-ink: #1c1b19;
+  --sh-ink-muted: #5f5a53;
+  --sh-rule: #d8d3cb;
+  --sh-rule-strong: #6c655c;
+
+  /* The figure palette. Shared on purpose: identical for every direction. */
+  --fg-line: #2a2926;
+  --fg-line-soft: #9a938a;
+  --fg-fill: #e9e5de;
+  --fg-hatch: #b9b1a6;
+  --fg-accent: #1f5f6b;
+  --fg-accent-soft: #d5e6e9;
+  --fg-warn: #8a4a10;
+  --fg-warn-soft: #f2e4d2;
+  --fg-stop: #96261f;
+
+  --sh-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sh-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  font-family: var(--sh-sans);
+  font-synthesis: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sh-canvas: #161513;
+    --sh-surface: #201f1c;
+    --sh-ink: #f2efe9;
+    --sh-ink-muted: #aaa298;
+    --sh-rule: #3e3a34;
+    --sh-rule-strong: #9a9289;
+
+    --fg-line: #eceae4;
+    --fg-line-soft: #7c756c;
+    --fg-fill: #2e2c28;
+    --fg-hatch: #5a544c;
+    --fg-accent: #6fc2cf;
+    --fg-accent-soft: #24444a;
+    --fg-warn: #e0a463;
+    --fg-warn-soft: #3d3020;
+    --fg-stop: #f08d84;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem 1.5rem 3rem;
+  background: var(--sh-canvas);
+  color: var(--sh-ink);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.sh-page { max-width: 1240px; margin: 0 auto; }
+
+.sh-eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--sh-ink-muted);
+}
+
+h1 { margin: 0 0 0.6rem; font-size: 26px; line-height: 1.2; font-weight: 650; }
+h2 { margin: 2.5rem 0 0.5rem; font-size: 18px; line-height: 1.3; font-weight: 620; }
+h3 { margin: 1.6rem 0 0.4rem; font-size: 15px; font-weight: 620; }
+
+.sh-lede { margin: 0 0 1.4rem; max-width: 68ch; color: var(--sh-ink); }
+p { margin: 0 0 0.8rem; max-width: 74ch; }
+code, .sh-mono { font-family: var(--sh-mono); font-size: 0.92em; }
+
+.sh-figure {
+  margin: 1rem 0 0.4rem;
+  padding: 1.25rem;
+  background: var(--sh-surface);
+  border: 1px solid var(--sh-rule);
+  border-radius: 6px;
+  overflow: visible;
+}
+
+.sh-caption {
+  margin: 0 0 1.6rem;
+  font-size: 13px;
+  color: var(--sh-ink-muted);
+  max-width: 80ch;
+}
+
+.sh-note {
+  margin: 0.8rem 0 1.6rem;
+  padding: 0.75rem 0.9rem;
+  border-left: 3px solid var(--sh-rule-strong);
+  background: transparent;
+  font-size: 13.5px;
+  color: var(--sh-ink);
+  max-width: 80ch;
+}
+
+.sh-note strong { font-weight: 620; }
+
+.sh-rule { border: 0; border-top: 1px solid var(--sh-rule); margin: 2.4rem 0 0; }
+
+details.sh-detail { margin: 0.4rem 0 1.6rem; font-size: 13.5px; }
+details.sh-detail > summary { cursor: default; color: var(--sh-ink-muted); }
+details.sh-detail table { border-collapse: collapse; margin-top: 0.6rem; font-size: 13px; }
+details.sh-detail th, details.sh-detail td {
+  border: 1px solid var(--sh-rule);
+  padding: 0.3rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+details.sh-detail th { font-weight: 620; }
+
+.sh-src { margin: 2rem 0 0; font-size: 12px; color: var(--sh-ink-muted); }
+
+.sh-input {
+  margin: 0.4rem 0 1.4rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--sh-surface);
+  border: 1px dashed var(--sh-rule-strong);
+  border-radius: 5px;
+  font-family: var(--sh-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--sh-ink);
+}
+
+@media (max-width: 900px) {
+  body { padding: 1.5rem 1rem 2.5rem; }
+  h1 { font-size: 22px; }
+}
+
+@media (max-width: 560px) {
+  body { padding: 1.25rem 0.85rem 2rem; }
+  .sh-figure { padding: 0.85rem; }
+}

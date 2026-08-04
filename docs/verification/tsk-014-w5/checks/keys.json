@@ -1,0 +1,2000 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns",
+          "unowned"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, how each kind may change, and how a reader traces why something exists",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, how each kind may change, and how a reader traces why something exists",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "figures": [
+      {
+        "id": "The traceability spine, and the layer each of its links lives in",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, how each kind may change, and how a reader traces why something exists",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, how each kind may change, and how a reader traces why something exists",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "figures": [
+      {
+        "id": "The traceability spine, and the layer each of its links lives in",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail, with what stopped each lane",
+        "drawn": [
+          "executed",
+          "notrun",
+          "outofscope",
+          "short"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [
+          "external",
+          "return"
+        ],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "d2-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "d2-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "d2-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "d2-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "d2-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "d2-baseline-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "d3-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "d3-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "d3-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "d3-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "d3-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "d3-baseline-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "p1-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "p1-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "p1-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "p1-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "p1-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "p1-baseline-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "p3-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "p3-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "p3-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "p3-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "p3-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "p3-baseline-dark-mobile",
+    "figures": []
+  }
+]

@@ -1,0 +1,35 @@
+{
+  "file": "registry.json",
+  "sha256": "7607cf86fb34ed97fd2aed4acaa43b8740433609a4e2829ca40fe964df1ecdb4",
+  "bytes": 38059,
+  "mtime_iso": "2026-08-04T16:02:58.744Z",
+  "pinned_at_state": "no W5 artefact had been authored. Every file under the watched directories was byte-identical to its counterpart on a previous board — a starting point, not authorship.",
+  "seed_files_byte_identical_to": {
+    "tsk-014-w4": 35,
+    "tsk-014-w3": 9
+  },
+  "seed_files_carried_under_a_new_name": [
+    {
+      "now": "rejected/d-authored-svg/w4-light-narrow.png",
+      "was": "tsk-014-w4/renders/dir-d-authored-svg-light-mobile.png"
+    },
+    {
+      "now": "rejected/d-authored-svg/w4-light-wide.png",
+      "was": "tsk-014-w4/renders/dir-d-authored-svg-light-desktop.png"
+    },
+    {
+      "now": "rejected/e-raster/w4-dark-narrow.png",
+      "was": "tsk-014-w4/renders/dir-e-raster-dark-mobile.png"
+    },
+    {
+      "now": "rejected/e-raster/w4-light-wide.png",
+      "was": "tsk-014-w4/renders/dir-e-raster-light-desktop.png"
+    }
+  ],
+  "authored_since_seed": [],
+  "what_this_proves": "the bytes, and the seed state. The digests survive a checkout, a copy and a commit; the mtime does not, and is recorded because it is the only ordering witness that will not.",
+  "what_this_does_not_prove": "that the author intended this before drawing. Only that these bytes preceded every authored artefact. A later change to the pinned file is a lock failure, not a silent edit.",
+  "governs": "every declaration the W5 gates check against",
+  "fixes": "W3 registry.json carried no lock at all, and its inode postdated seven of eleven candidate pages. The W5 first draft carried a lock whose stated proof (directory absence) had already expired when it was written.",
+  "re_pinned": "This is a corrected re-pin. The first W5 draft of the pinned files misstated the observer evidence and recorded planned repairs as completed outcomes; it was corrected before any W5 artefact was authored. See registry.json correction_history."
+}

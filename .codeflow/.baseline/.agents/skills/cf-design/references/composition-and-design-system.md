@@ -86,7 +86,12 @@ of them can invalidate the whole comparison:
   and the relationship it claims to expose. Two candidates sharing all three are
   one candidate in two costumes. Asserting this up front turns sibling
   distinctness into a check, rather than something discovered after both are
-  built.
+  built. Pin the declaration so its priority survives the working tree — a
+  digest, a commit, anything a later reader can check. A modification time
+  cannot do this, and an author's account of the order is not corroboration; if
+  priority cannot be shown, record that where it will be read, because every
+  check run against the declaration inherits exactly as much authority as the
+  declaration has.
 - **What would carry it.** Name the block, component, schema, or platform
   affordance in the product's real technical contract that could express each
   encoding, and what is lost if it cannot. Discovering after selection that the
@@ -97,8 +102,71 @@ of them can invalidate the whole comparison:
   part the direction optimises and what carries the other. Forcing one winner
   across both parts selects a compromise nobody chose.
 
+## When the carrier is the open decision
+
+Carrier qualification sometimes comes back negative for most of the candidates.
+That is not a result about compositions. It says the contract cannot express the
+relationships the product's own subjects have, and a composition winner chosen
+under it is a preference — the product will not build the thing that won.
+
+So the comparison moves up an altitude and is settled first. The alternatives at
+this altitude differ on one axis: **where composition authority sits**, and
+therefore what a new subject form costs.
+
+- authority in product code — a curated set of typed forms, each modelling one
+  kind of relationship; the document supplies data and no geometry. Uniform,
+  accessible and mode-correct by construction; a subject nothing models has
+  nowhere to go, and a new form is a release;
+- authority in the document — a bounded declarative grammar the runtime
+  compiles. Reach as wide as the grammar; a new subject form costs nothing but
+  the grammar is a permanent contract and a document can compose a bad one;
+- authority in a reviewed library — named, parameterised recipes versioned
+  alongside the skill rather than the binary. Consistent and lookupable; a novel
+  relationship waits for a review;
+- authority with the author — supplied markup under a runtime service. Maximal
+  reach, no model of meaning, so nothing validates the encoding and nothing
+  accumulates between documents;
+- no contract change at all — a pre-rendered image. Free today, and permanently
+  fixed at one width, one mode and one alt string.
+
+Judge them the way any other candidates are judged: **demonstrated, not
+described**. Each alternative renders real product content through its own
+mechanism, at the applicable contexts and modes, and each ships one subject it
+genuinely cannot carry, rendered as far as it goes. A drawing of what a content
+model would produce is a claim about a content model. Record per alternative the
+expressive reach, what it cannot express, the extension path and its cost,
+maintenance and safety consequences, and what a reader loses. Where an
+alternative moves untrusted content across a security boundary, that change is
+named and judged, never assumed equivalent.
+
+A hybrid is a real option and is not the default: it inherits both extension
+paths and both failure modes, and it earns its place only where the alternatives
+it combines have been separately demonstrated.
+
+Then reconcile, before judging. Authoring changes things, and the two ways that
+shows up look different but are one defect: a declared field quietly widened to
+match what got drawn, and a declared relationship the drawing never implemented.
+Read every declaration against its own rendered candidate and record each
+divergence — which one moved, when, and why. **Never edit the declaration to
+match the drawing.** Once edited it describes rather than constrains, and the
+check that was supposed to catch the drift now certifies it. A record of "no
+amendments" is a claim like any other and is worth checking.
+
 Then judge them rendered:
 
+- prove the render carries what the page contains before reading anything off
+  it. A still frame has no interaction, so a horizontal scroll container is a
+  silent crop: the line stops mid-token and nothing says it did, and the reader
+  believes they have all of it. A label drawn past its own frame is removed by
+  the frame with no notice, and marks sharing one lane can land exactly on each
+  other. Measure these — hidden overflow, out-of-frame geometry, document
+  overflow — rather than trusting the eye over a whole set of renders. A render
+  that fails is not weak evidence about its composition; it is evidence about
+  nothing, and the honest outcomes are fix and re-render, or record that context
+  as one the comparison cannot settle;
+- key every information-bearing mark where the reader can see it, and name it in
+  the accessible description too. A state the drawing distinguishes and the
+  legend omits is not a subtle mark, it is an unreadable one;
 - use the product's real content, not lorem or invented figures;
 - render at the viewports, modes, and input conditions that could change the
   reading, not only the author's window;

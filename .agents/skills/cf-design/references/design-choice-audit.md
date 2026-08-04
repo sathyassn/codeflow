@@ -169,15 +169,19 @@ such a candidate is **void, not weak**, and cannot be repaired by discounting it
   composition beneath it.
 - **Progressive depth.** Each layer holds only what belongs at its altitude,
   and the content inventory shows nothing material was dropped or demoted to
-  achieve it.
+  achieve it. Reconcile that inventory against a canonical baseline — the
+  surface's last accepted rendered state plus the sources the brief names —
+  because an inventory built from the new surface alone cannot show what the new
+  surface lost.
 - **No-box**, where a figure or diagram is the primary explanatory form. A
   payload consisting entirely of text in rectangles fails; ornamental
   connectors and icons do not rescue it. It does not apply to forms, tables,
   settings, lists, or any container carrying real product semantics, and it
   prohibits no component.
 - **Sibling distinctiveness and baseline differential**, where a family of
-  surfaces or a richer medium is at issue. Siblings must be identifiable by
-  their own content-bearing structure rather than a swapped tint or slot, and a
+  surfaces or a richer medium is at issue. Observed with titles, headings and
+  captions masked: siblings must be identifiable by their own content-bearing
+  structure rather than by their words, a swapped tint or a filled slot, and a
   richer surface must materially beat the plain baseline it replaces. Each
   sibling's primary unit, axis, and encoded relationship were declared before
   authoring; this gate confirms the rendered result against that declaration
@@ -192,9 +196,15 @@ such a candidate is **void, not weak**, and cannot be repaired by discounting it
   observes.
 
 Record for each applied gate what was tested, at which viewport, mode, platform,
-and state, who observed it, and the evidence. An untested gate is untested, not a
-pass; a gate whose preconditions above were not met is void, which is also not a
-pass. Everything outside these protocols is contextual judgment, graded by
+and state, the result that would count as a pass — registered before the renders
+were viewed — who observed it, and the evidence. A gate missing any applicable
+field is untested, not passed; an untested gate is untested, not a pass; and a
+gate whose preconditions above were not met is void, which is also not a pass.
+
+A measurement is evidence only in the units it claims. Take it off the rendered
+surface, in what the reader loses, and check the measure itself against a case
+where the answer is already known — a probe that reports a defect the page does
+not have will also miss one it does. Everything outside these protocols is contextual judgment, graded by
 materiality, with the operator as final authority on an operator-owned
 direction.
 

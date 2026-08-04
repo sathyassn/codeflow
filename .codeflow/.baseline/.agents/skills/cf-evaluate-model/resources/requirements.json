@@ -342,6 +342,50 @@
       ]
     },
     {
+      "id": "CF-DES-015",
+      "level": "hard",
+      "statement": "A rendered candidate counts as evidence only if the render carries what its page contains: horizontal clipping, out-of-frame drawing, and document overflow are measured rather than eyeballed, a render that fails carries no observation result, and every information-bearing mark is keyed for the reader and named in the accessible description.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "A rendered candidate is evidence only if the render carries what its page",
+            "crop, not an affordance. Measure hidden overflow, out-of-frame drawing and",
+            "from a render that fails. Key every information-bearing mark where the reader"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "prove the render carries what the page contains before reading anything off",
+            "key every information-bearing mark where the reader can see it, and name it in"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-016",
+      "level": "hard",
+      "statement": "A pre-authoring declaration is pinned so its priority outlives the working tree, declaration and drawing are reconciled in both directions after authoring, every divergence is recorded instead of the declaration being edited to match the drawing, and the seat judging a rendered board does not repair the drawings on it.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "preceded it. Pin it so its priority outlives the working tree, reconcile it",
+            "rather than editing the declaration to match**. Where a registration's priority",
+            "The seat judging a board does not"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "Pin the declaration so its priority survives the working tree",
+            "Never edit the declaration to"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-EVAL-001",
       "level": "hard",
       "statement": "Token efficiency is evaluated as reliable contract adherence per loaded token and never authorizes removal or weakening of a semantic duty.",

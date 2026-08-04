@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSK-007 — what stopped the evidence</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #12161b;     --ink-2: #48515e;   --ink-3: #5b6471;
+    --page: #f7f8fa;    --panel: #ffffff;   --rule: #dbdfe6;
+    --gap-ink: #6a4a1e; --gap-line: #b08a49; --gap-face: #fdf8ee;
+    --have: #17384a;    --have-face: #e6eef3;
+    --shadow: 0 1px 2px rgba(18, 22, 27, .06), 0 10px 28px -18px rgba(18, 22, 27, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eff2f6;    --ink-2: #b4bcc8;  --ink-3: #8d97a4;
+      --page: #0e1116;   --panel: #161a20;  --rule: #2a3039;
+      --gap-ink: #e9c883; --gap-line: #977638; --gap-face: #221c11;
+      --have: #a9d0e4;   --have-face: #1a2831;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 40px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -.015em; margin: 0 0 12px; font-weight: 640; }
+  .lede { margin: 0 0 30px; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  .lede code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14.5px; color: var(--ink); }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 22px 26px 20px; box-shadow: var(--shadow); }
+  svg { display: block; width: 100%; height: auto; }
+  .tile-gap { fill: var(--gap-face); stroke: var(--gap-line); stroke-width: 1.25; stroke-dasharray: 4 3; }
+  .tile-have { fill: var(--have-face); stroke: var(--have); stroke-width: 1.75; }
+  .tile-lane { font-size: 12px; font-weight: 620; fill: var(--ink); }
+  .tile-claim { font-size: 10.5px; fill: var(--ink-2); }
+  .grp-rule { stroke: var(--rule); stroke-width: 1; }
+  .grp-count { font-size: 27px; font-weight: 680; letter-spacing: -.02em; fill: var(--gap-ink); }
+  .grp-count.have { fill: var(--have); }
+  .grp-label { font-size: 13px; font-weight: 620; fill: var(--ink); }
+  .grp-detail { font-size: 11.5px; fill: var(--ink-3); }
+  .grp-bracket { stroke: var(--gap-line); stroke-width: 1.75; fill: none; }
+  .grp-bracket.have { stroke: var(--have); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 26px; margin: 22px 2px 0; font-size: 13.5px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 40px; height: 18px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  blockquote { margin: 0; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--ink-2); font-size: 13px; }
+  .src { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .band-wide, .band-mid, .band-narrow { display: none; }
+  .band-wide { display: block; }
+  @media (max-width: 1080px) {
+    body { padding: 32px 28px 56px; }
+    h1 { font-size: 26px; }
+    .band-wide { display: none; } .band-mid { display: block; }
+  }
+  @media (max-width: 620px) {
+    body { padding: 24px 16px 48px; }
+    h1 { font-size: 22px; }
+    figure { padding: 16px 12px 14px; border-radius: 11px; }
+    .band-mid { display: none; } .band-narrow { display: block; }
+    .legend { gap: 10px 16px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">TSK-007 · qualification evidence</p>
+  <h1>What stopped the evidence</h1>
+  <p class="lede">Eight claims across five lanes make <b>twenty-two places</b> where a run at candidate
+    <code>82671551</code> either happened or did not. Every one of them is a tile here. The tiles that
+    did not happen are grouped by <b>the kind of thing that stopped them</b>, so each group takes up
+    as much of the page as it accounts for; the ones that did happen keep their own group.</p>
+
+  <figure>
+    <div class="band-wide" id="wide"></div>
+    <div class="band-mid" id="mid"></div>
+    <div class="band-narrow" id="narrow"></div>
+    <div class="legend" id="legend"></div>
+  </figure>
+
+  <details>
+    <summary>Each cause, in the record's own words</summary>
+    <table id="facts">
+      <thead><tr><th>Cause</th><th>What it means</th><th>The record's sentence</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/tsk007-facts.js</code>; every quotation is checked verbatim
+    against <code>docs/verification/tsk-007-presentation/README.md</code>, and every tile is one cell of
+    that registry.</p>
+</div>
+
+<script src="../../../shared/tsk007-facts.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const F = window.tsk007Facts;
+  const laneShort = { "macOS arm64": "macOS", "Linux arm64": "Linux", "native Windows": "Windows",
+    "WSL2": "WSL2", "independent review": "review" };
+  const claimShort = {
+    targets: "nine targets", "release-binary": "release binary", linux: "native Linux",
+    "desktop-chromium": "Chromium", windows: "teardown", launcher: "launcher",
+    "cross-lineage-review": "cross-lineage", "claude-verdict": "Claude verdict",
+  };
+
+  // Every tile is one cell of the registry, so the grouping cannot invent or
+  // lose a position: the tiles are the cells, partitioned.
+  const tiles = [];
+  for (const claim of F.claims) {
+    F.lanes.forEach((lane, i) => {
+      const cell = claim.cells[i];
+      if (cell.state === "na") return;
+      const cause = F.absenceCauses[`${claim.id}:${i}`] ?? null;
+      tiles.push({ lane: laneShort[lane], claim: claimShort[claim.id], cause, present: cell.state === "executed" });
+    });
+  }
+  const groups = [
+    ...[...F.causes].sort((a, b) =>
+      tiles.filter((t) => t.cause === b.id).length - tiles.filter((t) => t.cause === a.id).length)
+      .map((cause) => ({
+        key: cause.id, label: cause.label, detail: cause.detail, present: false,
+        items: tiles.filter((t) => t.cause === cause.id),
+      })),
+    { key: "present", label: "a run that happened", detail: "executed at this exact candidate",
+      present: true, items: tiles.filter((t) => t.present) },
+  ].filter((group) => group.items.length);
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svg = (w, h, title, desc) => {
+    const root = n("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+    const tid = `t${++svg.seq}`, did = `d${svg.seq}`;
+    root.setAttribute("aria-labelledby", `${tid} ${did}`);
+    root.append(n("title", { id: tid }, title), n("desc", { id: did }, desc));
+    return root;
+  };
+  svg.seq = 0;
+  const TITLE = "Every place a run could have existed at the exact candidate, grouped by what stopped it";
+  const DESC = "Twenty-two equal tiles, one for each lane a claim applies to. Tiles with a dashed "
+    + "outline are places where no run exists; they are laid out in blocks, one block per kind of "
+    + "cause, so a block takes as much room as the number of places it accounts for. Tiles with a "
+    + "solid outline are runs that did happen and form their own block. Each tile names its lane and "
+    + "its claim, so the platform pattern can be read down a block.";
+
+  // ------------------------------------------- one cause per row, no scaling
+  // Every tile is the same size and every row starts at the same left edge, so
+  // a row's length is its count and two causes are compared by comparing two
+  // drawn lengths. Nothing is normalised, stacked or scaled to fit.
+  function build(W, opts) {
+    const { tileW, tileH, gap, headH, rowGap, x0, laneSize, claimSize, countSize } = opts;
+    const rowH = headH + tileH + rowGap;
+    const H = 10 + groups.length * rowH;
+    const s = svg(W, H, TITLE, DESC);
+    const gx = (i) => x0 + i * (tileW + gap);
+
+    groups.forEach((group, r) => {
+      const g = n("g");
+      s.append(g);
+      const top = 10 + r * rowH + headH;
+      const count = n("text", { class: `grp-count${group.present ? " have" : ""}`, x: x0, y: top - 21,
+        style: `font-size:${countSize}px` }, String(group.items.length));
+      g.append(count);
+      const labelX = x0 + (group.items.length > 9 ? countSize * 1.5 : countSize);
+      g.append(n("text", { class: "grp-label", x: labelX, y: top - 21 }, group.label));
+      g.append(n("text", { class: "grp-detail", x: x0, y: top - 6 }, group.detail));
+
+      group.items.forEach((item, i) => {
+        g.append(n("rect", { class: group.present ? "tile-have" : "tile-gap",
+          x: gx(i), y: top, width: tileW, height: tileH, rx: 5 }));
+        g.append(n("text", { class: "tile-lane", x: gx(i) + 8, y: top + tileH / 2 - 2,
+          style: `font-size:${laneSize}px` }, item.lane));
+        g.append(n("text", { class: "tile-claim", x: gx(i) + 8, y: top + tileH - 10,
+          style: `font-size:${claimSize}px` }, item.claim));
+      });
+      const end = gx(group.items.length - 1) + tileW;
+      g.append(n("path", { class: `grp-bracket${group.present ? " have" : ""}`,
+        d: `M${x0},${top + tileH + 2} V${top + tileH + 7} H${end} V${top + tileH + 2}` }));
+    });
+    return s;
+  }
+
+  const wide = () => build(1180, { tileW: 100, tileH: 50, gap: 6, headH: 46, rowGap: 22, x0: 2,
+    laneSize: 12, claimSize: 10.5, countSize: 27 });
+  const mid = () => build(880, { tileW: 73, tileH: 48, gap: 6, headH: 44, rowGap: 20, x0: 2,
+    laneSize: 11, claimSize: 9, countSize: 24 });
+
+  // -------------------------------------------------------------- narrow
+  // Blocks become full-width bands stacked down the page. A band's height is
+  // its count, so the dominant cause is still visibly dominant and the runs
+  // that happened are still visibly the small remainder — the magnitude does
+  // not become a number in a list.
+  function narrow() {
+    const W = 358, unit = 34, headH = 40, gap = 14, x0 = 2;
+    let y = 8;
+    const layout = groups.map((group) => {
+      const top = y + headH;
+      const height = group.items.length * unit;
+      y = top + height + gap;
+      return { group, top, height };
+    });
+    const s = svg(W, y, TITLE, DESC);
+    for (const { group, top, height } of layout) {
+      const g = n("g");
+      s.append(g);
+      const count = n("text", { class: `grp-count${group.present ? " have" : ""}`, x: x0, y: top - 14,
+        style: "font-size:22px" }, String(group.items.length));
+      g.append(count);
+      g.append(n("text", { class: "grp-label", x: x0 + (group.items.length > 9 ? 32 : 22), y: top - 14,
+        style: "font-size:12.5px" }, group.label));
+      g.append(n("text", { class: "grp-detail", x: x0, y: top - 1, style: "font-size:11px" }, group.detail));
+      g.append(n("rect", { class: group.present ? "tile-have" : "tile-gap",
+        x: x0, y: top + 4, width: W - x0 * 2, height, rx: 6 }));
+      group.items.forEach((item, i) => {
+        const iy = top + 4 + i * unit;
+        if (i > 0) g.append(n("line", { class: "grp-rule", x1: x0 + 10, y1: iy, x2: W - x0 - 10, y2: iy }));
+        g.append(n("text", { class: "tile-lane", x: x0 + 12, y: iy + 22 }, item.lane));
+        g.append(n("text", { class: "tile-claim", x: x0 + 96, y: iy + 22 }, item.claim));
+      });
+    }
+    return s;
+  }
+
+  document.getElementById("wide").append(wide());
+  document.getElementById("mid").append(mid());
+  document.getElementById("narrow").append(narrow());
+
+  const legendMarks = [
+    ["one place with no run", '<rect x="2" y="3" width="36" height="12" rx="3" class="tile-gap"/>'],
+    ["one run that happened", '<rect x="2" y="3" width="36" height="12" rx="3" class="tile-have"/>'],
+    ["one block, one kind of cause", '<path d="M2,4 V14 H38 V4" class="grp-bracket"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 40 18" aria-hidden="true">${marks}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const cause of F.causes) {
+    const tr = document.createElement("tr");
+    for (const value of [cause.label, cause.detail]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    const said = document.createElement("td");
+    for (const quote of [cause.quote, cause.alsoQuote].filter(Boolean)) {
+      const bq = document.createElement("blockquote");
+      bq.textContent = `“${quote}”`;
+      said.append(bq);
+    }
+    tr.append(said);
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(F.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

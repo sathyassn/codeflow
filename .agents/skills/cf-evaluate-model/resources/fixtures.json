@@ -174,6 +174,33 @@
       }
     },
     {
+      "id": "design-render-carries-its-page",
+      "tier": "standard",
+      "state": {
+        "surface": "a rendered candidate board",
+        "stage": "renders produced, deterministic checks green, nothing observed yet"
+      },
+      "files": {
+        "BOARD.md": "Three candidates, each rendered at 1440, 900 and 390 wide in light and dark.\nAccessibility, network, motion and checksum checks are all clean.\nThe board is described as admissible and ready for a blind observer.\n",
+        "probe.json": "{\n  \"c2-mobile\": {\n    \"clipped\": [\n      { \"element\": \"pre.source\", \"overflow_x\": \"auto\", \"hidden_px\": 412, \"client_width\": 330 }\n    ],\n    \"out_of_frame\": []\n  },\n  \"c3-tablet\": {\n    \"clipped\": [],\n    \"out_of_frame\": [\n      { \"element\": \"text.origin-label\", \"text\": \"Chrome 150 / Playwright 1.55\", \"overshoot_x\": 8.8 }\n    ]\n  }\n}\n",
+        "candidates/c2.md": "Quotes real source beside a rail of the rounds that rewrote each region.\nThe quoted lines are the evidence the candidate is verified against.\n",
+        "candidates/c3.md": "Draws a region that is deliberately off the round axis, labelled with the\nexternal cause that arrived from it. The label is the payload of that mark.\nLegend keys four cell states; the drawing renders five.\n"
+      }
+    },
+    {
+      "id": "design-declaration-versus-drawing",
+      "tier": "standard",
+      "state": {
+        "surface": "a rendered candidate board",
+        "stage": "authoring finished, judgment about to start"
+      },
+      "files": {
+        "registry.json": "{\n  \"note\": \"Registered before any candidate was authored.\",\n  \"states_note\": \"Marker tokens were corrected once during authoring. Only the technique token changed; no encoding declaration was touched after registration.\",\n  \"candidates\": [\n    { \"id\": \"a\", \"narrow_composition\": \"the axis rotates; extent is measured down the same rows, in a gutter of its own, with a tick at each line it crosses\" },\n    { \"id\": \"c\", \"encoded_relationship\": \"a partition with the one split path drawn straddling the perimeter\" }\n  ]\n}\n",
+        "NOTES.md": "The narrow band of candidate 'a' was redrawn after its mobile render was\ninspected, and the registry sentence describing that band was expanded\nafterwards to match what had been drawn. There is no version control here.\nCandidate 'c' draws the split path wholly inside the editable region; the\nperimeter is further down the page.\n",
+        "ROLE.md": "You are the independent seat judging this board. You authored none of it.\n"
+      }
+    },
+    {
       "id": "design-comparison-qualification",
       "tier": "standard",
       "state": {

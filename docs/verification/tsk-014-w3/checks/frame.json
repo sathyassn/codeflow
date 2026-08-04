@@ -1,0 +1,1334 @@
+{
+  "note": "per render: horizontal scroll containers that clip their own content, and drawn SVG content that extends past its own viewBox. A still render has no interaction, so clipped content is content the reader never gets.",
+  "renders": [
+    {
+      "render": "p1-a-critical-path-and-room-light-desktop",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-tablet",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-mobile",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-desktop",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-tablet",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-mobile",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-desktop",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-tablet",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-mobile",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-desktop",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-tablet",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-mobile",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-desktop",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-tablet",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-mobile",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-desktop",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-tablet",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-mobile",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-desktop",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-tablet",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-mobile",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-desktop",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-tablet",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-mobile",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-desktop",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-tablet",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-mobile",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": [
+        {
+          "element": "text.off-sub",
+          "text": "Playwright 1.55",
+          "overshoot_x": 8.8,
+          "overshoot_y": 0
+        }
+      ]
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-desktop",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-tablet",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-mobile",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": [
+        {
+          "element": "text.off-sub",
+          "text": "Playwright 1.55",
+          "overshoot_x": 8.8,
+          "overshoot_y": 0
+        }
+      ]
+    },
+    {
+      "render": "p3-b-source-region-history-light-desktop",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": [
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R2",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R3",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R4",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R5",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R6",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        }
+      ]
+    },
+    {
+      "render": "p3-b-source-region-history-light-tablet",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 7,
+          "client_width": 802,
+          "sample": "+  if (results.checks?.browser_close_fallbacks !== 1) {\n+    throw new Error(`Injected clo"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 29,
+          "client_width": 802,
+          "sample": "+  if (\n+    !results.toolchain?.browser_version\n+    || results.toolchain?.playwright_cor"
+        }
+      ],
+      "out_of_frame": [
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R2",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R3",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R4",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R5",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R6",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        }
+      ]
+    },
+    {
+      "render": "p3-b-source-region-history-light-mobile",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [
+        {
+          "element": "figure#regions",
+          "overflow_x": "hidden",
+          "hidden_px": 133,
+          "client_width": 360,
+          "sample": "crates/codeflow-present/web/package.json\n1 region the review touched\nR8\nR8\n\n@@ -27,7 +27,7"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 304,
+          "client_width": 332,
+          "sample": "const functionalEnvironmentNames = [\n   \"APPDATA\", \"CARGO_HOME\", \"COMSPEC\", \"HOME\", \"LANG\""
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 19,
+          "client_width": 332,
+          "sample": "? resolve(process.env.CF_PRESENT_EVIDENCE_DIR)\n   : null;\n const childEnvironment = {\n-  ."
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 79,
+          "client_width": 332,
+          "sample": "+  if (injectCleanupFailure) {\n+    throw new Error(\"injected real-browser cleanup failure"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 211,
+          "client_width": 332,
+          "sample": "const page = context.pages()[0] ?? await context.newPage();\n-  await page.goto(pathToFileU"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 291,
+          "client_width": 332,
+          "sample": "tracingStarted = false;\n-  await closeBrowser(context, browserProfileV2, browserProcessesV"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 377,
+          "client_width": 332,
+          "sample": "+} catch (error) {\n+  primaryError = error;\n } finally {\n+  const cleanupErrors = [];\n+  c"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 264,
+          "client_width": 332,
+          "sample": "+      windows_profile_confinement: windowsProfileConfinement ? \"pass\" : \"not applicable\","
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 191,
+          "client_width": 332,
+          "sample": "observedPage.setDefaultTimeout(15_000);\n-    observedPage.setDefaultNavigationTimeout(20_0"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 244,
+          "client_width": 332,
+          "sample": "+function timeoutWithinQualification(ceiling, phase) {\n+  const remaining = qualificationD"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 218,
+          "client_width": 332,
+          "sample": "const raw = execFileSync(\"/bin/ps\", [\"-axo\", \"pid=,ppid=,lstart=,command=\"], {\n       env:"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 410,
+          "client_width": 332,
+          "sample": "+  if (results.checks?.browser_close_fallbacks !== 1) {\n+    throw new Error(`Injected clo"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 430,
+          "client_width": 332,
+          "sample": "+  if (\n+    !results.toolchain?.browser_version\n+    || results.toolchain?.playwright_cor"
+        }
+      ],
+      "out_of_frame": [
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R2",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R3",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R4",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R5",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R6",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        }
+      ]
+    },
+    {
+      "render": "p3-b-source-region-history-dark-desktop",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": [
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R2",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R3",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R4",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R5",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R6",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        }
+      ]
+    },
+    {
+      "render": "p3-b-source-region-history-dark-tablet",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 7,
+          "client_width": 802,
+          "sample": "+  if (results.checks?.browser_close_fallbacks !== 1) {\n+    throw new Error(`Injected clo"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 29,
+          "client_width": 802,
+          "sample": "+  if (\n+    !results.toolchain?.browser_version\n+    || results.toolchain?.playwright_cor"
+        }
+      ],
+      "out_of_frame": [
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R2",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R3",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R4",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R5",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R6",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        }
+      ]
+    },
+    {
+      "render": "p3-b-source-region-history-dark-mobile",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [
+        {
+          "element": "figure#regions",
+          "overflow_x": "hidden",
+          "hidden_px": 133,
+          "client_width": 360,
+          "sample": "crates/codeflow-present/web/package.json\n1 region the review touched\nR8\nR8\n\n@@ -27,7 +27,7"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 304,
+          "client_width": 332,
+          "sample": "const functionalEnvironmentNames = [\n   \"APPDATA\", \"CARGO_HOME\", \"COMSPEC\", \"HOME\", \"LANG\""
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 19,
+          "client_width": 332,
+          "sample": "? resolve(process.env.CF_PRESENT_EVIDENCE_DIR)\n   : null;\n const childEnvironment = {\n-  ."
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 79,
+          "client_width": 332,
+          "sample": "+  if (injectCleanupFailure) {\n+    throw new Error(\"injected real-browser cleanup failure"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 211,
+          "client_width": 332,
+          "sample": "const page = context.pages()[0] ?? await context.newPage();\n-  await page.goto(pathToFileU"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 291,
+          "client_width": 332,
+          "sample": "tracingStarted = false;\n-  await closeBrowser(context, browserProfileV2, browserProcessesV"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 377,
+          "client_width": 332,
+          "sample": "+} catch (error) {\n+  primaryError = error;\n } finally {\n+  const cleanupErrors = [];\n+  c"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 264,
+          "client_width": 332,
+          "sample": "+      windows_profile_confinement: windowsProfileConfinement ? \"pass\" : \"not applicable\","
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 191,
+          "client_width": 332,
+          "sample": "observedPage.setDefaultTimeout(15_000);\n-    observedPage.setDefaultNavigationTimeout(20_0"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 244,
+          "client_width": 332,
+          "sample": "+function timeoutWithinQualification(ceiling, phase) {\n+  const remaining = qualificationD"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 218,
+          "client_width": 332,
+          "sample": "const raw = execFileSync(\"/bin/ps\", [\"-axo\", \"pid=,ppid=,lstart=,command=\"], {\n       env:"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 410,
+          "client_width": 332,
+          "sample": "+  if (results.checks?.browser_close_fallbacks !== 1) {\n+    throw new Error(`Injected clo"
+        },
+        {
+          "element": "pre",
+          "overflow_x": "auto",
+          "hidden_px": 430,
+          "client_width": 332,
+          "sample": "+  if (\n+    !results.toolchain?.browser_version\n+    || results.toolchain?.playwright_cor"
+        }
+      ],
+      "out_of_frame": [
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R2",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R3",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R4",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R5",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R6",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R7",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        },
+        {
+          "element": "text",
+          "text": "R8",
+          "overshoot_x": 0,
+          "overshoot_y": 1.8
+        }
+      ]
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-desktop",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-tablet",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-mobile",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-desktop",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-tablet",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-mobile",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-b-the-spine-light-desktop",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-b-the-spine-light-tablet",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-b-the-spine-light-mobile",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-b-the-spine-dark-desktop",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-b-the-spine-dark-tablet",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-b-the-spine-dark-mobile",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-c-write-authority-map-light-desktop",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-c-write-authority-map-light-tablet",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-c-write-authority-map-light-mobile",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-desktop",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-tablet",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-mobile",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-a-decision-reach-light-desktop",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-a-decision-reach-light-tablet",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-a-decision-reach-light-mobile",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-a-decision-reach-dark-desktop",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-a-decision-reach-dark-tablet",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-a-decision-reach-dark-mobile",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-b-evidence-margin-light-desktop",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-b-evidence-margin-light-tablet",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-b-evidence-margin-light-mobile",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-desktop",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-tablet",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-mobile",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-baseline-light-desktop",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-baseline-light-tablet",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p1-baseline-light-mobile",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-baseline-light-desktop",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-baseline-light-tablet",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p2-baseline-light-mobile",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": {
+        "scroll_width": 475,
+        "client_width": 390
+      },
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-baseline-light-desktop",
+      "page": "baselines/p3/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-baseline-light-tablet",
+      "page": "baselines/p3/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "p3-baseline-light-mobile",
+      "page": "baselines/p3/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-baseline-light-desktop",
+      "page": "baselines/d1/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-baseline-light-tablet",
+      "page": "baselines/d1/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d1-baseline-light-mobile",
+      "page": "baselines/d1/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": {
+        "scroll_width": 477,
+        "client_width": 390
+      },
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-baseline-light-desktop",
+      "page": "baselines/d2/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-baseline-light-tablet",
+      "page": "baselines/d2/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    },
+    {
+      "render": "d2-baseline-light-mobile",
+      "page": "baselines/d2/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "document_overflow": null,
+      "clipped": [],
+      "out_of_frame": []
+    }
+  ]
+}
