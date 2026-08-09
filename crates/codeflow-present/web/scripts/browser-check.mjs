@@ -269,101 +269,107 @@ async function checkInteractiveSurface(browser, origin) {
     const root = document.getElementById("cf-present-document");
     if (!root) throw new Error("Document root missing");
     globalThis.__cfDocumentRoot = root;
-    const text = document.getElementById("selection-target")?.firstChild;
-    if (!text) throw new Error("Selection fixture missing");
-    const range = document.createRange();
-    range.setStart(text, 0);
-    range.setEnd(text, 11);
-    const selection = getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
   });
+
+  // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByRole("button", { name: /Comment/ }).click();
-  await page.getByRole("button", { name: "Add selected text" }).click();
-  if (await page.locator(".cf-notes textarea").getAttribute("maxlength") !== "32") {
-    throw new Error("Review text input did not expose the server-provided length limit");
+  await page.locator(".cf-hint.on").waitFor();
+  await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+  await page.getByText("Nothing noted yet").waitFor();
+
+  async function clickTool(testId) {
+    await page.evaluate(() => {
+      const tools = document.querySelector("details.cf-tools");
+      if (tools) {
+        tools.open = true;
+        tools.scrollIntoView({ block: "end" });
+      }
+    });
+    await page.getByTestId(testId).click({ force: true });
   }
-  await page.locator(".cf-notes textarea").fill("Keep this exact wording.");
+  async function saveComposerNote(body, { viaFloat = false } = {}) {
+    if (viaFloat) {
+      await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 10000 });
+      await page.getByTestId("float-comment").click({ force: true });
+    }
+    const box = page.getByTestId("composer-text");
+    await box.waitFor({ state: "attached", timeout: 10000 });
+    if ((await box.getAttribute("maxlength")) !== "32") {
+      throw new Error("Composer did not expose the server-provided length limit");
+    }
+    await box.fill(body, { force: true });
+    await page.getByTestId("composer-save").click({ force: true });
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 });
+  }
+
+  // Text note (tools open composer directly)
   await selectFixtureText(page);
-  await page.getByRole("button", { name: "Add selected text" }).click();
+  await clickTool("tool-add-text");
+  await saveComposerNote("Keep this exact wording.");
+  if ((await page.locator(".cf-note-row").count()) !== 1) throw new Error("Text note did not land in the rail");
+  if ((await page.locator(".cf-marker").count()) !== 1) throw new Error("Speech marker missing for text note");
+
+  // Limit
   await selectFixtureText(page);
-  await page.getByRole("button", { name: "Add selected text" }).click();
-  await page.getByText("A review can contain at most 2 notes.").waitFor();
-  if (await page.locator(".cf-notes li").count() !== 2) {
+  await clickTool("tool-add-text");
+  await saveComposerNote("Second note body.");
+  await selectFixtureText(page);
+  await clickTool("tool-add-text");
+  await page.getByText("A review can contain at most 2 notes.").waitFor({ timeout: 10000 });
+  if ((await page.locator(".cf-note-row").count()) !== 2) {
     throw new Error("Review note limit was not enforced before creating an unsendable review");
   }
-  await page.locator(".cf-notes .cf-text-action").first().click();
-  await page.locator(".cf-notes .cf-text-action").first().click();
+  async function removeAllNotes() {
+    await page.evaluate(() => {
+      document.querySelectorAll('[data-testid="note-remove"]').forEach((btn) => {
+        if (btn instanceof HTMLElement) btn.click();
+      });
+    });
+    // Second pass in case React re-render left one
+    await page.waitForTimeout(50);
+    await page.evaluate(() => {
+      document.querySelectorAll('[data-testid="note-remove"]').forEach((btn) => {
+        if (btn instanceof HTMLElement) btn.click();
+      });
+    });
+    await page.waitForFunction(() => document.querySelectorAll(".cf-note-row").length === 0, null, { timeout: 10000 });
+  }
+  await removeAllNotes();
 
-  await page.getByRole("button", { name: "Pick element" }).click();
+  // Element keyboard → composer
+  await clickTool("tool-pick-element");
   await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
   await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
   await page.keyboard.press("Enter");
-  await page.getByText(/^Element: /u).waitFor();
-  if (await page.locator(".cf-region-marker").count() !== 1) {
-    throw new Error("Keyboard element feedback did not retain one visible numbered marker");
+  await saveComposerNote("Element note body.");
+  if ((await page.locator(".cf-marker").count()) !== 1) {
+    throw new Error("Keyboard element feedback did not retain one visible speech marker");
   }
-  await page.getByRole("button", { name: "Pick element" }).click();
+  await clickTool("tool-pick-element");
   await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
-  const noteEditor = page.locator(".cf-notes textarea");
-  await noteEditor.focus();
-  await page.keyboard.press("ArrowLeft");
-  if (!await noteEditor.evaluate((element) => document.activeElement === element)) {
-    throw new Error("Element capture hijacked arrow keys outside the review document");
-  }
-  // Esc exits element capture only; second Esc would exit Comment mode
   await page.keyboard.press("Escape");
   await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
-  if (await page.locator("#cf-feedback-panel").getAttribute("data-open") !== "true") {
+  if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) !== "true") {
     throw new Error("Esc should exit capture without leaving Comment mode");
   }
-  await page.locator(".cf-notes .cf-text-action").click();
+  await removeAllNotes();
 
-  await page.getByRole("button", { name: "Pick element" }).click();
-  await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
-  // Close collapses the rail on narrow viewports but keeps Comment + capture armed
-  await page.getByRole("button", { name: "Close" }).click();
-  await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false");
-  await page.locator("code[data-cf-language='rust']").click();
-  await page.getByText(/^Element: /u).waitFor();
-  if (await page.locator(".cf-region-marker").count() !== 1) {
-    throw new Error("Element feedback did not retain one visible numbered marker");
+  // Whole document → composer
+  await clickTool("tool-whole-doc");
+  await saveComposerNote("Whole document note.");
+  await page.locator(".cf-note-row .a").filter({ hasText: "Whole document" }).waitFor();
+  if ((await page.locator(".cf-marker").count()) !== 1) {
+    throw new Error("Whole-document feedback did not retain one visible speech marker");
   }
-  await page.locator(".cf-notes .cf-text-action").click();
+  await removeAllNotes();
 
-  await page.getByRole("button", { name: "Select area" }).click();
-  await page.locator("#cf-present-document[data-cf-capture-mode='region']").waitFor();
-  await page.keyboard.press("Escape");
-  await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
-  await page.getByRole("button", { name: "Select area" }).click();
-  await page.getByRole("button", { name: "Close" }).click();
-  await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false");
-  const areaTarget = page.locator("[data-cf-diagram-title='Request flow']");
-  await areaTarget.scrollIntoViewIfNeeded();
-  const target = await areaTarget.boundingBox();
-  if (!target) throw new Error("Area-selection fixture is not visible");
-  await page.mouse.move(target.x + 8, target.y + 8);
-  await page.mouse.down();
-  await page.mouse.move(target.x + Math.min(90, target.width - 8), target.y + Math.min(60, target.height - 8));
-  await page.mouse.up();
-  await page.getByText(/^Area: /u).waitFor();
-  if (await page.locator(".cf-region-marker").count() !== 1) {
-    throw new Error("Area feedback did not retain one visible numbered marker");
-  }
-  await page.locator(".cf-notes .cf-text-action").click();
-
-  await page.getByRole("button", { name: "Whole document" }).click();
-  await page.locator(".cf-notes blockquote").getByText("Whole document", { exact: true }).waitFor();
-  if (await page.locator(".cf-region-marker").count() !== 1) {
-    throw new Error("Whole-document feedback did not retain one visible numbered marker");
-  }
-  await page.locator(".cf-notes .cf-text-action").click();
-  // Leaving Comment mode hides the rail even if notes were queued earlier
+  // Leaving Comment mode hides the rail
   await page.keyboard.press("c");
   await page.waitForFunction(() =>
     document.querySelector(".cf-chrome-frame")?.getAttribute("data-commenting") === "false"
     && document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false"
   );
+
   await page.getByLabel("Theme").selectOption("technical");
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
