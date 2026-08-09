@@ -66,6 +66,11 @@ composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the
 surface has not earned its visual claim.
 
+Also read [visual-craft.md](visual-craft.md): utility themes and modes, type
+roles, altitude (concept → architecture → technical), stage grammar, motion
+limits, Comment chrome boundaries, and anti-patterns. Author into that system;
+do not invent a parallel visual language.
+
 ## Useful shapes
 
 ### Narrative and bullets

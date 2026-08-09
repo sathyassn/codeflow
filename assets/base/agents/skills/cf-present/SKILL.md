@@ -41,26 +41,47 @@ Keep language plain, direct, calm, and faithful to the session and project
 voice; preserve exact identifiers and technical terms. Do not invent
 personality, certainty, familiarity, research, or decorative emoji.
 
-Choose blocks by information shape. A visual must communicate a relationship,
-sequence, comparison, state, evidence, scale, or actual appearance. Styled text
-cards do not become visuals, and restyling the same chat answer is a failed use
-of this skill. Give the governing relationship one primary visual form at rest;
-put explanation around that form rather than decomposing prose into decorative
-containers. Prefer bullets for enumerable content and prose only where
-continuity matters. Use disclosures or tabs only when progressive depth or true
-peer views justify them. If the declarative catalog cannot materially improve
-the requested understanding, stay in chat or record the missing carrier instead
-of manufacturing a presentation.
+### Visual composition (utility system—not free-form)
 
-Read [references/document-authoring.md](references/document-authoring.md) when
-authoring or revising a document. It contains the exact block catalog,
-composition rules, lifecycle, and safety boundary. Start from
+Compose **into** CodeFlow’s utility presentation system (themes, type roles,
+blocks, stage grammar). Do **not** invent a competing skin, product brand pack,
+or one-off HTML layout for each session.
+
+1. **Altitude first.** Order content concept → architecture → technical; each
+   level complete for its job (thesis/stage → engineer-legible structure →
+   evidence panes).
+2. **One primary visual carrier** for the governing relationship (stage,
+   diagram, tree, table, diff, or justified media). Surround it with
+   explanation—do not decompose the same prose into decorative cards.
+3. **Blocks are the UI kit.** Use narrative, bullets, callout, comparison,
+   decision, status, table, code/diff, tree, diagram, media, disclosure, tabs,
+   feedback_prompt. Prefer the catalog over `html`.
+4. **Type roles, not font shopping.** Author for display / prose / label /
+   mono-evidence; the renderer owns typefaces and scale. Optional primitive
+   tokens only via explicit project config (`cf-customize`), never ad-hoc CSS.
+5. **Themes and modes.** Use shipped utility themes (e.g. technical, editorial)
+   with light / dark / system. Content must read in both modes; colour is never
+   the only state carrier.
+6. **Motion.** Meaning must hold at rest. Do not rely on animation to teach
+   architecture; leave restrained motion to chrome; honour reduced motion.
+7. **Anti-patterns.** Prose-in-pretty-boxes as “visuals”; permanent annotate
+   affordances; free-form HTML as a design system; product UI components;
+   cryptic headings or promotional filler.
+
+Read [references/visual-craft.md](references/visual-craft.md) for themes,
+type roles, stage grammar, Comment chrome boundaries, and the full checklist.
+Read [references/document-authoring.md](references/document-authoring.md) for
+the block catalog, composition rules, lifecycle, and safety boundary. Start from
 [assets/review-document.example.json](assets/review-document.example.json) when
 a representative envelope saves work; adapt it rather than filling every block.
 Use [assets/config.example.toml](assets/config.example.toml) and
 [assets/primitive-tokens.example.json](assets/primitive-tokens.example.json)
 only during an explicit `cf-customize` opt-in; they are examples, not files to
 copy automatically.
+
+`cf-design` settles **product** experience direction for consuming apps. It does
+not define utility themes or present chrome; do not pull product DS into present
+or export utility themes into the product.
 
 ## 3. Validate and open
 
@@ -88,17 +109,20 @@ copy automatically.
 - Use `codeflow present update <session-id> <document.json>` for a meaningful
   content revision. Preserve stable block IDs for conceptually unchanged
   blocks so anchored feedback can be explained across revisions.
-- The review surface accepts notes on exact selected text, one semantic element,
-  a dragged visual area, a whole block, or the whole document. Pending notes keep
-  numbered marks visible while the user edits them. Never guess a moved element
-  or visual region across revisions; unchanged coordinate space may re-anchor,
-  otherwise retain it visibly as orphaned feedback.
+- Comment is a single mode (`C` only inside the present session window). Notes
+  attach to exact selected text, one semantic element, a dragged visual area, a
+  whole block, or the whole document. The notes rail is visible **only while
+  Comment mode is on**; queued notes still update the count badge when mode is
+  off. Pending marks stay numbered while notes are edited. Never guess a moved
+  element or visual region across revisions; unchanged coordinate space may
+  re-anchor, otherwise retain it visibly as orphaned feedback.
 - Use `codeflow present feedback <session-id> [--follow]` to deliver review
-  envelopes to the invoking harness through stdout. Deduplicate by stable
-  `event_id`; delivery is at least once. This proves a complete envelope reached
-  the command consumer, not that a later model acted on it. The harness must
-  include the envelope in its active turn and only then resolve it after action
-  or an explicit decline.
+  envelopes to the invoking harness through stdout. The path is harness-agnostic
+  (Claude Code, Codex, Grok CLI, or any consumer of the CLI). Deduplicate by
+  stable `event_id`; delivery is at least once. This proves a complete envelope
+  reached the command consumer, not that a later model acted on it. The harness
+  must include the envelope in its active turn and only then resolve it after
+  action or an explicit decline.
 - After acting on or intentionally declining a delivered event, use
   `codeflow present resolve <session-id> <event-id> --event-version <n>
   --status addressed|dismissed`. Use the current version shown by the review

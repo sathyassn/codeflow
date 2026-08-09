@@ -11,9 +11,15 @@ architecture, capabilities, decisions, specs, epics, tasks, and code remain in
 their established files.
 
 This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
-Apply `cf-design` to settle the portal's own material experience direction,
-without turning the utility's themes or stack into product design authority.
-Apply `cf-editorial-review` to substantive explanatory copy.
+Compose portal pages into the **utility presentation system** (shared craft with
+`cf-present`: tokens, type roles, altitude, stage/diff conventions). Read
+[references/visual-craft.md](references/visual-craft.md) before theming or
+authoring layered pages.
+
+`cf-design` is product-generic: use it only if the **consuming product** needs
+experience direction. Do **not** treat portal fallback themes, Starlight
+components, or utility tokens as product brand authority—and do not push product
+DS into the portal. Apply `cf-editorial-review` to substantive explanatory copy.
 
 ## 1. Decide whether to adopt
 
@@ -56,31 +62,41 @@ evidence.
 
 ## 3. Build one layered route system
 
-Expose progressive depth where sources support it:
+Expose progressive depth where sources support it (altitude grammar):
 
 ```text
-purpose and mental model
+purpose and mental model                         (concept)
   -> capabilities and journeys
-    -> architecture, decisions, and work
-      -> technical source references and evidence
+    -> architecture, decisions, and work         (architecture)
+      -> technical source references and evidence (technical)
 ```
 
-Keep navigation predictable and searchable. Use visuals only when they clarify
-relationships, hierarchy, state, or flow; text inside decorated boxes is not a
-visual explanation. Prefer plain language, descriptive titles, concise prose,
-and bullets when they improve scanning. Avoid cryptic headings, invented
-personality, gratuitous emoji, and generic promotional language. Match an
+Keep navigation predictable and searchable. Prefer plain language, descriptive
+titles, concise prose, and bullets when they improve scanning. Match an
 established project voice when it exists; otherwise use calm, direct,
-third-person documentation language.
+third-person documentation language. Avoid cryptic headings, invented
+personality, gratuitous emoji, and promotional language.
+
+### Visual craft (utility—not free-form)
+
+- **Visuals** only when they clarify relationship, hierarchy, state, or flow.
+  Text inside decorated boxes is not a visual explanation.
+- **Architecture pages** use full-width stages with margins and engineer-legible
+  labeled structure—not caption micro-boxes or prose-in-pretty-boxes.
+- **Type roles:** display / prose / label / mono-evidence; themes own faces and
+  scale. Do not ship ad-hoc font stacks in content.
+- **Themes:** bundled `signal` and `folio` (light/dark) are utility fallbacks
+  via `portal.config.json`. A project may adapt the utility once from its brand;
+  never feed portal palette/type/components back into the product design system.
+- **Motion:** minimal; meaning at rest; respect reduced motion and no wrong-mode
+  flash on first paint.
+- **No present Comment lifecycle** in portal chrome.
+
+Details: [references/visual-craft.md](references/visual-craft.md).
 
 For a monorepo, keep global orientation and shared concepts above area or
 surface drill-down. Use multiple `source_roots` and layer paths to expose that
 graph; do not dump one navigation folder per package or duplicate shared prose.
-
-The bundled `signal` and `folio` themes are utility fallbacks, each supporting
-light and dark preference. A project may adapt the utility one way from its own
-brand. The portal must never feed a fallback palette, typography choice,
-component, or framework back into the product's design system.
 
 ## 4. Preserve evidence and safety
 

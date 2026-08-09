@@ -182,7 +182,7 @@ async function checkInteractiveSurface(browser, origin) {
   });
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: /Review/ }).click();
+  await page.getByRole("button", { name: /Comment/ }).click();
   await page.getByRole("heading", { name: "Earlier feedback" }).waitFor();
   await page.getByText("Matched uniquely in this revision.").waitFor();
   await page.getByText("Unpositioned: the referenced block is absent").waitFor();
@@ -278,7 +278,7 @@ async function checkInteractiveSurface(browser, origin) {
     selection?.removeAllRanges();
     selection?.addRange(range);
   });
-  await page.getByRole("button", { name: /^Review /u }).click();
+  await page.getByRole("button", { name: /Comment/ }).click();
   await page.getByRole("button", { name: "Add selected text" }).click();
   if (await page.locator(".cf-notes textarea").getAttribute("maxlength") !== "32") {
     throw new Error("Review text input did not expose the server-provided length limit");
@@ -311,14 +311,19 @@ async function checkInteractiveSurface(browser, origin) {
   if (!await noteEditor.evaluate((element) => document.activeElement === element)) {
     throw new Error("Element capture hijacked arrow keys outside the review document");
   }
+  // Esc exits element capture only; second Esc would exit Comment mode
   await page.keyboard.press("Escape");
   await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
-  await page.getByRole("button", { name: /^Review /u }).click();
+  if (await page.locator("#cf-feedback-panel").getAttribute("data-open") !== "true") {
+    throw new Error("Esc should exit capture without leaving Comment mode");
+  }
   await page.locator(".cf-notes .cf-text-action").click();
 
   await page.getByRole("button", { name: "Pick element" }).click();
-  await page.getByRole("button", { name: "Pick element" }).waitFor();
+  await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
+  // Close collapses the rail on narrow viewports but keeps Comment + capture armed
   await page.getByRole("button", { name: "Close" }).click();
+  await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false");
   await page.locator("code[data-cf-language='rust']").click();
   await page.getByText(/^Element: /u).waitFor();
   if (await page.locator(".cf-region-marker").count() !== 1) {
@@ -330,9 +335,9 @@ async function checkInteractiveSurface(browser, origin) {
   await page.locator("#cf-present-document[data-cf-capture-mode='region']").waitFor();
   await page.keyboard.press("Escape");
   await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
-  await page.getByRole("button", { name: /^Review /u }).click();
   await page.getByRole("button", { name: "Select area" }).click();
   await page.getByRole("button", { name: "Close" }).click();
+  await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false");
   const areaTarget = page.locator("[data-cf-diagram-title='Request flow']");
   await areaTarget.scrollIntoViewIfNeeded();
   const target = await areaTarget.boundingBox();
@@ -353,6 +358,12 @@ async function checkInteractiveSurface(browser, origin) {
     throw new Error("Whole-document feedback did not retain one visible numbered marker");
   }
   await page.locator(".cf-notes .cf-text-action").click();
+  // Leaving Comment mode hides the rail even if notes were queued earlier
+  await page.keyboard.press("c");
+  await page.waitForFunction(() =>
+    document.querySelector(".cf-chrome-frame")?.getAttribute("data-commenting") === "false"
+    && document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false"
+  );
   await page.getByLabel("Theme").selectOption("technical");
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");

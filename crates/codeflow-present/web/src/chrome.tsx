@@ -62,14 +62,43 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [busy, setBusy] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [eventMessage, setEventMessage] = useState<string | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  /** Annotate gestures only while Comment mode is armed. */
+  const [commentMode, setCommentMode] = useState(false);
+  /** Notes rail visibility; can collapse on narrow screens without leaving Comment mode. */
+  const [panelOpen, setPanelOpen] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
   const [regionDraft, setRegionDraft] = useState<RegionDraft | null>(null);
   const [markerEpoch, setMarkerEpoch] = useState(0);
+  const [hintMode, setHintMode] = useState<"text" | "element" | "region">("element");
   const feedbackRef = useRef<HTMLElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
   const submitAttemptRef = useRef<{ fingerprint: string; eventId: string } | null>(null);
+  const commentModeRef = useRef(false);
+  const captureModeRef = useRef<CaptureMode>(null);
+  const notesCountRef = useRef(0);
   const sections = useMemo(() => readSections(documentRoot), [documentRoot, config.revision]);
+
+  commentModeRef.current = commentMode;
+  captureModeRef.current = captureMode;
+  notesCountRef.current = notes.length;
+
+  const armComment = (on: boolean): void => {
+    setCommentMode(on);
+    commentModeRef.current = on;
+    if (!on) {
+      setPanelOpen(false);
+      setCaptureMode(null);
+      captureModeRef.current = null;
+      setRegionDraft(null);
+      regionDraftRef.current = null;
+      const n = notesCountRef.current;
+      setStatus(n ? `${n} note${n === 1 ? "" : "s"} queued · Comment off` : "Ready for review.");
+    } else {
+      setPanelOpen(true);
+      setHintMode("element");
+      setStatus("Comment on: select text, pick an element, or drag an area.");
+    }
+  };
 
   useEffect(() => {
     applyAppearance(appearance.theme, appearance.mode);
@@ -84,15 +113,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     [config.session_id, config.revision, config.event_sequence],
   );
   useEffect(() => {
+    documentRoot.dataset.cfCommenting = commentMode ? "true" : "false";
+    if (!commentMode) delete documentRoot.dataset.cfCaptureMode;
+    return () => {
+      delete documentRoot.dataset.cfCommenting;
+    };
+  }, [commentMode, documentRoot]);
+
+  useEffect(() => {
     const handleAnchor = (event: Event): void => {
-      if (busy || captureMode || !(event.target instanceof Element)) return;
+      if (!commentMode || busy || captureMode || !(event.target instanceof Element)) return;
       const button = event.target.closest<HTMLButtonElement>("button[data-anchor-block]");
       const block = button?.closest<HTMLElement>("[data-cf-block-id]");
       const blockId = block?.dataset.cfBlockId;
       if (!button || !block || !blockId || !documentRoot.contains(block)) return;
       if (notes.length >= config.review_limits.max_notes) {
         setStatus(noteLimitMessage(config.review_limits.max_notes));
-        setReviewOpen(true);
         return;
       }
       const blockLabel = block.dataset.cfBlockLabel ?? blockId;
@@ -107,13 +143,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           target_summary: `Block: ${blockLabel}`,
         },
       ]);
-      setReviewOpen(true);
       setVerdict((current) => (current === "approve" ? "approve_with_notes" : current));
       setStatus(`Note added for ${blockLabel}.`);
     };
     documentRoot.addEventListener("click", handleAnchor);
     return () => documentRoot.removeEventListener("click", handleAnchor);
-  }, [busy, captureMode, config.review_limits.max_notes, documentRoot, notes.length]);
+  }, [busy, captureMode, commentMode, config.review_limits.max_notes, documentRoot, notes.length]);
 
   useEffect(() => {
     if (captureMode !== "element") return undefined;
@@ -141,11 +176,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       complete(event.target);
     };
     const keydown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setCaptureMode(null);
-        return;
-      }
+      // Escape is owned by the global ladder (capture → comment mode).
+      if (event.key === "Escape") return;
       if ((event.key === "Enter" || event.key === " ") && document.activeElement instanceof Element && documentRoot.contains(document.activeElement)) {
         event.preventDefault();
         complete(document.activeElement);
@@ -218,24 +250,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setCaptureMode(null);
       event.preventDefault();
     };
-    const keydown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setCaptureMode(null);
-    };
     documentRoot.dataset.cfCaptureMode = "region";
     documentRoot.addEventListener("pointerdown", down);
     documentRoot.addEventListener("pointermove", move);
     documentRoot.addEventListener("pointerup", finish);
     documentRoot.addEventListener("pointercancel", finish);
-    documentRoot.ownerDocument.addEventListener("keydown", keydown, { capture: true });
     return () => {
       delete documentRoot.dataset.cfCaptureMode;
       documentRoot.removeEventListener("pointerdown", down);
       documentRoot.removeEventListener("pointermove", move);
       documentRoot.removeEventListener("pointerup", finish);
       documentRoot.removeEventListener("pointercancel", finish);
-      documentRoot.ownerDocument.removeEventListener("keydown", keydown, { capture: true });
       regionDraftRef.current = null;
       setRegionDraft(null);
     };
@@ -253,9 +278,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   const addNote = (): void => {
     if (busy) return;
+    if (!commentMode) armComment(true);
     if (notes.length >= config.review_limits.max_notes) {
       setStatus(noteLimitMessage(config.review_limits.max_notes));
-      setReviewOpen(true);
       return;
     }
     const selected = captureSelection(documentRoot);
@@ -267,6 +292,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(`Selected text is too long. Select at most ${config.review_limits.max_selector_utf16} characters.`);
       return;
     }
+    setHintMode("text");
     addCaptured(selected);
   };
 
@@ -319,12 +345,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   const handleShortcuts = (event: KeyboardEvent): void => {
-    if (event.key === "Escape") {
-      setReviewOpen(false);
-      document.getElementById("cf-review-toggle")?.focus();
-      return;
-    }
-    if (!config.shortcuts_enabled || isEditable(event.target)) return;
+    // Escape / C are owned by the document-level ladder.
+    if (event.key === "Escape" || event.key === "c" || event.key === "C") return;
+    if (!config.shortcuts_enabled || isEditable(event.target) || !commentModeRef.current) return;
     const keymap = config.keymap ?? { next: "j", previous: "k", review: "r", edit: "e" };
     if (![keymap.next, keymap.previous, keymap.review, keymap.edit].includes(event.key)) return;
     event.preventDefault();
@@ -343,6 +366,36 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     target?.focus();
   };
 
+  // Present session window only — single Esc / C ladder (never jumps other apps).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        // Capture tools first — even when focus is in a note textarea.
+        if (captureModeRef.current) {
+          event.preventDefault();
+          setCaptureMode(null);
+          captureModeRef.current = null;
+          setHintMode("element");
+          return;
+        }
+        if (isEditable(event.target)) return;
+        if (commentModeRef.current) {
+          event.preventDefault();
+          armComment(false);
+          document.getElementById("cf-comment-toggle")?.focus();
+        }
+        return;
+      }
+      if (isEditable(event.target) || !config.shortcuts_enabled) return;
+      if ((event.key === "c" || event.key === "C") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        armComment(!commentModeRef.current);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [config.shortcuts_enabled]);
+
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
     if (event.kind === "revision") {
@@ -352,17 +405,21 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     }
   }
 
+  const railVisible = commentMode && panelOpen;
+
   return (
-    <div class="cf-chrome-frame">
+    <div class="cf-chrome-frame" data-commenting={commentMode ? "true" : "false"} data-rail={railVisible ? "open" : "closed"}>
       {regionDraft ? <div class="cf-region-draft" style={regionDraftStyle(regionDraft)} aria-hidden="true" /> : null}
-      {notes.map((note, index) => {
-        const rect = targetRect(documentRoot, note, markerEpoch);
-        return rect ? (
-          <div key={note.client_id} class="cf-region-marker" style={regionMarkerStyle(rect)} aria-hidden="true">
-            <span>{index + 1}</span>
-          </div>
-        ) : null;
-      })}
+      {commentMode
+        ? notes.map((note, index) => {
+            const rect = targetRect(documentRoot, note, markerEpoch);
+            return rect ? (
+              <div key={note.client_id} class="cf-region-marker" style={regionMarkerStyle(rect)} aria-hidden="true">
+                <span>{index + 1}</span>
+              </div>
+            ) : null;
+          })
+        : null}
       <a class="cf-skip-link" href="#cf-present-document">Skip to document</a>
       <header class="cf-topbar">
         {config.identity ? (
@@ -403,17 +460,35 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             </select>
           </label>
           <button
-            id="cf-review-toggle"
-            class="cf-review-toggle"
+            id="cf-comment-toggle"
+            class="cf-comment-toggle"
             type="button"
+            data-testid="comment-btn"
             aria-controls="cf-feedback-panel"
-            aria-expanded={reviewOpen}
-            onClick={() => setReviewOpen((open) => !open)}
+            aria-expanded={railVisible}
+            aria-pressed={commentMode}
+            title={commentMode ? "Exit Comment mode (C or Esc)" : "Comment mode (C)"}
+            onClick={() => {
+              if (commentMode && !panelOpen) setPanelOpen(true);
+              else armComment(!commentMode);
+            }}
           >
-            Review <span aria-label={`${notes.length} pending notes`}>{notes.length}</span>
+            Comment
+            {notes.length > 0 ? (
+              <span class="cf-comment-count" aria-label={`${notes.length} pending notes`}>{notes.length}</span>
+            ) : null}
           </button>
         </div>
       </header>
+
+      {commentMode ? (
+        <div class="cf-mode-strip" data-testid="comment-hint" role="status">
+          <span class="cf-mode-chip" data-active={hintMode === "text" ? "true" : "false"}><b>Text</b> select</span>
+          <span class="cf-mode-chip" data-active={hintMode === "element" ? "true" : "false"}><b>Click</b> element</span>
+          <span class="cf-mode-chip" data-active={hintMode === "region" ? "true" : "false"}><b>Drag</b> area</span>
+          <span class="cf-mode-esc">C toggles · Esc exits</span>
+        </div>
+      ) : null}
 
       <nav class="cf-section-route" aria-label="Document sections">
         <ol>
@@ -430,8 +505,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       <aside
         id="cf-feedback-panel"
         class="cf-feedback"
-        data-open={reviewOpen ? "true" : "false"}
+        data-open={railVisible ? "true" : "false"}
         aria-labelledby="cf-feedback-title"
+        hidden={!railVisible}
         ref={feedbackRef}
         tabIndex={-1}
         onKeyDown={handleShortcuts}
@@ -439,15 +515,16 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         <div class="cf-feedback-heading">
           <div>
             <span class="cf-kicker">Feedback</span>
-            <h2 id="cf-feedback-title">Review queue</h2>
+            <h2 id="cf-feedback-title">Notes</h2>
           </div>
           <span class="cf-count" aria-label={`${notes.length} pending notes`}>{notes.length}</span>
           <button
             class="cf-feedback-close"
             type="button"
             onClick={() => {
-              setReviewOpen(false);
-              document.getElementById("cf-review-toggle")?.focus();
+              // Collapse rail without leaving Comment mode (narrow layouts / capture over document).
+              setPanelOpen(false);
+              document.getElementById("cf-comment-toggle")?.focus();
             }}
           >
             Close
@@ -498,8 +575,30 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         ) : null}
         <div class="cf-capture-tools" aria-label="Choose feedback target">
           <button class="cf-secondary-action" type="button" disabled={busy} onClick={addNote}>Add selected text</button>
-          <button class="cf-secondary-action" type="button" disabled={busy} aria-pressed={captureMode === "element"} onClick={() => setCaptureMode(captureMode === "element" ? null : "element")}>Pick element</button>
-          <button class="cf-secondary-action" type="button" disabled={busy} aria-pressed={captureMode === "region"} onClick={() => setCaptureMode(captureMode === "region" ? null : "region")}>Select area</button>
+          <button
+            class="cf-secondary-action"
+            type="button"
+            disabled={busy}
+            aria-pressed={captureMode === "element"}
+            onClick={() => {
+              setHintMode("element");
+              setCaptureMode(captureMode === "element" ? null : "element");
+            }}
+          >
+            Pick element
+          </button>
+          <button
+            class="cf-secondary-action"
+            type="button"
+            disabled={busy}
+            aria-pressed={captureMode === "region"}
+            onClick={() => {
+              setHintMode("region");
+              setCaptureMode(captureMode === "region" ? null : "region");
+            }}
+          >
+            Select area
+          </button>
           <button class="cf-secondary-action" type="button" disabled={busy} onClick={() => {
             const captured = captureDocument(documentRoot);
             if (captured) addCaptured(captured);
@@ -588,9 +687,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   function addCaptured(captured: CapturedTarget): void {
     if (notes.length >= config.review_limits.max_notes) {
       setStatus(noteLimitMessage(config.review_limits.max_notes));
-      setReviewOpen(true);
+      if (!commentMode) armComment(true);
       return;
     }
+    if (!commentMode) armComment(true);
+    else setPanelOpen(true);
     setNotes((current) => [...current, {
       client_id: crypto.randomUUID(),
       block_id: captured.blockId,
@@ -602,7 +703,6 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       ...(captured.region_selector ? { region_selector: captured.region_selector } : {}),
       target_summary: captured.summary,
     }]);
-    setReviewOpen(true);
     setVerdict((current) => current === "approve" ? "approve_with_notes" : current);
     setStatus(`Note added for ${captured.summary}.`);
     requestAnimationFrame(() => feedbackRef.current?.querySelector<HTMLTextAreaElement>("textarea[data-empty='true']")?.focus());
