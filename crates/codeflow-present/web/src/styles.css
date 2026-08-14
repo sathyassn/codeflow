@@ -225,7 +225,14 @@ a:hover { text-decoration-thickness: 0.13em; }
 .cf-section-route li { border-inline-start: 2px solid var(--cf-border); padding-inline-start: var(--cf-space-2); }
 .cf-section-route li[data-level="3"] { padding-inline-start: var(--cf-space-4); font-size: 0.86rem; }
 .cf-section-route li[data-active="true"] { border-color: var(--cf-accent); }
-.cf-section-route a { display: block; color: var(--cf-text-muted); text-decoration: none; }
+.cf-section-route a {
+  display: block;
+  overflow: hidden;
+  color: var(--cf-text-muted);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cf-section-route [aria-current="location"] { color: var(--cf-text); font-weight: 700; }
 
 /* Full-width document shell; prose stays readable, stages/figures use width */
@@ -303,6 +310,28 @@ th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; te
 .tabs summary, .block--disclosure summary { cursor: pointer; font-weight: 700; }
 .feedback-prompt { padding-block-start: var(--cf-space-4); border-block-start: 0.2rem solid var(--cf-accent); font-size: 1.08rem; font-weight: 650; }
 
+/* Visually hidden but available to AT (diagram captions, status). */
+.sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Diagram figcaption: title only at rest; do not restate the figure as prose. */
+#cf-present-document figure.diagram > figcaption {
+  margin-block-start: var(--cf-space-3);
+  color: var(--cf-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  max-inline-size: var(--cf-reading-measure);
+}
+
 .cf-local-scroll {
   overflow: auto;
   inline-size: 100%;
@@ -336,7 +365,7 @@ code { font-family: var(--cf-font-mono); }
 [data-cf-diagram-output] svg { display: block; max-inline-size: 100%; block-size: auto; margin: auto; }
 [data-cf-diagram-status] { color: var(--cf-text-muted); font-size: 0.86rem; }
 
-/* ═══ Pass10 Comment chrome (utility present) ═══ */
+/* ═══ Utility presentation system — Comment chrome ═══ */
 
 /* Comment control — unmistakable armed state */
 .cf-comment-btn {
@@ -346,12 +375,28 @@ code { font-family: var(--cf-font-mono); }
   padding: 7px 13px !important;
   border-radius: 8px !important;
   border: 1.5px solid var(--cf-border-strong) !important;
+  /* Solid opaque fill so axe contrast is measured against the button, not the blurred topbar. */
   background: var(--cf-surface) !important;
+  background-color: var(--cf-surface) !important;
   color: var(--cf-text) !important;
   font-family: var(--cf-font-mono) !important;
-  font-size: 0.82rem !important;
-  font-weight: 500;
+  font-size: 0.875rem !important;
+  font-weight: 600;
+  isolation: isolate;
   transition: background 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease !important;
+}
+.cf-comment-btn > span {
+  color: inherit !important;
+}
+/* Editorial light: keep idle Comment control above WCAG AA against solid white. */
+:root[data-cf-theme="editorial"][data-cf-mode-resolved="light"] .cf-comment-btn:not([aria-pressed="true"]) {
+  color: #0a0a09 !important;
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  border-color: #5c5b56 !important;
+}
+:root[data-cf-theme="editorial"][data-cf-mode-resolved="light"] .cf-comment-btn:not([aria-pressed="true"]) > span {
+  color: #0a0a09 !important;
 }
 .cf-comment-btn .cf-dot {
   width: 16px; height: 16px;
@@ -785,7 +830,7 @@ code { font-family: var(--cf-font-mono); }
   color: var(--cf-text-muted);
 }
 
-/* Tools (secondary — not primary pass10 path) */
+/* Tools (secondary — not the primary Comment path) */
 .cf-tools {
   flex-shrink: 0;
   border-top: 1px solid var(--cf-border);

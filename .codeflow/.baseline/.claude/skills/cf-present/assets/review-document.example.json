@@ -1,29 +1,23 @@
 {
   "schema_version": 1,
-  "title": "Review the delivery decision",
+  "title": "Review the dual-lineage delivery boundary",
   "language": "en",
   "provenance": {
     "task_id": "TSK-042"
   },
   "blocks": [
     {
-      "type": "narrative",
-      "id": "outcome",
-      "markdown": "The implementation is ready for a bounded decision. The evidence below separates what passed from what remains unverified."
+      "type": "diagram",
+      "id": "primary-flow",
+      "kind": "flowchart",
+      "source": "flowchart LR\n  ExploreC[\"Claude explore\"] --> Settle[Settle contested]\n  ExploreX[\"Codex explore\"] --> Settle\n  Settle --> Review[Cross review]\n  Review --> Gates[Gates]\n  Gates --> PR[PR]\n  ExploreC -. no shared context .-> ExploreX",
+      "acc_title": "Two lineages meet only at settle",
+      "acc_description": "Claude and Codex explore without a shared context edge; they converge at settle, then cross-review, gates, and PR."
     },
     {
-      "type": "comparison",
-      "id": "options",
-      "columns": [
-        {
-          "title": "Ship now",
-          "markdown": "Accept the remaining platform qualification as explicit release follow-up."
-        },
-        {
-          "title": "Hold",
-          "markdown": "Wait until every supported native platform canary is complete."
-        }
-      ]
+      "type": "narrative",
+      "id": "thesis",
+      "markdown": "The governing claim is structural: independent explore lanes meet only at settle. Approve shipping with Windows canary as explicit follow-up, or hold until that canary is green."
     },
     {
       "type": "status",
@@ -32,7 +26,12 @@
         {
           "label": "Workspace tests",
           "state": "pass",
-          "detail": "Recorded in the task evidence"
+          "detail": "Recorded in task evidence"
+        },
+        {
+          "label": "Cross-lineage review",
+          "state": "pass",
+          "detail": "Findings addressed on the integration branch"
         },
         {
           "label": "Native Windows canary",
@@ -42,9 +41,29 @@
       ]
     },
     {
+      "type": "comparison",
+      "id": "options",
+      "columns": [
+        {
+          "title": "Ship now",
+          "markdown": "Accept the Windows canary as explicit release follow-up. Structure of the delivery path is settled."
+        },
+        {
+          "title": "Hold",
+          "markdown": "Wait until the supported native Windows canary is complete before merge."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "id": "comment-hint",
+      "tone": "info",
+      "markdown": "Use **Comment** (`C`) on the figure or evidence rows if the boundary is wrong. Notes rail appears only while Comment mode is on."
+    },
+    {
       "type": "feedback_prompt",
       "id": "decision-request",
-      "prompt": "Approve the current boundary, request changes, or identify the evidence still needed."
+      "prompt": "Approve ship-with-follow-up, request hold until Windows canary, or mark the structural claim wrong."
     }
   ]
 }

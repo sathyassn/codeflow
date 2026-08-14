@@ -1,5 +1,5 @@
 /**
- * Present review chrome — pass10 Comment SM + utility craft.
+ * Present review chrome — utility presentation system Comment SM + craft.
  * Rust owns #cf-present-document; this Preact tree owns chrome only (ADR-0049).
  * Feedback still posts /app/api/reviews for harness-agnostic delivery.
  */
@@ -355,7 +355,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (composerOpen) requestAnimationFrame(() => composerTextRef.current?.focus());
   }, [composerOpen]);
 
-  /* ─── Pin → float → composer (pass10 flow) ─── */
+  /* ─── Pin → float → composer (qualified Comment flow) ─── */
   function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: { openComposer?: boolean }): void {
     if (notesCountRef.current >= config.review_limits.max_notes) {
       setStatus(noteLimitMessage(config.review_limits.max_notes));
@@ -672,7 +672,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         </ol>
       </nav>
 
-      {/* Quiet float — pass10 */}
+      {/* Quiet float — Comment capture chip */}
       {pendingPin && !composerOpen ? (
         <div
           class="cf-float on"
@@ -694,7 +694,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         </div>
       ) : null}
 
-      {/* Composer — pass10 */}
+      {/* Composer — note body */}
       {composerOpen ? (
         <div
           class="cf-composer on"
@@ -740,7 +740,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         </div>
       ) : null}
 
-      {/* Notes rail — pass10 dock grammar */}
+      {/* Notes rail — dock grammar (Comment mode only) */}
       <aside
         id="cf-feedback-panel"
         class="cf-dock"
@@ -861,7 +861,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           )}
         </div>
 
-        {/* Advanced tools — not the primary pass10 path; kept for a11y + qualification bridges */}
+        {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <details class="cf-tools">
           <summary>Tools</summary>
           <div class="cf-capture-tools" aria-label="Choose feedback target">
@@ -982,7 +982,7 @@ function composerPositionStyle(clientX: number, clientY: number): string {
 }
 
 function speechMarkerStyle(rect: DOMRect): string {
-  // Park left of the anchor — pass10 marker placement
+  // Park left of the anchor — speech marker placement
   const x = Math.max(4, rect.left - 34);
   const y = Math.max(4, rect.top - 4);
   return `left:${x}px;top:${y}px`;

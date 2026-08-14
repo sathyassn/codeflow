@@ -41,47 +41,44 @@ Keep language plain, direct, calm, and faithful to the session and project
 voice; preserve exact identifiers and technical terms. Do not invent
 personality, certainty, familiarity, research, or decorative emoji.
 
-### Visual composition (utility system—not free-form)
+### How to think about presentation (mandatory)
 
-Compose **into** CodeFlow’s utility presentation system (themes, type roles,
-blocks, stage grammar). Do **not** invent a competing skin, product brand pack,
-or one-off HTML layout for each session.
+The JSON document is **not** the presentation. The open page is. Block order is
+attention order; block **type** chooses how the claim is perceived (figure vs
+reading band vs evidence rows vs peer columns). The runtime will not invent a
+stage board from a wall of prose.
 
-1. **Altitude first.** Order content concept → architecture → technical; each
-   level complete for its job (thesis/stage → engineer-legible structure →
-   evidence panes).
-2. **One primary visual carrier** for the governing relationship (stage,
-   diagram, tree, table, diff, or justified media). Surround it with
-   explanation—do not decompose the same prose into decorative cards.
-3. **Blocks are the UI kit.** Use narrative, bullets, callout, comparison,
-   decision, status, table, code/diff, tree, diagram, media, disclosure, tabs,
-   feedback_prompt. Prefer the catalog over `html`.
-4. **Type roles, not font shopping.** Author for display / prose / label /
-   mono-evidence; the renderer owns typefaces and scale. Optional primitive
-   tokens only via explicit project config (`cf-customize`), never ad-hoc CSS.
-5. **Themes and modes.** Use shipped utility themes (e.g. technical, editorial)
-   with light / dark / system. Content must read in both modes; colour is never
-   the only state carrier.
-6. **Motion.** Meaning must hold at rest. Do not rely on animation to teach
-   architecture; leave restrained motion to chrome; honour reduced motion.
-7. **Anti-patterns.** Prose-in-pretty-boxes as “visuals”; permanent annotate
-   affordances; free-form HTML as a design system; product UI components;
-   cryptic headings or promotional filler.
+**Before writing blocks or calling `present open`, load in order:**
 
-Read [references/visual-craft.md](references/visual-craft.md) for themes,
-type roles, stage grammar, Comment chrome boundaries, and the full checklist.
-Read [references/document-authoring.md](references/document-authoring.md) for
-the block catalog, composition rules, lifecycle, and safety boundary. Start from
-[assets/review-document.example.json](assets/review-document.example.json) when
-a representative envelope saves work; adapt it rather than filling every block.
-Use [assets/config.example.toml](assets/config.example.toml) and
+1. [resources/how-presentation-works.md](resources/how-presentation-works.md)
+   — what the human sees, how to choose instruments, worked good/bad contrast
+2. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
+   — system craft, Comment lifecycle, fail-closed anti-patterns
+3. [references/visual-craft.md](references/visual-craft.md) — short checklist
+4. [references/document-authoring.md](references/document-authoring.md) — fields
+   **after** the page walk is settled
+
+Work backward: job → 5‑second picture → one primary carrier → support / prove /
+ask → mentally walk the page → only then encode JSON.
+
+**Choose blocks by information shape.** A visual must communicate a
+relationship, sequence, comparison, state, evidence, scale, or actual
+appearance—not decorate surrounding prose. Give the governing relationship
+**one primary visual form at rest**; put explanation around that form.
+**Restyling the same chat answer is a failed use** of this skill (including
+equal-weight text cards and bullet walls with no structural carrier)—stay in
+chat or restructure. Phrase retained for contract checks: restyling the same
+chat answer is a failed use of this skill.
+
+Start from
+[resources/present-document.example.json](resources/present-document.example.json)
+as a **shape** (carrier first), not a form to pad. Use
+[assets/config.example.toml](assets/config.example.toml) and
 [assets/primitive-tokens.example.json](assets/primitive-tokens.example.json)
-only during an explicit `cf-customize` opt-in; they are examples, not files to
-copy automatically.
+only during an explicit `cf-customize` opt-in.
 
 `cf-design` settles **product** experience direction for consuming apps. It does
-not define utility themes or present chrome; do not pull product DS into present
-or export utility themes into the product.
+not define utility themes or present chrome.
 
 ## 3. Validate and open
 
@@ -96,9 +93,11 @@ or export utility themes into the product.
 3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is an
    explicit recovery or automation path, not permission to attach to the
    operator's browser or active view.
-4. Report the session ID and what decision or feedback is sought. Do not claim
-   the document was seen or approved until feedback or other direct evidence
-   proves it.
+4. **Handoff to the operator:** lead with the owner-private **bootstrap file
+   path / openable link** CodeFlow printed, then session ID, revision, and the
+   decision sought. Do not send ports and cookie recipes as the primary path.
+5. Do not claim the document was seen or approved until feedback or other
+   direct evidence proves it.
 
 ## 4. Revise through immutable document versions
 
@@ -113,9 +112,9 @@ or export utility themes into the product.
   attach to exact selected text, one semantic element, a dragged visual area, a
   whole block, or the whole document. The notes rail is visible **only while
   Comment mode is on**; queued notes still update the count badge when mode is
-  off. Pending marks stay numbered while notes are edited. Never guess a moved
-  element or visual region across revisions; unchanged coordinate space may
-  re-anchor, otherwise retain it visibly as orphaned feedback.
+  off. Pending numbered marks visible while notes are edited. Never guess a
+  moved element or visual region across revisions; unchanged coordinate space
+  may re-anchor, otherwise retain it visibly as orphaned feedback.
 - Use `codeflow present feedback <session-id> [--follow]` to deliver review
   envelopes to the invoking harness through stdout. The path is harness-agnostic
   (Claude Code, Codex, Grok CLI, or any consumer of the CLI). Deduplicate by

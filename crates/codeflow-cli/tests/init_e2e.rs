@@ -13,6 +13,10 @@ use std::process::{Command, Output};
 const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
     "references/document-authoring.md",
+    "references/visual-craft.md",
+    "resources/how-presentation-works.md",
+    "resources/utility-presentation-system.md",
+    "resources/present-document.example.json",
     "assets/review-document.example.json",
     "assets/config.example.toml",
     "assets/primitive-tokens.example.json",

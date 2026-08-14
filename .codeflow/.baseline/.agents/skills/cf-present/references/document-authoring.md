@@ -1,10 +1,15 @@
 # `cf-present` document authoring reference
 
-Load this reference when creating or revising a presentation document. The
-canonical machine contract is
-`.codeflow/schemas/present/document-v1.schema.json`; this page explains how to
-choose and compose it. The runtime remains authoritative for semantic and byte
-limits.
+**Thinking first:**  
+[../resources/how-presentation-works.md](../resources/how-presentation-works.md)
+explains what the human sees and how to choose instruments. Load it **before**
+this page. This file is the **encoding** reference (envelope, fields, limits)—
+not a substitute for judgment about structure.
+
+The machine contract is
+`.codeflow/schemas/present/document-v1.schema.json`. The runtime is
+authoritative for semantic and byte limits. Schema validity never means the
+page is a good present.
 
 ## Envelope
 
@@ -65,6 +70,15 @@ nothing. Use diagrams, trees, tables, diffs, media, or a justified bounded HTML
 composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the
 surface has not earned its visual claim.
+
+**Required first:**
+[../resources/how-presentation-works.md](../resources/how-presentation-works.md),
+then
+[../resources/utility-presentation-system.md](../resources/utility-presentation-system.md),
+then [visual-craft.md](visual-craft.md). Encode only after the page walk is
+clear. Prefer
+[../resources/present-document.example.json](../resources/present-document.example.json)
+as shape (carrier first)—not a narrative-only bar.
 
 ## Useful shapes
 

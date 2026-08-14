@@ -353,10 +353,13 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("</template><div data-cf-diagram-output><pre><code>");
             escape_html_to(source, output);
             output.push_str("</code></pre></div><p data-cf-diagram-status class=\"sr-only\" role=\"status\"></p></div><figcaption>");
+            // Visible caption stays short (title only). Full description is on
+            // data-cf-diagram-description and in a screen-reader span so the
+            // fold is not eaten by a prose wall under the primary figure.
             escape_html_to(acc_title, output);
-            output.push_str(" — ");
+            output.push_str("<span class=\"sr-only\"> — ");
             escape_html_to(acc_description, output);
-            output.push_str("</figcaption></figure>");
+            output.push_str("</span></figcaption></figure>");
         }
         Block::Media {
             mime_type,

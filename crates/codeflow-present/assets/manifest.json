@@ -15,8 +15,8 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-5C35UJPM.js",
-      "present.style": "/app/assets/app-NDWS43PX.css"
+      "present.app": "/app/assets/app-WSNA2MUF.js",
+      "present.style": "/app/assets/app-2YIG667W.css"
     },
     "inline": {
       "present.prepaint": {
@@ -27,14 +27,25 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-5C35UJPM.js",
-        "stored_path": "service/app-5C35UJPM.js.br",
+        "request_path": "/app/assets/app-2YIG667W.css",
+        "stored_path": "service/app-2YIG667W.css.br",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 28310,
+        "encoded_bytes": 5535,
+        "sha256": "ac0b25e81f9ff4aa832d96c48bbfc8785c256f531ca6c6828e416fcdc84cfd00",
+        "etag": "\"sha256-rAsl6B+f9KqDLZbEi7/IeFwlb1McpsaCjkFvzchM/QA=\"",
+        "imports": []
+      },
+      {
+        "request_path": "/app/assets/app-WSNA2MUF.js",
+        "stored_path": "service/app-WSNA2MUF.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
         "raw_bytes": 46823,
-        "encoded_bytes": 14650,
-        "sha256": "2dec1d9ac360581f51061d7baa0d0644a12d3b1f35143b34494b692358e55d05",
-        "etag": "\"sha256-LewdmsNgWB9RBh17qg0GRKEtOx81FDs0SUtpI1jlXQU=\"",
+        "encoded_bytes": 14660,
+        "sha256": "fee54515435e04ca92c640596d0a721d28d7f8c3ce325eb1ff1c503d2a5a4a45",
+        "etag": "\"sha256-/uVFFUNeBMqSxkBZbQpyHSjX+MPOMl6x/xxQPSpaSkU=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
@@ -49,17 +60,6 @@
             "kind": "dynamic-import"
           }
         ]
-      },
-      {
-        "request_path": "/app/assets/app-NDWS43PX.css",
-        "stored_path": "service/app-NDWS43PX.css.br",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 27470,
-        "encoded_bytes": 5386,
-        "sha256": "11880dc4bac126084c445bac50d4d9318e1270fc58db336453a6e100b23dcba1",
-        "etag": "\"sha256-EYgNxLrBJghMRFusUNTZMY4ScPxY2zNkU6bhALI9y6E=\"",
-        "imports": []
       },
       {
         "request_path": "/app/assets/chunk-abnfDiagram-VRR7QNED-GFX6RLCU.js",
@@ -5218,20 +5218,20 @@
     ],
     "metrics": {
       "asset_count": 118,
-      "raw_corpus_bytes": 4168604,
-      "brotli_corpus_bytes": 947891,
+      "raw_corpus_bytes": 4169444,
+      "brotli_corpus_bytes": 948050,
       "largest_raw_chunk_bytes": 667680,
       "largest_brotli_chunk_bytes": 119823
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-89f4cc4e34884e06.js.gz",
+      "stored_path": "export/renderer-650077479adfe115.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 4157169,
-      "encoded_bytes": 1071748,
-      "sha256": "89f4cc4e34884e06df2fa056a391feb6fc9c765a1d53495c4db09fb25e8ce2a4"
+      "raw_bytes": 4158518,
+      "encoded_bytes": 1062484,
+      "sha256": "650077479adfe115a8b2e258db1857edee6c64176b28b4e23eaf35c17c39c6f1"
     }
   },
   "budgets": {
@@ -5241,5 +5241,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "5b09f7c4b7876c3138aa8cc094bc4b5468128dfcf05aaf94954c96a42feb5f89"
+  "corpus_sha256": "ff1027af3c73153e4e2d3a00cc86c21f69426307eca19b45107edacb0ca7707c"
 }

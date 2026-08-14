@@ -398,9 +398,11 @@ impl Block {
         }
     }
 
+    /// Short, scannable label for TOC / feedback notes. Not the full prose of
+    /// long prompts or captions — those remain in the block body.
     #[must_use]
     pub fn review_label(&self) -> String {
-        match self {
+        let raw = match self {
             Self::Callout {
                 title: Some(title), ..
             }
@@ -420,10 +422,32 @@ impl Block {
             Self::Diagram { acc_title, .. } => acc_title.clone(),
             Self::Media { alt, .. } => alt.clone(),
             Self::Disclosure { summary, .. } => summary.clone(),
-            Self::FeedbackPrompt { prompt, .. } => prompt.clone(),
+            // Full prompt is rendered in the block body; never dump it into the nav.
+            Self::FeedbackPrompt { .. } => "Feedback request".to_string(),
             _ => self.id().to_string(),
-        }
+        };
+        truncate_nav_label(&raw, 40)
     }
+}
+
+/// Nav / TOC labels stay one short line so long titles cannot collapse the rail.
+fn truncate_nav_label(label: &str, max_chars: usize) -> String {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return "Section".to_string();
+    }
+    let count = trimmed.chars().count();
+    if count <= max_chars {
+        return trimmed.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out: String = trimmed.chars().take(keep).collect();
+    // Avoid orphan spaces before the ellipsis.
+    while out.ends_with(char::is_whitespace) {
+        out.pop();
+    }
+    out.push('…');
+    out
 }
 
 fn validate_blocks(
@@ -962,6 +986,30 @@ mod tests {
                 .collect(),
         }]);
         assert!(oversized_tree.validate().is_err());
+    }
+
+    #[test]
+    fn review_label_keeps_nav_scannable_for_long_feedback_and_titles() {
+        let long_prompt = "Give the exact release decision: Ship current build (macOS/Linux only; no Windows claim), Hold until native Windows is qualified, or Request changes with anchored notes.";
+        let feedback = Block::FeedbackPrompt {
+            id: "verdict".to_string(),
+            prompt: long_prompt.to_string(),
+        };
+        assert_eq!(feedback.review_label(), "Feedback request");
+        assert!(feedback.review_label().chars().count() <= 40);
+
+        let diagram = Block::Diagram {
+            id: "fig".to_string(),
+            kind: DiagramKind::Flowchart,
+            source: "flowchart LR\n  A-->B".to_string(),
+            acc_title: "Verified native paths versus open Windows gap and more words".to_string(),
+            acc_description: "Long description for accessibility only.".to_string(),
+        };
+        let label = diagram.review_label();
+        assert!(label.chars().count() <= 40, "{label}");
+        assert!(label.ends_with('…'), "{label}");
+        // Full prompt still available for body rendering via prompt field, not review_label.
+        assert_ne!(feedback.review_label(), long_prompt);
     }
 
     #[test]

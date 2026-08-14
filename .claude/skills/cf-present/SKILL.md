@@ -41,26 +41,44 @@ Keep language plain, direct, calm, and faithful to the session and project
 voice; preserve exact identifiers and technical terms. Do not invent
 personality, certainty, familiarity, research, or decorative emoji.
 
-Choose blocks by information shape. A visual must communicate a relationship,
-sequence, comparison, state, evidence, scale, or actual appearance. Styled text
-cards do not become visuals, and restyling the same chat answer is a failed use
-of this skill. Give the governing relationship one primary visual form at rest;
-put explanation around that form rather than decomposing prose into decorative
-containers. Prefer bullets for enumerable content and prose only where
-continuity matters. Use disclosures or tabs only when progressive depth or true
-peer views justify them. If the declarative catalog cannot materially improve
-the requested understanding, stay in chat or record the missing carrier instead
-of manufacturing a presentation.
+### How to think about presentation (mandatory)
 
-Read [references/document-authoring.md](references/document-authoring.md) when
-authoring or revising a document. It contains the exact block catalog,
-composition rules, lifecycle, and safety boundary. Start from
-[assets/review-document.example.json](assets/review-document.example.json) when
-a representative envelope saves work; adapt it rather than filling every block.
-Use [assets/config.example.toml](assets/config.example.toml) and
+The JSON document is **not** the presentation. The open page is. Block order is
+attention order; block **type** chooses how the claim is perceived (figure vs
+reading band vs evidence rows vs peer columns). The runtime will not invent a
+stage board from a wall of prose.
+
+**Before writing blocks or calling `present open`, load in order:**
+
+1. [resources/how-presentation-works.md](resources/how-presentation-works.md)
+   — what the human sees, how to choose instruments, worked good/bad contrast
+2. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
+   — system craft, Comment lifecycle, fail-closed anti-patterns
+3. [references/visual-craft.md](references/visual-craft.md) — short checklist
+4. [references/document-authoring.md](references/document-authoring.md) — fields
+   **after** the page walk is settled
+
+Work backward: job → 5‑second picture → one primary carrier → support / prove /
+ask → mentally walk the page → only then encode JSON.
+
+**Choose blocks by information shape.** A visual must communicate a
+relationship, sequence, comparison, state, evidence, scale, or actual
+appearance—not decorate surrounding prose. Give the governing relationship
+**one primary visual form at rest**; put explanation around that form.
+**Restyling the same chat answer is a failed use** of this skill (including
+equal-weight text cards and bullet walls with no structural carrier)—stay in
+chat or restructure. Phrase retained for contract checks: restyling the same
+chat answer is a failed use of this skill.
+
+Start from
+[resources/present-document.example.json](resources/present-document.example.json)
+as a **shape** (carrier first), not a form to pad. Use
+[assets/config.example.toml](assets/config.example.toml) and
 [assets/primitive-tokens.example.json](assets/primitive-tokens.example.json)
-only during an explicit `cf-customize` opt-in; they are examples, not files to
-copy automatically.
+only during an explicit `cf-customize` opt-in.
+
+`cf-design` settles **product** experience direction for consuming apps. It does
+not define utility themes or present chrome.
 
 ## 3. Validate and open
 
@@ -75,9 +93,11 @@ copy automatically.
 3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is an
    explicit recovery or automation path, not permission to attach to the
    operator's browser or active view.
-4. Report the session ID and what decision or feedback is sought. Do not claim
-   the document was seen or approved until feedback or other direct evidence
-   proves it.
+4. **Handoff to the operator:** lead with the owner-private **bootstrap file
+   path / openable link** CodeFlow printed, then session ID, revision, and the
+   decision sought. Do not send ports and cookie recipes as the primary path.
+5. Do not claim the document was seen or approved until feedback or other
+   direct evidence proves it.
 
 ## 4. Revise through immutable document versions
 
@@ -88,17 +108,20 @@ copy automatically.
 - Use `codeflow present update <session-id> <document.json>` for a meaningful
   content revision. Preserve stable block IDs for conceptually unchanged
   blocks so anchored feedback can be explained across revisions.
-- The review surface accepts notes on exact selected text, one semantic element,
-  a dragged visual area, a whole block, or the whole document. Pending notes keep
-  numbered marks visible while the user edits them. Never guess a moved element
-  or visual region across revisions; unchanged coordinate space may re-anchor,
-  otherwise retain it visibly as orphaned feedback.
+- Comment is a single mode (`C` only inside the present session window). Notes
+  attach to exact selected text, one semantic element, a dragged visual area, a
+  whole block, or the whole document. The notes rail is visible **only while
+  Comment mode is on**; queued notes still update the count badge when mode is
+  off. Pending numbered marks visible while notes are edited. Never guess a
+  moved element or visual region across revisions; unchanged coordinate space
+  may re-anchor, otherwise retain it visibly as orphaned feedback.
 - Use `codeflow present feedback <session-id> [--follow]` to deliver review
-  envelopes to the invoking harness through stdout. Deduplicate by stable
-  `event_id`; delivery is at least once. This proves a complete envelope reached
-  the command consumer, not that a later model acted on it. The harness must
-  include the envelope in its active turn and only then resolve it after action
-  or an explicit decline.
+  envelopes to the invoking harness through stdout. The path is harness-agnostic
+  (Claude Code, Codex, Grok CLI, or any consumer of the CLI). Deduplicate by
+  stable `event_id`; delivery is at least once. This proves a complete envelope
+  reached the command consumer, not that a later model acted on it. The harness
+  must include the envelope in its active turn and only then resolve it after
+  action or an explicit decline.
 - After acting on or intentionally declining a delivered event, use
   `codeflow present resolve <session-id> <event-id> --event-version <n>
   --status addressed|dismissed`. Use the current version shown by the review

@@ -397,6 +397,30 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/references/visual-craft.md"
+dest = ".claude/skills/cf-present/references/visual-craft.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/how-presentation-works.md"
+dest = ".claude/skills/cf-present/resources/how-presentation-works.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/utility-presentation-system.md"
+dest = ".claude/skills/cf-present/resources/utility-presentation-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/present-document.example.json"
+dest = ".claude/skills/cf-present/resources/present-document.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/assets/review-document.example.json"
 dest = ".claude/skills/cf-present/assets/review-document.example.json"
 ownership = "managed"
@@ -444,6 +468,24 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/references/information-architecture.md"
 dest = ".claude/skills/cf-docs-portal/references/information-architecture.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/visual-craft.md"
+dest = ".claude/skills/cf-docs-portal/references/visual-craft.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
+dest = ".claude/skills/cf-docs-portal/resources/utility-presentation-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
+dest = ".claude/skills/cf-docs-portal/resources/portal-page-shape.example.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -676,6 +718,30 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/references/visual-craft.md"
+dest = ".agents/skills/cf-present/references/visual-craft.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/how-presentation-works.md"
+dest = ".agents/skills/cf-present/resources/how-presentation-works.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/utility-presentation-system.md"
+dest = ".agents/skills/cf-present/resources/utility-presentation-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/present-document.example.json"
+dest = ".agents/skills/cf-present/resources/present-document.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/assets/review-document.example.json"
 dest = ".agents/skills/cf-present/assets/review-document.example.json"
 ownership = "managed"
@@ -720,6 +786,24 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/references/information-architecture.md"
 dest = ".agents/skills/cf-docs-portal/references/information-architecture.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/references/visual-craft.md"
+dest = ".agents/skills/cf-docs-portal/references/visual-craft.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
+dest = ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
+dest = ".agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

@@ -184,7 +184,7 @@
         {
           "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
           "markers": [
-            "the governing idea — not the fact inventory — as the thing that must survive",
+            "the governing idea \u2014 not the fact inventory \u2014 as the thing that must survive",
             "A declared alternate composition is a design decision"
           ]
         },
@@ -468,11 +468,11 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "**IDENTITY** — establish where you actually are",
-            "**INTENT-MATCH** — confirm this is the worktree and branch *this task* was assigned",
-            "stop and surface it — never silently adapt",
+            "**IDENTITY** \u2014 establish where you actually are",
+            "**INTENT-MATCH** \u2014 confirm this is the worktree and branch *this task* was assigned",
+            "stop and surface it \u2014 never silently adapt",
             "never accept name resemblance as a match",
-            "**CURRENCY** — fetch, then check the base against the repository's configured target branch",
+            "**CURRENCY** \u2014 fetch, then check the base against the repository's configured target branch",
             "assignment explicitly calls for creating a worktree",
             "Absence alone never authorizes repair",
             "rerun all three assertions inside the new worktree"
@@ -603,7 +603,7 @@
           "markers": [
             "Never set override envs",
             "never stage credentials",
-            "fix the cause — never bypass"
+            "fix the cause \u2014 never bypass"
           ]
         },
         {
@@ -659,7 +659,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "brief already fixes a clear direction",
-            "2–3 viable options",
+            "2\u20133 viable options",
             "failure modes, security, testing, and maintainability"
           ]
         }
@@ -683,7 +683,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "is reassignment: create Plan vN+1",
-            "same-seat high→xhigh escalation"
+            "same-seat high\u2192xhigh escalation"
           ]
         }
       ]
@@ -1429,6 +1429,16 @@
             "runtime-generated structural path",
             "bounded normalized coordinates"
           ]
+        },
+        {
+          "path": ".agents/skills/cf-present/resources/how-presentation-works.md",
+          "markers": [
+            "JSON is only the handoff format",
+            "order of `blocks[]` = order of attention",
+            "5\u2011second picture",
+            "Choose one primary carrier",
+            "Mentally walk the page"
+          ]
         }
       ]
     },
@@ -1741,8 +1751,8 @@
         {
           "path": ".claude/agents/cf-security-reviewer.md",
           "markers": [
-            "Defender lens — Claude",
-            "Attacker lens — a second vendor",
+            "Defender lens \u2014 Claude",
+            "Attacker lens \u2014 a second vendor",
             "Cross-vendor divergence escalates",
             "severity high / confidence confirmed"
           ]

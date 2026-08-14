@@ -11,13 +11,21 @@ architecture, capabilities, decisions, specs, epics, tasks, and code remain in
 their established files.
 
 This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
-Compose portal pages into the **utility presentation system** (shared craft with
-`cf-present`: tokens, type roles, altitude, stage/diff conventions). Read
-[references/visual-craft.md](references/visual-craft.md) before theming or
-authoring layered pages.
+
+**Before theming, layering, or authoring portal pages, load in order:**
+
+1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
+   — **canonical** utility presentation system (shared with `cf-present`)
+2. [references/visual-craft.md](references/visual-craft.md) — portal checklist
+3. Other references below as the task requires
+
+Pass the portal composition gate in the canonical resource. A docs shell that
+is only a wall of prose cards or a marketing layout is a **failed** use of this
+skill.
 
 `cf-design` is product-generic: use it only if the **consuming product** needs
-experience direction. Do **not** treat portal fallback themes, Starlight
+experience direction. Apply `cf-design` only for that product direction—not for
+utility portal themes. Do **not** treat portal fallback themes, Starlight
 components, or utility tokens as product brand authority—and do not push product
 DS into the portal. Apply `cf-editorial-review` to substantive explanatory copy.
 
@@ -77,7 +85,12 @@ established project voice when it exists; otherwise use calm, direct,
 third-person documentation language. Avoid cryptic headings, invented
 personality, gratuitous emoji, and promotional language.
 
-### Visual craft (utility—not free-form)
+### Visual craft (utility presentation system—mandatory)
+
+Normative detail:
+[resources/utility-presentation-system.md](resources/utility-presentation-system.md)
+and [references/visual-craft.md](references/visual-craft.md). Page shape example:
+[resources/portal-page-shape.example.md](resources/portal-page-shape.example.md).
 
 - **Visuals** only when they clarify relationship, hierarchy, state, or flow.
   Text inside decorated boxes is not a visual explanation.
@@ -91,8 +104,6 @@ personality, gratuitous emoji, and promotional language.
 - **Motion:** minimal; meaning at rest; respect reduced motion and no wrong-mode
   flash on first paint.
 - **No present Comment lifecycle** in portal chrome.
-
-Details: [references/visual-craft.md](references/visual-craft.md).
 
 For a monorepo, keep global orientation and shared concepts above area or
 surface drill-down. Use multiple `source_roots` and layer paths to expose that

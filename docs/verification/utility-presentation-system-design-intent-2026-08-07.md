@@ -140,13 +140,19 @@ DESIGN_INTENT:
 
 ## Skill doctrine (implementation target)
 
+Canonical skill resources (authoring authority when skills are installed):
+
+- `cf-present/resources/utility-presentation-system.md`
+- `cf-docs-portal/resources/utility-presentation-system.md`
+
 When models use `cf-present` or `cf-docs-portal` (or agent-os equivalents):
 
-1. Prefer the **utility system** over free-form HTML.
-2. Choose **altitude** and **form** from the subject (relationship → stage type).
-3. Generate **content** into system forms; do not invent a competing visual language.
-4. Fail closed on anti-patterns above.
-5. Product UI for the consuming app remains out of scope of these skills.
+1. **Load the skill resource first** — then profile `visual-craft` — then author.
+2. Prefer the **utility presentation system** over free-form HTML.
+3. Choose **altitude** and **form** from the subject (relationship → stage type).
+4. Generate **content** into system forms; do not invent a competing visual language.
+5. Fail closed on anti-patterns above (including text-only walls as “present”).
+6. Product UI for the consuming app remains out of scope of these skills.
 
 ---
 
