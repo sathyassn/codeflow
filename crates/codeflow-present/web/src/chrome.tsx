@@ -89,6 +89,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerBody, setComposerBody] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const dockRef = useRef<HTMLElement>(null);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
@@ -596,28 +597,19 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <span class="cf-revision">Revision {config.revision}</span>
         </div>
         <div class="cf-appearance" aria-label="Appearance">
-          <label>
-            <span>Theme</span>
-            <select
-              value={appearance.theme}
-              onChange={(e) => setAppearance((c) => ({ ...c, theme: e.currentTarget.value as UtilityTheme }))}
-            >
-              {(Object.keys(themeLabels) as UtilityTheme[]).map((t) => (
-                <option value={t}>{themeLabels[t]}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Mode</span>
-            <select
-              value={appearance.mode}
-              onChange={(e) => setAppearance((c) => ({ ...c, mode: e.currentTarget.value as AppearanceMode }))}
-            >
-              {(Object.keys(modeLabels) as AppearanceMode[]).map((m) => (
-                <option value={m}>{modeLabels[m]}</option>
-              ))}
-            </select>
-          </label>
+          <span class={`cf-note-count-meta${notes.length > 0 ? " has" : ""}`} data-testid="note-count">
+            {notes.length} {notes.length === 1 ? "note" : "notes"}
+          </span>
+          <button
+            type="button"
+            class="cf-settings-btn"
+            data-testid="settings-btn"
+            aria-expanded={settingsOpen}
+            aria-controls="cf-settings-panel"
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            Settings
+          </button>
           <button
             id="cf-comment-toggle"
             class="cf-comment-btn"
@@ -642,6 +634,44 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               {notes.length}
             </span>
           </button>
+          {settingsOpen ? (
+            <div id="cf-settings-panel" class="cf-settings-panel open" data-testid="settings-panel">
+              <h3>Display</h3>
+              <div>
+                <div class="lbl">
+                  Theme<span class="d">utility skins</span>
+                </div>
+                <div class="pills">
+                  {(Object.keys(themeLabels) as UtilityTheme[]).map((t) => (
+                    <button
+                      type="button"
+                      aria-pressed={appearance.theme === t}
+                      onClick={() => setAppearance((c) => ({ ...c, theme: t }))}
+                    >
+                      {themeLabels[t]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div class="lbl">
+                  Appearance<span class="d">light, dark, or follow OS</span>
+                </div>
+                <div class="pills">
+                  {(Object.keys(modeLabels) as AppearanceMode[]).map((m) => (
+                    <button
+                      type="button"
+                      aria-pressed={appearance.mode === m}
+                      onClick={() => setAppearance((c) => ({ ...c, mode: m }))}
+                    >
+                      {modeLabels[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p class="hint">Applies to this review surface and is remembered in this browser.</p>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -656,7 +686,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <span class="mode" data-active={hintMode === "region" ? "true" : "false"}>
             <b>Drag</b> area
           </span>
-          <span class="esc-note">C toggles · Esc exits</span>
+          <span class="esc-note">Shift+drag forces region · Esc</span>
         </div>
       ) : null}
 

@@ -37,14 +37,16 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   const blockId = block?.dataset.cfBlockId;
   if (!block || !blockId || block.matches(".block--diagram")) return null;
 
-  const before = document.createRange();
-  before.selectNodeContents(startElement);
-  before.setEnd(range.startContainer, range.startOffset);
-  const start = before.toString().length;
   const exact = range.toString();
-  const canonical = startElement.textContent ?? "";
-  const end = start + exact.length;
-  if (!exact || canonical.slice(start, end) !== exact) return null;
+  if (!exact.trim()) return null;
+  // Server validates against Block::canonical_review_text(), not live DOM
+  // textContent (markdown stripping vs rendered HTML can differ). Prefer the
+  // rendered canonical attribute; fall back to locating the quote in it.
+  const canonical =
+    startElement.getAttribute("data-cf-canonical-text") ?? startElement.textContent ?? "";
+  const start = canonical.indexOf(exact);
+  const end = start >= 0 ? start + exact.length : -1;
+  if (start < 0 || canonical.slice(start, end) !== exact) return null;
 
   return {
     blockId,

@@ -370,14 +370,15 @@ async function checkInteractiveSurface(browser, origin) {
     && document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false"
   );
 
-  await page.getByLabel("Theme").selectOption("technical");
+  await page.getByTestId("settings-btn").click();
+  await page.getByRole("button", { name: "Technical", exact: true }).click();
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
 
-  for (const theme of ["editorial", "technical"]) {
-    await page.getByLabel("Theme").selectOption(theme);
-    for (const mode of ["light", "dark"]) {
-      await page.getByLabel("Mode").selectOption(mode);
+  for (const theme of ["Editorial", "Technical"]) {
+    await page.getByRole("button", { name: theme, exact: true }).click();
+    for (const mode of ["Light", "Dark"]) {
+      await page.getByRole("button", { name: mode, exact: true }).click();
       const axeResult = await page.evaluate(async () => globalThis.axe.run(document, {
         runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
       }));

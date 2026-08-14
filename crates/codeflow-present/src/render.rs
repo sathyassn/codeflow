@@ -184,7 +184,9 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
         output.push_str("</div></section>");
         return;
     }
-    output.push_str("<div data-cf-review-text-root>");
+    output.push_str("<div data-cf-review-text-root data-cf-canonical-text=\"");
+    escape_attr_to(&block.canonical_review_text(), output);
+    output.push_str("\">");
 
     match block {
         Block::Narrative { markdown, .. } => render_markdown(markdown, output),
