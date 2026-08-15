@@ -16,6 +16,8 @@ composition gate, **do not** treat it as craft-complete. Fix sources or refuse
 decorative portal chrome.
 
 `cf-design` stays product-generic. This skill is **utility portal** only.
+Author repository sources for this project or any consuming project. Do not
+clone the design-exploration board or copy present Comment chrome.
 
 ---
 

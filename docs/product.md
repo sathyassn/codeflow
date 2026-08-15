@@ -56,10 +56,13 @@ multi-user coordination remains deferred.
 - **Not a general GUI/TUI product or application shell.** The bounded
   `cf-present` review document defined by SPC-004 is the sole interactive
   exception: an explicit CLI action may launch an isolated browser window
-  backed by a loopback-only, per-session service that self-terminates. It is
-  not a dashboard, remote server, persistent service, or consuming-product UI
-  framework. The opt-in documentation portal is a generated static artifact,
-  not an operated CodeFlow interface.
+  backed by a loopback-only, per-session service that self-terminates. Agents
+  author this session's catalog document; the runtime owns chrome and Comment.
+  It is not a dashboard, remote server, persistent service, consuming-product
+  UI framework, or a clone of the design-exploration board. The opt-in
+  documentation portal is a generated static artifact that applies the same
+  utility craft to durable source-linked docs, not an operated CodeFlow
+  interface.
 - **No bespoke memory infrastructure.** No embeddings, vector DBs, GraphRAG, or
   database-as-authority; markdown + JSONL truth with an FTS5 cache (D17).
 - **Not a substitute for an OS or harness security boundary.** CodeFlow ships

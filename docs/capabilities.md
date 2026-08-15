@@ -678,7 +678,7 @@ area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
 epics: [EPC-005]
-adrs: [ADR-0049, ADR-0050, ADR-0052]
+adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 
 `codeflow present` turns a closed versioned JSON+Markdown document into one
@@ -687,7 +687,10 @@ cross-harness `cf-present` authoring skill, canonical document/token/history
 schemas, representative assets, and proportional routing: simple answers stay
 in chat; a complex explanation, comparison, plan, decision, evidence set, diff,
 or review uses the utility only when coherent visual inspection or anchored
-feedback materially helps.
+feedback materially helps. Agents author **this session's** subject into the
+catalog; the runtime owns chrome, themes, and the Comment system. The
+design-exploration board is craft reference, not a document to clone. Durable
+docs belong to `cf-docs-portal`.
 
 The runtime validates the declarative block tree, embeds its deterministic
 renderer, stores immutable revisions and append-only feedback in owner-private
@@ -796,6 +799,9 @@ configuration.
 
 The mirrored `cf-docs-portal` skill owns proportional adoption, layered
 information design, safe source interpretation, exact dependency operations,
-browser/accessibility evidence, and cleanup. The repository dogfoods the
-starter under `docs-portal/`; a generated local site is evidence and never an
-implicit publish action.
+browser/accessibility evidence, and cleanup. It applies the same utility
+presentation craft as `cf-present` (tokens, altitude, stage grammar) to
+durable source-linked docs for CodeFlow or any consuming project, without a
+session Comment lifecycle. The repository dogfoods the starter under
+`docs-portal/`; a generated local site is evidence and never an implicit
+publish action.

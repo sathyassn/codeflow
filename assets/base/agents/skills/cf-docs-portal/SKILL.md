@@ -12,6 +12,11 @@ their established files.
 
 This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
 
+Docs for **this or any consuming repo** reuse the same utility design
+system as `cf-present`: author repository sources; the portal applies
+tokens, altitude, and stage grammar. Do not clone the design-exploration
+board or copy present Comment chrome.
+
 **Before theming, layering, or authoring portal pages, load in order:**
 
 1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
@@ -23,11 +28,11 @@ Pass the portal composition gate in the canonical resource. A docs shell that
 is only a wall of prose cards or a marketing layout is a **failed** use of this
 skill.
 
-`cf-design` is product-generic: use it only if the **consuming product** needs
-experience direction. Apply `cf-design` only for that product direction—not for
-utility portal themes. Do **not** treat portal fallback themes, Starlight
-components, or utility tokens as product brand authority—and do not push product
-DS into the portal. Apply `cf-editorial-review` to substantive explanatory copy.
+`cf-design` is product-generic. Apply `cf-design` only when the **consuming
+product** needs experience direction, never to utility portal themes. Portal fallback
+themes, Starlight components, and utility tokens are not product brand
+authority; do not push product DS into the portal. Apply `cf-editorial-review`
+to substantive explanatory copy.
 
 ## 1. Decide whether to adopt
 
@@ -154,21 +159,16 @@ material portal change, verify:
 - task-owned browser state, ports, test data, traces, and screenshots, followed
   by verified resource cleanup.
 
-`npm run browser:verify` is the reusable headless default. It starts a
-task-owned loopback preview on an ephemeral port under the workflow lease;
-derives its base path, layers, routes, and search terms from validated project
-configuration and generated evidence; and binds the result to the exact Git,
-configuration, generator, and artifact-claim identity. Chromium, Firefox, and
-WebKit run sequentially with separate temporary profiles. The suite checks
-landmarks, accessible names/tree structure, WCAG 2.2 AA axe rules, layout,
-search, system/persisted appearance before first paint, configured layer
-journeys, deep links, applicable strict-ID and source-link behavior, real
-keyboard traversal and unobscured focus, both fallback themes in both modes,
-target size, responsive overflow, console failures, and remote requests. It
-bounds and hashes success and failure screenshots/traces and verifies server
-and profile teardown. Set a unique `PORTAL_BROWSER_RUN` for concurrent tasks.
-Use a headed task-owned browser only for a finding the headless run cannot
-settle, never the operator's profile or view.
+`npm run browser:verify` is the reusable headless default: a task-owned
+loopback preview under the workflow lease; journeys, routes, and search terms
+derived from validated configuration and generated evidence; Chromium,
+Firefox, and WebKit in sequence with separate temporary profiles; WCAG 2.2 AA axe
+rules plus the §5 journeys, console failures, and remote requests; bounded
+hashed screenshot/trace evidence and verified server and profile teardown
+(mechanics and identity binding: `references/operations.md`). Set a unique
+`PORTAL_BROWSER_RUN` for concurrent tasks. Use a headed task-owned browser only
+for a finding the headless run cannot settle, never the operator's profile or
+view.
 
 The directly invoked Claude judgment primary reviews the rendered experience,
 content hierarchy, and source fidelity. Codex verifies implementation,

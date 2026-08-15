@@ -33,9 +33,33 @@
   --cf-diagram-line: #46534c;
   --cf-grad-a: color-mix(in srgb, var(--cf-accent) 16%, transparent);
   --cf-grad-b: color-mix(in srgb, var(--cf-positive) 10%, transparent);
+  --cf-ui-scale: 1;
+  --cf-chrome-h: 4.5rem;
+  /* Left rail geometry: the TOC occupies page-pad..page-pad+toc-w, so the
+     document column and the Comment mode strip both start past it. One var —
+     the strip can never overlap the TOC again by drifting independently. */
+  --cf-toc-w: 12rem;
+  /* Gap holds the Comment marker gutter (34px chip + 8px offset) clear of the TOC. */
+  --cf-toc-gap: 3rem;
+  --cf-left-rail: calc(var(--cf-page-pad-inline) + var(--cf-toc-w) + var(--cf-toc-gap));
   font-family: var(--cf-font-sans);
+  font-size: calc(16px * var(--cf-ui-scale));
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+:root[data-cf-scale="compact"] { --cf-ui-scale: 0.94; }
+:root[data-cf-scale="default"] { --cf-ui-scale: 1; }
+:root[data-cf-scale="large"] { --cf-ui-scale: 1.12; }
+
+:root[data-cf-typeface="instrument"] {
+  --cf-font-sans: Archivo, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+:root[data-cf-typeface="editorial"] {
+  --cf-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+:root[data-cf-typeface="plex"] {
+  --cf-font-sans: "IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 :root[data-cf-mode-resolved="light"] { color-scheme: light; }
@@ -85,7 +109,8 @@
   --cf-grad-b: color-mix(in srgb, #808a94 8%, transparent);
 }
 
-/* Technical — Instrument (pine / cartographic blue); default lean */
+/* Instrument (pass10 default) and Technical (export alias) */
+:root[data-cf-theme="instrument"][data-cf-mode-resolved="light"],
 :root[data-cf-theme="technical"][data-cf-mode-resolved="light"] {
   --cf-canvas: #eef2ef;
   --cf-surface: #ffffff;
@@ -103,10 +128,9 @@
   --cf-warning: #b26e12;
   --cf-danger: #9b1c1c;
   --cf-diagram-line: #46534c;
-  --cf-grad-a: color-mix(in srgb, var(--cf-accent) 16%, transparent);
-  --cf-grad-b: color-mix(in srgb, var(--cf-positive) 10%, transparent);
 }
 
+:root[data-cf-theme="instrument"][data-cf-mode-resolved="dark"],
 :root[data-cf-theme="technical"][data-cf-mode-resolved="dark"] {
   --cf-canvas: #0a1210;
   --cf-surface: #121c18;
@@ -126,6 +150,44 @@
   --cf-diagram-line: #aebab3;
   --cf-grad-a: color-mix(in srgb, var(--cf-accent) 16%, transparent);
   --cf-grad-b: color-mix(in srgb, var(--cf-positive) 10%, transparent);
+}
+
+:root[data-cf-theme="ink"][data-cf-mode-resolved="light"] {
+  --cf-canvas: #f6efe3;
+  --cf-surface: #fbf6ec;
+  --cf-surface-raised: #f3eadc;
+  --cf-surface-subtle: #e8dccb;
+  --cf-text: #2a2116;
+  --cf-text-muted: #5c5144;
+  --cf-border: #d9cbb8;
+  --cf-border-strong: #8a7a66;
+  --cf-accent: #8a4b24;
+  --cf-accent-strong: #6e3b1b;
+  --cf-accent-soft: #f3e6d6;
+  --cf-focus: #8a4b24;
+  --cf-positive: #3d6b3a;
+  --cf-warning: #a46a16;
+  --cf-danger: #9b1c1c;
+  --cf-diagram-line: #5c5144;
+}
+
+:root[data-cf-theme="ink"][data-cf-mode-resolved="dark"] {
+  --cf-canvas: #1a1510;
+  --cf-surface: #241e17;
+  --cf-surface-raised: #2e261e;
+  --cf-surface-subtle: #3a3127;
+  --cf-text: #f3eadc;
+  --cf-text-muted: #c2b4a2;
+  --cf-border: #3f352b;
+  --cf-border-strong: #8a7a66;
+  --cf-accent: #d4a06a;
+  --cf-accent-strong: #e0b588;
+  --cf-accent-soft: #3a2a1c;
+  --cf-focus: #d4a06a;
+  --cf-positive: #7cbc74;
+  --cf-warning: #d9a85a;
+  --cf-danger: #ff8a80;
+  --cf-diagram-line: #c2b4a2;
 }
 
 * { box-sizing: border-box; }
@@ -175,9 +237,10 @@ a:hover { text-decoration-thickness: 0.13em; }
 .cf-skip-link:focus { transform: none; }
 
 .cf-topbar {
-  position: sticky;
-  z-index: 10;
-  inset-block-start: 0;
+  position: fixed;
+  z-index: 60;
+  inset: 0 0 auto 0;
+  width: 100%;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -294,6 +357,24 @@ a:hover { text-decoration-thickness: 0.13em; }
   color: var(--cf-text-muted);
   line-height: 1.45;
 }
+.cf-settings-panel .preview {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--cf-border);
+  background: var(--cf-canvas);
+}
+.cf-settings-panel .preview .body { font-family: var(--cf-font-sans); font-size: 0.94rem; color: var(--cf-text); }
+.cf-settings-panel .preview .mono { font-family: var(--cf-font-mono); font-size: 0.78rem; color: var(--cf-text-muted); }
+.cf-settings-panel .preview .swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--cf-accent);
+}
 .cf-appearance label, .cf-feedback label { display: grid; gap: var(--cf-space-1); }
 .cf-appearance label > span, .cf-feedback label > span {
   color: var(--cf-text-muted);
@@ -303,34 +384,40 @@ a:hover { text-decoration-thickness: 0.13em; }
 
 .cf-section-route {
   position: fixed;
-  inset: 7rem auto 2rem var(--cf-page-pad-inline);
-  inline-size: 11rem;
+  inset: calc(var(--cf-chrome-h) + 0.85rem) auto 2rem var(--cf-page-pad-inline);
+  inline-size: var(--cf-toc-w);
   overflow: auto;
   z-index: 5;
 }
-.cf-section-route ol { display: grid; gap: var(--cf-space-1); margin: 0; padding: 0; list-style: none; }
+html:has(.cf-chrome-frame[data-commenting="true"]) .cf-section-route {
+  inset-block-start: calc(var(--cf-chrome-h) + 3.6rem);
+}
+.cf-section-route ol { display: grid; gap: 0.55rem; margin: 0; padding: 0; list-style: none; }
 .cf-section-route li { border-inline-start: 2px solid var(--cf-border); padding-inline-start: var(--cf-space-2); }
 .cf-section-route li[data-level="3"] { padding-inline-start: var(--cf-space-4); font-size: 0.86rem; }
 .cf-section-route li[data-active="true"] { border-color: var(--cf-accent); }
 .cf-section-route a {
   display: block;
-  overflow: hidden;
   color: var(--cf-text-muted);
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 .cf-section-route [aria-current="location"] { color: var(--cf-text); font-weight: 700; }
 
 /* Full-width document shell; prose stays readable, stages/figures use width */
 #cf-present-document {
+  position: relative;
   inline-size: min(var(--cf-doc-max), 100%);
   min-block-size: 65vh;
   margin: 0 auto;
-  padding: clamp(2rem, 5vw, 4.5rem) var(--cf-page-pad-inline) 7rem;
-  padding-inline-start: max(var(--cf-page-pad-inline), 13rem);
+  padding: calc(var(--cf-chrome-h) + 2rem) var(--cf-page-pad-inline) 7rem;
+  padding-inline-start: max(var(--cf-page-pad-inline), var(--cf-left-rail));
   box-sizing: border-box;
   overflow-x: clip;
+}
+html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
+  padding-block-start: calc(var(--cf-chrome-h) + 3.75rem);
 }
 
 #cf-present-document > header { margin-block-end: var(--cf-space-7); max-inline-size: var(--cf-reading-measure); }
@@ -346,17 +433,50 @@ a:hover { text-decoration-thickness: 0.13em; }
 #cf-present-document iframe,
 #cf-present-document img,
 #cf-present-document video { max-inline-size: 100%; }
+.block--html figure.stage,
+.cf-stage-host {
+  margin: 0;
+  max-inline-size: 100%;
+}
+.cf-stage-host {
+  padding: clamp(1.1rem, 2.2vw, 1.75rem);
+  border: 1px solid var(--cf-border);
+  border-radius: 14px;
+  background: var(--cf-surface);
+}
+.cf-kicker {
+  margin: 0 0 0.5rem;
+  color: var(--cf-text-muted);
+  font-family: var(--cf-font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.cf-claim {
+  margin: 0 0 1.1rem;
+  max-inline-size: 22ch;
+  color: var(--cf-text);
+  font-size: clamp(1.35rem, 2.1vw, 1.85rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+.cf-stage-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.block--html iframe {
+  display: block;
+  inline-size: 100%;
+  block-size: 28rem;
+  border: 0;
+  background: transparent;
+}
 #cf-present-document [data-cf-block-id] { position: relative; scroll-margin-block-start: 6rem; }
 .block { margin-block: 0 var(--cf-space-7); }
 .anchor-button {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-start: -2.5rem;
-  display: grid;
-  place-items: center;
-  inline-size: 1.75rem;
-  min-block-size: 1.75rem;
-  padding: 0;
+  display: none !important;
   border-color: var(--cf-border);
   border-radius: 50%;
   color: var(--cf-text-muted);
@@ -514,15 +634,17 @@ code { font-family: var(--cf-font-mono); }
 }
 .cf-feedback-close { display: none; }
 
-/* Mode strip — inverted chrome toolbelt */
+/* Mode strip — toolbelt in the document column, never over the left nav */
 .cf-hint {
   display: none;
-  position: sticky;
-  z-index: 55;
-  inset-block-start: 4.5rem;
-  margin: 10px clamp(1rem, 3vw, 2.5rem) 0;
+  position: fixed;
+  z-index: 50;
+  top: calc(var(--cf-chrome-h) + 0.65rem);
+  /* Align with the document column start — clear of the fixed left TOC. */
+  left: max(var(--cf-left-rail), calc((100vw - var(--cf-doc-max)) / 2 + var(--cf-left-rail)));
+  margin: 0;
   width: fit-content;
-  max-inline-size: calc(100% - 2rem);
+  max-inline-size: calc(100vw - var(--cf-left-rail) - 2rem);
   padding: 5px 6px 5px 8px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--cf-text) 88%, transparent);
@@ -569,9 +691,10 @@ code { font-family: var(--cf-font-mono); }
   margin-left: 4px;
 }
 
-/* Region marquee */
+/* Region marquee — document coordinates inside the marker layer, so the
+   persistent rectangle scrolls with the content it covers */
 .cf-region-draft {
-  position: fixed;
+  position: absolute;
   z-index: 40;
   pointer-events: none;
   border-radius: 4px;
@@ -709,9 +832,17 @@ code { font-family: var(--cf-font-mono); }
   border-color: color-mix(in srgb, var(--cf-danger) 40%, var(--cf-border));
 }
 
-/* Speech markers */
+/* Speech markers — parked in the document gutter beside their anchor.
+   Absolutely positioned inside the in-document marker layer so they scroll
+   with the content they annotate; re-measured on resize and type-scale. */
+.cf-marker-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 34;
+}
 .cf-marker {
-  position: fixed;
+  position: absolute;
   z-index: 35;
   min-width: 26px;
   height: 26px;
@@ -740,7 +871,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-dock {
   position: fixed;
   z-index: 45;
-  inset: 4.75rem 0 0 auto;
+  inset: var(--cf-chrome-h) 0 0 auto;
   display: none;
   flex-direction: column;
   width: min(22rem, 28vw);
@@ -785,6 +916,8 @@ code { font-family: var(--cf-font-mono); }
   min-height: 0;
   background: var(--cf-surface);
 }
+/* Empty body: centred in the fixed rail (the rail is viewport-fixed, so this
+   cannot drift with document scroll), and it names the three gestures. */
 .cf-dock .list:has(.empty) { display: grid; align-content: center; }
 .cf-dock .empty {
   margin: 0;
@@ -796,6 +929,19 @@ code { font-family: var(--cf-font-mono); }
   gap: 8px;
   justify-items: center;
   text-align: center;
+}
+.cf-dock .empty::before {
+  content: "";
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  margin-bottom: 4px;
+  background: var(--cf-surface-raised);
+  border: 1px solid var(--cf-border);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0Z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 20px;
 }
 .cf-dock .empty .t { font-size: 0.95rem; color: var(--cf-text); font-weight: 500; }
 .cf-dock .empty .h { max-width: 22ch; color: var(--cf-text-muted); }
@@ -994,27 +1140,40 @@ code { font-family: var(--cf-font-mono); }
 .cf-feedback-history [data-anchor-state="orphaned"] { border-inline-start-color: var(--cf-warning); }
 .cf-anchor-warning { color: var(--cf-warning); }
 
+/* Hover highlight while armed: candidate under cursor, then pinned target */
+.cf-hot {
+  outline: 2px solid color-mix(in srgb, var(--cf-accent) 65%, transparent);
+  outline-offset: 3px;
+  border-radius: 4px;
+  transition: outline-color 100ms ease;
+}
+.cf-hot-sel {
+  outline: 2px solid var(--cf-accent);
+  outline-offset: 3px;
+  background: color-mix(in srgb, var(--cf-accent) 14%, transparent);
+}
+
 /* Document: no permanent +; only while Comment armed */
 #cf-present-document[data-cf-commenting="true"] { cursor: crosshair; }
-#cf-present-document[data-cf-commenting="true"][data-cf-capture-mode="text"],
-#cf-present-document[data-cf-commenting="true"] { }
+#cf-present-document[data-cf-commenting="true"][data-cf-cursor="text"] { cursor: text; }
+#cf-present-document[data-cf-commenting="true"] ::selection {
+  background: color-mix(in srgb, var(--cf-accent) 22%, transparent);
+}
 #cf-present-document[data-cf-capture-mode="element"] { cursor: crosshair; }
 #cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
   outline: 2px solid var(--cf-focus);
   outline-offset: 3px;
 }
 #cf-present-document[data-cf-capture-mode="region"] { cursor: crosshair; user-select: none; touch-action: none; }
-#cf-present-document[data-cf-commenting="true"] .anchor-button { pointer-events: auto; }
-#cf-present-document[data-cf-commenting="true"] .block:hover > .anchor-button,
-#cf-present-document[data-cf-commenting="true"] .anchor-button:focus-visible { opacity: 1; }
+#cf-present-document[data-cf-commenting="true"] .anchor-button { display: none !important; }
 
 /* Reserve rail when open */
 html:has(.cf-chrome-frame[data-rail="open"]) #cf-present-document {
   max-inline-size: calc(100% - min(22rem, 28vw) - 1rem);
   margin-inline-end: min(22rem, 28vw);
 }
-html:has(.cf-chrome-frame[data-rail="open"]) .cf-section-route {
-  /* keep left nav clear of rail */
+html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint {
+  max-inline-size: calc(100vw - var(--cf-left-rail) - min(22rem, 28vw) - 2rem);
 }
 
 @media (max-width: 52rem) {
@@ -1043,15 +1202,16 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-section-route {
 
 @media (max-width: 70rem) {
   .cf-section-route { display: none; }
-  #cf-present-document { inline-size: min(var(--cf-doc-max), 100%); margin-inline-start: 0; padding-inline-start: max(var(--cf-page-pad-inline), 13rem); }
+  .cf-hint { left: var(--cf-page-pad-inline); max-inline-size: calc(100vw - 2rem); }
+  #cf-present-document { inline-size: min(var(--cf-doc-max), 100%); margin-inline-start: 0; padding-inline-start: var(--cf-page-pad-inline); }
   .cf-feedback { inline-size: min(21rem, 31vw); }
 }
 
 @media (max-width: 52rem) {
-  .cf-topbar { position: relative; align-items: flex-start; }
+  .cf-topbar { position: fixed; align-items: flex-start; }
   .cf-title-group { display: grid; gap: 0; }
   .cf-appearance { flex-wrap: wrap; justify-content: flex-end; }
-  #cf-present-document { inline-size: auto; margin: 0; padding: 3rem clamp(1rem, 6vw, 3rem); }
+  #cf-present-document { inline-size: auto; margin: 0; padding: calc(var(--cf-chrome-h) + 2rem) clamp(1rem, 6vw, 3rem) 3rem; }
   .cf-comment-toggle { align-self: end; }
   .cf-feedback {
     z-index: 15;
@@ -1079,7 +1239,7 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-section-route {
   .cf-appearance label { min-inline-size: 8rem; }
   .cf-section-route { display: none; }
   #cf-present-document {
-    padding: 1.25rem 0.85rem 5rem;
+    padding: calc(var(--cf-chrome-h) + 1.25rem) 0.85rem 5rem;
     padding-inline-start: 0.85rem;
     overflow-x: clip;
   }

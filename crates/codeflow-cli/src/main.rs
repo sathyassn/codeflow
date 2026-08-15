@@ -58,7 +58,7 @@ enum Command {
     Orient,
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
-    /// Adopt or reconcile the opt-in documentation portal utility.
+    /// Adopt or reconcile the opt-in documentation portal (utility craft over durable docs).
     Portal(cmd::portal::PortalArgs),
     /// Validate record frontmatter; --docs adds the doc-graph integrity lint.
     Validate(cmd::validate::ValidateArgs),
@@ -88,7 +88,7 @@ enum Command {
     Task(cmd::new::TaskArgs),
     /// Durable-work lifecycle checks.
     Work(cmd::work::WorkArgs),
-    /// Create and manage bounded local interactive presentation sessions.
+    /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),
 }
 

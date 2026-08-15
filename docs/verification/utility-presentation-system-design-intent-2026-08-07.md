@@ -7,9 +7,16 @@
 
 Exploration references (not normative sources of code):
 
-- Grok passes 4–6 under `codeflow-epc-005-design-exploration/docs/verification/grok-utility-system-*`
+- Grok passes 4–6 and the later full interactive board under
+  `codeflow-epc-005-design-exploration/docs/verification/grok-utility-system-*`
+  (that board showed **both** `cf-present` and `cf-docs-portal`; it is a
+  **design reference**, not product HTML and not a session document to clone)
 - Claude Design project *Cf-present design concepts* — `CFU Compare Lane.dc.html`
 - Rejected: prose-in-pretty-boxes; permanent `+` on every element; Mermaid/ASCII as primary page form
+- Rejected: re-rendering the exploration board’s demo subject as a present
+  session or portal page. CLI + skills apply the settled craft to **new**
+  subject matter each time (present = this-session explanation + Comment;
+  portal = durable docs for CodeFlow or any consuming project)
 
 Stack decision: [ADR-0053](../decisions/ADR-0053-utility-presentation-stack-and-design-system.md).
 

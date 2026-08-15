@@ -33,6 +33,13 @@ means they start by *seeing* a relationship.
 
 Chrome does not fix weak content. It only frames it.
 
+The design-exploration board that settled utility craft is a **reference**, not
+a document to clone. Do not reproduce its demo subject (system + present +
+portal tabs, sample lineage figure, sample comments). Author **this session's**
+subject into catalog blocks so the same chrome, tokens, and Comment system can
+be used again. Portal work is a different skill (`cf-docs-portal`) on the same
+craft.
+
 ---
 
 ## 2. Why structure is the presentation
@@ -45,7 +52,7 @@ Think in jobs, not tags:
 
 | Job for the reader | What they need to perceive | Instrument (block) | What goes wrong if you substitute prose |
 |--------------------|----------------------------|--------------------|----------------------------------------|
-| Grasp a relationship, flow, or split | Geometry: nodes, edges, order, fork | **diagram** / **tree** / careful **table** | They re-linearise your sentences and miss the shape |
+| Grasp a relationship, flow, or split | Geometry: nodes, edges, order, fork | authored **stage** (justified `html`) / **diagram** / **tree** | They re-linearise your sentences and miss the shape |
 | Compare peers | Side-by-side columns of equal rank | **comparison** | A bullet list collapses peers into sequence (implies ranking by order) |
 | Trust evidence | Scanable states: pass / fail / pending / not-run | **status** | A paragraph “tests are mostly fine” cannot be annotated as a row |
 | Inspect exact change | Monospace change surface | **diff** / **code** | Paraphrase hides the line they need to mark |
@@ -58,7 +65,11 @@ Think in jobs, not tags:
 **Important:** `comparison` of three text cards is still **text** if the cards
 only restate chat. Geometry only helps when the **difference between columns**
 is the point. A diagram whose Mermaid is a fig leaf for more sentences is still
-a wall—just with a code block on top.
+a wall—just with a code block on top. And when the governing claim needs a true
+stage — labeled nodes, named edges, deliberate scale and margins — **author
+one**: a justified `html` stage drawn with utility tokens (see the example
+JSON). Mermaid and ASCII are quick supporting forms; they are **never the
+primary page form** when geometry should teach.
 
 The system will not invent a lineage board, a confidence strip, or a stage
 diagram for you. Those exist only if **you** author a carrier whose shape

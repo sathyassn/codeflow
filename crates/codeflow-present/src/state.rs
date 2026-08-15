@@ -3742,7 +3742,7 @@ mod tests {
         envelope.notes.push(FeedbackNote {
             id: Uuid::new_v4(),
             block_id: "intro".to_string(),
-            block_label: "intro".to_string(),
+            block_label: "Hello".to_string(),
             kind: FeedbackKind::Comment,
             body: "Keep this wording.".to_string(),
             selector: Some(TextSelector {
@@ -4131,7 +4131,7 @@ mod tests {
         envelope.notes.push(FeedbackNote {
             id: Uuid::new_v4(),
             block_id: "intro".to_string(),
-            block_label: "intro".to_string(),
+            block_label: "Hello".to_string(),
             kind: FeedbackKind::Comment,
             body: "Explain this.".to_string(),
             selector: Some(TextSelector {
@@ -4167,7 +4167,7 @@ mod tests {
         envelope.notes.push(FeedbackNote {
             id: Uuid::new_v4(),
             block_id: "intro".to_string(),
-            block_label: "intro".to_string(),
+            block_label: "Hello".to_string(),
             kind: FeedbackKind::Adjustment,
             body: "Align this element with the governing idea.".to_string(),
             selector: None,
@@ -4215,7 +4215,7 @@ mod tests {
         envelope.notes.push(FeedbackNote {
             id: Uuid::new_v4(),
             block_id: "intro".to_string(),
-            block_label: "intro".to_string(),
+            block_label: "Hello".to_string(),
             kind: FeedbackKind::Comment,
             body: "This visual area needs more separation.".to_string(),
             selector: None,

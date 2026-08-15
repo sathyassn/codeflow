@@ -421,6 +421,11 @@ reported and never mutating a value you set, while the write-once doc seeds (all
 of `docs/`) are seeded once at init and never touched again — yours to edit and
 own. `scaffold-manifest.toml` is the update contract.
 
+`codeflow present` is the session review CLI for that same utility craft:
+agents author this session's catalog document; the runtime owns chrome and
+Comment. It is not a documentation portal and not a clone of the
+design-exploration board.
+
 The optional documentation portal is a separate managed bundle, not part of
 that default scaffold. One starter source lives under `assets/docs-portal/`
 and is embedded in the binary. `codeflow portal setup --path <dir>` explicitly

@@ -371,12 +371,21 @@ async function checkInteractiveSurface(browser, origin) {
   );
 
   await page.getByTestId("settings-btn").click();
-  await page.getByRole("button", { name: "Technical", exact: true }).click();
+  await page.locator("[data-testid=skin-pills] [data-skin=instrument]").click();
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
 
-  for (const theme of ["Editorial", "Technical"]) {
-    await page.getByRole("button", { name: theme, exact: true }).click();
+  await page.locator("[data-testid=scale-pills] [data-scale=large]").click();
+  await page.getByTestId("typeface-plex").click();
+  await page.waitForFunction(() =>
+    document.documentElement.dataset.cfScale === "large"
+    && document.documentElement.dataset.cfTypeface === "plex"
+  );
+  await page.locator("[data-testid=scale-pills] [data-scale=default]").click();
+  await page.locator("[data-testid=typeface-pills] [data-typeface=instrument]").click();
+
+  for (const theme of ["editorial", "instrument", "ink"]) {
+    await page.locator(`[data-testid=skin-pills] [data-skin=${theme}]`).click();
     for (const mode of ["Light", "Dark"]) {
       await page.getByRole("button", { name: mode, exact: true }).click();
       const axeResult = await page.evaluate(async () => globalThis.axe.run(document, {

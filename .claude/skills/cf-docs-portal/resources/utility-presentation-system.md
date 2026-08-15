@@ -14,6 +14,34 @@ Stack boundaries: ADR-0049 (present: Rust document / Preact chrome), ADR-0048
 
 ---
 
+## 0. Job of the CLI and skills (do not skip)
+
+The CLI (`codeflow present …`, `codeflow portal …`) and these skills exist so
+an agent **reuses one design system** instead of inventing a page each turn.
+
+| Job | Skill / CLI | What the agent authors | What the runtime already owns |
+|-----|-------------|------------------------|-------------------------------|
+| Explain or review **this session** | `cf-present` | **This** subject's catalog blocks | Chrome, themes, tokens, **Comment system** |
+| Durable docs for **CodeFlow or any consuming project** | `cf-docs-portal` | Repository sources + portal config | Docs shell, search, layers, same craft overlay |
+
+The design-exploration board that settled this system showed **both** present
+and portal profiles on one board so craft could be compared. That board is a
+**design reference only**:
+
+- Use it for tokens, altitude, stage grammar, Comment SM, portal layers, and
+  anti-patterns.
+- Do **not** re-render its demo subject (system landing with both tabs, sample
+  lineage figure, sample notes) as a present session, a portal page, or product
+  HTML.
+- Do **not** treat “show present” or “show the design” as “clone the reference
+  board.” Each invocation applies the same craft to **new** subject matter.
+- Comment is present-only chrome the runtime already owns. Portal has **no**
+  Comment lifecycle.
+
+`cf-design` stays product-generic. It does not own this utility.
+
+---
+
 ## 1. Separation of planes
 
 | Plane | Owns | Does not own |

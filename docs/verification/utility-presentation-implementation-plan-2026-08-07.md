@@ -29,6 +29,7 @@
 
 ### T4 — Skills and quals
 - [x] `cf-present`, `cf-docs-portal` compose into utility system; `cf-design` stays product-generic
+- [x] Doctrine: CLI/skills reuse the design system for **new** subject matter; exploration board is reference only (both profiles)
 - [ ] Eval/canary hooks for subject-led / no prose-in-boxes where applicable
 - [ ] agent-os portable doctrine alignment (PR #43)
 

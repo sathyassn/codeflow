@@ -6,6 +6,12 @@ use clap::{Args, Subcommand};
 use codeflow_core::scaffold::{self, AssetSource};
 
 #[derive(Args)]
+#[command(
+    about = "Adopt or reconcile the opt-in documentation portal",
+    long_about = "Apply the utility presentation design system to durable repository docs\n\
+for this project or any consuming project. Author source-in-place Markdown.\n\
+Not a present session and not product UI. No Comment lifecycle."
+)]
 pub struct PortalArgs {
     #[command(subcommand)]
     command: PortalCommand,

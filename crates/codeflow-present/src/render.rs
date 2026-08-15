@@ -412,26 +412,21 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             escape_html_to(prompt, output);
             output.push_str("</p>");
         }
-        Block::Html { id, html, title } => {
-            output.push_str("<figure><iframe sandbox title=\"");
-            escape_attr_to(title.as_deref().unwrap_or("Sandboxed content"), output);
+        Block::Html { html, title, .. } => {
+            // Interactive present: validated HTML is inlined so Comment can pin
+            // nodes/edges like the design-reference board. Export keeps iframe
+            // sandboxing for a file that may be opened outside the session CSP.
             if options.interactive {
-                output.push_str("\" src=\"/sandbox/");
-                output.push_str(&options.revision.to_string());
-                output.push('/');
-                output.push_str(&sandbox_id(options.session_id, id));
-                output.push_str("\"></iframe>");
+                output.push_str("<figure class=\"stage\"><div class=\"cf-stage-host\">");
+                output.push_str(html);
+                output.push_str("</div></figure>");
             } else {
+                output.push_str("<figure class=\"stage\"><iframe sandbox title=\"");
+                escape_attr_to(title.as_deref().unwrap_or("Sandboxed content"), output);
                 output.push_str("\" srcdoc=\"");
                 escape_attr_to(html, output);
-                output.push_str("\"></iframe>");
+                output.push_str("\"></iframe></figure>");
             }
-            if let Some(title) = title {
-                output.push_str("<figcaption>");
-                escape_html_to(title, output);
-                output.push_str("</figcaption>");
-            }
-            output.push_str("</figure>");
         }
     }
     output.push_str("</div></section>");

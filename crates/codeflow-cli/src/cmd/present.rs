@@ -20,6 +20,12 @@ use codeflow_present::{
 use uuid::Uuid;
 
 #[derive(Debug, Args)]
+#[command(
+    about = "Review this session on the utility presentation surface",
+    long_about = "Turn a validated catalog JSON document into one isolated review surface.\n\
+Author this session's subject; the runtime owns chrome, themes, and Comment.\n\
+Not a documentation portal, product UI, or a clone of the design-exploration board."
+)]
 pub struct PresentArgs {
     #[command(subcommand)]
     command: PresentCommand,

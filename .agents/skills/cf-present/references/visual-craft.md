@@ -17,6 +17,12 @@ If you cannot pass the self-check in *how presentation works*, **do not open**
 the session.
 
 `cf-design` stays product-generic. This skill is **utility present** only.
+Author **this session's** subject. Do not clone the design-exploration board.
+
+Display chrome (runtime-owned, same as the settled design reference): Font
+(Archivo / Inter / Plex Sans), Size (Compact / Default / Large), Palette
+(Neutral / Cool / Warm), Appearance (Light / Dark / System). Comment is one
+mode: gesture → float → composer; rail only while armed; Esc backs out.
 
 ---
 

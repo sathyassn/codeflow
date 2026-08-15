@@ -424,9 +424,31 @@ impl Block {
             Self::Disclosure { summary, .. } => summary.clone(),
             // Full prompt is rendered in the block body; never dump it into the nav.
             Self::FeedbackPrompt { .. } => "Feedback request".to_string(),
+            Self::Status { .. } => "Evidence".to_string(),
+            Self::Comparison { .. } => "Compare".to_string(),
+            Self::Narrative { markdown, .. } | Self::Callout { markdown, .. } => {
+                prose_nav_label(markdown)
+            }
             _ => self.id().to_string(),
         };
         truncate_nav_label(&raw, 40)
+    }
+}
+
+fn prose_nav_label(markdown: &str) -> String {
+    let stripped: String = markdown
+        .chars()
+        .filter(|ch| !matches!(ch, '*' | '_' | '`' | '#' | '[' | ']' | '>'))
+        .collect();
+    let first = stripped
+        .split(['.', '!', '?'])
+        .next()
+        .unwrap_or(stripped.as_str())
+        .trim();
+    if first.is_empty() {
+        "Section".to_string()
+    } else {
+        first.to_string()
     }
 }
 
@@ -1010,6 +1032,18 @@ mod tests {
         assert!(label.ends_with('…'), "{label}");
         // Full prompt still available for body rendering via prompt field, not review_label.
         assert_ne!(feedback.review_label(), long_prompt);
+
+        let narrative = Block::Narrative {
+            id: "frame".to_string(),
+            markdown: "How to use this surface. Agents author this session.".to_string(),
+        };
+        assert_eq!(narrative.review_label(), "How to use this surface");
+
+        let status = Block::Status {
+            id: "verification".to_string(),
+            items: Vec::new(),
+        };
+        assert_eq!(status.review_label(), "Evidence");
     }
 
     #[test]

@@ -15,26 +15,26 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-IEOFTRIT.js",
-      "present.style": "/app/assets/app-STB4G6JE.css"
+      "present.app": "/app/assets/app-4DGCKEIB.js",
+      "present.style": "/app/assets/app-B27MJLJS.css"
     },
     "inline": {
       "present.prepaint": {
-        "source": "\"use strict\";(()=>{(()=>{let c=new Set([\"editorial\",\"technical\"]),l=new Set([\"system\",\"light\",\"dark\"]),e=null,t=null;try{e=localStorage.getItem(\"cf-present-theme\"),t=localStorage.getItem(\"cf-present-mode\")}catch{}let a=e&&c.has(e)?e:\"editorial\",s=t&&l.has(t)?t:\"system\",d=s===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":s,o=document.documentElement;o.dataset.cfTheme=a,o.dataset.cfMode=s,o.dataset.cfModeResolved=d})();})();",
-        "sha256": "f932d4518f6820614393f02005c2a7edf50b7a6873df2e09eb91d3116b9145d0",
-        "csp_sha256": "sha256-+TLUUY9oIGFDk/AgBcKn7fULemhz3y4J65HTEWuRRdA="
+        "source": "\"use strict\";(()=>{(()=>{let n=new Set([\"instrument\",\"editorial\",\"ink\",\"technical\"]),o=new Set([\"system\",\"light\",\"dark\"]),r=new Set([\"instrument\",\"editorial\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),t=null,s=null,a=null,l=null;try{t=localStorage.getItem(\"cf-present-theme\"),s=localStorage.getItem(\"cf-present-mode\"),a=localStorage.getItem(\"cf-present-typeface\"),l=localStorage.getItem(\"cf-present-scale\")}catch{}let m=t&&n.has(t)?t:\"instrument\",c=s&&o.has(s)?s:\"system\",f=a&&r.has(a)?a:\"instrument\",i=l&&d.has(l)?l:\"default\",h=c===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":c,e=document.documentElement;e.dataset.cfTheme=m,e.dataset.cfMode=c,e.dataset.cfModeResolved=h,e.dataset.cfTypeface=f,e.dataset.cfScale=i})();})();",
+        "sha256": "0677d5a199a7393b80c1edf97bb456db932787455079d21381b9a1c0dccee527",
+        "csp_sha256": "sha256-BnfVoZmnOTuAwe35e7RW25Mnh0VQedITgbmhwNzO5Sc="
       }
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-IEOFTRIT.js",
-        "stored_path": "service/app-IEOFTRIT.js.br",
+        "request_path": "/app/assets/app-4DGCKEIB.js",
+        "stored_path": "service/app-4DGCKEIB.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 47542,
-        "encoded_bytes": 14820,
-        "sha256": "7ca2357a2e2c332cc45588369e6aa36767b828ac98dc18696497b31a82ea3354",
-        "etag": "\"sha256-fKI1ei4sMyzEVYg2nmqjZ2e4KKyY3BhpZJezGoLqM1Q=\"",
+        "raw_bytes": 60609,
+        "encoded_bytes": 18744,
+        "sha256": "7fb3d5effa298bfefbf68dd1f967ee5ae8ab3aa22dbabf61eee73502291f4892",
+        "etag": "\"sha256-f7PV7/opi/779o3R+WfuWuirOqItur9h7uc1AikfSJI=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
@@ -51,15 +51,20 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-STB4G6JE.css",
-        "stored_path": "service/app-STB4G6JE.css.br",
+        "request_path": "/app/assets/app-B27MJLJS.css",
+        "stored_path": "service/app-B27MJLJS.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 30172,
-        "encoded_bytes": 5759,
-        "sha256": "249fd35d5721b8b9ed4b92ffcd33d3ca3bf7f1e43073214bc06523433b8e6fe2",
-        "etag": "\"sha256-JJ/TXVchuLntS5L/zTPTyjv38eQwcyFLwGUjQzuOb+I=\"",
-        "imports": []
+        "raw_bytes": 34379,
+        "encoded_bytes": 6531,
+        "sha256": "bd16ed1deb36ea721261805f73396b4c789f290a6a33db06fd6030da921e9c8f",
+        "etag": "\"sha256-vRbtHes26nISYYBfczlrTHifKQpqM9sG/WAw2pIenI8=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
+          }
+        ]
       },
       {
         "request_path": "/app/assets/chunk-abnfDiagram-VRR7QNED-GFX6RLCU.js",
@@ -5218,20 +5223,20 @@
     ],
     "metrics": {
       "asset_count": 118,
-      "raw_corpus_bytes": 4172025,
-      "brotli_corpus_bytes": 948434,
+      "raw_corpus_bytes": 4189299,
+      "brotli_corpus_bytes": 953130,
       "largest_raw_chunk_bytes": 667680,
       "largest_brotli_chunk_bytes": 119823
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-982a0eb043241b56.js.gz",
+      "stored_path": "export/renderer-a4ba1f051fa72d4d.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 4160716,
-      "encoded_bytes": 1062752,
-      "sha256": "982a0eb043241b56a429d4d72d9db84975336fc3f7572c02dd70b53cbde1b205"
+      "raw_bytes": 4166196,
+      "encoded_bytes": 1064134,
+      "sha256": "a4ba1f051fa72d4d8bd69ad170b2eedc53cd3832a44e547a7c11f4e74e3c5ac9"
     }
   },
   "budgets": {
@@ -5241,5 +5246,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "cbd2e841c89e38346736429874db3e001f2439b1a9c8973673b3888177df7ca1"
+  "corpus_sha256": "22cf55063ef96b818fb459e610e92a679c187760cc30a7031d975df90cd11ad3"
 }

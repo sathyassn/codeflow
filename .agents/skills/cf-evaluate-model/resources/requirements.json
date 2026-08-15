@@ -1258,6 +1258,8 @@
           "path": ".agents/skills/cf-docs-portal/SKILL.md",
           "markers": [
             "derived utility, never a second source of truth",
+            "same utility design system as `cf-present`",
+            "Do not clone the",
             "Apply `cf-design`",
             "Apply `cf-editorial-review`",
             "strict-ID previews"
@@ -1415,6 +1417,8 @@
           "path": ".agents/skills/cf-present/SKILL.md",
           "markers": [
             "restyling the same chat answer is a failed use",
+            "Author **this session's** subject",
+            "Do not clone the design-exploration board",
             "one primary visual form at rest",
             "exact selected text, one semantic element",
             "whole document",

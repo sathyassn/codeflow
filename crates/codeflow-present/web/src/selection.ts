@@ -12,6 +12,25 @@ export function annotatableElements(documentRoot: HTMLElement): readonly HTMLEle
     .filter((element) => element.closest("[data-cf-block-id]") && !element.closest("button[data-anchor-block]"));
 }
 
+/** The element a hover highlight or click pin resolves to — mirrors captureElement. */
+export function annotatableAncestor(documentRoot: HTMLElement, target: Element): HTMLElement | null {
+  if (target.closest(".cf-marker, .cf-marker-layer")) return null;
+  const block = target.closest<HTMLElement>("[data-cf-block-id]");
+  if (!block || !documentRoot.contains(block)) return null;
+  const element = target.closest<HTMLElement>(ANNOTATABLE) ?? block;
+  if (!block.contains(element) || element.closest("button[data-anchor-block]")) return null;
+  return element;
+}
+
+const TEXTUAL_TAGS = /^(H1|H2|H3|H4|P|LI|PRE|CODE|TD|TH|LABEL|A|EM|STRONG|SMALL|BLOCKQUOTE|SPAN)$/;
+
+/** Prose where a drag must mean native text selection — never a region marquee. */
+export function isTextualTarget(target: Element): boolean {
+  if ((target.namespaceURI ?? "").includes("svg")) return false;
+  if (TEXTUAL_TAGS.test(target.tagName.toUpperCase())) return true;
+  return Boolean(target.closest("p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcaption") && !target.closest("button, svg"));
+}
+
 export interface CapturedTarget {
   readonly blockId: string;
   readonly blockLabel: string;
@@ -196,9 +215,14 @@ function elementPath(block: HTMLElement, element: HTMLElement): string {
 }
 
 function accessibleLabel(element: HTMLElement): string {
-  const label = element.getAttribute("aria-label")
+  let label = element.getAttribute("aria-label")
     ?? (element instanceof HTMLImageElement ? element.alt : "")
     ?? "";
+  // An unlabeled SVG has no innerText and its textContent smashes every <text>
+  // node together; the enclosing figure's aria-label is the readable identity.
+  if (!label && (element.namespaceURI ?? "").includes("svg")) {
+    label = element.closest("figure[role='img'], [role='img'], figure")?.getAttribute("aria-label") ?? "";
+  }
   const text = label || element.innerText || element.textContent || element.tagName.toLowerCase();
   return truncate(text.replace(/\s+/g, " ").trim() || element.tagName.toLowerCase(), 256);
 }

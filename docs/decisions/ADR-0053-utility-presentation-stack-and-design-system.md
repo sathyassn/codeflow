@@ -47,7 +47,10 @@ epic.
 
 **Unity.** Shared craft is the design system and asset/token contracts—not a
 single SPA monorepo. Present remains a session-scoped review surface; portal
-remains a static source-linked guide.
+remains a static source-linked guide. The CLI and skills exist so each
+invocation applies that craft to **new** subject matter. The design-exploration
+board that compared both profiles is a reference, not product HTML and not a
+session document to clone.
 
 ## Consequences
 

@@ -8,9 +8,17 @@
 - `assets/base/agents/skills/cf-present/resources/utility-presentation-system.md`
 - `assets/base/agents/skills/cf-docs-portal/resources/utility-presentation-system.md`
 
-Exploration demos and historical board renders under design-exploration are
-**not** shippable product HTML and are **not** named in operator-facing skill
-doctrine. They informed settlement of this contract only.
+Exploration demos and historical board renders under design-exploration
+(historically “pass 10”) are a **design reference** for **both** `cf-present`
+and `cf-docs-portal`. They are **not** shippable product HTML, **not** a
+document to clone into a present session, and are **not** named in
+operator-facing skill doctrine. They informed settlement of this contract only.
+
+The CLI and skills exist so each agent invocation **applies that craft to new
+subject matter**: `codeflow present` for this-session explanation/review
+(including the runtime-owned Comment system); `codeflow portal` for durable
+docs for CodeFlow or any consuming project. Do not treat “show present” as
+re-rendering the reference board.
 
 **Architecture:** ADR-0049, ADR-0048, ADR-0053, DESIGN_INTENT 2026-08-07.
 

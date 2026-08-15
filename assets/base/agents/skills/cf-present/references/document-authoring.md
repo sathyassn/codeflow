@@ -4,7 +4,8 @@
 [../resources/how-presentation-works.md](../resources/how-presentation-works.md)
 explains what the human sees and how to choose instruments. Load it **before**
 this page. This file is the **encoding** reference (envelope, fields, limits)—
-not a substitute for judgment about structure.
+not a substitute for judgment about structure. Encode **this session's**
+subject. Do not clone the design-exploration board.
 
 The machine contract is
 `.codeflow/schemas/present/document-v1.schema.json`. The runtime is
@@ -48,12 +49,12 @@ still represents the same conceptual item.
 | verification state | `status` | pass, fail, pending, or not-run evidence |
 | source text | `code` / `diff` | inspectable code or a unified change |
 | hierarchy | `tree` | ownership, composition, or repository structure |
-| relationship or sequence | `diagram` | Mermaid flow, sequence, timeline, state, class, ER, or mind map |
+| supporting relationship or sequence | `diagram` | Mermaid flow, sequence, timeline, state, class, ER, or mind map — a quick supporting form, not the primary carrier when the claim needs a true stage |
 | actual visual/audio evidence | `media` | bounded embedded PNG/JPEG/GIF/WebP/MP4/WebM/MP3/Ogg |
 | secondary depth | `disclosure` | detail that should not dominate the first read |
 | true peer views | `tabs` | one-at-a-time alternatives sharing the same context |
 | requested response | `feedback_prompt` | the exact question or review decision sought |
-| exceptional static layout | `html` | bounded inert HTML that standard blocks cannot express |
+| subject-led stage or exceptional static layout | `html` | bounded inert HTML/SVG — the authored primary stage (utility tokens, labeled nodes, named edges) or a static layout standard blocks cannot express |
 
 Do not add a block category merely for variety. Repeat a block when the
 information warrants it, but consolidate fragments that form one thought. A
@@ -142,10 +143,14 @@ side by side.
 
 ### Sandboxed HTML
 
-Use `html` only when the standard catalog cannot carry the required static
-layout. It runs without scripts, same-origin access, forms, navigation, or
-network. Never use it as a component SDK, a way around the schema, or a place
-for product runtime code. Prefer a standard block over equivalent custom HTML.
+`html` has two sanctioned uses: the **authored primary stage** — a subject-led
+SVG/HTML composition drawn with utility tokens (`var(--cf-…)`), labeled nodes,
+and named edges, when the governing claim needs true geometry (the example
+JSON's first block) — and an exceptional static layout the standard catalog
+cannot express. It runs without scripts, same-origin access, forms, navigation,
+or network. Never use it as a component SDK, a way around the schema, or a
+place for product runtime code. Prefer a standard block over equivalent custom
+HTML, and never make Mermaid/ASCII stand in for a stage the claim deserves.
 
 ## Language and review quality
 

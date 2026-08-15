@@ -227,17 +227,24 @@ records one adopted root;
 repeated setup and ordinary `codeflow update` reconcile the managed starter
 without replacing `portal.config.json`. Configure source roots there rather
 than copying authoritative prose into the portal. Generated content and search
-output remain disposable, and local generation never publishes a site. Read
-`cf-docs-portal` for content, dependency, browser, accessibility, evidence, and
-cleanup obligations.
+output remain disposable, and local generation never publishes a site.
+
+The portal applies the same utility presentation craft as `cf-present`
+(tokens, altitude, stage grammar) over durable source-linked docs for this
+repository or any consuming project. It has no session Comment lifecycle. The
+design-exploration board that settled the craft is a reference, not a page to
+clone. Read `cf-docs-portal` for content, dependency, browser, accessibility,
+evidence, and cleanup obligations.
 
 ## Optional interactive review documents
 
 Standard and full tiers also include `cf-present`. It is a bounded review
 utility for complex explanations, alternatives, plans, diffs, and evidence—not
-a product UI or durable documentation store. Author a schema-valid temporary
-JSON document from the skill's block catalog, then let the CLI enforce semantic
-and byte limits and open a task-owned isolated browser profile:
+a product UI or durable documentation store. Author **this session's** subject
+into a schema-valid temporary JSON document from the skill's block catalog.
+The runtime owns chrome, themes, and Comment. Do not clone the
+design-exploration board or invent a second visual language. The CLI enforces
+semantic and byte limits and opens a task-owned isolated browser profile:
 
 ```sh
 codeflow present open /path/to/review-document.json

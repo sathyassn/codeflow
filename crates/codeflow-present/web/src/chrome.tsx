@@ -3,6 +3,7 @@
  * Rust owns #cf-present-document; this Preact tree owns chrome only (ADR-0049).
  * Feedback still posts /app/api/reviews for harness-agnostic delivery.
  */
+import { createPortal } from "preact/compat";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AppearanceMode,
@@ -13,16 +14,20 @@ import type {
   ReviewResponse,
   ReviewVerdict,
   SessionEvent,
+  TypeScale,
+  Typeface,
   UtilityTheme,
 } from "./contracts";
 import { followSessionEvents } from "./events";
 import { postJson } from "./http";
 import {
+  annotatableAncestor,
   annotatableElements,
   captureDocument,
   captureElement,
   captureRegion,
   captureSelection,
+  isTextualTarget,
   resolveElement,
   resolveRegion,
 } from "./selection";
@@ -47,6 +52,7 @@ interface Section {
 
 type CaptureMode = "element" | "region" | null;
 type HintMode = "text" | "element" | "region";
+type TargetKind = "text" | "element" | "region";
 interface RegionDraft {
   readonly start: Point;
   readonly current: Point;
@@ -56,15 +62,51 @@ interface PendingPin {
   readonly clientX: number;
   readonly clientY: number;
 }
+interface DragGesture {
+  x0: number;
+  y0: number;
+  moved: boolean;
+  region: boolean;
+  forceRegion: boolean;
+  proseOnly: boolean;
+}
 
+function targetKindOf(target: Pick<PendingFeedback, "selector" | "element_selector" | "region_selector">): TargetKind {
+  if (target.selector) return "text";
+  if (target.region_selector) return "region";
+  return "element";
+}
+
+const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Region" };
+
+/** Short float/composer quote: the summary minus its "Text:/Element:/Area:" prefix. */
+function captureQuote(captured: CapturedTarget): string {
+  return captured.summary.replace(/^(Text|Element|Area):\s*/, "").slice(0, 48);
+}
+
+const skinPills: readonly UtilityTheme[] = ["instrument", "editorial", "ink"];
 const themeLabels: Readonly<Record<UtilityTheme, string>> = {
-  editorial: "Editorial",
+  instrument: "Neutral",
+  editorial: "Cool",
+  ink: "Warm",
   technical: "Technical",
 };
+const typefacePills: readonly Typeface[] = ["instrument", "editorial", "plex"];
+const typefaceLabels: Readonly<Record<Typeface, string>> = {
+  instrument: "Archivo",
+  editorial: "Inter",
+  plex: "Plex Sans",
+};
+const scalePills: readonly TypeScale[] = ["compact", "default", "large"];
+const scaleLabels: Readonly<Record<TypeScale, string>> = {
+  compact: "Compact",
+  default: "Default",
+  large: "Large",
+};
 const modeLabels: Readonly<Record<AppearanceMode, string>> = {
-  system: "Follow system",
   light: "Light",
   dark: "Dark",
+  system: "System",
 };
 
 const SPEECH_PATH =
@@ -91,6 +133,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  const [markerLayer, setMarkerLayer] = useState<HTMLElement | null>(null);
+
   const dockRef = useRef<HTMLElement>(null);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
@@ -98,15 +142,49 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const commentModeRef = useRef(false);
   const captureModeRef = useRef<CaptureMode>(null);
   const notesCountRef = useRef(0);
-  const dragGestureRef = useRef<{ x0: number; y0: number; moved: boolean } | null>(null);
+  const dragGestureRef = useRef<DragGesture | null>(null);
   const lastSelectionRef = useRef<CapturedTarget | null>(null);
+  const lastPinnedExactRef = useRef<string>("");
+  const composerOpenRef = useRef(false);
+  const pendingPinRef = useRef<PendingPin | null>(null);
   const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: { openComposer?: boolean }) => void>(() => undefined);
+  const saveComposerRef = useRef<() => void>(() => undefined);
+  const settingsOpenRef = useRef(false);
+  const shiftRef = useRef(false);
+  const hotRef = useRef<HTMLElement | null>(null);
+  const hotSelRef = useRef<HTMLElement | null>(null);
+  // Client-side marker placement hints (never sent to the server): for a text
+  // note, the selection's vertical fraction inside its anchor block.
+  const markerMetaRef = useRef(new Map<string, { ay: number }>());
+  // Where an edit was initiated (marker or note row) — positions the composer.
+  const editAtRef = useRef<{ x: number; y: number } | null>(null);
 
   const sections = useMemo(() => readSections(documentRoot), [documentRoot, config.revision]);
   commentModeRef.current = commentMode;
   captureModeRef.current = captureMode;
   notesCountRef.current = notes.length;
+  composerOpenRef.current = composerOpen;
+  pendingPinRef.current = pendingPin;
+  settingsOpenRef.current = settingsOpen;
   const railVisible = commentMode && panelOpen;
+
+  const clearHot = (): void => {
+    hotRef.current?.classList.remove("cf-hot");
+    hotRef.current = null;
+    hotSelRef.current?.classList.remove("cf-hot-sel");
+    hotSelRef.current = null;
+  };
+  const setHot = (element: HTMLElement | null): void => {
+    if (hotRef.current === element) return;
+    hotRef.current?.classList.remove("cf-hot");
+    hotRef.current = element;
+    element?.classList.add("cf-hot");
+  };
+  const setHotSel = (element: HTMLElement | null): void => {
+    hotSelRef.current?.classList.remove("cf-hot-sel");
+    hotSelRef.current = element;
+    element?.classList.add("cf-hot-sel");
+  };
 
   const armComment = (on: boolean): void => {
     setCommentMode(on);
@@ -121,6 +199,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setComposerOpen(false);
       setComposerBody("");
       setEditingId(null);
+      clearHot();
+      dragGestureRef.current = null;
+      window.getSelection()?.removeAllRanges();
       setStatus(notesCountRef.current ? `${notesCountRef.current} note${notesCountRef.current === 1 ? "" : "s"} queued · Comment off` : "Ready for review.");
     } else {
       setPanelOpen(true);
@@ -130,11 +211,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   useEffect(() => {
-    applyAppearance(appearance.theme, appearance.mode);
-    persistAppearance(appearance.theme, appearance.mode);
+    applyAppearance(appearance);
+    persistAppearance(appearance);
     if (appearance.mode !== "system") return undefined;
-    return watchSystemMode(() => applyAppearance(appearance.theme, appearance.mode));
-  }, [appearance.theme, appearance.mode]);
+    return watchSystemMode(() => applyAppearance(appearance));
+  }, [appearance]);
 
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
   useEffect(
@@ -144,11 +225,52 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   useEffect(() => {
     documentRoot.dataset.cfCommenting = commentMode ? "true" : "false";
-    if (!commentMode) delete documentRoot.dataset.cfCaptureMode;
+    if (!commentMode) {
+      delete documentRoot.dataset.cfCaptureMode;
+      delete documentRoot.dataset.cfCursor;
+    }
     return () => {
       delete documentRoot.dataset.cfCommenting;
+      delete documentRoot.dataset.cfCursor;
     };
   }, [commentMode, documentRoot]);
+
+  // In-document marker host: markers live in the document coordinate space so
+  // they scroll with what they annotate (pass10 gutter behavior).
+  useEffect(() => {
+    const layer = document.createElement("div");
+    layer.className = "cf-marker-layer";
+    layer.setAttribute("aria-hidden", "false");
+    documentRoot.append(layer);
+    setMarkerLayer(layer);
+    return () => {
+      layer.remove();
+      setMarkerLayer(null);
+    };
+  }, [documentRoot, config.revision]);
+
+  // Iframe stages swallow pointer events. When Comment is armed, cover them so
+  // click/drag pin the figure instead of disappearing into the child document.
+  useEffect(() => {
+    if (!commentMode) return undefined;
+    const covers: HTMLElement[] = [];
+    documentRoot.querySelectorAll("iframe").forEach((frame) => {
+      const parent = frame.parentElement;
+      if (!parent) return;
+      if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
+      const cover = document.createElement("div");
+      cover.dataset.cfCommentCover = "true";
+      cover.setAttribute("aria-hidden", "true");
+      Object.assign(cover.style, {
+        position: "absolute",
+        inset: "0",
+        zIndex: "2",
+      });
+      parent.append(cover);
+      covers.push(cover);
+    });
+    return () => covers.forEach((el) => el.remove());
+  }, [commentMode, documentRoot, config.revision]);
 
   /* ─── Explicit capture modes (a11y / advanced tools) ─── */
   useEffect(() => {
@@ -214,11 +336,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   useEffect(() => {
     if (captureMode !== "region") return undefined;
     let pointerId: number | null = null;
+    let startClient: Point | null = null;
+    const docPoint = (event: PointerEvent): Point => {
+      const root = documentRoot.getBoundingClientRect();
+      return { x: event.clientX - root.left, y: event.clientY - root.top };
+    };
     const down = (event: PointerEvent): void => {
       if (event.button !== 0) return;
       pointerId = event.pointerId;
       documentRoot.setPointerCapture(pointerId);
-      const point = { x: event.clientX, y: event.clientY };
+      startClient = { x: event.clientX, y: event.clientY };
+      const point = docPoint(event);
       const draft = { start: point, current: point };
       regionDraftRef.current = draft;
       setRegionDraft(draft);
@@ -228,7 +356,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (pointerId !== event.pointerId) return;
       const draft = regionDraftRef.current;
       if (draft) {
-        const next = { ...draft, current: { x: event.clientX, y: event.clientY } };
+        const next = { ...draft, current: docPoint(event) };
         regionDraftRef.current = next;
         setRegionDraft(next);
       }
@@ -237,8 +365,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     const finish = (event: PointerEvent): void => {
       if (pointerId !== event.pointerId) return;
       const point = { x: event.clientX, y: event.clientY };
-      const draft = regionDraftRef.current;
-      const captured = draft ? captureRegion(documentRoot, draft.start, point) : null;
+      const captured = startClient ? captureRegion(documentRoot, startClient, point) : null;
+      startClient = null;
       regionDraftRef.current = null;
       setRegionDraft(null);
       if (captured) pinCaptureRef.current(captured, point.x, point.y, { openComposer: true });
@@ -265,92 +393,206 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     };
   }, [captureMode, documentRoot, notes.length]);
 
-  /* ─── Pass10 default gestures while Comment is armed (no tool forced) ─── */
+  /* ─── Pass10 default gestures while Comment is armed (no tool forced) ───
+   * Prose (textual, no Shift): native selection only — never start a marquee.
+   * Diagram / empty: drag draws a region. Shift+drag forces region anywhere.
+   * Priority on release: text selection > deliberate region > element click.
+   */
   useEffect(() => {
     if (!commentMode || captureMode || busy || composerOpen) return undefined;
 
+    shiftRef.current = false;
+    let pinTimer = 0;
     const onSelection = (): void => {
       if (!commentModeRef.current || captureModeRef.current) return;
+      const drag = dragGestureRef.current;
+      if (drag && !drag.proseOnly && drag.region) return;
       const selected = captureSelection(documentRoot);
-      // Always stash for the Tools "Add selected text" path (button focus clears live selection).
       if (selected?.selector) lastSelectionRef.current = selected;
       if (!selected?.selector) return;
       if (selected.selector.exact.length > config.review_limits.max_selector_utf16) {
         setStatus(`Selected text is too long. Select at most ${config.review_limits.max_selector_utf16} characters.`);
         return;
       }
-      // Auto-pin on selection only when there is no open composer/float already.
-      // Tools and explicit gestures still drive the full float/composer path.
       setHintMode("text");
+      if (selected.selector.exact === lastPinnedExactRef.current) return;
+      window.clearTimeout(pinTimer);
+      pinTimer = window.setTimeout(() => {
+        if (!commentModeRef.current || captureModeRef.current) return;
+        const live = lastSelectionRef.current;
+        if (!live?.selector) return;
+        lastPinnedExactRef.current = live.selector.exact;
+        const rect = window.getSelection()?.getRangeAt(0)?.getBoundingClientRect();
+        const cx = rect ? rect.left + rect.width / 2 - 40 : 80;
+        pinCaptureRef.current(live, cx, rect?.bottom ?? 120, { openComposer: false });
+      }, 160);
+    };
+
+    const onShift = (event: KeyboardEvent): void => {
+      if (event.key !== "Shift") return;
+      shiftRef.current = event.type === "keydown";
+      if (commentModeRef.current && !dragGestureRef.current) {
+        setHintMode(shiftRef.current ? "region" : "element");
+      }
     };
 
     const onPointerDown = (event: PointerEvent): void => {
       if (event.button !== 0 || !(event.target instanceof Element)) return;
       if (!documentRoot.contains(event.target)) return;
+      if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
       if (event.target.closest("button, a, input, textarea, select")) return;
-      dragGestureRef.current = { x0: event.clientX, y0: event.clientY, moved: false };
+      if (pendingPinRef.current) {
+        setPendingPin(null);
+        lastPinnedExactRef.current = "";
+        setHotSel(null);
+      }
+      regionDraftRef.current = null;
+      setRegionDraft(null);
+      const textual = isTextualTarget(event.target) && !shiftRef.current;
+      if (textual) setHintMode("text");
+      else if (shiftRef.current) setHintMode("region");
+      else setHintMode(annotatableAncestor(documentRoot, event.target) ? "element" : "region");
+      dragGestureRef.current = {
+        x0: event.clientX,
+        y0: event.clientY,
+        moved: false,
+        region: false,
+        forceRegion: shiftRef.current,
+        proseOnly: textual,
+      };
     };
+
     const onPointerMove = (event: PointerEvent): void => {
       const g = dragGestureRef.current;
-      if (!g) return;
-      if (Math.hypot(event.clientX - g.x0, event.clientY - g.y0) > 8) {
-        g.moved = true;
+      if (!g) {
+        // Idle-armed hover: text cursor over prose, candidate outline elsewhere.
+        if (pendingPinRef.current || composerOpenRef.current) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target || !documentRoot.contains(target) || target.closest(".cf-marker, .cf-marker-layer")) {
+          setHot(null);
+          return;
+        }
+        const textual = isTextualTarget(target) && !shiftRef.current;
+        documentRoot.dataset.cfCursor = textual ? "text" : "cross";
+        const candidate = textual ? null : (annotatableAncestor(documentRoot, target) as HTMLElement | null);
+        setHot(candidate);
+        if (textual) setHintMode("text");
+        else if (shiftRef.current) setHintMode("region");
+        else setHintMode(candidate ? "element" : "region");
+        return;
+      }
+      if (g.proseOnly) return;
+      const w = Math.abs(event.clientX - g.x0);
+      const h = Math.abs(event.clientY - g.y0);
+      if (w > 5 || h > 5) g.moved = true;
+      const force = g.forceRegion || shiftRef.current;
+      const marquee = force ? w > 10 || h > 10 : (w >= 28 && h >= 28) || w > 14 || h > 14;
+      if (marquee) {
+        // Non-prose marquee: never leave a stray selection behind (diagram
+        // <text> labels select as the pointer crosses them).
+        window.getSelection()?.removeAllRanges();
+        g.region = true;
         setHintMode("region");
+        setHot(null);
+        // Draft is stored in document coordinates so the persistent marquee
+        // scrolls with the content it covers.
+        const root = documentRoot.getBoundingClientRect();
         const draft = {
-          start: { x: g.x0, y: g.y0 },
-          current: { x: event.clientX, y: event.clientY },
+          start: { x: g.x0 - root.left, y: g.y0 - root.top },
+          current: { x: event.clientX - root.left, y: event.clientY - root.top },
         };
         regionDraftRef.current = draft;
         setRegionDraft(draft);
       }
     };
+
     const onPointerUp = (event: PointerEvent): void => {
       const g = dragGestureRef.current;
       dragGestureRef.current = null;
       if (!g) return;
-      if (g.moved) {
+      const w = Math.abs(event.clientX - g.x0);
+      const h = Math.abs(event.clientY - g.y0);
+      const dist = Math.hypot(w, h);
+      // The gesture decides, not the side effect: a marquee begun off prose is
+      // a region even if it swept across a label on the way.
+      const regionGesture = !g.proseOnly && g.region && ((w >= 20 && h >= 20) || (g.forceRegion && dist > 16));
+
+      if (regionGesture) {
         window.getSelection()?.removeAllRanges();
         const captured = captureRegion(documentRoot, { x: g.x0, y: g.y0 }, { x: event.clientX, y: event.clientY });
-        regionDraftRef.current = null;
-        setRegionDraft(null);
         if (captured) {
+          // Keep the marquee visible under the float/composer — it shows what
+          // the pending region note covers. Cleared on save, cancel, or Esc.
           setHintMode("region");
           pinCapture(captured, event.clientX, event.clientY, { openComposer: false });
+        } else {
+          regionDraftRef.current = null;
+          setRegionDraft(null);
         }
         return;
       }
       regionDraftRef.current = null;
       setRegionDraft(null);
-      // Bare click → element pin (if no meaningful selection)
+
+      // Text selection wins — the selectionchange pin already owns the float.
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) return;
-      if (!(event.target instanceof Element)) return;
+
+      // Abandoned non-region drag
+      if (!g.proseOnly && dist > 22) {
+        setHot(null);
+        return;
+      }
+
+      // Click → element pin on the block under the pointer
+      const under = document.elementFromPoint(event.clientX, event.clientY);
+      const target =
+        (under && documentRoot.contains(under) && !under.closest(".cf-marker, .cf-marker-layer") ? under : null) ??
+        (event.target instanceof Element ? event.target : null);
+      if (!target || target.closest(".cf-marker, .cf-marker-layer")) return;
+      const captured = captureElement(documentRoot, target);
+      if (!captured) return;
       setHintMode("element");
-      const captured = captureElement(documentRoot, event.target);
-      if (captured) pinCapture(captured, event.clientX, event.clientY, { openComposer: false });
+      setHot(null);
+      setHotSel(annotatableAncestor(documentRoot, target));
+      pinCapture(captured, event.clientX, event.clientY, { openComposer: false });
     };
 
     document.addEventListener("selectionchange", onSelection);
+    document.addEventListener("keydown", onShift);
+    document.addEventListener("keyup", onShift);
     documentRoot.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
     return () => {
+      window.clearTimeout(pinTimer);
       document.removeEventListener("selectionchange", onSelection);
+      document.removeEventListener("keydown", onShift);
+      document.removeEventListener("keyup", onShift);
       documentRoot.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      setHot(null);
     };
   }, [busy, captureMode, commentMode, composerOpen, config.review_limits.max_selector_utf16, documentRoot]);
 
+  // Markers hold document coordinates; anything that reflows the document
+  // (viewport resize, type scale, rail open) must re-measure their anchors.
   useEffect(() => {
-    const refresh = (): void => setMarkerEpoch((v) => v + 1);
-    addEventListener("scroll", refresh, { passive: true });
-    addEventListener("resize", refresh, { passive: true });
-    return () => {
-      removeEventListener("scroll", refresh);
-      removeEventListener("resize", refresh);
+    let raf = 0;
+    const refresh = (): void => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setMarkerEpoch((v) => v + 1));
     };
-  }, []);
+    addEventListener("resize", refresh, { passive: true });
+    const observer = "ResizeObserver" in globalThis ? new ResizeObserver(refresh) : null;
+    observer?.observe(documentRoot);
+    return () => {
+      cancelAnimationFrame(raf);
+      removeEventListener("resize", refresh);
+      observer?.disconnect();
+    };
+  }, [documentRoot]);
 
   useEffect(() => {
     if (composerOpen) requestAnimationFrame(() => composerTextRef.current?.focus());
@@ -394,10 +636,19 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus("Note updated.");
     } else if (pendingPin) {
       const c = pendingPin.captured;
+      const clientId = crypto.randomUUID();
+      // Text markers park at the selection's height within the anchor block —
+      // remember the fraction so re-measures keep pointing at the right line.
+      if (c.selector) {
+        const block = documentRoot.querySelector<HTMLElement>(`[data-cf-block-id="${CSS.escape(c.blockId)}"]`);
+        const rect = block?.getBoundingClientRect();
+        const ay = rect && rect.height > 0 ? Math.min(1, Math.max(0, (pendingPin.clientY - rect.top) / rect.height)) : 0;
+        markerMetaRef.current.set(clientId, { ay });
+      }
       setNotes((current) => [
         ...current,
         {
-          client_id: crypto.randomUUID(),
+          client_id: clientId,
           block_id: c.blockId,
           block_label: c.blockLabel,
           kind: "comment" as FeedbackKind,
@@ -410,23 +661,33 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       ]);
       setVerdict((v) => (v === "approve" ? "approve_with_notes" : v));
       setStatus(`Note saved for ${c.summary}.`);
+      lastPinnedExactRef.current = "";
       window.getSelection()?.removeAllRanges();
     }
+    clearHot();
+    setRegionDraft(null);
+    regionDraftRef.current = null;
     setPendingPin(null);
     setComposerOpen(false);
     setComposerBody("");
     setEditingId(null);
     setPanelOpen(true);
   }
+  saveComposerRef.current = saveComposer;
 
   function cancelComposer(): void {
     setComposerOpen(false);
     setComposerBody("");
     setEditingId(null);
     setPendingPin(null);
+    lastPinnedExactRef.current = "";
+    clearHot();
+    setRegionDraft(null);
+    regionDraftRef.current = null;
   }
 
-  function openNoteEditor(note: PendingFeedback): void {
+  function openNoteEditor(note: PendingFeedback, at?: { x: number; y: number }): void {
+    editAtRef.current = at ?? null;
     setEditingId(note.client_id);
     setComposerBody(note.body);
     setPendingPin(null);
@@ -509,14 +770,25 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
-        if (composerOpen) {
+        // Ladder: settings → composer → float → capture tool → exit Comment.
+        if (settingsOpenRef.current) {
+          event.preventDefault();
+          setSettingsOpen(false);
+          return;
+        }
+        if (composerOpenRef.current) {
           event.preventDefault();
           cancelComposer();
           return;
         }
-        if (pendingPin) {
+        if (pendingPinRef.current) {
           event.preventDefault();
+          pendingPinRef.current = null;
           setPendingPin(null);
+          lastPinnedExactRef.current = "";
+          clearHot();
+          setRegionDraft(null);
+          regionDraftRef.current = null;
           return;
         }
         if (captureModeRef.current) {
@@ -534,9 +806,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         }
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && composerOpen) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && composerOpenRef.current) {
         event.preventDefault();
-        saveComposer();
+        saveComposerRef.current();
         return;
       }
       if (isEditable(event.target) || !config.shortcuts_enabled) return;
@@ -547,7 +819,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [composerOpen, config.shortcuts_enabled, pendingPin]);
+  }, [config.shortcuts_enabled]);
 
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
@@ -560,29 +832,34 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   return (
     <div class="cf-chrome-frame" data-commenting={commentMode ? "true" : "false"} data-rail={railVisible ? "open" : "closed"}>
-      {regionDraft ? <div class="cf-region-draft" style={regionDraftStyle(regionDraft)} aria-hidden="true" /> : null}
-
-      {commentMode
-        ? notes.map((note, index) => {
-            const rect = targetRect(documentRoot, note, markerEpoch);
-            if (!rect) return null;
-            return (
-              <button
-                key={note.client_id}
-                type="button"
-                class="cf-marker"
-                data-testid="note-marker"
-                style={speechMarkerStyle(rect)}
-                aria-label={`Note ${index + 1}: ${note.target_summary ?? note.block_label}`}
-                onClick={() => openNoteEditor(note)}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d={SPEECH_PATH} />
-                </svg>
-                <span class="n">{index + 1}</span>
-              </button>
-            );
-          })
+      {commentMode && markerLayer
+        ? createPortal(
+            <>
+              {regionDraft ? <div class="cf-region-draft" style={regionDraftStyle(regionDraft)} aria-hidden="true" /> : null}
+              {notes.map((note, index) => {
+                const at = markerPlacement(documentRoot, note, markerMetaRef.current.get(note.client_id), index, markerEpoch);
+                if (!at) return null;
+                return (
+                  <button
+                    key={note.client_id}
+                    type="button"
+                    class="cf-marker"
+                    data-testid="note-marker"
+                    style={`left:${at.left}px;top:${at.top}px`}
+                    aria-label={`Note ${index + 1} on ${targetKindOf(note)}: ${note.target_summary ?? note.block_label}`}
+                    title={`#${index + 1} ${targetKindOf(note)}: ${noteQuote(note)}`}
+                    onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d={SPEECH_PATH} />
+                    </svg>
+                    <span class="n">{index + 1}</span>
+                  </button>
+                );
+              })}
+            </>,
+            markerLayer,
+          )
         : null}
 
       <a class="cf-skip-link" href="#cf-present-document">
@@ -637,14 +914,55 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           {settingsOpen ? (
             <div id="cf-settings-panel" class="cf-settings-panel open" data-testid="settings-panel">
               <h3>Display</h3>
+              <div class="preview" aria-hidden="true">
+                <span class="swatch" />
+                <span class="body">Body Aa</span>
+                <span class="mono">Mono 012</span>
+              </div>
               <div>
                 <div class="lbl">
-                  Theme<span class="d">utility skins</span>
+                  Font<span class="d">typeface for prose and UI</span>
                 </div>
-                <div class="pills">
-                  {(Object.keys(themeLabels) as UtilityTheme[]).map((t) => (
+                <div class="pills" data-testid="typeface-pills">
+                  {typefacePills.map((face) => (
                     <button
                       type="button"
+                      data-typeface={face}
+                      data-testid={`typeface-${face}`}
+                      aria-pressed={appearance.typeface === face}
+                      onClick={() => setAppearance((c) => ({ ...c, typeface: face }))}
+                    >
+                      {typefaceLabels[face]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div class="lbl">
+                  Size<span class="d">type scale, floors held</span>
+                </div>
+                <div class="pills" data-testid="scale-pills">
+                  {scalePills.map((scale) => (
+                    <button
+                      type="button"
+                      data-scale={scale}
+                      aria-pressed={appearance.scale === scale}
+                      onClick={() => setAppearance((c) => ({ ...c, scale }))}
+                    >
+                      {scaleLabels[scale]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div class="lbl">
+                  Palette<span class="d">colour family</span>
+                </div>
+                <div class="pills" data-testid="skin-pills">
+                  {skinPills.map((t) => (
+                    <button
+                      type="button"
+                      data-skin={t}
                       aria-pressed={appearance.theme === t}
                       onClick={() => setAppearance((c) => ({ ...c, theme: t }))}
                     >
@@ -715,10 +1033,21 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 <path d="M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0Z" />
               </svg>
             </span>
-            <span class="lab">Comment</span>
-            <span class="q">{pendingPin.captured.summary}</span>
+            <span class="lab">{kindLabels[targetKindOf(pendingPin.captured)]}</span>
+            <span class="q">{captureQuote(pendingPin.captured)}</span>
           </button>
-          <button type="button" class="esc" data-testid="float-esc" onClick={() => setPendingPin(null)}>
+          <button
+            type="button"
+            class="esc"
+            data-testid="float-esc"
+            onClick={() => {
+              setPendingPin(null);
+              lastPinnedExactRef.current = "";
+              clearHot();
+              setRegionDraft(null);
+              regionDraftRef.current = null;
+            }}
+          >
             esc
           </button>
         </div>
@@ -729,13 +1058,19 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         <div
           class="cf-composer on"
           data-testid="composer"
-          style={composerPositionStyle(pendingPin?.clientX ?? 40, pendingPin?.clientY ?? 80)}
+          style={composerPositionStyle(
+            pendingPin?.clientX ?? editAtRef.current?.x ?? 40,
+            pendingPin?.clientY ?? editAtRef.current?.y ?? 80,
+          )}
         >
           <div class="title">{editingId ? "Edit note" : "Comment"}</div>
           <div class="q">
-            {editingId
-              ? notes.find((n) => n.client_id === editingId)?.target_summary ?? ""
-              : pendingPin?.captured.summary ?? ""}
+            {(() => {
+              const editing = editingId ? notes.find((n) => n.client_id === editingId) : null;
+              if (editing) return `${targetKindOf(editing)} · ${noteQuote(editing)}`;
+              if (pendingPin) return `${targetKindOf(pendingPin.captured)} · ${captureQuote(pendingPin.captured)}`;
+              return "";
+            })()}
           </div>
           <textarea
             ref={composerTextRef}
@@ -853,11 +1188,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 data-testid="note-row"
                 data-id={note.client_id}
                 tabindex={0}
-                onClick={() => openNoteEditor(note)}
+                onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    openNoteEditor(note);
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    openNoteEditor(note, { x: rect.left, y: rect.bottom });
                   }
                 }}
               >
@@ -868,7 +1204,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 </span>
                 <div>
                   <div class="k">
-                    comment · #{index + 1}
+                    {targetKindOf(note)} · #{index + 1}
                     <button
                       type="button"
                       class="cf-text-action"
@@ -1011,11 +1347,36 @@ function composerPositionStyle(clientX: number, clientY: number): string {
   return `left:${left}px;top:${top}px;width:${width}px`;
 }
 
-function speechMarkerStyle(rect: DOMRect): string {
-  // Park left of the anchor — speech marker placement
-  const x = Math.max(4, rect.left - 34);
-  const y = Math.max(4, rect.top - 4);
-  return `left:${x}px;top:${y}px`;
+function noteQuote(note: PendingFeedback): string {
+  return (note.target_summary ?? note.block_label).replace(/^(Text|Element|Area):\s*/, "").slice(0, 96);
+}
+
+/**
+ * Pass10 marker placement in document coordinates: text and element markers
+ * park in the gutter immediately left of their anchor (flipping right when the
+ * anchor hugs the edge); region markers sit inside the region's top-left.
+ */
+function markerPlacement(
+  documentRoot: HTMLElement,
+  note: PendingFeedback,
+  meta: { ay: number } | undefined,
+  index: number,
+  markerEpoch: number,
+): { left: number; top: number } | null {
+  const rect = targetRect(documentRoot, note, markerEpoch);
+  if (!rect) return null;
+  const root = documentRoot.getBoundingClientRect();
+  if (root.width <= 0) return null;
+  const left = rect.left - root.left;
+  const top = rect.top - root.top;
+  const kind = targetKindOf(note);
+  if (kind === "region") return { left: left + 8, top: top + 8 };
+  // Chip width by digit count — a two-digit number widens the marker.
+  const width = index + 1 >= 10 ? 42 : 34;
+  const y = kind === "text" ? top + (meta?.ay ?? 0) * rect.height - 4 : top;
+  const gutter = left - width - 8;
+  const x = gutter >= 2 ? gutter : Math.min(left + rect.width + 8, root.width - width - 2);
+  return { left: Math.max(2, x), top: Math.max(2, y) };
 }
 
 function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpoch: number): DOMRect | null {

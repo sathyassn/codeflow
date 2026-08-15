@@ -1,16 +1,24 @@
 (() => {
-  const themes = new Set(["editorial", "technical"]);
+  const themes = new Set(["instrument", "editorial", "ink", "technical"]);
   const modes = new Set(["system", "light", "dark"]);
+  const typefaces = new Set(["instrument", "editorial", "plex"]);
+  const scales = new Set(["compact", "default", "large"]);
   let storedTheme: string | null = null;
   let storedMode: string | null = null;
+  let storedTypeface: string | null = null;
+  let storedScale: string | null = null;
   try {
     storedTheme = localStorage.getItem("cf-present-theme");
     storedMode = localStorage.getItem("cf-present-mode");
+    storedTypeface = localStorage.getItem("cf-present-typeface");
+    storedScale = localStorage.getItem("cf-present-scale");
   } catch {
     // Defaults below remain usable when storage is unavailable.
   }
-  const theme = storedTheme && themes.has(storedTheme) ? storedTheme : "editorial";
+  const theme = storedTheme && themes.has(storedTheme) ? storedTheme : "instrument";
   const mode = storedMode && modes.has(storedMode) ? storedMode : "system";
+  const typeface = storedTypeface && typefaces.has(storedTypeface) ? storedTypeface : "instrument";
+  const scale = storedScale && scales.has(storedScale) ? storedScale : "default";
   const resolved =
     mode === "system"
       ? matchMedia("(prefers-color-scheme: dark)").matches
@@ -21,4 +29,6 @@
   root.dataset.cfTheme = theme;
   root.dataset.cfMode = mode;
   root.dataset.cfModeResolved = resolved;
+  root.dataset.cfTypeface = typeface;
+  root.dataset.cfScale = scale;
 })();
