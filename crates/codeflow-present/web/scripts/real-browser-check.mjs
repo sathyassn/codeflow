@@ -166,7 +166,13 @@ try {
   }
 
   for (const mode of ["light", "dark"]) {
-    await page.getByLabel("Mode").selectOption(mode);
+    // Pass10 chrome: appearance lives behind the Settings panel as pills.
+    await page.getByTestId("settings-btn").click();
+    await page.getByTestId("settings-panel")
+      .getByRole("button", { name: mode === "light" ? "Light" : "Dark", exact: true })
+      .click();
+    await page.keyboard.press("Escape");
+    await page.getByTestId("settings-panel").waitFor({ state: "detached" });
     const accessibility = await page.evaluate(async () => globalThis.axe.run(document, {
       runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
     }));
@@ -176,18 +182,27 @@ try {
     await page.screenshot({ path: join(output, `review-${mode}.png`), fullPage: true });
   }
 
-  const reviewButton = page.locator("#cf-review-toggle");
-  if (await reviewButton.isVisible()) {
-    await reviewButton.click();
-  } else if (!await page.locator("#cf-feedback-panel").isVisible()) {
+  // Single Comment mode: arm, then use the rail's secondary tools; each
+  // capture opens the composer, and the note body is saved per capture.
+  await page.locator("#cf-comment-toggle").click();
+  await page.locator(".cf-hint.on").waitFor();
+  const dock = page.getByTestId("notes-dock");
+  if (!await dock.isVisible()) {
     throw new Error(
       `Authenticated review controls did not mount; console=${JSON.stringify(consoleErrors)}, responses=${JSON.stringify(responses)}`,
     );
   }
+  await dock.locator(".cf-tools summary").click();
+  const saveComposerNote = async (body) => {
+    await page.getByTestId("composer").waitFor();
+    await page.getByTestId("composer-text").fill(body);
+    await page.getByTestId("composer-save").click();
+    await page.getByTestId("composer").waitFor({ state: "detached" });
+  };
 
   await page.getByRole("button", { name: "Pick element" }).click();
   await page.locator("code[data-cf-language='rust']").click();
-  await page.getByText(/^Element: /u).waitFor();
+  await saveComposerNote("Keep the implementation example aligned with the verified contract.");
 
   await page.getByRole("button", { name: "Select area" }).click();
   const regionTarget = page.locator("[data-cf-diagram-title='Qualification flow']");
@@ -201,18 +216,16 @@ try {
     regionBox.y + Math.min(80, regionBox.height - 12),
   );
   await page.mouse.up();
-  await page.getByText(/^Area: /u).waitFor();
+  await saveComposerNote("Preserve this visual relationship in the next revision.");
 
   await page.getByRole("button", { name: "Whole document" }).click();
-  await page.locator(".cf-notes blockquote").getByText("Whole document", { exact: true }).waitFor();
-  const pendingMarkers = await page.locator(".cf-region-marker").count();
+  await saveComposerNote("Review the complete document hierarchy before approval.");
+
+  await dock.locator(".cf-note-row .a").getByText("Whole document", { exact: true }).waitFor();
+  const pendingMarkers = await page.locator(".cf-marker").count();
   if (pendingMarkers !== 3) {
     throw new Error(`Real review retained ${pendingMarkers} target markers, expected 3`);
   }
-  const noteEditors = page.locator(".cf-notes textarea");
-  await noteEditors.nth(0).fill("Keep the implementation example aligned with the verified contract.");
-  await noteEditors.nth(1).fill("Preserve this visual relationship in the next revision.");
-  await noteEditors.nth(2).fill("Review the complete document hierarchy before approval.");
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByRole("button", { name: "Submit review" }).click();
   await page.getByRole("status").getByText(/Review received/u).waitFor();
@@ -235,7 +248,7 @@ try {
   ], project);
 
   run(codeflow, ["present", "update", sessionId, secondDocument], project);
-  await page.getByText(/A newer document revision is available/u).waitFor();
+  await page.getByTestId("toast").getByText(/A newer document revision is available/u).waitFor();
   await page.screenshot({ path: join(output, "revision-notice.png"), fullPage: true });
   await bounded(
     context.tracing.stop({ path: join(trace, "revision-v1.zip") }),
@@ -257,12 +270,12 @@ try {
   tracingStarted = true;
   const revisedPage = context.pages()[0] ?? await context.newPage();
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
-  await revisedPage.getByText("Second revision").waitFor();
+  await revisedPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   const exportPath = join(output, "review.html");
   run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "technical", "--mode", "dark"], project);
   const exportPage = await context.newPage();
   await exportPage.goto(pathToFileURL(exportPath).href);
-  await exportPage.getByText("Second revision").waitFor();
+  await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   await exportPage.waitForFunction(() => (
     document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") === "ready"
   ));

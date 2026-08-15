@@ -134,6 +134,16 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [markerLayer, setMarkerLayer] = useState<HTMLElement | null>(null);
+  // Toast: confirmations and session notices must stay visible when the rail
+  // (and its status line) is closed — pass10 grammar. Sticky for session-level
+  // notices; timed for confirmations.
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef(0);
+  const showToast = (message: string, opts?: { sticky?: boolean }): void => {
+    window.clearTimeout(toastTimerRef.current);
+    setToast(message);
+    if (!opts?.sticky) toastTimerRef.current = window.setTimeout(() => setToast(null), 3400);
+  };
 
   const dockRef = useRef<HTMLElement>(null);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
@@ -759,7 +769,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setInstruction("");
       submitAttemptRef.current = null;
       armComment(false);
-      setStatus(`${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).`);
+      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).`;
+      setStatus(confirmation);
+      showToast(confirmation);
     } catch {
       setStatus("Review was not submitted. Your pending notes are unchanged.");
     } finally {
@@ -824,9 +836,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
     if (event.kind === "revision") {
-      setStatus("A newer document revision is available. Finish or discard this review before reloading.");
+      const notice = "A newer document revision is available. Finish or discard this review before reloading.";
+      setStatus(notice);
+      showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
-      setStatus("This review session is closed.");
+      const notice = "This review session is closed.";
+      setStatus(notice);
+      showToast(notice, { sticky: true });
     }
   }
 
@@ -1330,6 +1346,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           {eventMessage ? <p class="cf-event-message">{eventMessage}</p> : null}
         </div>
       </aside>
+
+      {toast ? (
+        <div class="cf-toast on" role="status" data-testid="toast">
+          {toast}
+        </div>
+      ) : null}
     </div>
   );
 }
