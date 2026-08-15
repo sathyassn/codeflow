@@ -21,7 +21,7 @@
     "@shikijs/core": "4.4.1",
     "@shikijs/engine-javascript": "4.4.1",
     "@shikijs/langs": "4.4.1",
-    "mermaid": "11.16.0",
+    "mermaid": "11.16.1",
     "preact": "10.29.8"
   },
   "devDependencies": {

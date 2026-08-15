@@ -3850,19 +3850,19 @@
       ]
     },
     {
-      "bom-ref": "dompurify@3.4.12",
+      "bom-ref": "dompurify@3.4.13",
       "type": "library",
       "name": "dompurify",
-      "version": "3.4.12",
+      "version": "3.4.13",
       "scope": "required",
       "author": "Dr.-Ing. Mario Heiderich, Cure53 <mario@cure53.de> (https://cure53.de/)",
       "description": "DOMPurify is a DOM-only, super-fast, uber-tolerant XSS sanitizer for HTML, MathML and SVG. It runs as JavaScript and works in all modern browsers, as well as in Node.js (via jsdom). DOMPurify is written by security people who have vast background in web attacks and XSS. Fear not.",
-      "purl": "pkg:npm/dompurify@3.4.12",
+      "purl": "pkg:npm/dompurify@3.4.13",
       "properties": [],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.12.tgz"
+          "url": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.13.tgz"
         },
         {
           "type": "vcs",
@@ -3880,7 +3880,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "cd0bc67adf19dac59b4210a67c5cff4f94161f6a019a39ea2b7aaf3a36aa68d2eb2c417dd7659a994fa88674e9d1309ea7f305547a5d26e09911d14e7539c416"
+          "content": "daf998228aa3cded9dfa46a43fc4bf9d2e6c85fb25e7cee4cf012370695376292c5158051e7142b0b603563fc936a2553906464980539aec9cbf43e87709a731"
         }
       ],
       "licenses": [
@@ -4405,19 +4405,19 @@
       ]
     },
     {
-      "bom-ref": "mermaid@11.16.0",
+      "bom-ref": "mermaid@11.16.1",
       "type": "library",
       "name": "mermaid",
-      "version": "11.16.0",
+      "version": "11.16.1",
       "scope": "required",
       "author": "Knut Sveidqvist",
       "description": "Markdown-ish syntax for generating flowcharts, mindmaps, sequence diagrams, class diagrams, gantt charts, git graphs and more.",
-      "purl": "pkg:npm/mermaid@11.16.0",
+      "purl": "pkg:npm/mermaid@11.16.1",
       "properties": [],
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://registry.npmjs.org/mermaid/-/mermaid-11.16.0.tgz"
+          "url": "https://registry.npmjs.org/mermaid/-/mermaid-11.16.1.tgz"
         },
         {
           "type": "vcs",
@@ -4427,7 +4427,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "66f9b791bb2d81da6f2093cf22d94bedfa69219de489bbdcd686481b176f93db7a505cfa7e5bfe270ec5b5118ac1f708f0e724987d382ea1ba2e54ba5f8075a4"
+          "content": "4d0b2aeaedb67c09f7ade93954eb9bae128fa358398700b715750df618b2ba94dc91c6221aeb8a1a4350aca63018991753165da23c111b8ea0b1208564c0e9e2"
         }
       ],
       "licenses": [
@@ -5622,7 +5622,7 @@
         "@shikijs/core@4.4.1",
         "@shikijs/engine-javascript@4.4.1",
         "@shikijs/langs@4.4.1",
-        "mermaid@11.16.0",
+        "mermaid@11.16.1",
         "preact@10.29.8"
       ]
     },
@@ -6239,7 +6239,7 @@
       ]
     },
     {
-      "ref": "dompurify@3.4.12",
+      "ref": "dompurify@3.4.13",
       "dependsOn": [
         "@types/trusted-types@2.0.7"
       ]
@@ -6333,7 +6333,7 @@
       ]
     },
     {
-      "ref": "mermaid@11.16.0",
+      "ref": "mermaid@11.16.1",
       "dependsOn": [
         "@braintree/sanitize-url@7.1.2",
         "@iconify/utils@3.1.4",
@@ -6346,7 +6346,7 @@
         "d3-sankey@0.12.3",
         "dagre-d3-es@7.0.14",
         "dayjs@1.11.21",
-        "dompurify@3.4.12",
+        "dompurify@3.4.13",
         "es-toolkit@1.50.0",
         "katex@0.16.47",
         "khroma@2.1.0",
