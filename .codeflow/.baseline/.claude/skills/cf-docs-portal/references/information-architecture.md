@@ -4,7 +4,8 @@
 
 Start with the repository's existing Markdown, decisions, work records, and
 technical references as one authoritative graph. Generate one portal over that
-graph. A portal is a reading and navigation view, not another documentation
+graph. The shipped starter scans `docs/` only; add a `project-management`
+source root and Records layer when those files exist. A portal is a reading and navigation view, not another documentation
 authority and not a folder browser.
 
 Use progressive depth where the source material supports it:

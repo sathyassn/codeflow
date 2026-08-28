@@ -57,8 +57,6 @@ deliberately.
 
 Edit the portal's user-owned `portal.config.json`. Name the repository root,
 source roots, exclusions, title, description, base path, and utility theme.
-The starter defaults to a `docs/` graph. Add a `project-management` source
-root and Records layer only when those files exist.
 Do not copy prose into a portal-only content authority. Generated
 content under `.portal/generated/`, generated Starlight content, search data,
 and build output are disposable.
