@@ -17,6 +17,16 @@
   locale-independent comparator. Never label worktree bytes with `HEAD`.
 - Resolve relationships from declared frontmatter and strict stable IDs. Inline
   ID mentions may become links, but never invent a declared dependency.
+- Depth-2 `Concept` / `Architecture` / `Technical` sections are the altitude
+  grammar: the adapter renders the trio as a tablist with one visible panel in
+  the derived page only. Sources stay plain Markdown; raw source HTML stays
+  escaped.
+- A leading depth-1 heading that repeats the page title — exactly, or with
+  only a record-ID prefix such as `ADR-0001 —` — renders once (the shell
+  already shows the title); any other heading is author content.
+- A `cf-stage` fence is generated-figure input: bounded node/stage/caption
+  grammar, every text field escaped, roles whitelisted. An invalid figure
+  produces the bounded error page, never partial or unescaped output.
 - Treat an explicit ID or relationship field as authority: a wrong type,
   malformed ID, invalid target, or duplicate key produces the bounded error
   page. Infer a supported ID from the filename only when `id` is absent.

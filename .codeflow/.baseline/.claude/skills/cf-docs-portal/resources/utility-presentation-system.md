@@ -83,8 +83,10 @@ a teaser dump.
 
 ### Appearance
 
-- Utility themes (present: e.g. technical / editorial; portal: e.g. signal /
-  folio) × **light / dark / system** where the surface supports it.
+- Utility skins instrument / editorial / ink × **light / dark / system** where
+  the surface supports it. Present selects skins directly; the portal's two
+  bundled fallbacks map `signal` → instrument and `folio` → ink, with the
+  utility faces (Archivo / IBM Plex Sans; system fallbacks, no remote fonts).
 - Semantic colour roles: canvas, surface, text, line, accent, focus, pass /
   warn / danger. Colour is never the only carrier of state.
 - Motion is optional chrome only; **meaning holds at rest**. Honour reduced
@@ -152,6 +154,15 @@ purpose and mental model            (concept)
 ```
 
 - Same craft tokens overlaid on the docs shell (nav, crumbs, search, source pins).
+- Altitude is **authored into the sources**: depth-2 `## Concept`,
+  `## Architecture`, and `## Technical` sections. The adapter renders the trio
+  as a real tablist — one visible layer, keyboard-navigable, hash-addressable;
+  fenced `text` stages render full-width. Raw source HTML stays escaped —
+  never hand-author portal chrome.
+- A `cf-stage` fence authors a subject-led labeled flow (nodes, parallel
+  stages, roles, caption) the adapter renders with utility tokens; ASCII
+  stays the fallback for shapes that grammar cannot express (grammar:
+  `references/visual-craft.md`).
 - Agents maintain repository sources; portal is derived (adapter + evidence).
 - **No** session Comment lifecycle, verdicts, or notes rail.
 - Architecture pages: full-width stages with margins—not caption micro-boxes.

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -97,7 +97,7 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     const pages = [];
     for (let index = 0; index < 70; index += 1) {
       const relative = `generated/page-${index}.md`;
-      const text = index === 68 ? "# Page\n\n## Deep target\n" : index === 69 ? "# Page\n\n<span class=\"portal-id-preview\">CAP-001</span>\n" : "# Page\n";
+      const text = index === 66 || index === 67 ? "# Page\n\n<div class=\"portal-altitude-tabs\" role=\"tablist\"></div>\n" : index === 68 ? "# Page\n\n## Deep target\n" : index === 69 ? "# Page\n\n<span class=\"portal-id-preview\">CAP-001</span>\n" : "# Page\n";
       await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
       await writeFile(path.join(root, relative), text);
       pages.push({ stale: false, route: `reference/page-${index}`, output_markdown: relative, output_markdown_sha256: sha256(text) });
@@ -105,6 +105,8 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     assert.deepEqual(await discoverSurfaceRoutes(pages, root), {
       deepLink: "reference/page-68",
       strictPreview: "reference/page-69",
+      altitudeTabs: ["reference/page-66", "reference/page-67"],
+      layerSamples: { reference: ["reference/page-0", "reference/page-69"] },
     });
     pages[69].output_markdown_sha256 = "0".repeat(64);
     await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
@@ -349,6 +351,60 @@ test("the AST rewrite escapes raw HTML while preserving code and GFM", () => {
   assert.match(rendered, /<div>example<\/div>/);
   assert.match(rendered, /\n\n## <span class="portal-id-preview">/);
   assert.match(rendered, /```\n\nAfter the fence\./);
+});
+
+test("cf-stage fences render token-driven figures and fail closed", () => {
+  const source = "```cf-stage\npolicy | one source @accent\n->\nhooks | five shims\nguards | in-session\n->\nprotected | human-merged @positive\ncaption: planes read one source\n```";
+  const rendered = renderStageFences(source, "docs/x.md");
+  assert.match(rendered, /<figure class="portal-stage"><div class="portal-stage-flow">/);
+  assert.match(rendered, /<li class="portal-stage-node" data-role="accent"><span class="k">policy<\/span><span class="s">one source<\/span><\/li>/);
+  assert.match(rendered, /<li class="portal-stage-node" data-role="neutral"><span class="k">hooks<\/span>/);
+  assert.equal(rendered.split("portal-stage-arrow").length - 1, 2);
+  assert.match(rendered, /<figcaption>planes read one source<\/figcaption>/);
+  const hostile = renderStageFences("```cf-stage\n<b>x</b> | <i onclick=\"y\">z</i>\n->\nB\n```");
+  assert.doesNotMatch(hostile, /<b>|<i onclick/);
+  assert.match(hostile, /&lt;b&gt;x&lt;\/b&gt;/);
+  const ascii = "```text\nA -> B\n```";
+  assert.equal(renderStageFences(ascii), ascii);
+  assert.throws(() => renderStageFences("```cf-stage\nonly one stage\n```"), /at least two/);
+  assert.throws(() => renderStageFences("```cf-stage\nA @nope\n->\nB\n```"), /unknown node role/);
+  assert.throws(() => renderStageFences("```cf-stage\nA\n->\n```"), /final stage/);
+  assert.throws(() => renderStageFences("```cf-stage\nA\n->\nB\ncaption: x\ncaption: y\n```"), /one caption/);
+  assert.throws(() => renderStageFences(`\`\`\`cf-stage\n${"N\n".repeat(6)}->\nB\n\`\`\``), /node count per stage/);
+});
+
+test("a leading H1 that repeats the page title renders once", () => {
+  assert.equal(stripLeadingTitleHeading("# Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# ADR-0053 — Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# TSK-002-001: Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# Introduction to Guide\n\nBody.", "Guide"), "# Introduction to Guide\n\nBody.");
+  assert.equal(stripLeadingTitleHeading("# Other\n\nBody.", "Guide"), "# Other\n\nBody.");
+  assert.equal(stripLeadingTitleHeading("Intro first.\n\n# Guide", "Guide"), "Intro first.\n\n# Guide");
+});
+
+test("altitude sections become a tablist with one panel per layer", () => {
+  const source = "Intro prose.\n\n## Concept\n\nClaim.\n\n## Architecture\n\n```text\nA -> B\n```\n\n## Technical\n\n| Claim | State |\n|---|---|\n| x | pass |\n\n## Appendix\n\nUnwrapped tail.";
+  const rendered = decorateAltitude(source);
+  assert.match(rendered, /<div class="portal-altitude-tabs" role="tablist" aria-label="Altitude">\n<button type="button" role="tab" id="portal-tab-concept" aria-controls="portal-panel-concept" aria-selected="true" data-anchor="concept">Concept<\/button>\n<button type="button" role="tab" id="portal-tab-architecture" aria-controls="portal-panel-architecture" aria-selected="false" tabindex="-1" data-anchor="architecture">Architecture<\/button>/);
+  assert.match(rendered, /<section class="portal-altitude" role="tabpanel" id="portal-panel-concept" aria-labelledby="portal-tab-concept" data-altitude="concept">\n\n## Concept/);
+  assert.match(rendered, /<\/section>\n\n<section class="portal-altitude" role="tabpanel" id="portal-panel-architecture" aria-labelledby="portal-tab-architecture" data-altitude="architecture">\n\n## Architecture/);
+  assert.match(rendered, /<\/section>\n\n## Appendix\n\nUnwrapped tail\./);
+  assert.equal(rendered.split("<section ").length - 1, rendered.split("</section>").length - 1);
+  assert.equal(rendered.split('role="tab"').length - 1, 3);
+  // A second, differently shaped source page becomes a tablist the same way —
+  // the grammar is corpus-wide, never a single hero page.
+  const second = decorateAltitude("# Subsystem\n\nLead.\n\n## Concept\n\nOne claim.\n\n```cf-stage\nA | in @accent\n->\nB | out\n```\n\n## Technical\n\n- evidence");
+  assert.match(second, /<div class="portal-altitude-tabs" role="tablist"/);
+  assert.equal(second.split('role="tabpanel"').length - 1, 2);
+  assert.match(second, /<section class="portal-altitude" role="tabpanel" id="portal-panel-technical"/);
+});
+
+test("altitude decoration passes non-conforming and ambiguous sources through", () => {
+  for (const source of ["## Concept\n\nOnly one layer.", "## Concept\n\nx\n\n## Concept\n\ny\n\n## Technical\n\nz", "Prose without layers.\n\n## Usage\n\nx"]) {
+    assert.equal(decorateAltitude(source), source);
+  }
+  const nested = decorateAltitude("# Concept\n\n### Concept\n\n## Concept\n\nx\n\n## Technical\n\ny");
+  assert.match(nested, /data-anchor="concept-2">Concept<\/button>/);
 });
 
 test("the AST rewrite permits external links but refuses remote images and ambiguous references", () => {

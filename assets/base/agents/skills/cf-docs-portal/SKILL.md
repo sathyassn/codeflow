@@ -24,23 +24,21 @@ board or copy present Comment chrome.
 2. [references/visual-craft.md](references/visual-craft.md) — portal checklist
 3. Other references below as the task requires
 
-Pass the portal composition gate in the canonical resource. A docs shell that
-is only a wall of prose cards or a marketing layout is a **failed** use of this
-skill.
+Pass the portal composition gate in the canonical resource. A prose-card wall
+or a marketing layout fails this skill.
 
-`cf-design` is product-generic. Apply `cf-design` only when the **consuming
-product** needs experience direction, never to utility portal themes. Portal fallback
-themes, Starlight components, and utility tokens are not product brand
-authority; do not push product DS into the portal. Apply `cf-editorial-review`
-to substantive explanatory copy.
+`cf-design` is product-generic: apply it only when the **consuming product**
+needs experience direction, never to utility portal themes. Portal themes,
+Starlight components, and utility tokens are never product brand authority,
+and product DS stays out of the portal. Apply `cf-editorial-review` to
+substantive explanatory copy.
 
 ## 1. Decide whether to adopt
 
 Use the portal when layered browsing, cross-linking, or machine-readable twins
 materially improve understanding. Keep Markdown-only docs when the repository
-is tiny, short-lived, or lacks enough durable source material to justify a
-build dependency. Record an honest refusal instead of generating decorative or
-empty pages.
+is tiny, short-lived, or lacks the durable sources to justify a build
+dependency. Record an honest refusal instead of decorative or empty pages.
 
 Adoption is explicit:
 
@@ -99,13 +97,15 @@ and [references/visual-craft.md](references/visual-craft.md). Page shape example
 
 - **Visuals** only when they clarify relationship, hierarchy, state, or flow.
   Text inside decorated boxes is not a visual explanation.
-- **Architecture pages** use full-width stages with margins and engineer-legible
-  labeled structure—not caption micro-boxes or prose-in-pretty-boxes.
+- **Architecture-layer sources** each author the altitude trio plus a stage —
+  full-width labeled structure, not caption micro-boxes; verification fails a
+  trio page that shows more than one panel.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
   scale. Do not ship ad-hoc font stacks in content.
-- **Themes:** bundled `signal` and `folio` (light/dark) are utility fallbacks
-  via `portal.config.json`. A project may adapt the utility once from its brand;
-  never feed portal palette/type/components back into the product design system.
+- **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
+  switch skin, face, scale, and appearance in the Display panel. A project may
+  adapt the utility once from its brand; never feed portal palette/type/
+  components back into the product design system.
 - **Motion:** minimal; meaning at rest; respect reduced motion and no wrong-mode
   flash on first paint.
 - **No present Comment lifecycle** in portal chrome.

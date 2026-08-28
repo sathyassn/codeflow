@@ -3,10 +3,10 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
+  amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
   pinnedSourceUrl as providerSourceUrl, referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
-  recoverUnavailableIds, strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
+  recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
@@ -47,7 +47,7 @@ if (!filesystemPathsEqual(repositoryRoot, configuredRepositoryRoot)) throw new E
 const adapterRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const selfContainedRuntime = filesystemPathsEqual(path.resolve(adapterRoot), path.resolve(portalRoot));
 const runtimeInputs = selfContainedRuntime
-  ? [".node-version", "astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/content.config.ts", "src/styles", "tsconfig.json"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
+  ? [".node-version", "astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/components", "src/content.config.ts", "src/styles", "tsconfig.json"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
   : [];
 const publicRootRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "public")).split(path.sep).join("/"), "portal public path");
 const publicRecords = selfContainedRuntime
@@ -251,7 +251,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
   }).join("\n");
   const backlinks = page.backlinks.map((backlink) => `- **${backlink.type.replaceAll("_", " ")}** ← [${backlink.source_id ?? backlink.source_route}](${withBase(base, backlink.source_route)})`).join("\n");
   const referenced = referencedIds(page.body).filter((id) => routesById.has(id) && !page.ids.includes(id));
-  const safeBody = rewriteRepositoryMarkdown(page.body, {
+  const safeBody = decorateAltitude(renderStageFences(rewriteRepositoryMarkdown(stripLeadingTitleHeading(page.body, page.title), {
     sourcePath: page.source_path,
     sourceRoutes,
     repositoryFiles,
@@ -261,7 +261,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
     strictTargets: previews,
     mediaReferences: referencedMedia,
     sourceAnchors: anchorsBySource,
-  });
+  }), page.source_path));
   const snippetMarker = page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->` : "";
   const context = [];
   const facts = [];

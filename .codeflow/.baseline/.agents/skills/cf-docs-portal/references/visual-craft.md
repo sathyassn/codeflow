@@ -58,9 +58,34 @@ purpose and mental model          (concept)
 Each layer complete for its audience. Architecture: full-width stages with
 margins and engineer-legible structure—not caption micro-boxes.
 
+Author the trio as depth-2 sections — `## Concept`, `## Architecture`,
+`## Technical` — in the repository source. The adapter renders them as a
+**real altitude tablist**: exactly one layer visible at a time, arrow-key
+navigable, the selected layer recorded in the URL hash (`#architecture` loads
+that panel only). Fenced `text` stages render full-width. Raw source HTML
+stays escaped, so the grammar lives in Markdown, never hand-authored chrome.
+
+Composition gate by layer kind: an architecture-layer source needs the trio
+plus a subject-led stage (`cf-stage` or a justified figure); an orient or
+concept page leads with one governing claim, not a bullet wall; technical and
+record pages prefer tables, code, and evidence. Author the trio on **every**
+architecture-shaped source, never one hero page. Browser verification fails
+closed when a trio page shows more than one layer at once, and when an
+architecture-shaped layer contains zero altitude pages; it exercises every
+tabbed route, not the first it finds.
+
+A subject-led labeled figure is a `cf-stage` fence: node lines
+(`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger`),
+a `->` line between stages (nodes inside one stage are parallel), and one
+`caption:` line. The adapter renders it into generated HTML styled by the
+`--cf-*` tokens; invalid grammar fails the page loudly. Keep ASCII `text`
+fences as the fallback for shapes the flow grammar cannot express.
+
 ## 4. Themes and type
 
-- Bundled utility themes (e.g. **signal**, **folio**) via `portal.config.json`.
+- Bundled themes via `portal.config.json` map to the utility skins: **signal**
+  → instrument (Archivo), **folio** → ink (IBM Plex Sans); light/dark from the
+  shell toggle. System-fallback faces only — no remote fonts.
 - Author for type roles; themes own faces and scale.
 - Project may adapt utility once from brand; never feed portal palette/type/
   components back into the product design system.
@@ -74,7 +99,10 @@ incorrect-mode flash on first paint.
 
 When craft or theme changes:
 
-- both themes × light/dark (and system preference path)
+- all utility skins × light/dark (and system preference path)
+- altitude tabs hide inactive layers; hash loads select the named layer
+- Display settings (font / size / palette / appearance) apply and persist
+- search: `/` focuses the query and a portal-owned term returns a followable hit
 - contrast, focus, keyboard order, reduced motion
 - layered journeys and overflow on narrow widths
 - `npm run browser:verify` and `codeflow validate --portal …` per operations

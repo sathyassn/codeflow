@@ -655,3 +655,144 @@ fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
         problems.join("\n  ")
     );
 }
+
+/// The portal's utility token layer must stay value-identical to the settled
+/// present skins (ADR-0053 shared craft): portal `signal` mirrors the present
+/// `instrument` skin and portal `folio` mirrors `ink`, in both modes, plus the
+/// instrument/plex typeface stacks and the shared mono stack. Present's
+/// `styles.css` is canonical; a divergence here is design-system drift.
+#[test]
+fn portal_utility_tokens_match_present_skins() {
+    fn block_after(css: &str, marker: &str) -> std::collections::BTreeMap<String, String> {
+        let start = css
+            .find(marker)
+            .unwrap_or_else(|| panic!("selector marker not found: {marker}"));
+        let open = css[start..].find('{').expect("selector block opens") + start + 1;
+        let close = css[open..].find('}').expect("selector block closes") + open;
+        css[open..close]
+            .lines()
+            .filter_map(|line| {
+                let line = line.split("/*").next().unwrap_or("").trim();
+                let (name, value) = line.strip_prefix("--cf-")?.split_once(':')?;
+                Some((
+                    name.trim().to_string(),
+                    value.trim().trim_end_matches(';').trim().to_lowercase(),
+                ))
+            })
+            .collect()
+    }
+    const ROLES: [&str; 16] = [
+        "canvas",
+        "surface",
+        "surface-raised",
+        "surface-subtle",
+        "text",
+        "text-muted",
+        "border",
+        "border-strong",
+        "accent",
+        "accent-strong",
+        "accent-soft",
+        "focus",
+        "positive",
+        "warning",
+        "danger",
+        "diagram-line",
+    ];
+    let root = repo_root();
+    let present = std::fs::read_to_string(root.join("crates/codeflow-present/web/src/styles.css"))
+        .expect("present styles are readable");
+    let portal = std::fs::read_to_string(
+        root.join("assets/docs-portal/starter/src/styles/utility-tokens.css"),
+    )
+    .expect("portal utility tokens are readable");
+    let pairs = [
+        (
+            "portal instrument light vs present instrument light",
+            ":root {",
+            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"light\"]",
+        ),
+        (
+            "portal instrument dark vs present instrument dark",
+            ":root[data-theme=\"dark\"] {",
+            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"dark\"]",
+        ),
+        (
+            "portal editorial light vs present editorial light",
+            ":root[data-cfp-skin=\"editorial\"] {",
+            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"light\"]",
+        ),
+        (
+            "portal editorial dark vs present editorial dark",
+            ":root[data-theme=\"dark\"][data-cfp-skin=\"editorial\"] {",
+            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"dark\"]",
+        ),
+        (
+            "portal ink light vs present ink light",
+            ":root[data-cfp-skin=\"ink\"] {",
+            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"light\"]",
+        ),
+        (
+            "portal ink dark vs present ink dark",
+            ":root[data-theme=\"dark\"][data-cfp-skin=\"ink\"] {",
+            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"dark\"]",
+        ),
+    ];
+    let mut drift = Vec::new();
+    for (label, portal_marker, present_marker) in pairs {
+        let ours = block_after(&portal, portal_marker);
+        let theirs = block_after(&present, present_marker);
+        for role in ROLES {
+            match (ours.get(role), theirs.get(role)) {
+                (Some(a), Some(b)) if a == b => {}
+                (a, b) => drift.push(format!(
+                    "{label}: --cf-{role}: portal {a:?} != present {b:?}"
+                )),
+            }
+        }
+    }
+
+    let typefaces = [
+        (
+            "portal instrument sans vs present instrument typeface",
+            ":root[data-cfp-typeface=\"instrument\"]",
+            "[data-cf-typeface=\"instrument\"]",
+            "font-sans",
+        ),
+        (
+            "portal editorial sans vs present editorial typeface",
+            ":root[data-cfp-typeface=\"editorial\"]",
+            "[data-cf-typeface=\"editorial\"]",
+            "font-sans",
+        ),
+        (
+            "portal plex sans vs present plex typeface",
+            ":root[data-cfp-typeface=\"plex\"]",
+            "[data-cf-typeface=\"plex\"]",
+            "font-sans",
+        ),
+    ];
+    for (label, portal_marker, present_marker, role) in typefaces {
+        let ours = block_after(&portal, portal_marker);
+        let theirs = block_after(&present, present_marker);
+        match (ours.get(role), theirs.get(role)) {
+            (Some(a), Some(b)) if a == b => {}
+            (a, b) => drift.push(format!(
+                "{label}: --cf-{role}: portal {a:?} != present {b:?}"
+            )),
+        }
+    }
+    let portal_mono = block_after(&portal, ":root {");
+    let present_mono = block_after(&present, ":root {");
+    match (portal_mono.get("font-mono"), present_mono.get("font-mono")) {
+        (Some(a), Some(b)) if a == b => {}
+        (a, b) => drift.push(format!("shared mono stack: portal {a:?} != present {b:?}")),
+    }
+
+    assert!(
+        drift.is_empty(),
+        "portal utility tokens drifted from the canonical present skins \
+         (crates/codeflow-present/web/src/styles.css):\n  {}",
+        drift.join("\n  ")
+    );
+}
