@@ -27,10 +27,10 @@ board or copy present Comment chrome.
 Pass the portal composition gate in the canonical resource. A prose-card wall
 or a marketing layout fails this skill.
 
-`cf-design` is product-generic: apply it only when the **consuming product**
-needs experience direction, never to utility portal themes. Portal themes,
-Starlight components, and utility tokens are never product brand authority,
-and product DS stays out of the portal. Apply `cf-editorial-review` to
+Apply `cf-design` only when the **consuming product** needs experience
+direction, never to utility portal themes. Portal themes, Starlight
+components, and utility tokens are never product brand authority, and
+product DS stays out of the portal. Apply `cf-editorial-review` to
 substantive explanatory copy.
 
 ## 1. Decide whether to adopt
@@ -57,6 +57,8 @@ deliberately.
 
 Edit the portal's user-owned `portal.config.json`. Name the repository root,
 source roots, exclusions, title, description, base path, and utility theme.
+The starter defaults to a `docs/` graph. Add a `project-management` source
+root and Records layer only when those files exist.
 Do not copy prose into a portal-only content authority. Generated
 content under `.portal/generated/`, generated Starlight content, search data,
 and build output are disposable.

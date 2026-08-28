@@ -7,12 +7,11 @@
   "release_version": null,
   "primitive_tokens": null,
   "repository_root": "..",
-  "source_roots": ["docs", "project-management"],
-  "exclude": ["docs/verification", "project-management/templates"],
+  "source_roots": ["docs"],
+  "exclude": ["docs/verification"],
   "layers": [
-    { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md"] },
-    { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/decisions"] },
-    { "id": "records", "label": "Records", "description": "Specs, epics, tasks, and their evidence-linked relationships.", "prefixes": ["project-management"] },
+    { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/overview.md"] },
+    { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/architecture", "docs/decisions"] },
     { "id": "reference", "label": "Reference", "description": "Supporting guides and technical reference material.", "fallback": true }
   ],
   "base": "/"
