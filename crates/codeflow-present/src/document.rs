@@ -394,12 +394,15 @@ impl Block {
             Self::Disclosure { summary, .. } => summary.clone(),
             Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
             Self::FeedbackPrompt { prompt, .. } => prompt.clone(),
-            Self::Html { title, html, .. } => [title.as_deref().unwrap_or_default(), &visible_text_from_html(html)]
-                .into_iter()
-                .map(str::trim)
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join(" "),
+            Self::Html { title, html, .. } => [
+                title.as_deref().unwrap_or_default(),
+                &visible_text_from_html(html),
+            ]
+            .into_iter()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
         }
     }
 

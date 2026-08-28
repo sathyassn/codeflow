@@ -2246,9 +2246,9 @@ fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize>
                 "feedback excerpt image exceeds its bound".to_string(),
             ));
         }
-        let decoded = STANDARD
-            .decode(image.data_base64.as_bytes())
-            .map_err(|_| PresentError::InvalidDocument("feedback excerpt image is not base64".to_string()))?;
+        let decoded = STANDARD.decode(image.data_base64.as_bytes()).map_err(|_| {
+            PresentError::InvalidDocument("feedback excerpt image is not base64".to_string())
+        })?;
         if decoded.is_empty() || decoded.len() > limits::MAX_EXCERPT_IMAGE_BYTES {
             return Err(PresentError::InvalidDocument(
                 "feedback excerpt image exceeds its decoded bound".to_string(),
