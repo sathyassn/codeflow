@@ -154,8 +154,11 @@ Agents author **document blocks**. They do not rebuild Comment UI.
    (count badge). The **notes rail appears only while Comment mode is on**.
 7. **Keyboard:** `C` toggles Comment **only inside an open present session
    window**. Ignore when focus is editable. `⌘/Ctrl+Enter` saves note body.
-8. **Submit** posts the session review API. Any harness consumes via
-   `codeflow present feedback` (Claude Code, Codex, Grok CLI, …).
+8. **Submit** posts the session review API. Each note carries an `excerpt`
+   (visible quote, element contents, or text inside a region, plus an optional
+   JPEG crop) so the harness can see what was marked; selectors still re-anchor.
+   Any harness consumes via `codeflow present feedback` (Claude Code, Codex,
+   Grok CLI, …).
 9. **Openable handoff:** when reporting a session, lead with the owner-private
    bootstrap path / file URL CodeFlow printed—not a scavenger hunt of ports.
 

@@ -119,6 +119,10 @@ export interface PendingFeedback {
   readonly element_selector?: ElementSelector;
   readonly region_selector?: RegionSelector;
   readonly target_summary?: string;
+  readonly excerpt?: {
+    readonly text?: string;
+    readonly image?: { readonly media_type: "image/jpeg"; readonly data_base64: string };
+  };
 }
 
 export interface ReviewRequest {

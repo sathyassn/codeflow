@@ -340,8 +340,9 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
     assert!(missing_brotli.starts_with("HTTP/1.1 406 "));
 
     let event_id = "019f9b53-a341-7fa7-84c2-5f198ceea099";
+    let note_id = "019f9b53-a341-7fa7-84c2-5f198ceea100";
     let review = format!(
-        r#"{{"event_id":"{event_id}","session_id":"{}","revision":1,"verdict":"approve","notes":[]}}"#,
+        r#"{{"event_id":"{event_id}","session_id":"{}","revision":1,"verdict":"approve","notes":[{{"client_id":"{note_id}","block_id":"summary","block_label":"First revision","kind":"comment","body":"Keep the quote","excerpt":{{"text":"First revision"}}}}]}}"#,
         running.session_id
     );
     let submitted = http(
@@ -354,13 +355,19 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
             review.len()
         ),
     );
-    assert!(submitted.starts_with("HTTP/1.1 201 "));
+    assert!(
+        submitted.starts_with("HTTP/1.1 201 "),
+        "review submit failed: {}",
+        submitted.chars().take(800).collect::<String>()
+    );
     let delivered = require_success(&codeflow(
         &fixture.project,
         &fixture.home,
         &["present", "feedback", &running.session_id],
     ));
     assert!(delivered.contains(event_id));
+    assert!(delivered.contains("First revision"));
+    assert!(delivered.contains("\"excerpt\""));
     require_success(&codeflow(
         &fixture.project,
         &fixture.home,

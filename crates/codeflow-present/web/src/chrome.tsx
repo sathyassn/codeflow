@@ -32,6 +32,7 @@ import {
   resolveRegion,
 } from "./selection";
 import type { CapturedTarget, Point } from "./selection";
+import { captureRectJpeg } from "./excerpt";
 import {
   applyAppearance,
   initialAppearance,
@@ -458,16 +459,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       }
       regionDraftRef.current = null;
       setRegionDraft(null);
-      const textual = isTextualTarget(event.target) && !shiftRef.current;
+      const shift = shiftRef.current || event.shiftKey;
+      const textual = isTextualTarget(event.target) && !shift;
       if (textual) setHintMode("text");
-      else if (shiftRef.current) setHintMode("region");
+      else if (shift) setHintMode("region");
       else setHintMode(annotatableAncestor(documentRoot, event.target) ? "element" : "region");
       dragGestureRef.current = {
         x0: event.clientX,
         y0: event.clientY,
         moved: false,
         region: false,
-        forceRegion: shiftRef.current,
+        forceRegion: shift,
         proseOnly: textual,
       };
     };
@@ -495,7 +497,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const w = Math.abs(event.clientX - g.x0);
       const h = Math.abs(event.clientY - g.y0);
       if (w > 5 || h > 5) g.moved = true;
-      const force = g.forceRegion || shiftRef.current;
+      const force = g.forceRegion || shiftRef.current || event.shiftKey;
       const marquee = force ? w > 10 || h > 10 : (w >= 28 && h >= 28) || w > 14 || h > 14;
       if (marquee) {
         // Non-prose marquee: never leave a stray selection behind (diagram
@@ -631,7 +633,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerOpen(true);
   }
 
-  function saveComposer(): void {
+  async function saveComposer(): Promise<void> {
     const body = composerBody.trim();
     if (!body) {
       setStatus("Write a note before saving.");
@@ -655,6 +657,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         const ay = rect && rect.height > 0 ? Math.min(1, Math.max(0, (pendingPin.clientY - rect.top) / rect.height)) : 0;
         markerMetaRef.current.set(clientId, { ay });
       }
+      let excerptText = c.excerptText?.trim() || c.selector?.exact?.trim() || "";
+      let excerptImage = null;
+      if (c.region_selector) {
+        const box = resolveRegion(documentRoot, c.region_selector);
+        if (box) excerptImage = await captureRectJpeg(documentRoot, box);
+      } else if (c.element_selector) {
+        const el = resolveElement(documentRoot, c.blockId, c.element_selector);
+        const box = el?.getBoundingClientRect();
+        if (box && box.width >= 4 && box.height >= 4) excerptImage = await captureRectJpeg(documentRoot, box);
+      }
+      const excerpt = excerptText || excerptImage ? { ...(excerptText ? { text: excerptText } : {}), ...(excerptImage ? { image: excerptImage } : {}) } : undefined;
       setNotes((current) => [
         ...current,
         {
@@ -667,6 +680,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           ...(c.element_selector ? { element_selector: c.element_selector } : {}),
           ...(c.region_selector ? { region_selector: c.region_selector } : {}),
           target_summary: c.summary,
+          ...(excerpt ? { excerpt } : {}),
         },
       ]);
       setVerdict((v) => (v === "approve" ? "approve_with_notes" : v));
@@ -683,7 +697,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setEditingId(null);
     setPanelOpen(true);
   }
-  saveComposerRef.current = saveComposer;
+  saveComposerRef.current = () => {
+    void saveComposer();
+  };
 
   function cancelComposer(): void {
     setComposerOpen(false);
@@ -1020,7 +1036,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <span class="mode" data-active={hintMode === "region" ? "true" : "false"}>
             <b>Drag</b> area
           </span>
-          <span class="esc-note">Shift+drag forces region · Esc</span>
+          <span class="esc-note">Shift+drag only on text · Esc</span>
         </div>
       ) : null}
 
@@ -1149,52 +1165,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           </button>
         </div>
 
-        {config.feedback?.items.length || config.feedback?.omitted_older ? (
-          <section class="cf-feedback-history" aria-labelledby="cf-feedback-history-title">
-            <div class="cf-history-heading">
-              <h3 id="cf-feedback-history-title">Earlier feedback</h3>
-              {config.feedback.omitted_older ? <span>{config.feedback.omitted_older} older in session history</span> : null}
-            </div>
-            <ol>
-              {config.feedback.items.map((item) => (
-                <li key={item.event_id}>
-                  <div class="cf-history-meta">
-                    <strong>{item.verdict.replaceAll("_", " ")}</strong>
-                    <span>{item.lifecycle}</span>
-                    <span>Revision {item.source_revision}</span>
-                    <span>Version {item.event_version}</span>
-                  </div>
-                  {item.instruction ? <p>{item.instruction}</p> : null}
-                  {item.notes.length ? (
-                    <ul>
-                      {item.notes.map((note) => (
-                        <li key={note.id} data-anchor-state={note.anchor.state}>
-                          <div class="cf-note-heading">
-                            <strong>{note.block_label}</strong>
-                            <span>{note.anchor.state}</span>
-                          </div>
-                          {note.quote ? <blockquote>{note.quote}</blockquote> : null}
-                          <p>{note.body}</p>
-                          {note.anchor.state === "orphaned" ? (
-                            <p class="cf-anchor-warning">Unpositioned: {note.anchor.reason}</p>
-                          ) : note.anchor.state === "reanchored" ? (
-                            <p class="cf-anchor-note">Matched uniquely in this revision.</p>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </section>
-        ) : null}
-
         <div class="list" data-testid="notes-list">
           {!notes.length ? (
             <div class="empty" data-testid="notes-empty">
               <span class="t">Nothing noted yet</span>
-              <span class="h">Select text, click a figure, or drag across empty area.</span>
+              <span class="h">Select words, click a figure, or drag a box on the stage or empty canvas. Hold Shift only if the drag starts on text.</span>
             </div>
           ) : (
             notes.map((note, index) => (
@@ -1242,6 +1217,49 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             ))
           )}
         </div>
+
+        {config.feedback?.items.length || config.feedback?.omitted_older ? (
+          <details class="cf-feedback-history" data-testid="feedback-history">
+            <summary id="cf-feedback-history-title">
+              Earlier feedback
+              {config.feedback.omitted_older ? (
+                <span> · {config.feedback.omitted_older} older in session history</span>
+              ) : null}
+            </summary>
+            <ol>
+              {config.feedback.items.map((item) => (
+                <li key={item.event_id}>
+                  <div class="cf-history-meta">
+                    <strong>{item.verdict.replaceAll("_", " ")}</strong>
+                    <span>{item.lifecycle}</span>
+                    <span>Revision {item.source_revision}</span>
+                    <span>Version {item.event_version}</span>
+                  </div>
+                  {item.instruction ? <p>{item.instruction}</p> : null}
+                  {item.notes.length ? (
+                    <ul>
+                      {item.notes.map((note) => (
+                        <li key={note.id} data-anchor-state={note.anchor.state}>
+                          <div class="cf-note-heading">
+                            <strong>{note.block_label}</strong>
+                            <span>{note.anchor.state}</span>
+                          </div>
+                          {note.quote ? <blockquote>{note.quote}</blockquote> : null}
+                          <p>{note.body}</p>
+                          {note.anchor.state === "orphaned" ? (
+                            <p class="cf-anchor-warning">Unpositioned: {note.anchor.reason}</p>
+                          ) : note.anchor.state === "reanchored" ? (
+                            <p class="cf-anchor-note">Matched uniquely in this revision.</p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </details>
+        ) : null}
 
         {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <details class="cf-tools">

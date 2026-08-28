@@ -39,8 +39,8 @@ use crate::{
     render::{render_document, render_unsupported, sandbox_id, RenderIdentity, RenderOptions},
     state::{
         create_private_dir_all, write_json_atomic, ElementSelector, FeedbackEnvelope, FeedbackKind,
-        FeedbackNote, FeedbackVerdict, RegionSelector, RevisionContent, SessionStatus,
-        SessionStore, TextSelector,
+        FeedbackExcerpt, FeedbackNote, FeedbackVerdict, RegionSelector, RevisionContent,
+        SessionStatus, SessionStore, TextSelector,
     },
 };
 
@@ -192,6 +192,8 @@ struct ReviewNote {
     element_selector: Option<ElementSelector>,
     #[serde(default)]
     region_selector: Option<RegionSelector>,
+    #[serde(default)]
+    excerpt: Option<FeedbackExcerpt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -634,6 +636,7 @@ async fn submit_review(
             selector: note.selector,
             element_selector: note.element_selector,
             region_selector: note.region_selector,
+            excerpt: note.excerpt,
         });
     }
     let Ok(event_id) = Uuid::parse_str(&request.event_id) else {

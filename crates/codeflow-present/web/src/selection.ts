@@ -1,4 +1,7 @@
 import type { ElementSelector, RegionSelector, TextSelector } from "./contracts";
+// Explicit .ts: check.mjs loads this module under Node type stripping, which
+// does not resolve extensionless relative value imports.
+import { intersectingVisibleText, quoteFromRange, visibleTextOf } from "./excerpt.ts";
 
 const CONTEXT_UNITS = 32;
 const REGION_SCALE = 1_000_000;
@@ -23,12 +26,25 @@ export function annotatableAncestor(documentRoot: HTMLElement, target: Element):
 }
 
 const TEXTUAL_TAGS = /^(H1|H2|H3|H4|P|LI|PRE|CODE|TD|TH|LABEL|A|EM|STRONG|SMALL|BLOCKQUOTE|SPAN)$/;
+const PROSE_SELECTOR = "p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcaption";
 
-/** Prose where a drag must mean native text selection — never a region marquee. */
+/**
+ * Words the reviewer can highlight, including SVG `<text>` / `<tspan>` on a
+ * stage. Shapes, media, and empty canvas stay non-prose so a box-drag is a
+ * region and a click is an element. A blanket "anything in svg/figure is
+ * non-prose" rule made stage labels select with no Text chip.
+ */
 export function isTextualTarget(target: Element): boolean {
+  const tag = target.tagName.toUpperCase();
+  if (tag === "TEXT" || tag === "TSPAN") return true;
   if ((target.namespaceURI ?? "").includes("svg")) return false;
-  if (TEXTUAL_TAGS.test(target.tagName.toUpperCase())) return true;
-  return Boolean(target.closest("p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcaption") && !target.closest("button, svg"));
+  if (target.closest("img, video, audio, iframe")) return false;
+  if (TEXTUAL_TAGS.test(tag)) return true;
+  const reviewRoot = target.closest("[data-cf-review-text-root]");
+  if (reviewRoot?.querySelector(PROSE_SELECTOR) && !target.closest("button, svg, figure[role='img']")) {
+    return true;
+  }
+  return Boolean(target.closest(PROSE_SELECTOR) && !target.closest("button"));
 }
 
 export interface CapturedTarget {
@@ -38,6 +54,7 @@ export interface CapturedTarget {
   readonly element_selector?: ElementSelector;
   readonly region_selector?: RegionSelector;
   readonly summary: string;
+  readonly excerptText?: string;
 }
 
 export interface Point {
@@ -56,7 +73,7 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   const blockId = block?.dataset.cfBlockId;
   if (!block || !blockId || block.matches(".block--diagram")) return null;
 
-  const exact = range.toString();
+  const exact = quoteFromRange(range);
   if (!exact.trim()) return null;
   // Server validates against Block::canonical_review_text(), not live DOM
   // textContent (markdown stripping vs rendered HTML can differ). Prefer the
@@ -72,6 +89,7 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
     blockLabel: block.dataset.cfBlockLabel ?? blockId,
     selector: selectorFromOffsets(canonical, start, end),
     summary: `Text: ${truncate(exact.trim(), 96)}`,
+    excerptText: exact.trim(),
   };
 }
 
@@ -94,6 +112,7 @@ export function captureElement(documentRoot: HTMLElement, rawTarget: Element): C
       block_digest: blockDigest,
     },
     summary: `Element: ${label}`,
+    excerptText: label,
   };
 }
 
@@ -129,11 +148,13 @@ export function captureRegion(documentRoot: HTMLElement, start: Point, end: Poin
     capture_width_px: Math.max(1, Math.round(coordinateRect.width)),
     capture_height_px: Math.max(1, Math.round(coordinateRect.height)),
   };
+  const regionText = intersectingVisibleText(documentRoot, selected);
   return {
     blockId,
     blockLabel: attributed.dataset.cfBlockLabel ?? blockId,
     region_selector: selector,
     summary: `Area: ${Math.round(clipped.width)}×${Math.round(clipped.height)} px in ${scope === "block" ? attributed.dataset.cfBlockLabel ?? blockId : "document"}`,
+    ...(regionText ? { excerptText: regionText } : {}),
   };
 }
 
@@ -215,16 +236,13 @@ function elementPath(block: HTMLElement, element: HTMLElement): string {
 }
 
 function accessibleLabel(element: HTMLElement): string {
-  let label = element.getAttribute("aria-label")
+  const visible = visibleTextOf(element);
+  if (visible) return truncate(visible, 2048);
+  const aria = element.getAttribute("aria-label")
     ?? (element instanceof HTMLImageElement ? element.alt : "")
+    ?? element.closest("figure[role='img'], [role='img'], figure")?.getAttribute("aria-label")
     ?? "";
-  // An unlabeled SVG has no innerText and its textContent smashes every <text>
-  // node together; the enclosing figure's aria-label is the readable identity.
-  if (!label && (element.namespaceURI ?? "").includes("svg")) {
-    label = element.closest("figure[role='img'], [role='img'], figure")?.getAttribute("aria-label") ?? "";
-  }
-  const text = label || element.innerText || element.textContent || element.tagName.toLowerCase();
-  return truncate(text.replace(/\s+/g, " ").trim() || element.tagName.toLowerCase(), 256);
+  return truncate(aria.replace(/\s+/g, " ").trim() || element.tagName.toLowerCase(), 2048);
 }
 
 function normalizedRect(start: Point, end: Point): DOMRect {

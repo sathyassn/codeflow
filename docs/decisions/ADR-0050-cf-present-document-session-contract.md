@@ -93,7 +93,10 @@ The same review envelope may instead target a semantic element or a visual
 region. Element targets contain only the runtime's closed structural-path
 grammar plus the exact rendered-block digest; arbitrary CSS selectors are
 rejected. Regions use integer normalized coordinates in an exact block or the
-source document, with capture dimensions retained as evidence. A block-scoped
+source document, with capture dimensions retained as evidence. Each note may
+also carry an optional `excerpt`: visible quote or contained text, and a
+bounded JPEG crop for a region that intersects a stage. Selectors remain the
+re-anchor locators; excerpts are what the calling harness reads. A block-scoped
 element or region may re-anchor only while that block digest is unchanged. A
 changed block or document-wide region in a later revision becomes visibly
 orphaned. Whole-block and whole-document notes use these same boundaries.

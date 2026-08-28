@@ -8,7 +8,7 @@ use crate::{
     error::{PresentError, Result},
     limits,
     media::matches_declared_media,
-    safe_html::validate_sandbox_html,
+    safe_html::{validate_sandbox_html, visible_text_from_html},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -394,7 +394,12 @@ impl Block {
             Self::Disclosure { summary, .. } => summary.clone(),
             Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
             Self::FeedbackPrompt { prompt, .. } => prompt.clone(),
-            Self::Html { title, .. } => title.clone().unwrap_or_default(),
+            Self::Html { title, html, .. } => [title.as_deref().unwrap_or_default(), &visible_text_from_html(html)]
+                .into_iter()
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
@@ -929,6 +934,21 @@ mod tests {
     fn utf16_selector_basis_preserves_emoji_units() {
         let text = "a😀b";
         assert_eq!(text.encode_utf16().count(), 4);
+    }
+
+    #[test]
+    fn html_canonical_text_includes_visible_stage_labels() {
+        let block = Block::Html {
+            id: "stage".to_string(),
+            title: Some("Stage title".to_string()),
+            html: "<figure><svg><text>Element · click a figure</text></svg></figure>".to_string(),
+        };
+        let canonical = block.canonical_review_text();
+        assert!(canonical.contains("Stage title"));
+        assert!(
+            canonical.contains("Element · click a figure"),
+            "visible SVG labels must be selectable as Text: {canonical:?}"
+        );
     }
 
     #[test]

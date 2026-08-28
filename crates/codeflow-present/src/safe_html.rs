@@ -49,6 +49,19 @@ const URL_ATTRIBUTES: &[&str] = &[
 /// The sandbox remains defense in depth; this parser-level boundary rejects
 /// document navigation, active content, and remote resource references even if
 /// browser navigation semantics or a future CSP interpretation changes.
+/// Visible text a reviewer can select in the rendered sandbox, including SVG
+/// `<text>` labels. Must stay aligned with `captureSelection` so a Text pin
+/// survives server-side selector validation.
+pub(crate) fn visible_text_from_html(source: &str) -> String {
+    Html::parse_fragment(source)
+        .root_element()
+        .text()
+        .map(|part| part.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) fn validate_sandbox_html(source: &str) -> Result<()> {
     let fragment = Html::parse_fragment(source);
     for element in fragment.tree.nodes().filter_map(ElementRef::wrap) {

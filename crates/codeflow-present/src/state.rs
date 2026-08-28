@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -206,6 +207,25 @@ pub struct FeedbackNote {
     pub element_selector: Option<ElementSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_selector: Option<RegionSelector>,
+    /// Visible quote, element contents, or text inside a region — plus an optional crop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<FeedbackExcerpt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FeedbackExcerpt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<FeedbackImage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FeedbackImage {
+    pub media_type: String,
+    pub data_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2192,7 +2212,56 @@ fn validate_feedback_note(note: &FeedbackNote, content: &RevisionContent) -> Res
     Ok(note.body.len()
         + note.block_id.len()
         + note.block_label.len()
+        + validate_feedback_excerpt(note.excerpt.as_ref())?
         + validate_feedback_target(note, block)?)
+}
+
+fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize> {
+    let Some(excerpt) = excerpt else {
+        return Ok(0);
+    };
+    if excerpt.text.is_none() && excerpt.image.is_none() {
+        return Err(PresentError::InvalidDocument(
+            "feedback excerpt must include text, an image, or both".to_string(),
+        ));
+    }
+    let mut bytes = 0;
+    if let Some(text) = &excerpt.text {
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.len() > limits::MAX_EXCERPT_TEXT_BYTES {
+            return Err(PresentError::InvalidDocument(
+                "feedback excerpt text is empty or exceeds its bound".to_string(),
+            ));
+        }
+        bytes += trimmed.len();
+    }
+    if let Some(image) = &excerpt.image {
+        if image.media_type != "image/jpeg" {
+            return Err(PresentError::InvalidDocument(
+                "feedback excerpt image must be image/jpeg".to_string(),
+            ));
+        }
+        if image.data_base64.len() > limits::MAX_EXCERPT_IMAGE_B64_BYTES {
+            return Err(PresentError::InvalidDocument(
+                "feedback excerpt image exceeds its bound".to_string(),
+            ));
+        }
+        let decoded = STANDARD
+            .decode(image.data_base64.as_bytes())
+            .map_err(|_| PresentError::InvalidDocument("feedback excerpt image is not base64".to_string()))?;
+        if decoded.is_empty() || decoded.len() > limits::MAX_EXCERPT_IMAGE_BYTES {
+            return Err(PresentError::InvalidDocument(
+                "feedback excerpt image exceeds its decoded bound".to_string(),
+            ));
+        }
+        if decoded.len() < 3 || decoded[0] != 0xff || decoded[1] != 0xd8 {
+            return Err(PresentError::InvalidDocument(
+                "feedback excerpt image is not a JPEG".to_string(),
+            ));
+        }
+        bytes += image.data_base64.len();
+    }
+    Ok(bytes)
 }
 
 fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block) -> Result<usize> {
@@ -3753,6 +3822,7 @@ mod tests {
                 end_utf16: 5,
             }),
             element_selector: None,
+            excerpt: None,
             region_selector: None,
         });
         assert_eq!(store.append_feedback(envelope).unwrap().sequence, 1);
@@ -4142,6 +4212,7 @@ mod tests {
                 end_utf16: 4,
             }),
             element_selector: None,
+            excerpt: None,
             region_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
@@ -4177,6 +4248,7 @@ mod tests {
                 label: "Important phrase".to_string(),
                 block_digest: digest.clone(),
             }),
+            excerpt: None,
             region_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
@@ -4220,6 +4292,7 @@ mod tests {
             body: "This visual area needs more separation.".to_string(),
             selector: None,
             element_selector: None,
+            excerpt: None,
             region_selector: Some(RegionSelector {
                 scope: RegionScope::Block,
                 anchor_id: "intro".to_string(),

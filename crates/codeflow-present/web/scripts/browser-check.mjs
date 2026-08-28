@@ -16,6 +16,7 @@ const sourceStyles = await readFile(join(webRoot, "src/styles.css"), "utf8");
 const exportFallback = await readFile(join(webRoot, "src/export-fallback.css"), "utf8");
 const projectUtilityCss = ":root[data-cf-theme]{--cf-reading-measure:68ch;}";
 const applicationCsp = `default-src 'none'; script-src 'self' '${manifest.service.inline["present.prepaint"].csp_sha256}'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+const reviewPosts = [];
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -71,6 +72,9 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/app/api/reviews" && request.method === "POST") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      reviewPosts.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end('{"event_id":"evt-browser-check","state":"received"}');
       return;
@@ -95,7 +99,7 @@ const browser = await chromium.launch({ executablePath, headless: true });
 
 try {
   await checkProseLazyPath(browser, origin);
-  await checkInteractiveSurface(browser, origin);
+  await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, diagrams, axe, and 320 px reflow\n");
 } finally {
@@ -154,7 +158,7 @@ async function checkProseLazyPath(browser, origin) {
   await context.close();
 }
 
-async function checkInteractiveSurface(browser, origin) {
+async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const context = await browser.newContext({ viewport: { width: 320, height: 760 }, colorScheme: "light" });
   const page = await context.newPage();
   const network = await installNetworkAudit(context, page);
@@ -183,7 +187,8 @@ async function checkInteractiveSurface(browser, origin) {
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: /Comment/ }).click();
-  await page.getByRole("heading", { name: "Earlier feedback" }).waitFor();
+  await page.getByTestId("feedback-history").waitFor();
+  await page.getByTestId("feedback-history").locator("summary").click();
   await page.getByText("Matched uniquely in this revision.").waitFor();
   await page.getByText("Unpositioned: the referenced block is absent").waitFor();
   await page.getByRole("button", { name: "Close" }).click();
@@ -277,6 +282,43 @@ async function checkInteractiveSurface(browser, origin) {
   await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
   await page.getByText("Nothing noted yet").waitFor();
 
+  // Drag starting on the prose wrapper (padding around the paragraph) must stay
+  // Text. Missing that hit-test is how region marquees steal text selection.
+  {
+    const prose = page.locator("#cf-present-document [data-cf-review-text-root]").first();
+    const box = await prose.boundingBox();
+    if (!box) throw new Error("Prose review-text-root has no box");
+    await page.mouse.move(box.x + 8, box.y + 4);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 160, box.y + 22, { steps: 10 });
+    const marquee = await page.locator(".cf-region-draft").count();
+    await page.mouse.up();
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
+    if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+  }
+
+  // Words on an authored SVG stage must pin as Text (same as HTML prose).
+  {
+    await page.evaluate(() => {
+      const node = document.getElementById("stage-label")?.firstChild;
+      if (!node) throw new Error("Stage label text node missing");
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const selection = getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (kind !== "Text") throw new Error(`Stage label selection opened ${kind}, expected Text`);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+  }
+
   async function clickTool(testId) {
     await page.evaluate(() => {
       const tools = document.querySelector("details.cf-tools");
@@ -362,6 +404,143 @@ async function checkInteractiveSurface(browser, origin) {
     throw new Error("Whole-document feedback did not retain one visible speech marker");
   }
   await removeAllNotes();
+
+  // Harness excerpts: intercept the actual review POST, not the rail labels.
+  async function submitCapturedReview() {
+    capturedReviews.length = 0;
+    await page.getByTestId("submit-all").click();
+    await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
+    if (capturedReviews.length !== 1) {
+      throw new Error(`Expected one review POST, got ${capturedReviews.length}`);
+    }
+    return capturedReviews[0];
+  }
+  async function armComment() {
+    if ((await page.locator(".cf-chrome-frame").getAttribute("data-commenting")) === "true") return;
+    await page.getByTestId("comment-btn").click();
+    await page.waitForFunction(() =>
+      document.querySelector(".cf-chrome-frame")?.getAttribute("data-commenting") === "true"
+    );
+  }
+  async function assertPaintedJpeg(dataBase64, label) {
+    if (typeof dataBase64 !== "string" || dataBase64.length < 80) {
+      throw new Error(`${label} excerpt image missing or tiny (${dataBase64?.length ?? 0} b64 chars)`);
+    }
+    const result = await page.evaluate(async (data) => {
+      const binary = atob(data);
+      const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+      if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return { ok: false, reason: "not jpeg" };
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { ok: false, reason: "no canvas" };
+      ctx.drawImage(bitmap, 0, 0);
+      const sample = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let painted = 0;
+      let seen = 0;
+      for (let i = 0; i < sample.length; i += 64) {
+        seen += 1;
+        if (sample[i] < 248 || sample[i + 1] < 248 || sample[i + 2] < 248) painted += 1;
+      }
+      return { ok: painted >= Math.max(4, seen * 0.01), painted, seen, width: bitmap.width, height: bitmap.height, bytes: bytes.length };
+    }, dataBase64);
+    if (!result.ok) {
+      throw new Error(`${label} JPEG was blank or invalid: ${JSON.stringify(result)}`);
+    }
+  }
+
+  await selectFixtureText(page);
+  await clickTool("tool-add-text");
+  await saveComposerNote("Text excerpt check.");
+  const textReview = await submitCapturedReview();
+  const textNote = textReview.notes?.[0];
+  if (!textNote?.selector?.exact?.startsWith("Review this")) {
+    throw new Error(`Text excerpt quote was ${JSON.stringify(textNote?.selector?.exact)}`);
+  }
+  if (textNote.excerpt?.text !== textNote.selector.exact) {
+    throw new Error(`Text excerpt.text ${JSON.stringify(textNote.excerpt)} did not match the quote`);
+  }
+  if (textNote.excerpt?.image) {
+    throw new Error("Text notes must not attach a crop image");
+  }
+
+  await armComment();
+  await page.waitForFunction(() =>
+    document.querySelector(".cf-chrome-frame")?.getAttribute("data-commenting") === "true"
+    && !document.querySelector('[data-testid="composer"]')
+    && !document.getElementById("cf-present-document")?.hasAttribute("data-cf-capture-mode")
+  );
+  async function revealDocumentForGestures() {
+    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") {
+      await page.locator(".cf-feedback-close").click({ force: true });
+      await page.waitForFunction(() =>
+        document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false"
+      );
+    }
+  }
+  async function shiftDragRegion(locator) {
+    await revealDocumentForGestures();
+    await locator.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+    const box = await locator.boundingBox();
+    if (!box) throw new Error("Shift+drag target has no box");
+    await page.keyboard.down("Shift");
+    await page.mouse.move(box.x + 10, box.y + Math.min(12, box.height / 2));
+    await page.mouse.down();
+    await page.mouse.move(box.x + Math.min(210, Math.max(80, box.width - 6)), box.y + Math.max(36, box.height - 4), { steps: 12 });
+    const marquee = await page.locator(".cf-region-draft").count();
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    if (marquee === 0) {
+      const hit = await page.evaluate(({ x, y }) => {
+        const node = document.elementFromPoint(x, y);
+        return node && { tag: node.tagName, id: node.id, className: String(node.className).slice(0, 80) };
+      }, { x: box.x + 10, y: box.y + Math.min(12, box.height / 2) });
+      throw new Error(`Shift+drag on prose drew no marquee; box=${JSON.stringify(box)} hit=${JSON.stringify(hit)}`);
+    }
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (kind !== "Region") throw new Error(`Shift+drag on prose opened ${kind}, expected Region`);
+    return kind;
+  }
+
+  // Shift+drag on prose is Region (plain drag on the same node is Text, tested above).
+  await shiftDragRegion(page.locator("#selection-target"));
+  await page.keyboard.press("Escape");
+  await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+
+  await clickTool("tool-pick-element");
+  await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
+  await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
+  await page.keyboard.press("Enter");
+  await saveComposerNote("Element excerpt body.");
+  await page.waitForFunction(() =>
+    !document.querySelector('[data-testid="composer"]')
+    && !document.getElementById("cf-present-document")?.hasAttribute("data-cf-capture-mode")
+  );
+
+  await shiftDragRegion(page.locator("#selection-target"));
+  await saveComposerNote("Region excerpt body.", { viaFloat: true });
+  const mixedReview = await submitCapturedReview();
+  const elementNote = mixedReview.notes.find((note) => note.element_selector);
+  const regionNote = mixedReview.notes.find((note) => note.region_selector);
+  if (!elementNote?.excerpt?.text) {
+    throw new Error(`Element excerpt missing inner text: ${JSON.stringify(elementNote)}`);
+  }
+  if (!elementNote.excerpt.image || elementNote.excerpt.image.media_type !== "image/jpeg") {
+    throw new Error("Element excerpt did not include a JPEG of the element");
+  }
+  await assertPaintedJpeg(elementNote.excerpt.image.data_base64, "element");
+  if (!regionNote?.excerpt?.image || regionNote.excerpt.image.media_type !== "image/jpeg") {
+    throw new Error(`Region excerpt missing JPEG: ${JSON.stringify(regionNote)}`);
+  }
+  await assertPaintedJpeg(regionNote.excerpt.image.data_base64, "region");
+  if (!regionNote.excerpt.text) {
+    throw new Error("Region excerpt missing intersecting visible text");
+  }
+
+  await armComment();
 
   // Leaving Comment mode hides the rail
   await page.keyboard.press("c");
@@ -451,7 +630,8 @@ function fixtureHtml(proseOnly) {
     ? ""
     : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
         <h2 id="implementation">Implementation</h2>
-        <div data-cf-review-text-root><p id="selection-target">Review this exact sentence before approval.</p></div>
+        <div data-cf-review-text-root><p id="selection-target">Review this exact sentence before approval.</p>
+        <figure role="img" aria-label="Stage fixture"><svg viewBox="0 0 280 36" width="280" height="36"><text id="stage-label" x="8" y="24">Stage words</text></svg></figure></div>
         <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
       </section>
       <section class="block block--diagram" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
@@ -482,7 +662,7 @@ function fixtureHtml(proseOnly) {
       max_visible_feedback: 256,
       max_text_utf16: 32,
       max_selector_utf16: 16,
-      max_payload_bytes: 65536,
+      max_payload_bytes: 262144,
     },
     identity: {
       src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
