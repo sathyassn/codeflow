@@ -128,8 +128,29 @@
         "body": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "selector": {"$ref": "#/$defs/selector"},
         "element_selector": {"$ref": "#/$defs/element_selector"},
-        "region_selector": {"$ref": "#/$defs/region_selector"}
+        "region_selector": {"$ref": "#/$defs/region_selector"},
+        "excerpt": {"$ref": "#/$defs/excerpt"}
       }
+    },
+    "excerpt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "x-codeflow-max-bytes": 4096},
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["media_type", "data_base64"],
+          "properties": {
+            "media_type": {"enum": ["image/jpeg"]},
+            "data_base64": {"type": "string", "minLength": 1, "x-codeflow-max-bytes": 32768}
+          }
+        }
+      },
+      "anyOf": [
+        {"required": ["text"]},
+        {"required": ["image"]}
+      ]
     },
     "envelope": {
       "type": "object",
@@ -154,7 +175,7 @@
           }
         }
       ],
-      "$comment": "The runtime requires unique note IDs, current session/revision/block attribution, and a 64 KiB aggregate feedback bound."
+      "$comment": "The runtime requires unique note IDs, current session/revision/block attribution, and a 256 KiB aggregate feedback bound."
     },
     "event": {
       "oneOf": [
