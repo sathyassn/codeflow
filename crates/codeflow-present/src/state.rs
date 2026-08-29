@@ -4226,6 +4226,84 @@ mod tests {
     }
 
     #[test]
+    fn feedback_excerpt_accepts_quoted_text_and_rejects_empty_or_non_jpeg() {
+        let (_temp, store) = store();
+        let session = store.create(parsed()).unwrap();
+        let mut envelope = feedback(session.id, Uuid::new_v4());
+        envelope.notes.push(FeedbackNote {
+            id: Uuid::new_v4(),
+            block_id: "intro".to_string(),
+            block_label: "Hello".to_string(),
+            kind: FeedbackKind::Comment,
+            body: "Keep the quote.".to_string(),
+            selector: None,
+            element_selector: None,
+            region_selector: None,
+            excerpt: Some(FeedbackExcerpt {
+                text: Some("Hello".to_string()),
+                image: None,
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_ok());
+
+        envelope.event_id = Uuid::new_v4();
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: None,
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: Some("   ".to_string()),
+            image: None,
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: Some("x".repeat(limits::MAX_EXCERPT_TEXT_BYTES + 1)),
+            image: None,
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/png".to_string(),
+                data_base64: "aaaa".to_string(),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/jpeg".to_string(),
+                data_base64: "not-base64!".to_string(),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/jpeg".to_string(),
+                data_base64: STANDARD.encode([0x00, 0x01, 0x02]),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: Some("Hello".to_string()),
+            image: Some(FeedbackImage {
+                media_type: "image/jpeg".to_string(),
+                data_base64: STANDARD.encode([0xff, 0xd8, 0xff]),
+            }),
+        });
+        envelope.event_id = Uuid::new_v4();
+        assert!(store.append_feedback(envelope).is_ok());
+    }
+
+    #[test]
     fn visual_feedback_accepts_only_generated_element_paths_and_exact_block_digests() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
