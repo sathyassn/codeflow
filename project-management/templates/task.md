@@ -6,7 +6,7 @@ title: {{TITLE_YAML}}
 status: todo             # todo | blocked | in_progress | complete | cancelled
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 specs: []                # task-specific SPC-### inputs; epic specs are inherited
-depends_on: []           # structural predecessors; Plan guards own branch readiness
+depends_on: []           # every direct structural predecessor; [] only for a true root
 integration_target: {{TARGET_BRANCH}} # main/master or integration/EPC-NNN-<slug>
 external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}

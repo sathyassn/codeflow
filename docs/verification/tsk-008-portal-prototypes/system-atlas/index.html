@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en" data-prototype="system-atlas">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CodeFlow system atlas prototype</title>
+  <script src="../shared/theme-init.js"></script>
+  <link rel="stylesheet" href="../shared/base.css">
+  <link rel="stylesheet" href="./style.css?v=4">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="topbar">
+    <button type="button" class="nav-toggle icon-button" data-navigation-toggle aria-label="Open navigation" aria-expanded="false">Menu</button>
+    <a class="wordmark" href="#context"><span class="mark">CF</span><span>System atlas</span></a>
+    <nav class="level-switch" aria-label="Architecture level">
+      <button type="button" data-level-target="context" aria-pressed="true">Context</button>
+      <button type="button" data-level-target="container" aria-pressed="false">Containers</button>
+      <button type="button" data-level-target="component" aria-pressed="false">Components</button>
+      <button type="button" data-level-target="code" aria-pressed="false">Code</button>
+    </nav>
+    <div class="top-actions">
+      <button type="button" class="search-button" data-open-search>Find a surface <kbd>⌘K</kbd></button>
+      <button type="button" class="icon-button theme-toggle" data-theme-toggle aria-label="Use light mode"></button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <nav class="explorer" data-site-navigation aria-label="Repository explorer">
+      <div class="scope"><small>Repository</small><strong>codeflow</strong><span>2.1.0 · Rust</span></div>
+      <details open><summary>Understand</summary><a href="#context">System context</a><a href="#trace">Traceability</a><a href="#capability">Capabilities</a></details>
+      <details open><summary>Build</summary><a href="#workspace">Rust workspace</a><a href="#scaffold">Scaffold assets</a><a href="#delegation">Delegation lifecycle</a></details>
+      <details><summary>Operate</summary><a href="#commands">CLI commands</a><a href="#policy">Policy boundary</a><a href="#release">Release path</a></details>
+      <details><summary>Evidence</summary><a href="#sources">Source map</a><a href="#verification">Verification</a><a href="#decisions">Decisions</a></details>
+      <div class="explorer-footer"><span>Indexed sources</span><strong>47 decisions · 13 shipped capabilities · 1 building</strong></div>
+    </nav>
+
+    <main id="content">
+      <section class="atlas-head" id="context" data-search-item data-search-title="System context" data-search-context="Concept · docs/product.md">
+        <div><p class="breadcrumb">CodeFlow / Architecture / Explorer</p><h1>A map from intent to verified change</h1><p>Explore the system by abstraction level. Every named surface links back to repository evidence.</p></div>
+        <div class="head-meta"><span>Version</span><strong>Scaffold 2.1.0</strong><a class="source-link" href="/docs/product.md">docs/product.md</a></div>
+      </section>
+
+      <section class="map-stage" aria-label="Interactive system architecture">
+        <div class="map-canvas" data-level="context">
+          <svg viewBox="0 0 1000 570" role="img" aria-labelledby="context-title context-desc">
+            <title id="context-title">CodeFlow system context</title><desc id="context-desc">The operator and native agent harness use CodeFlow to work on a consuming repository, with Git hosting as the authoritative remote boundary.</desc>
+            <path class="edge" d="M230 285H410M590 285H770M500 195V110"/><path class="edge faint" d="M500 375V465"/>
+            <g class="node person" transform="translate(50 220)"><rect width="180" height="130" rx="22"/><text x="90" y="55">Operator</text><text class="sub" x="90" y="82">intent · authority</text></g>
+            <g class="node system selected" transform="translate(410 195)"><rect width="180" height="180" rx="34"/><text x="90" y="72">CodeFlow</text><text class="sub" x="90" y="102">discipline layer</text><text class="sub" x="90" y="128">Rust + scaffold</text></g>
+            <g class="node system" transform="translate(410 15)"><rect width="180" height="95" rx="20"/><text x="90" y="42">Agent harness</text><text class="sub" x="90" y="68">native tools + judgment</text></g>
+            <g class="node system" transform="translate(770 220)"><rect width="180" height="130" rx="22"/><text x="90" y="55">Repository</text><text class="sub" x="90" y="82">code · docs · policy</text></g>
+            <g class="node external" transform="translate(410 465)"><rect width="180" height="90" rx="18"/><text x="90" y="40">Git hosting</text><text class="sub" x="90" y="66">authoritative perimeter</text></g>
+          </svg>
+        </div>
+        <div class="map-canvas" data-level="container" hidden>
+          <svg viewBox="0 0 1000 570" role="img" aria-label="CodeFlow container architecture">
+            <path class="edge" d="M190 285H310M510 285H630M730 210V120M730 360V455"/>
+            <g class="node" transform="translate(30 220)"><rect width="160" height="130" rx="20"/><text x="80" y="55">Harness</text><text class="sub" x="80" y="82">Claude · Codex</text></g>
+            <g class="node selected" transform="translate(310 200)"><rect width="200" height="170" rx="28"/><text x="100" y="68">codeflow CLI</text><text class="sub" x="100" y="98">command interface</text><text class="sub" x="100" y="124">hook dispatcher</text></g>
+            <g class="node" transform="translate(630 200)"><rect width="200" height="170" rx="28"/><text x="100" y="68">codeflow-core</text><text class="sub" x="100" y="98">policy · records</text><text class="sub" x="100" y="124">scaffold · guards</text></g>
+            <g class="node external" transform="translate(630 25)"><rect width="200" height="95" rx="20"/><text x="100" y="42">Git worktree</text><text class="sub" x="100" y="68">project truth</text></g>
+            <g class="node external" transform="translate(630 455)"><rect width="200" height="95" rx="20"/><text x="100" y="42">Local state</text><text class="sub" x="100" y="68">ledger · qualification</text></g>
+          </svg>
+        </div>
+        <div class="map-canvas" data-level="component" hidden>
+          <div class="component-grid">
+            <button type="button" data-inspect-target="policy" aria-pressed="true"><span>01</span><strong>Policy engine</strong><small>one source for every gate</small></button>
+            <button type="button" data-inspect-target="records" aria-pressed="false"><span>02</span><strong>Record store</strong><small>Markdown truth, rebuildable index</small></button>
+            <button type="button" data-inspect-target="scaffold" aria-pressed="false"><span>03</span><strong>Scaffold engine</strong><small>owned, managed, project files</small></button>
+            <button type="button" data-inspect-target="delegate" aria-pressed="false"><span>04</span><strong>Delegate lifecycle</strong><small>transport-neutral evidence</small></button>
+          </div>
+        </div>
+        <div class="map-canvas code-view" data-level="code" hidden>
+          <p class="file-path">crates/codeflow-core/src/delegate.rs · lines 24–42</p>
+          <pre><code>/// State requested by `delegate wait`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+<span>pub enum</span> WaitUntil {
+    /// The delegated harness reported a startup event.
+    Ready,
+    /// The armed prompt was accepted by the harness.
+    Accepted,
+    /// The accepted turn completed or failed.
+    Terminal,
+}
+
+/// A successfully observed wait state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+<span>pub struct</span> WaitResult {
+    /// Canonical JSON record to print for the caller.
+    pub json: String,
+    /// Whether the terminal record represents failure.
+    pub failed: bool,
+}</code></pre>
+          <a class="source-link" href="/crates/codeflow-core/src/delegate.rs">Open source file</a>
+        </div>
+        <div class="map-legend"><span><i class="local"></i> CodeFlow-owned</span><span><i class="external-key"></i> External boundary</span><span>Lines show runtime relationships, not data volume.</span></div>
+      </section>
+
+      <section class="inspector-region" id="workspace" data-search-item data-search-title="Rust workspace" data-search-context="Architecture · docs/architecture.md">
+        <div class="inspector" data-inspector="policy">
+          <p class="eyebrow">Selected component</p><h2>Policy engine</h2><p>Git hooks, harness guards, and CI read the same policy document. Local checks shorten feedback; remote protection is the authoritative boundary.</p>
+          <dl><div><dt>Input</dt><dd><code>.codeflow/policy.json</code></dd></div><div><dt>Used by</dt><dd>hooks · guard · CI</dd></div><div><dt>Decision</dt><dd><a href="/docs/decisions/ADR-0017-codeflow-ci-portable-verification.md">ADR-0017</a></dd></div></dl>
+        </div>
+        <div class="inspector" data-inspector="records" hidden>
+          <p class="eyebrow">Selected component</p><h2>Record store</h2><p>Markdown and YAML frontmatter remain project truth. JSONL records events. SQLite FTS5 is a disposable search cache, never a second authority.</p>
+          <dl><div><dt>Interface</dt><dd><code>RecordStore</code></dd></div><div><dt>Primary</dt><dd><code>MarkdownStore</code></dd></div><div><dt>Decision</dt><dd><a href="/docs/decisions/ADR-0045-durable-work-authority-and-layout.md">ADR-0045</a></dd></div></dl>
+        </div>
+        <div class="inspector" data-inspector="scaffold" hidden>
+          <p class="eyebrow">Selected component</p><h2>Scaffold engine</h2><p>Embedded assets are version-locked with the binary. Ownership classes let updates replace managed material while preserving project-owned extensions.</p>
+          <dl><div><dt>Source</dt><dd><code>assets/base/</code></dd></div><div><dt>Commands</dt><dd>init · update · customize</dd></div><div><dt>Capabilities</dt><dd>CAP-001 · CAP-002</dd></div></dl>
+        </div>
+        <div class="inspector" data-inspector="delegate" hidden>
+          <p class="eyebrow">Selected component</p><h2>Delegate lifecycle</h2><p>A write-once state protocol proves launch, provenance, return, failure, and recheck while the host continues to own native harness launch and prompt delivery.</p>
+          <dl><div><dt>Commands</dt><dd>delegate init · arm · wait</dd></div><div><dt>Failure</dt><dd>ambiguity poisons the run</dd></div><div><dt>Decision</dt><dd><a href="/docs/decisions/ADR-0036-transport-neutral-delegate-lifecycle.md">ADR-0036</a></dd></div></dl>
+        </div>
+        <aside class="evidence-panel" id="sources">
+          <p class="eyebrow">Evidence chain</p>
+          <ol><li><a href="/docs/product.md">Product boundary</a><small>docs/product.md</small></li><li><a href="/docs/architecture.md">System structure</a><small>docs/architecture.md</small></li><li><a href="/docs/capabilities.md">Shipped behavior</a><small>docs/capabilities.md</small></li><li><a href="/crates/codeflow-core/src/lib.rs">Code entry</a><small>codeflow-core/src/lib.rs</small></li></ol>
+          <p class="evidence-note">Generated explanations must reconcile against these sources; missing rationale remains visible.</p>
+        </aside>
+      </section>
+
+      <section class="trace" id="trace" data-search-item data-search-title="Traceability path" data-search-context="Concept · AGENTS.md">
+        <div><p class="eyebrow">Cross-cutting view</p><h2>Trace one promise through the repository.</h2></div>
+        <ol class="trace-line"><li><span>Capability</span><strong>CAP-010</strong></li><li><span>Decision</span><strong>ADR-0036</strong></li><li><span>Implementation</span><strong>delegate.rs</strong></li><li><span>Verification</span><strong>doctor roundtrip</strong></li></ol>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="search-dialog" data-search-dialog aria-label="Search the system atlas">
+    <form class="search-head" role="search" data-search-form>
+      <label class="visually-hidden" for="atlas-search">Find a capability, decision, command, or file</label>
+      <input id="atlas-search" type="search" placeholder="Find a capability, decision, command, or file" aria-controls="atlas-results" autocomplete="off">
+      <button type="submit" class="icon-button search-submit">Go</button>
+      <button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button>
+    </form>
+    <p class="search-status visually-hidden" data-search-status aria-live="polite"></p>
+    <section id="atlas-results" class="search-results" data-search-results aria-label="Search results"></section>
+  </dialog>
+  <script type="module" src="../shared/prototype.js"></script>
+</body>
+</html>

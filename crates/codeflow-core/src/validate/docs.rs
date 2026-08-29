@@ -10,7 +10,8 @@
 //! * capability status legal; shipped capabilities have nonempty `verified_by`
 //! * ADR `status` legal (`proposed|accepted|superseded`); superseded ADRs
 //!   carry `superseded_by`
-//! * epic frontmatter `capabilities[]` / `adrs[]` resolve back
+//! * capability `epics[]` and epic `capabilities[]` links are reciprocal;
+//!   epic `adrs[]` references resolve
 //! * epic/task `specs[]` resolve to specification records
 //! * task `epic_id` resolves, or an explicit standalone reason exists
 //! * task `depends_on[]` references resolve and form an acyclic graph
@@ -90,9 +91,79 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_capabilities(repo_root, &graph, &mut report);
     lint_adrs(repo_root, &mut report);
     lint_epics(repo_root, &graph, &mut report);
+    lint_capability_epic_reciprocity(repo_root, &mut report);
     lint_tasks(repo_root, &graph, &mut report);
 
     report
+}
+
+fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintReport) {
+    let capabilities_path = repo_root.join("docs/capabilities.md");
+    let Ok(content) = std::fs::read_to_string(&capabilities_path) else {
+        return;
+    };
+    let (entries, _) = parse_capabilities(&content);
+    let capability_epics: BTreeMap<String, (BTreeSet<String>, usize)> = entries
+        .into_iter()
+        .map(|entry| (entry.id, (entry.epics.into_iter().collect(), entry.line)))
+        .collect();
+    let mut epic_capabilities = BTreeMap::<String, (BTreeSet<String>, PathBuf)>::new();
+    for path in crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")) {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok((data, _)) = parse_frontmatter(&bytes) else {
+            continue;
+        };
+        let format_id = get_string_field(&data, "format_id");
+        let epic_id = if is_valid_epic_format_id(&format_id) {
+            format_id
+        } else {
+            get_string_field(&data, "id")
+        };
+        if epic_id.is_empty() {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf();
+        epic_capabilities.insert(
+            epic_id,
+            (
+                string_list(&data, "capabilities").into_iter().collect(),
+                relative,
+            ),
+        );
+    }
+
+    for (capability, (epics, line)) in &capability_epics {
+        for epic in epics {
+            if let Some((backlinks, _)) = epic_capabilities.get(epic) {
+                if !backlinks.contains(capability) {
+                    report.issues.push(DocsLintIssue {
+                        file: PathBuf::from("docs/capabilities.md"),
+                        line: *line,
+                        message: format!(
+                            "{capability} links {epic}, but that epic does not link back in capabilities[]"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    for (epic, (capabilities, path)) in epic_capabilities {
+        for capability in capabilities {
+            if let Some((backlinks, _)) = capability_epics.get(&capability) {
+                if !backlinks.contains(&epic) {
+                    report.issues.push(DocsLintIssue {
+                        file: path.clone(),
+                        line: 1,
+                        message: format!(
+                            "{epic} links {capability}, but that capability does not link back in epics[]"
+                        ),
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
@@ -193,7 +264,15 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
         });
     }
 
+    let mut seen_capabilities = BTreeSet::new();
     for entry in entries {
+        if !seen_capabilities.insert(entry.id.clone()) {
+            report.issues.push(DocsLintIssue {
+                file: rel.clone(),
+                line: entry.line,
+                message: format!("{}: duplicate capability id", entry.id),
+            });
+        }
         // Status legality.
         if !CAPABILITY_STATUS_VALUES.contains(&entry.status.as_str()) {
             report.issues.push(DocsLintIssue {
@@ -873,6 +952,26 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_capability_ids_are_loud() {
+        let dir = clean_repo();
+        let path = dir.path().join("docs/capabilities.md");
+        let mut registry = std::fs::read_to_string(&path).unwrap();
+        registry.push_str(&capability_block(
+            "CAP-001",
+            "building",
+            "[EPC-001]",
+            "[ADR-0001]",
+            "[]",
+        ));
+        std::fs::write(path, registry).unwrap();
+        let report = lint_docs(dir.path());
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message == "CAP-001: duplicate capability id"));
+    }
+
+    #[test]
     fn clean_graph_lints_clean() {
         let dir = clean_repo();
         let report = lint_docs(dir.path());
@@ -973,6 +1072,54 @@ mod tests {
             report.issues.iter().any(|i| i.message.contains("CAP-404")
                 && i.file.as_path() == Path::new("project-management/epics/EPC-001/EPC-001.md")),
             "nested epic back-ref must be linted; issues: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn capability_and_epic_links_must_be_reciprocal() {
+        let dir = clean_repo();
+        epic_file(dir.path(), "EPC-001", "[]", "[ADR-0001]");
+
+        let report = lint_docs(dir.path());
+        assert!(report.issues.iter().any(|issue| {
+            issue.message.contains("CAP-001 links EPC-001")
+                && issue.message.contains("does not link back")
+        }));
+    }
+
+    #[test]
+    fn epic_to_capability_link_requires_the_registry_backlink() {
+        let dir = clean_repo();
+        let registry = std::fs::read_to_string(dir.path().join("docs/capabilities.md")).unwrap();
+        std::fs::write(
+            dir.path().join("docs/capabilities.md"),
+            registry.replace("epics: [EPC-001]", "epics: []"),
+        )
+        .unwrap();
+
+        let report = lint_docs(dir.path());
+        assert!(report.issues.iter().any(|issue| {
+            issue.message.contains("EPC-001 links CAP-001")
+                && issue.message.contains("does not link back")
+        }));
+    }
+
+    #[test]
+    fn reciprocal_links_use_the_stable_format_id_for_legacy_epics() {
+        let dir = clean_repo();
+        let path = dir.path().join("project-management/epics/EPC-001.md");
+        let epic = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            path,
+            epic.replace("id: EPC-001", "id: epic-01a\nformat_id: EPC-001"),
+        )
+        .unwrap();
+
+        let report = lint_docs(dir.path());
+        assert!(
+            report.is_clean(),
+            "stable reciprocal identity should remain clean: {:?}",
             report.issues
         );
     }

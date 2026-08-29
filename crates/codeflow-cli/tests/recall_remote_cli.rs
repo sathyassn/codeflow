@@ -94,7 +94,7 @@ fn recall_all_answers_why_question_across_two_repos() {
     assert!(text.contains("[proj-b]"), "missing repo-b hit:\n{text}");
     assert!(
         text.contains("docs/decisions/ADR-0003-recall-engine.md"),
-        "{text}"
+        "repository-relative output must remain portable:\n{text}"
     );
     assert!(
         text.contains("(session)"),

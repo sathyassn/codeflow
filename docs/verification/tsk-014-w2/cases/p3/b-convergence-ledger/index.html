@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P3-b — did a later round answer an earlier finding, or only widen it?</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --reopen: #8a3a12; --extend: #4a6fa5; --settle: #16181d; --outside: #6b3fa0; --quiet: #eceef1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --reopen: #f0b073; --extend: #8fb4e8; --settle: #e9ebf0; --outside: #c4a6f0; --quiet: #1c1f26; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 88rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.3rem; color: var(--dim); max-width: 50rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .ledger { position: relative; }
+  #arcs { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  table { border-collapse: collapse; width: 100%; font-size: .7rem; position: relative; }
+  caption { text-align: left; font-size: .72rem; color: var(--muted); padding-bottom: .4rem; }
+  th, td { border-bottom: 1px solid var(--line); padding: .4rem .35rem; text-align: left;
+    vertical-align: top; }
+  thead th { border-bottom: 1px solid var(--ink); font-size: .68rem; letter-spacing: .04em;
+    color: var(--dim); font-weight: 600; white-space: nowrap; }
+  thead th small { display: block; font-weight: 400; color: var(--muted); letter-spacing: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+  thead .zone th, thead .zone td { border-bottom: 0; font-size: .59rem; letter-spacing: .1em;
+    text-transform: uppercase; font-weight: 700; color: var(--dim); padding-bottom: .1rem; }
+  thead .zone th.off { color: var(--outside); }
+  th[scope="row"] { width: 15rem; font-weight: 500; color: var(--ink); font-size: .72rem; }
+  th[scope="row"] b { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .74rem; font-weight: 650; }
+  /* Every row reserves a band under its text. Return arcs are drawn there, so a
+     drawn relationship can never sit on top of the words it relates. */
+  tbody th[scope="row"], tbody td { padding-bottom: 1.25rem; }
+  tbody tr:hover { background: var(--quiet); }
+
+  /* The one column that is not a round. Kept inside the ledger so an arrival
+     from off the axis has a real origin next to its destination, and kept
+     visibly detached so it can never be read as a ninth round. */
+  .off { border-left: 1px dashed var(--outside); padding-left: .6rem; width: 11rem; }
+  thead th.off { color: var(--outside); white-space: normal; }
+  td.off .olabel { display: block; color: var(--outside); font-weight: 650; }
+  td.off .odetail { display: block; color: var(--dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .94em; }
+  td.off .onone { color: var(--muted); }
+
+  td.empty { background: var(--quiet); }
+  td .words { display: block; font-weight: 600; color: var(--ink); }
+  td .cause { display: block; color: var(--dim); margin-top: .12rem; }
+  td.st-reopened .words { color: var(--reopen); }
+  td.st-extended .words { color: var(--extend); }
+  td.st-closed:not(.st-reopened) .words { color: var(--settle); }
+  td.outside .cause { color: var(--outside); font-weight: 650; }
+  td.settled { border-left: 1px solid var(--line); white-space: nowrap; }
+  td.settled b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; }
+  td.settled span { display: block; color: var(--dim); }
+  td.settled[data-multi="true"] span { color: var(--reopen); font-weight: 650; }
+
+  /* Strips: the narrow-viewport composition. Same axes, inverted — each finding
+     becomes a block, the ruler keeps its position on the round axis, and the
+     entries keep every word the matrix cells carried. */
+  .strips { display: none; }
+  .strip { border-top: 1px solid var(--ink); padding: .7rem 0 1rem; }
+  .strip > h2 { font-size: .82rem; margin: 0 0 .1rem; font-weight: 650; }
+  .strip > h2 b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .strip > p { margin: 0 0 .5rem; font-size: .74rem; color: var(--dim); }
+  .ruler { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; margin-bottom: .6rem; }
+  .ruler span { font-size: .58rem; text-align: center; color: var(--muted); padding-top: .2rem;
+    border-top: 3px solid var(--quiet); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .ruler span[data-active="true"] { border-top-color: var(--ink); color: var(--ink); font-weight: 650; }
+  .ruler span[data-active="true"][data-lead="reopened"] { border-top-color: var(--reopen); }
+  .ruler span[data-active="true"][data-lead="extended"] { border-top-color: var(--extend); }
+  .entries { list-style: none; margin: 0; padding: 0 0 0 1.6rem; }
+  .entry { position: relative; padding: 0 0 .55rem; font-size: .76rem; }
+  .entry .rid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; }
+  .entry .words { font-weight: 650; }
+  .entry .what { display: block; color: var(--dim); font-size: .74rem; }
+  .entry .cause { display: block; margin-top: .1rem; }
+  .entry.st-reopened .words, .entry.st-reopened .cause { color: var(--reopen); }
+  .entry.st-extended .words { color: var(--extend); }
+  .entry.outside .cause { color: var(--outside); }
+  /* The narrow twin of the off-axis column: the origin sits immediately above
+     the round it arrived at, so the connector stays inside the list's own
+     gutter and crosses nothing. */
+  .entry.origin .rid, .entry.origin .words { color: var(--outside); }
+  .entry.origin .odetail { display: block; color: var(--dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; }
+  .residual { margin: .2rem 0 0; font-size: .72rem; color: var(--muted);
+    border-top: 1px solid var(--line); padding-top: .25rem; }
+
+  details { margin-top: .5rem; font-size: .74rem; }
+  summary { cursor: pointer; color: var(--dim); }
+  summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .hunk { overflow-x: auto; border: 1px solid var(--line); margin-top: .4rem; }
+  .hunk:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .68rem; line-height: 1.5; }
+  pre .l { display: block; padding: 0 .5rem; white-space: pre; }
+  pre .l.add { color: var(--settle); font-weight: 600; }
+  pre .l.del { color: var(--dim); text-decoration: line-through; }
+  pre .l.ctx { color: var(--muted); }
+  .hunkat { font-size: .64rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all; margin: .5rem 0 0; }
+
+  .readout { margin: 1.6rem 0 0; border-top: 1px solid var(--line); padding-top: .8rem;
+    font-size: .82rem; color: var(--dim); max-width: 56rem; }
+  .readout b { color: var(--ink); font-weight: 650; }
+  .legend { margin-top: 1.2rem; font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; max-width: 56rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1.1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { tbody tr { transition: background .1s ease; } }
+
+  @media (max-width: 1180px) {
+    table, caption { display: none; }
+    .strips { display: block; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Findings across rounds — and whether a later round answered an earlier one</h1>
+  <p class="lede">Rounds run left to right. A cell says what happened to that finding in that round, and every row keeps a
+    clear band beneath its words for the arcs. A solid arc <strong>returns</strong> from a round that re-opened a finding
+    to the round whose fix did not hold. A round that only <strong>widened</strong> a check draws no arc, because nothing
+    had failed. One column is deliberately <strong>not a round</strong>: it holds the single cause that arrived from
+    outside this axis, next to the round it arrived at.</p>
+
+  <div class="ledger" id="ledger">
+    <svg id="arcs" aria-hidden="true" focusable="false"></svg>
+    <table id="matrix">
+      <caption>Seven findings, eight rounds, and one origin that is not a round. Empty cells mean the round did not touch that finding.</caption>
+      <thead>
+        <tr class="zone" id="zone"></tr>
+        <tr id="head"></tr>
+      </thead>
+      <tbody id="body"></tbody>
+    </table>
+    <div class="strips" id="strips"></div>
+  </div>
+
+  <p class="readout" id="readout"></p>
+
+  <div class="legend">
+    <div><b>raised + fixed</b> — the finding first appears together with its fix.</div>
+    <div><b>re-opened</b> — the earlier fix did not hold. A solid arc in the row's band runs back to the round it answers.</div>
+    <div><b>the off-axis column</b> — an origin that is not a round. Its dashed arc enters the round the cause arrived at; from there the solid arc carries on to the round that was re-opened. Six rows are empty because only one re-opening came from outside.</div>
+    <div><b>extended</b> — the round widened what the check proves. No arc: the earlier fix did not fail.</div>
+    <div><b>residual</b> — a bounded remainder the closing round recorded and left open.</div>
+  </div>
+  <p class="src">Source: the shared subject source <code>shared/p3-convergence.js</code>, over
+    <code>git show</code> of each round and <code>project-management/tasks/TSK-014.md</code>. Diff lines and quotations
+    are checked against the repository by <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/p3-convergence.js"></script>
+<script>
+(() => {
+  const model = window.p3Convergence;
+  const { rounds, findings } = model;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const wide = () => window.matchMedia("(min-width: 1181px)").matches;
+
+  const leadOf = (cell) =>
+    cell.states.includes("reopened") ? "reopened"
+      : cell.states.includes("extended") ? "extended"
+        : cell.states.includes("closed") ? "closed" : "opened";
+  const wordsOf = (cell) => {
+    const parts = [];
+    if (cell.states.includes("reopened")) parts.push("re-opened");
+    else if (cell.states.includes("extended")) parts.push("extended");
+    else if (cell.states.includes("opened")) parts.push("raised + fixed");
+    if (cell.states.includes("closed")) parts.push(cell.states.includes("reopened") ? "and closed" : "closed");
+    return parts.join(" ");
+  };
+  const causeOf = (cell) => cell.answers
+    ? (cell.cause === "outside-harness"
+        ? `from outside the harness, not from ${cell.answers}`
+        : `caused by the fix in ${cell.answers}`)
+    : "";
+  const classOf = (cell) => cell.states.map((s) => `st-${s}`).join(" ") +
+    (cell.cause === "outside-harness" ? " outside" : "");
+
+  // The one re-opening whose cause was not a round. It is a property of the
+  // subject, not of this page: the source records the origin or there is none.
+  const originOf = (finding) => model.reopenings(finding)
+    .find((cell) => cell.cause === "outside-harness" && cell.origin) ?? null;
+
+  // ------------------------------------------------------------- matrix
+  document.getElementById("zone").innerHTML =
+    `<td></td><th colspan="${rounds.length}" scope="colgroup">rounds &mdash; inside the harness</th>` +
+    `<th scope="colgroup" class="off">not a round</th><td></td>`;
+
+  document.getElementById("head").innerHTML =
+    `<th scope="col">finding</th>` +
+    rounds.map((r) => `<th scope="col">${r.id}<small>${r.sha}</small></th>`).join("") +
+    `<th scope="col" class="off">where a cause arrived from<small>off this axis</small></th>` +
+    `<th scope="col">settled</th>`;
+
+  document.getElementById("body").innerHTML = findings.map((f) => {
+    const spanned = model.rounds_spanned(f);
+    const multi = model.reopenings(f).length > 0;
+    const origin = originOf(f);
+    return `<tr><th scope="row"><b>${f.id}</b>${f.title}</th>` +
+      rounds.map((r) => {
+        const cell = model.cellOf(f.id, r.id);
+        if (!cell) return `<td class="empty"></td>`;
+        return `<td class="${classOf(cell)}" data-cell="${f.id}-${r.id}">` +
+          `<span class="words">${wordsOf(cell)}</span>` +
+          (cell.answers ? `<span class="cause">${causeOf(cell)}</span>` : "") +
+          (cell.states.includes("residual") ? `<span class="cause">residual left open</span>` : "") +
+          `</td>`;
+      }).join("") +
+      `<td class="off" data-cell="${f.id}-outside">` +
+      (origin
+        ? `<span class="olabel">${esc(origin.origin.label)}</span>` +
+          `<span class="odetail">${esc(origin.origin.detail)}</span>` +
+          `<span class="odetail">&rarr; ${origin.round}</span>`
+        : `<span class="onone">&mdash;</span>`) +
+      `</td>` +
+      `<td class="settled" data-multi="${multi}"><b>${model.closedIn(f)}</b>` +
+      `<span>${multi ? `${spanned} rounds` : "first try"}</span></td></tr>`;
+  }).join("");
+
+  // ------------------------------------------------------------- strips
+  document.getElementById("strips").innerHTML = findings.map((f) => {
+    const multi = model.reopenings(f).length > 0;
+    const origin = originOf(f);
+    // The ruler carries rounds only — that is what "off the axis" means. The
+    // origin appears instead directly above the round it arrived at, so its
+    // connector stays inside the list's own gutter.
+    const originItem = (cell) => (origin && origin.round === cell.round
+      ? `<li class="entry origin" data-cell="${f.id}-outside">` +
+        `<span class="rid">outside</span> <span class="words">${esc(origin.origin.label)}</span>` +
+        `<span class="odetail">${esc(origin.origin.detail)}</span>` +
+        `<span class="what">not a round on this axis — it arrived at ${origin.round}.</span></li>`
+      : "");
+    return `<section class="strip"><h2><b>${f.id}</b> — ${f.title}</h2>` +
+      `<p>settled at ${model.closedIn(f)}${multi ? ` after ${model.rounds_spanned(f)} rounds` : ", first try"}</p>` +
+      `<div class="ruler">${rounds.map((r) => {
+        const cell = model.cellOf(f.id, r.id);
+        return `<span data-active="${Boolean(cell)}"${cell ? ` data-lead="${leadOf(cell)}"` : ""}>${r.id}</span>`;
+      }).join("")}</div>` +
+      `<ul class="entries">${f.cells.map((cell) => originItem(cell) +
+        `<li class="entry ${classOf(cell)}" data-cell="${f.id}-${cell.round}">` +
+        `<span class="rid">${cell.round}</span> <span class="words">${wordsOf(cell)}</span>` +
+        `<span class="what">${cell.what}.</span>` +
+        (cell.answers ? `<span class="cause">&uarr; ${causeOf(cell)}</span>` : "") +
+        `</li>`).join("")}</ul>` +
+      (f.residual ? `<p class="residual">still open: ${f.residual}</p>` : "") +
+      `</section>`;
+  }).join("");
+
+  // ------------------------------- the diff, deliberately secondary
+  const detailHost = document.createElement("div");
+  detailHost.innerHTML = findings.map((f) => {
+    const cells = f.cells.filter((c) => c.hunk);
+    return `<details><summary>${f.id} — the ${cells.length} change${cells.length === 1 ? "" : "s"} behind this row` +
+      `${f.quotes.length ? `, and ${f.quotes.length} quotation${f.quotes.length === 1 ? "" : "s"}` : ""}</summary>` +
+      cells.map((c) => `<p class="hunkat">${c.round} &nbsp;${c.hunk.path} &nbsp;${c.hunk.header}</p>` +
+        `<div class="hunk" tabindex="0" role="group" aria-label="${c.round} diff at ${c.hunk.path}">` +
+        `<pre>${c.hunk.lines.map((line) => {
+          const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+          return `<span class="l ${kind}">${esc(line)}</span>`;
+        }).join("")}</pre></div>`).join("") +
+      f.quotes.map((q) => `<p class="hunkat">&ldquo;${esc(q.text)}&rdquo; — ${q.source}</p>`).join("") +
+      `</details>`;
+  }).join("");
+  document.getElementById("readout").after(detailHost);
+
+  // ------------------------------------------------------------ readout
+  const { multiRound, external, selfCaused } = model.answer;
+  const externalFinding = findings.find((f) => f.id === external[0]);
+  const externalCell = originOf(externalFinding);
+  document.getElementById("readout").innerHTML =
+    `<b>${multiRound.length} of ${findings.length}</b> findings needed more than one round: ${multiRound.join(", ")}. ` +
+    `${selfCaused.join(" and ")} were re-opened by their own fixes — those arcs start and end inside the round axis. ` +
+    `<b>${external.join(", ")}</b> is the only one whose re-opening arrived from off it: ` +
+    `${esc(externalCell.origin.label)}, ${esc(externalCell.origin.detail)}, landing at ${externalCell.round}, ` +
+    `which is why the closing change is in <code>${externalCell.hunk.path}</code> and not in the harness.`;
+
+  // ------------------------------------------------------------- arcs
+  function drawArcs() {
+    const svg = document.getElementById("arcs");
+    const field = document.getElementById("ledger").getBoundingClientRect();
+    svg.setAttribute("viewBox", `0 0 ${field.width} ${field.height}`);
+    svg.textContent = "";
+    const rectOf = (key) => {
+      const nodes = [...document.querySelectorAll(`[data-cell="${key}"]`)]
+        .filter((n) => n.getClientRects().length);
+      if (!nodes.length) return null;
+      const r = nodes[0].getBoundingClientRect();
+      return { left: r.left - field.left, right: r.right - field.left,
+        top: r.top - field.top, bottom: r.bottom - field.top, midY: r.top - field.top + r.height / 2 };
+    };
+    const line = (d, colour, dash) => {
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", d);
+      p.setAttribute("fill", "none");
+      p.setAttribute("stroke", colour);
+      p.setAttribute("stroke-width", "1.8");
+      if (dash) p.setAttribute("stroke-dasharray", dash);
+      svg.append(p);
+      return p;
+    };
+    // An arrowhead at (x, y) for a stroke travelling in unit direction (ux, uy).
+    const head = (x, y, ux, uy, colour) => {
+      const px = -uy;
+      const py = ux;
+      const back = 5.5;
+      const wing = 3.4;
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d",
+        `M ${x} ${y} L ${x - ux * back + px * wing} ${y - uy * back + py * wing} ` +
+        `M ${x} ${y} L ${x - ux * back - px * wing} ${y - uy * back - py * wing}`);
+      p.setAttribute("fill", "none");
+      p.setAttribute("stroke", colour);
+      p.setAttribute("stroke-width", "1.8");
+      svg.append(p);
+    };
+    const reopenColour = getComputedStyle(document.body).getPropertyValue("--reopen").trim();
+    const outsideColour = getComputedStyle(document.body).getPropertyValue("--outside").trim();
+
+    // Two relationships, drawn the same way in both layouts and never over text.
+    // Wide: inside the band each row reserves beneath its own words. Narrow:
+    // inside the gutter the entry list reserves to its left, on two lanes so the
+    // two strokes cannot overlap.
+    //   solid   — the round that re-opened a finding returns to the round it answers
+    //   dashed  — a cause that is not a round arrives at the round it landed in
+    // The two strokes are kept off each other by construction: wide layouts
+    // offset where each enters its destination cell, narrow layouts give each
+    // its own lane of the reserved gutter.
+    const arc = (fromKey, toKey, colour, dash, enter, lane) => {
+      const from = rectOf(fromKey);
+      const to = rectOf(toKey);
+      if (!from || !to) return;
+      if (wide()) {
+        const rise = Math.min(from.bottom, to.bottom) - 17;
+        const run = Math.min(from.bottom, to.bottom) - 6;
+        line(`M ${from.left + 9} ${rise} V ${run} H ${to.left + enter} V ${rise}`, colour, dash);
+        head(to.left + enter, rise, 0, -1, colour);
+        return;
+      }
+      const x = Math.min(from.left, to.left) - lane;
+      line(`M ${from.left - 4} ${from.midY} H ${x} V ${to.midY} H ${to.left - 5}`, colour, dash);
+      head(to.left - 4, to.midY, 1, 0, colour);
+    };
+
+    findings.forEach((f) => model.reopenings(f).forEach((cell) => {
+      if (cell.cause === "outside-harness" && cell.origin) {
+        // The cause came from the one column that is not a round. It arrives at
+        // the round it landed in; that round's own solid arc then carries on to
+        // the round it re-opened, so the chain reads origin → landing → answered.
+        arc(`${f.id}-outside`, `${f.id}-${cell.round}`, outsideColour, "5 3", 28, 9);
+      }
+      // The back-reference is the same relationship whatever caused it.
+      arc(`${f.id}-${cell.round}`, `${f.id}-${cell.answers}`, reopenColour, null, 9, 20);
+    }));
+    document.documentElement.dataset.answer = JSON.stringify(model.answer);
+    document.documentElement.dataset.ready = "true";
+  }
+
+  requestAnimationFrame(drawArcs);
+  let timer;
+  addEventListener("resize", () => { clearTimeout(timer); timer = setTimeout(drawArcs, 120); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EPC-005 — waves, the unbroken run, and room</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #14181f;      --ink-2: #4a5361;   --ink-3: #5c6573;
+    --page: #f7f8fa;     --panel: #ffffff;   --rule: #d9dde4;
+    --guide: #e6e9ee;    --spine: #17233a;   --spine-soft: #8b97ab;
+    --feed: #5d6a80;
+    --room: #7a5a12;     --room-fill: #fbf3de;
+    --now: #1c4f3f;
+    --shadow: 0 1px 2px rgba(20, 24, 31, .06), 0 8px 24px -16px rgba(20, 24, 31, .3);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #edf0f4;     --ink-2: #b3bcc9;  --ink-3: #8d97a5;
+      --page: #0f1216;    --panel: #171b21;  --rule: #2b323b;
+      --guide: #232932;   --spine: #dfe6f2;  --spine-soft: #6c7787;
+      --feed: #9aa6ba;
+      --room: #e6c169;    --room-fill: #2a2417;
+      --now: #7fd8b4;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px -16px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 40px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 10px;
+  }
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -.015em; margin: 0 0 12px; font-weight: 640; }
+  .lede { margin: 0 0 30px; max-width: 62ch; color: var(--ink-2); font-size: 16.5px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 22px 26px 18px; box-shadow: var(--shadow); }
+  svg { display: block; width: 100%; height: auto; }
+  text { font-family: inherit; }
+  .wave-label { font-size: 13px; font-weight: 620; fill: var(--ink-2); letter-spacing: .01em; }
+  .wave-sub   { font-size: 11px; fill: var(--ink-3); }
+  .task-id    { font-size: 15px; font-weight: 660; letter-spacing: .01em;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .task-name  { font-size: 12.5px; fill: var(--ink-2); }
+  .guide { stroke: var(--guide); stroke-width: 1; }
+  .spine-run { stroke: var(--spine); stroke-width: 9; stroke-linecap: round; fill: none; }
+  .spine-node { fill: var(--panel); stroke: var(--spine); stroke-width: 2.5; }
+  .spine-node.now { stroke-width: 2.5; }
+  .joint { fill: var(--spine); }
+  .room-node { fill: var(--panel); stroke: var(--room); stroke-width: 1.5; stroke-dasharray: 5 3; }
+  .room-track { fill: var(--room-fill); stroke: var(--room); stroke-width: 1.5; stroke-dasharray: 5 3; }
+  .room-tick { stroke: var(--room); stroke-width: 1.5; }
+  .room-cap { stroke: var(--room); stroke-width: 3; stroke-linecap: butt; }
+  .room-lead { stroke: var(--room); stroke-width: 1.5; stroke-dasharray: 3 3; }
+  /* F14. These were 1.25px of the softest line colour at 60% opacity — three
+     reductions stacked on the same mark, which is how a dependency edge ends up
+     weak at the wide band and indistinguishable from a guide. One reduction is
+     enough to say "mechanics, one layer in". */
+  .feeds { stroke: var(--feed); stroke-width: 1.9; fill: none; }
+  .register-rule { stroke: var(--rule); stroke-width: 1.5; stroke-dasharray: 9 5; }
+  .register-label { font-size: 11px; fill: var(--ink-3); letter-spacing: .09em; text-transform: uppercase; }
+  .now-tab { fill: var(--now); }
+  .id-spine { fill: var(--ink); } .id-room { fill: var(--ink); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 26px; margin: 22px 2px 0;
+            font-size: 13.5px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 46px; height: 16px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 14px; width: 100%; }
+  th, td { text-align: left; padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule); }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .src { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .band-wide, .band-mid, .band-narrow { display: none; }
+  .band-wide { display: block; }
+  @media (max-width: 1080px) {
+    body { padding: 32px 28px 56px; }
+    h1 { font-size: 26px; }
+    .band-wide { display: none; } .band-mid { display: block; }
+  }
+  @media (max-width: 640px) {
+    body { padding: 24px 16px 48px; }
+    h1 { font-size: 22px; }
+    figure { padding: 16px 14px 14px; border-radius: 11px; }
+    .band-mid { display: none; } .band-narrow { display: block; }
+    .legend { gap: 10px 18px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">EPC-005 · presentation system</p>
+  <h1>The work that is not finished yet</h1>
+  <p class="lede">Six tasks remain. Each one sits at <b>the earliest wave it could start</b> — the axis
+    runs from what is open now to the last thing the epic can finish. Where a task can be started later
+    without the epic finishing later, that later start is drawn as extent along the same axis.</p>
+
+  <figure>
+    <div class="band-wide" id="wide"></div>
+    <div class="band-mid" id="mid"></div>
+    <div class="band-narrow" id="narrow"></div>
+    <div class="legend" id="legend"></div>
+  </figure>
+
+  <details>
+    <summary>The same six tasks as a table</summary>
+    <table id="facts">
+      <thead><tr><th>Task</th><th>Status</th><th>Depends on (still open)</th><th>Earliest wave</th><th>Latest wave</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Derived at load from <code>shared/plan-model.js</code> over the frontmatter of
+    <code>project-management/tasks/TSK-*.md</code>. No value on this page is typed by hand.</p>
+</div>
+
+<script type="application/json" id="plan-data">
+{
+  "tasks": [
+    { "id": "TSK-005", "title": "strengthen editorial and product design contracts", "status": "complete", "deps": [], "specs": ["SPC-003"], "target": "main" },
+    { "id": "TSK-006", "title": "research and prototype the presentation experience", "status": "complete", "deps": ["TSK-005"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-007", "title": "verify and qualify the presentation utility", "status": "blocked", "deps": ["TSK-011"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-008", "title": "research and prototype documentation portals", "status": "complete", "deps": ["TSK-005"], "specs": ["SPC-005"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-009", "title": "build and qualify the documentation portal utility", "status": "blocked", "deps": ["TSK-008", "TSK-014"], "specs": ["SPC-005"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-010", "title": "integrate and release the CodeFlow system", "status": "todo", "deps": ["TSK-007", "TSK-009", "TSK-013", "TSK-014"], "specs": [], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-011", "title": "build the interactive presentation utility", "status": "blocked", "deps": ["TSK-006", "TSK-014"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-012", "title": "refine design exploration, sourcing, and revision contracts", "status": "cancelled", "deps": ["TSK-005"], "specs": ["SPC-006"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-013", "title": "prepare the v3 release candidate", "status": "in_progress", "deps": [], "specs": [], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-014", "title": "recover the design method and utility directions", "status": "in_progress", "deps": ["TSK-005", "TSK-006", "TSK-008"], "specs": ["SPC-004", "SPC-005", "SPC-006"], "target": "integration/EPC-005-presentation-system" }
+  ]
+}
+</script>
+<script src="../../../shared/plan-model.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const model = window.planModel(JSON.parse(document.getElementById("plan-data").textContent));
+  // A short label may only shorten a task's real title; tools/verify.mjs checks
+  // that every word here appears in the frontmatter title, so a label can never
+  // quietly rename the work it points at.
+  const short = {
+    "TSK-007": "qualify the utility", "TSK-009": "build the portal", "TSK-010": "release the system",
+    "TSK-011": "build the presentation utility", "TSK-013": "the v3 release candidate",
+    "TSK-014": "recover the design method",
+  };
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svg = (w, h, title, desc) => {
+    const root = n("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-labelledby": "" });
+    const tid = `t${++svg.seq}`; const did = `d${svg.seq}`;
+    root.setAttribute("aria-labelledby", `${tid} ${did}`);
+    root.append(n("title", { id: tid }, title), n("desc", { id: did }, desc));
+    return root;
+  };
+  svg.seq = 0;
+  const TITLE = "EPC-005 remaining tasks on a wave axis";
+  const DESC = "Tasks are placed at the earliest wave each could start. A single heavy line runs "
+    + "through the tasks it passes through. Every task carries a cap on the same wave scale: where a "
+    + "task could start later, a dashed track runs from its own wave line out to that cap, ticked at "
+    + "each wave it crosses; where it could not, the cap sits flush on its own wave line. Thin curves "
+    + "are the remaining dependencies. A solid tab on a task's leading edge means nothing still open "
+    + "blocks it today.";
+
+  const chainSet = new Set(model.chain);
+  const openTasks = model.open.slice().sort((a, b) => model.wave(a.id) - model.wave(b.id));
+  const roomOf = (id) => model.room[id] ?? 0;
+
+  // ---------------------------------------------------------------- wide
+  function wide() {
+    const W = 1180, COLS = model.maxWave, X0 = 140, COLW = 242, INSET = 14, NODE_H = 54;
+    const NODE_W = COLW - INSET * 2;
+    const colLeft = (w) => X0 + (w - 1) * COLW;
+    const colRight = (w) => X0 + w * COLW;
+    const cx = (w) => X0 + (w - 0.5) * COLW;
+    const rows = { spine: 104, mid: 236, low: 330 };
+    const H = 466;
+    const s = svg(W, H, TITLE, DESC);
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+
+    const guides = g();
+    for (let i = 0; i <= COLS; i += 1) {
+      guides.append(n("line", { class: "guide", x1: X0 + i * COLW, y1: 86, x2: X0 + i * COLW, y2: H - 24 }));
+    }
+    for (let w = 1; w <= COLS; w += 1) {
+      guides.append(n("text", { class: "wave-label", x: cx(w), y: 44, "text-anchor": "middle" }, `wave ${w}`));
+    }
+    guides.append(n("text", { class: "wave-sub", x: X0, y: 62 }, "open now"));
+    guides.append(n("text", { class: "wave-sub", x: X0 + COLS * COLW, y: 62, "text-anchor": "end" }, "epic finishes"));
+
+    const place = (id) => {
+      const w = model.wave(id);
+      const y = chainSet.has(id) ? rows.spine : (id === "TSK-009" ? rows.mid : rows.low);
+      return { w, x: colLeft(w) + INSET, y, cx: cx(w), cy: y + NODE_H / 2,
+        r: colRight(w) - INSET, b: y + NODE_H };
+    };
+
+    // The remaining dependencies are mechanics, one layer in: thin, low, and
+    // curved so they read as links rather than as a frame around the field.
+    const feeds = g();
+    const curve = (d) => feeds.append(n("path", { class: "feeds", d }));
+    const a14 = place("TSK-014"), a09 = place("TSK-009"), a13 = place("TSK-013"), a10 = place("TSK-010");
+    curve(`M${a14.cx},${a14.y} C${a14.cx + 160},${a14.y - 40} ${a10.cx - 160},${a10.y - 40} ${a10.cx},${a10.y}`);
+    curve(`M${a14.cx},${a14.b} C${a14.cx},${a14.b + 48} ${a09.cx},${a09.y - 46} ${a09.cx},${a09.y}`);
+    curve(`M${a09.cx},${a09.b} C${a09.cx + 184},${a09.b + 180} ${a10.cx - 20},${a09.b + 160} ${a10.cx - 20},${a10.b}`);
+    curve(`M${a13.cx},${a13.b} C${a13.cx + 240},${a13.b + 92} ${a10.cx + 20},${a13.b + 84} ${a10.cx + 20},${a10.b}`);
+
+    // One unbroken line, drawn before the boxes so it threads through them.
+    const run = g();
+    const first = place(model.chain[0]), last = place(model.chain[model.chain.length - 1]);
+    run.append(n("line", { class: "spine-run", x1: first.cx, y1: first.cy, x2: last.cx, y2: last.cy }));
+    for (const id of model.chain) {
+      const p = place(id);
+      run.append(n("circle", { class: "joint", cx: p.cx, cy: p.cy, r: 4.5 }));
+    }
+
+    // Extent is measured on the same axis as position: a track starts at its
+    // task's own wave boundary and every tick lands on a later one, so the
+    // length is countable in waves rather than merely long.
+    // Every task is measured on the same scale, so a task with none is drawn
+    // rather than left out: its cap sits flush on its own wave line, at zero.
+    const tracks = g();
+    for (const task of openTasks) {
+      const p = place(task.id), start = colRight(p.w), len = roomOf(task.id) * COLW;
+      if (len > 0) {
+        tracks.append(n("line", { class: "room-lead", x1: p.r, y1: p.cy, x2: start, y2: p.cy }));
+        tracks.append(n("rect", { class: "room-track", x: start, y: p.cy - 11, width: len, height: 22, rx: 5 }));
+        for (let k = 1; k < roomOf(task.id); k += 1) {
+          tracks.append(n("line", { class: "room-tick", x1: start + k * COLW, y1: p.cy - 11, x2: start + k * COLW, y2: p.cy + 11 }));
+        }
+      }
+      tracks.append(n("line", { class: "room-cap", x1: start + len, y1: p.cy - 15, x2: start + len, y2: p.cy + 15 }));
+    }
+
+    const nodes = g();
+    for (const task of openTasks) {
+      const p = place(task.id), onRun = chainSet.has(task.id);
+      nodes.append(n("rect", {
+        class: onRun ? "spine-node" : "room-node", x: p.x, y: p.y, width: NODE_W, height: NODE_H, rx: 8,
+      }));
+      if (model.startable.includes(task.id)) {
+        nodes.append(n("rect", { class: "now-tab", x: p.x - 3, y: p.y + 6, width: 6, height: NODE_H - 12, rx: 3 }));
+      }
+      nodes.append(n("text", { class: `task-id ${onRun ? "id-spine" : "id-room"}`, x: p.x + 18, y: p.y + 23 }, task.id));
+      nodes.append(n("text", { class: "task-name", x: p.x + 18, y: p.y + 41 }, short[task.id]));
+    }
+    return s;
+  }
+
+  // ------------------------------------------------------- intermediate
+  // The four-column field does not fit. Instead of shrinking it, the field
+  // collapses to two bands against the same horizontal wave axis: the
+  // unbroken run above, everything with extent below.
+  function mid() {
+    const W = 900, COLS = model.maxWave, X0 = 96, COLW = 196, INSET = 12, NODE_H = 66;
+    const NODE_W = COLW - INSET * 2;
+    const colLeft = (w) => X0 + (w - 1) * COLW;
+    const colRight = (w) => X0 + w * COLW;
+    const cx = (w) => X0 + (w - 0.5) * COLW;
+    const rows = { spine: 98, low: 226 };
+    const H = 396;
+    const s = svg(W, H, TITLE, DESC);
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+
+    const guides = g();
+    for (let i = 0; i <= COLS; i += 1) {
+      guides.append(n("line", { class: "guide", x1: X0 + i * COLW, y1: 72, x2: X0 + i * COLW, y2: H - 14 }));
+    }
+    for (let w = 1; w <= COLS; w += 1) {
+      guides.append(n("text", { class: "wave-label", x: cx(w), y: 42, "text-anchor": "middle" }, `wave ${w}`));
+    }
+    guides.append(n("text", { class: "wave-sub", x: X0, y: 60 }, "open now"));
+    guides.append(n("text", { class: "wave-sub", x: X0 + COLS * COLW, y: 60, "text-anchor": "end" }, "epic finishes"));
+
+    // The four-column field and the tracks that cross it stop sharing one
+    // arrangement here. The run keeps a register of its own above the divider;
+    // everything with a later start moves into a second register below it,
+    // against the same wave axis. Position and extent both survive, and the
+    // page stops being one field.
+    const belowOrder = ["TSK-009", "TSK-013"];
+    const place = (id) => {
+      const w = model.wave(id);
+      const y = chainSet.has(id) ? rows.spine : rows.low + belowOrder.indexOf(id) * 74;
+      return { w, x: colLeft(w) + INSET, y, cx: cx(w), cy: y + NODE_H / 2, r: colRight(w) - INSET, b: y + NODE_H };
+    };
+    const dividerY = rows.low - 30;
+    guides.append(n("line", { class: "register-rule", x1: 4, y1: dividerY, x2: W - 4, y2: dividerY }));
+    guides.append(n("text", { class: "register-label", x: 4, y: dividerY - 8 }, "the run"));
+    guides.append(n("text", { class: "register-label", x: 4, y: dividerY + 18 }, "and what can start later"));
+
+    const feeds = g();
+    const curve = (d) => feeds.append(n("path", { class: "feeds", d }));
+    const a14 = place("TSK-014"), a09 = place("TSK-009"), a13 = place("TSK-013"), a10 = place("TSK-010");
+    curve(`M${a14.cx},${a14.y} C${a14.cx + 130},${a14.y - 36} ${a10.cx - 130},${a10.y - 36} ${a10.cx},${a10.y}`);
+    curve(`M${a14.cx},${a14.b} C${a14.cx},${a14.b + 44} ${a09.cx},${a09.y - 42} ${a09.cx},${a09.y}`);
+    curve(`M${a09.cx},${a09.b} C${a09.cx + 150},${a09.b + 34} ${a10.cx - 18},${a09.b + 30} ${a10.cx - 18},${a10.b}`);
+    curve(`M${a13.cx},${a13.b} C${a13.cx + 210},${a13.b + 56} ${a10.cx + 18},${a13.b + 50} ${a10.cx + 18},${a10.b}`);
+
+    const run = g();
+    const first = place(model.chain[0]), last = place(model.chain[model.chain.length - 1]);
+    run.append(n("line", { class: "spine-run", x1: first.cx, y1: first.cy, x2: last.cx, y2: last.cy }));
+    for (const id of model.chain) {
+      const p = place(id);
+      run.append(n("circle", { class: "joint", cx: p.cx, cy: p.cy, r: 4 }));
+    }
+
+    const tracks = g();
+    for (const task of openTasks) {
+      const p = place(task.id), start = colRight(p.w), len = roomOf(task.id) * COLW;
+      if (len > 0) {
+        tracks.append(n("line", { class: "room-lead", x1: p.r, y1: p.cy, x2: start, y2: p.cy }));
+        tracks.append(n("rect", { class: "room-track", x: start, y: p.cy - 10, width: len, height: 20, rx: 5 }));
+        for (let k = 1; k < roomOf(task.id); k += 1) {
+          tracks.append(n("line", { class: "room-tick", x1: start + k * COLW, y1: p.cy - 10, x2: start + k * COLW, y2: p.cy + 10 }));
+        }
+      }
+      tracks.append(n("line", { class: "room-cap", x1: start + len, y1: p.cy - 14, x2: start + len, y2: p.cy + 14 }));
+    }
+
+    const nodes = g();
+    for (const task of openTasks) {
+      const p = place(task.id), onRun = chainSet.has(task.id);
+      nodes.append(n("rect", { class: onRun ? "spine-node" : "room-node", x: p.x, y: p.y, width: NODE_W, height: NODE_H, rx: 8 }));
+      if (model.startable.includes(task.id)) {
+        nodes.append(n("rect", { class: "now-tab", x: p.x - 3, y: p.y + 6, width: 6, height: NODE_H - 12, rx: 3 }));
+      }
+      nodes.append(n("text", { class: `task-id ${onRun ? "id-spine" : "id-room"}`, x: p.x + 13, y: p.y + 24 }, task.id));
+      const name = short[task.id].split(" ");
+      nodes.append(n("text", { class: "task-name", x: p.x + 13, y: p.y + 42 }, name.slice(0, 2).join(" ")));
+      if (name.length > 2) nodes.append(n("text", { class: "task-name", x: p.x + 13, y: p.y + 57 }, name.slice(2).join(" ")));
+    }
+    return s;
+  }
+
+  // -------------------------------------------------------------- narrow
+  // The axis turns. Waves become rows down the page and the unbroken run
+  // descends through them; extent still runs along a measured scale, now
+  // across. Position still says which wave; it is not a stack of equal boxes.
+  function narrow() {
+    /* W4 REPLACEMENT of the narrow band, declared in registry.json before it was
+       drawn. The W3 band measured every task's later start downward in ONE
+       SHARED GUTTER at a single x: two tasks whose room overlapped merged into
+       one continuous column, three caps landed on the same wave boundary and
+       rendered as a single mark, and a zero-room cap was orphaned below the last
+       row attached to nothing. Everything was inside the frame, so no containment
+       probe saw any of it, and the reader could not recover which task had how
+       much room — which is the question.
+
+       Extent no longer rotates with the axis. Waves stay rows, the run still
+       descends through them, and a later start is measured HORIZONTALLY inside
+       that task's own row against one shared scale drawn once at the head. Two
+       tasks cannot occupy one column because no two rows are the same row, and a
+       task with no room carries its cap at zero on that scale, in its own row. */
+    const W = 358, ROWH = 116, NODE_X = 50, NODE_W = 186, NODE_H = 46;
+    const RS_X = 250, RS_W = 100;                        // the shared room scale
+    const top = 62;
+    const H = top + model.maxWave * ROWH + 26;
+    const s = svg(W, H, TITLE, DESC);
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+    const boundary = (w) => top + w * ROWH;              // the line BELOW wave w
+    const slotY = (w, slot) => top + (w - 1) * ROWH + 10 + slot * 56;
+
+    const guides = g();
+    for (let w = 0; w <= model.maxWave; w += 1) {
+      guides.append(n("line", { class: "guide", x1: 6, y1: boundary(w), x2: W - 6, y2: boundary(w) }));
+    }
+    for (let w = 1; w <= model.maxWave; w += 1) {
+      guides.append(n("text", { class: "wave-label", x: 6, y: boundary(w - 1) + 16 }, `wave ${w}`));
+    }
+    guides.append(n("text", { class: "wave-sub", x: 6, y: 26 }, "open now"));
+    guides.append(n("text", { class: "wave-sub", x: 6, y: 44 }, "↓ to the epic's finish"));
+    /* the shared room scale, drawn once */
+    const maxRoom = Math.max(...openTasks.map((t) => roomOf(t.id)), 1);
+    const rx = (r) => RS_X + (r / maxRoom) * RS_W;
+    guides.append(n("text", { class: "wave-sub", x: RS_X, y: 26, "text-anchor": "middle" }, "later start"));
+    for (let r = 0; r <= maxRoom; r += 1) {
+      guides.append(n("line", { class: "guide", x1: rx(r), y1: 34, x2: rx(r), y2: H - 20 }));
+      guides.append(n("text", { class: "wave-sub", x: rx(r), y: 46, "text-anchor": "middle" }, String(r)));
+    }
+
+    // The axis turns, and extent turns with it: waves are rows, the run
+    // descends through them, and a later start is measured down the same rows
+    // in a gutter of its own. Nothing is a stack of equal boxes and nothing
+    // overlaps.
+    const slotOf = new Map();
+    for (let w = 1; w <= model.maxWave; w += 1) {
+      const here = openTasks.filter((t) => model.wave(t.id) === w)
+        .sort((a, b) => Number(chainSet.has(b.id)) - Number(chainSet.has(a.id)));
+      here.forEach((task, index) => slotOf.set(task.id, index));
+    }
+    const place = (id) => {
+      const w = model.wave(id), y = slotY(w, slotOf.get(id));
+      return { w, x: NODE_X, y, cx: NODE_X + NODE_W / 2, cy: y + NODE_H / 2, b: y + NODE_H };
+    };
+
+    const feeds = g();
+    for (const [from, to] of [["TSK-014", "TSK-009"], ["TSK-009", "TSK-010"], ["TSK-013", "TSK-010"]]) {
+      const a = place(from), b = place(to);
+      const lane = NODE_X - 14;
+      feeds.append(n("path", { class: "feeds",
+        d: `M${a.x},${a.cy} C${lane - 16},${a.cy} ${lane - 16},${b.cy} ${b.x},${b.cy}` }));
+    }
+
+    const run = g();
+    const first = place(model.chain[0]), last = place(model.chain[model.chain.length - 1]);
+    run.append(n("line", { class: "spine-run", x1: first.cx, y1: first.cy, x2: last.cx, y2: last.cy }));
+    for (const id of model.chain) {
+      const p = place(id);
+      run.append(n("circle", { class: "joint", cx: p.cx, cy: p.cy, r: 4 }));
+    }
+
+    const tracks = g();
+    for (const task of openTasks) {
+      const p = place(task.id), room = roomOf(task.id);
+      if (room > 0) {
+        tracks.append(n("rect", { class: "room-track", x: rx(0), y: p.cy - 8, width: rx(room) - rx(0), height: 16, rx: 4 }));
+        for (let k = 1; k < room; k += 1) {
+          tracks.append(n("line", { class: "room-tick", x1: rx(k), y1: p.cy - 8, x2: rx(k), y2: p.cy + 8 }));
+        }
+      }
+      tracks.append(n("line", { class: "room-cap", x1: rx(room), y1: p.cy - 13, x2: rx(room), y2: p.cy + 13 }));
+    }
+
+    const nodes = g();
+    for (const task of openTasks) {
+      const p = place(task.id), onRun = chainSet.has(task.id);
+      nodes.append(n("rect", { class: onRun ? "spine-node" : "room-node", x: p.x, y: p.y, width: NODE_W, height: NODE_H, rx: 7 }));
+      if (model.startable.includes(task.id)) {
+        nodes.append(n("rect", { class: "now-tab", x: p.x - 3, y: p.y + 5, width: 6, height: NODE_H - 10, rx: 3 }));
+      }
+      nodes.append(n("text", { class: `task-id ${onRun ? "id-spine" : "id-room"}`, x: p.x + 12, y: p.y + 20 }, task.id));
+      nodes.append(n("text", { class: "task-name", x: p.x + 12, y: p.y + 36 }, short[task.id]));
+    }
+    return s;
+  }
+
+  document.getElementById("wide").append(wide());
+  document.getElementById("mid").append(mid());
+  document.getElementById("narrow").append(narrow());
+
+  // ------------------------------------------------------------- legend
+  const legendMarks = [
+    ["one unbroken run", '<line x1="2" y1="8" x2="44" y2="8" class="spine-run"/><circle cx="23" cy="8" r="3.5" class="joint"/>'],
+    ["how much later it could start; the cap marks the limit",
+      '<line x1="2" y1="8" x2="8" y2="8" class="room-lead"/><rect x="8" y="2" width="30" height="12" rx="3" class="room-track"/><line x1="38" y1="0" x2="38" y2="16" class="room-cap"/>'],
+    ["nothing open blocks it today", '<rect x="2" y="1" width="6" height="14" rx="3" class="now-tab"/><rect x="8" y="2" width="36" height="12" rx="3" class="room-node"/>'],
+    ["a remaining dependency", '<path d="M2,13 H24 Q30,13 30,8 T44,3" class="feeds"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 46 16" aria-hidden="true">${marks}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  // -------------------------------------------------------------- table
+  const body = document.querySelector("#facts tbody");
+  for (const task of openTasks) {
+    const tr = document.createElement("tr");
+    const openDeps = task.deps.filter((d) => !model.done(model.byId.get(d)));
+    for (const value of [task.id, task.status, openDeps.join(", ") || "—",
+      String(model.wave(task.id)), String(model.latest(task.id))]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

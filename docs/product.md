@@ -35,11 +35,11 @@ multi-user coordination remains deferred.
   project-management on top (ADR-0019) — the binary validating every shape so
   growth is mechanical.
 - Host-neutral skill contracts for a Claude+Codex duo over every non-trivial
-  repository task: stage-aware parallel independent work, fixed
-  design/implementation/review roles, versioned dual approval, bounded
-  worktree parallelism, effective network/tool autonomy, and evidence-based
-  verification through each vendor's native interactive harness (ADR-0023,
-  ADR-0024, ADR-0025).
+  repository task: stage-aware parallel independent work, capability-routed
+  production and review, versioned dual approval, bounded worktree parallelism,
+  effective network/tool autonomy, and evidence-based verification through
+  each vendor's native interactive harness (ADR-0023, ADR-0024, ADR-0025,
+  ADR-0046).
 
 ## Non-goals
 
@@ -53,7 +53,16 @@ multi-user coordination remains deferred.
 - **Not a process-enforcement engine.** No phase ordering, role boundaries, or
   review-before-X sequencing in code; gates exist only where a mistake is
   irreversible or invisible (charter §6.6).
-- **Not a GUI or TUI.** Command-line and harness-native surfaces only.
+- **Not a general GUI/TUI product or application shell.** The bounded
+  `cf-present` review document defined by SPC-004 is the sole interactive
+  exception: an explicit CLI action may launch an isolated browser window
+  backed by a loopback-only, per-session service that self-terminates. Agents
+  author this session's catalog document; the runtime owns chrome and Comment.
+  It is not a dashboard, remote server, persistent service, consuming-product
+  UI framework, or a clone of the design-exploration board. The opt-in
+  documentation portal is a generated static artifact that applies the same
+  utility craft to durable source-linked docs, not an operated CodeFlow
+  interface.
 - **No bespoke memory infrastructure.** No embeddings, vector DBs, GraphRAG, or
   database-as-authority; markdown + JSONL truth with an FTS5 cache (D17).
 - **Not a substitute for an OS or harness security boundary.** CodeFlow ships

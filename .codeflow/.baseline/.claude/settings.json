@@ -176,6 +176,9 @@
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": true,
     "filesystem": {
+      "allowRead": [
+        "~/.claude/plugins/cache"
+      ],
       "denyRead": [
         "~/.ssh",
         "~/.aws",

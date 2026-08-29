@@ -41,7 +41,12 @@ You are clarifying and materializing planned work, not building it.
    materialize the exact approved topology into canonical `depends_on` task
    frontmatter. A node, edge, decision guard, ownership, acceptance/interface,
    or safety-boundary mutation creates Plan vN+1; an in-node step does not.
-6. Draft on a `plan/` branch, matching artifact to work weight. An **epic** (in
+6. Draft on a `plan/` branch, matching artifact to work weight. When the brief
+   supplies a set or batch of tasks, first partition it by coherent durable
+   outcome and direct dependencies: each related multi-task body may become an
+   epic, while unrelated outcomes and genuine standalone tasks keep separate
+   landing routes. Do not treat the batch itself as an epic boundary. An
+   **epic** (in
    `project-management/epics/`) is warranted only for a body of work that is >1
    PR, >1 session, or spans multiple capabilities; anything smaller is a single
    durable task with a non-empty `standalone_reason`; challenge standalone use
@@ -50,9 +55,19 @@ You are clarifying and materializing planned work, not building it.
    a Tier-3 decision is involved (new dependency, schema change, boundary
    change). Allocate with `codeflow epic new`, `codeflow spec new --for
    EPC-NNN|TSK-NNN`, and `codeflow task new --epic EPC-NNN` or
-   `--standalone-reason "..."`; after the stable body-of-work integration
-   branch exists, pass `--into integration/<epic-id>-<slug>`. A task branch is
-   never an integration target; it cannot authorize its own planning record.
+   `--standalone-reason "..."`. For each multi-task epic, first create one shared
+   `integration/<epic-id>-<slug>` branch from the intended protected target,
+   then pass it with `--into` for every task in that body. This is the default,
+   not an optional optimization: task branches land there in graph order and
+   only the integrated body reaches the protected target through one final
+   human-reviewed PR. Select this shape autonomously when the clarity gate,
+   acceptance boundaries, and settled graph show one coherent multi-task
+   outcome; do not ask the operator merely to choose the routine landing
+   mechanism. Honor an explicit operator request when it fits that evidence,
+   but never let it bypass planning, safety, or protected-branch boundaries. A
+   different landing shape needs an explicit Plan vN rationale and approval
+   from both primary seats before task allocation. A task branch is never an
+   integration target; it cannot authorize its own planning record.
    The target must be a real local or remote-tracking branch, not `HEAD`, a
    tag, an object ID, or another Git revision expression.
    Do not hand-invent IDs. If another method already owns equivalent specs or
@@ -61,7 +76,9 @@ You are clarifying and materializing planned work, not building it.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
    every non-trivial repository task: both seats plan independently, Claude leads
    design, and each implementation task records its approved producer and
-   cross-lineage reviewer. The qualified Claude judgment primary owns the
+   cross-lineage reviewer. That per-task review occurs before integration and
+   is not replaced by the combined integration review. The qualified Claude
+   judgment primary owns the
    integrated Claude verdict regardless of the host. Solo `/cf-develop` appears
    only as the noted fallback
    when a required interactive seat is unavailable.

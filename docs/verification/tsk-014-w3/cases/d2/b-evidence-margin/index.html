@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPC-004 — what stands behind each claim</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #15181d;      --ink-2: #464e59;   --ink-3: #58606c;
+    --page: #fbfbfc;     --panel: #ffffff;   --rule: #dcdfe5;
+    --ok: #1f4d3d;       --ok-face: #eef6f2;
+    --bnd: #6a5116;      --bnd-face: #f9f4e8;
+    --gap: #7b1f4b;      --gap-face: #fbf1f5;
+    --auth: #1d3a52;
+    --shadow: 0 1px 2px rgba(21, 24, 29, .05), 0 12px 30px -20px rgba(21, 24, 29, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef0f4;     --ink-2: #b0b8c4;  --ink-3: #8a939f;
+      --page: #0d1014;    --panel: #15181e;  --rule: #282e37;
+      --ok: #7fd3ae;      --ok-face: #13211b;
+      --bnd: #e5c37c;     --bnd-face: #221e12;
+      --gap: #f0a6c1;     --gap-face: #24151c;
+      --auth: #a7c9e2;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 30px -20px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 44px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 32px; line-height: 1.16; letter-spacing: -.018em; margin: 0 0 6px; font-weight: 640; }
+  .sub { margin: 0 0 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         font-size: 13px; color: var(--ink-3); }
+  .lede { margin: 0 0 30px; max-width: 64ch; color: var(--ink-2); font-size: 17px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .rail-head {
+    display: grid; grid-template-columns: 1fr 372px; gap: 0 28px; margin: 0 0 10px;
+    font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+  }
+
+  .claim {
+    display: grid; grid-template-columns: 1fr 372px; gap: 0 28px;
+    border-top: 1px solid var(--rule); padding: 20px 0 22px; align-items: stretch;
+  }
+  .claim:last-of-type { border-bottom: 1px solid var(--rule); }
+  .said { min-width: 0; }
+  .said .where {
+    display: inline-flex; align-items: baseline; gap: 9px; margin: 0 0 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--ink-3);
+  }
+  .said .where b { color: var(--ink); font-weight: 660; }
+  /* Authority is a fixed small mark, present at every claim: it says which
+     decision governs without competing with the margin for attention. */
+  .said .gov {
+    border: 1.5px solid var(--auth); border-radius: 5px; padding: 1px 6px; font-size: 11px;
+    color: var(--auth); font-weight: 620; letter-spacing: .02em;
+  }
+  .said .gov[data-rel="supersedes-mechanism"] { border-style: dashed; }
+  .said .gov[data-rel="process"] { border-style: dotted; }
+  .said p { margin: 0; font-size: 15.5px; color: var(--ink); line-height: 1.55; }
+  .said q { color: var(--ink-2); font-style: normal; }
+
+  /* The margin is a position, not a cell. It exists at every claim, at the
+     claim's own eye level, and it keeps its full height when it is empty. */
+  .margin { position: relative; border-left: 2px solid var(--rule); padding: 0 0 0 22px; }
+  .margin .box {
+    border-radius: 10px; padding: 13px 16px 14px; height: 100%;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .margin[data-state="executed"] .box { background: var(--ok-face); border: 1.5px solid var(--ok); }
+  .margin[data-state="bounded"] .box { background: var(--bnd-face); border: 1.5px dashed var(--bnd); }
+  /* Reserved and unfilled: an edge all the way round, a hatched field, and no
+     content. It cannot be mistaken for a row nobody got to. */
+  .margin[data-state="absent"] .box {
+    background:
+      repeating-linear-gradient(45deg, color-mix(in srgb, var(--gap) 16%, transparent) 0 2px, transparent 2px 8px),
+      var(--gap-face);
+    border: 2px dashed var(--gap); align-items: flex-start;
+  }
+  .margin .state {
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; margin: 0 0 6px;
+  }
+  .margin[data-state="executed"] .state { color: var(--ok); }
+  .margin[data-state="bounded"] .state { color: var(--bnd); }
+  .margin[data-state="absent"] .state { color: var(--gap); }
+  .margin .what { margin: 0; font-size: 13.5px; color: var(--ink); }
+  .margin .at { margin: 8px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                font-size: 11.5px; color: var(--ink-2); }
+  .margin .bound { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2); }
+  .margin .empty-note { margin: 0; font-size: 13px; color: var(--gap); max-width: 30ch; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 11px 24px; margin: 26px 0 0; font-size: 13px;
+            color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 9px; }
+  .legend i { width: 20px; height: 14px; border-radius: 4px; flex: none; }
+  .legend i.ok { background: var(--ok-face); border: 1.5px solid var(--ok); }
+  .legend i.bnd { background: var(--bnd-face); border: 1.5px dashed var(--bnd); }
+  .legend i.gap { border: 2px dashed var(--gap);
+    background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--gap) 16%, transparent) 0 2px, transparent 2px 8px), var(--gap-face); }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  blockquote { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  .src { margin: 24px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  @media (max-width: 1080px) {
+    body { padding: 34px 26px 56px; }
+    h1 { font-size: 27px; }
+    /* The margin narrows but stays a margin: the reserved position stays beside
+       its claim rather than moving underneath it. */
+    .claim, .rail-head { grid-template-columns: 1fr 292px; gap: 0 20px; }
+    .margin { padding-left: 16px; }
+  }
+  @media (max-width: 680px) {
+    body { padding: 24px 15px 48px; }
+    h1 { font-size: 22px; }
+    .lede { font-size: 15.5px; }
+    /* The margin becomes a reserved band beneath its claim. It keeps its own
+       edge and its full height when empty, so a deliberate absence is still a
+       shape on the page and never a missing row. */
+    .claim, .rail-head { grid-template-columns: 1fr; gap: 14px 0; }
+    .rail-head span:last-child { display: none; }
+    .margin { border-left: 0; border-top: 2px solid var(--rule); padding: 14px 0 0; }
+    .margin .box { min-height: 108px; }
+    .margin[data-state="absent"] .box { min-height: 108px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Record · specification</p>
+  <h1>What stands behind each claim</h1>
+  <p class="sub">project-management/specs/SPC-004.md · status approved</p>
+  <p class="lede">Five claims from this record, in the order the record makes them. Each one keeps
+    <b>a position of its own for its evidence</b>, at its own eye level. The position is there whether
+    or not anything fills it.</p>
+
+  <div class="rail-head"><span>the record says</span><span>and behind it</span></div>
+  <div id="claims"></div>
+
+  <div class="legend">
+    <span><i class="ok"></i>a run exists at the exact candidate</span>
+    <span><i class="bnd"></i>evidence exists, but not here</span>
+    <span><i class="gap"></i>the position is reserved and nothing fills it</span>
+  </div>
+
+  <details>
+    <summary>Every claim and its evidence, in the sources' own words</summary>
+    <table id="facts">
+      <thead><tr><th>Claim</th><th>Governed by</th><th>Evidence source</th><th>The sentence</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/record-authority.js</code>. Every frontmatter value is checked
+    against the real record files and every quotation verbatim against its source.</p>
+</div>
+
+<script src="../../../shared/record-authority.js"></script>
+<script>
+(() => {
+  const A = window.recordAuthority;
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const stateWord = { executed: "run", bounded: "bounded", absent: "reserved" };
+
+  const host = document.getElementById("claims");
+  for (const claim of A.claims) {
+    const row = el("div", "claim");
+
+    const said = el("div", "said");
+    const where = el("p", "where");
+    where.append(el("b", null, claim.id), document.createTextNode(claim.where));
+    for (const link of claim.authority) {
+      const gov = el("span", "gov", link.record);
+      gov.dataset.rel = link.relation;
+      where.append(gov);
+    }
+    said.append(where);
+    const text = el("p");
+    text.append(el("q", null, claim.quote.text));
+    said.append(text);
+
+    const margin = el("div", "margin");
+    margin.dataset.state = claim.evidence.state;
+    const box = el("div", "box");
+    box.append(el("p", "state", stateWord[claim.evidence.state]));
+    if (claim.evidence.state === "absent") {
+      box.append(el("p", "empty-note", claim.evidence.bound));
+    } else {
+      box.append(el("p", "what", claim.evidence.what));
+      if (claim.evidence.at) box.append(el("p", "at", claim.evidence.at.slice(0, 8)));
+      if (claim.evidence.bound) box.append(el("p", "bound", claim.evidence.bound));
+    }
+    margin.append(box);
+
+    row.append(said, margin);
+    host.append(row);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const claim of A.claims) {
+    const tr = document.createElement("tr");
+    for (const value of [
+      `${claim.id} ${claim.where}`,
+      claim.authority.map((a) => `${a.record} (${a.relation})`).join(", "),
+      claim.evidence.source,
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    const said = document.createElement("td");
+    const bq = document.createElement("blockquote");
+    bq.textContent = `“${claim.evidence.quote.text}”`;
+    said.append(bq);
+    tr.append(said);
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(A.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

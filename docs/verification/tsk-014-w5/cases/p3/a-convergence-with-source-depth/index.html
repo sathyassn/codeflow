@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The qualification review, round by round</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #12161b;      --ink-2: #464f5c;   --ink-3: #59626f;
+    --page: #f7f8fa;     --panel: #ffffff;   --rule: #dadee5;
+    --grid: #e5e9ee;
+    --mark: #1b2b3a;     --mark-soft: #97a2b0;
+    --self: #8a4a10;     --outside: #7b1f4b;
+    --off-face: #f6eef2; --off-line: #b06a8e;
+    --code: #f4f6f8;     --code-add: #0f5132;  --code-del: #842029;
+    --shadow: 0 1px 2px rgba(18, 22, 27, .06), 0 10px 28px -18px rgba(18, 22, 27, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef1f5;     --ink-2: #b2bac6;   --ink-3: #8b95a2;
+      --page: #0e1116;    --panel: #161a20;   --rule: #29303a;
+      --grid: #232a33;
+      --mark: #d8e2ee;    --mark-soft: #6a7583;
+      --self: #f0b070;    --outside: #f2a3c4;
+      --off-face: #2a1d25; --off-line: #a8688a;
+      --code: #1c222b;    --code-add: #7ee2ad;  --code-del: #ff9d9d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 40px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -.015em; margin: 0 0 12px; font-weight: 640; }
+  .lede { margin: 0 0 30px; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 22px 24px 18px; box-shadow: var(--shadow); }
+  svg { display: block; width: 100%; height: auto; }
+  .round-head { font-size: 12px; font-weight: 620; fill: var(--ink-2); }
+  .round-date { font-size: 11px; fill: var(--ink-3); }
+  .grid-line { stroke: var(--grid); stroke-width: 1; }
+  .find-id { font-size: 13px; font-weight: 680; fill: var(--ink);
+             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .find-title { font-size: 12.5px; fill: var(--ink-2); }
+  .cell-open { fill: none; stroke: var(--mark-soft); stroke-width: 1.75; }
+  .cell-closed { fill: var(--mark); }
+  .cell-reopen { fill: none; stroke: var(--self); stroke-width: 2.5; }
+  .cell-reopen.outside { stroke: var(--outside); }
+  .cell-ext { fill: none; stroke: var(--mark-soft); stroke-width: 1.75; stroke-dasharray: 3 2.5; }
+  .cell-res { stroke: var(--mark-soft); stroke-width: 1.75; }
+  .arc-self { stroke: var(--self); stroke-width: 2; stroke-dasharray: 6 3.5; fill: none; }
+  .arc-outside { stroke: var(--outside); stroke-width: 3.25; fill: none; stroke-dasharray: none; }
+  .arrow { fill: var(--self); } .arrow.outside { fill: var(--outside); }
+  .off-band { fill: var(--off-face); }
+  .off-edge { stroke: var(--off-line); stroke-width: 2; stroke-dasharray: 7 4; fill: none; }
+  .off-title { font-size: 11.5px; font-weight: 680; fill: var(--outside); }
+  .off-sub { font-size: 11px; fill: var(--ink-2);
+             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .off-node { fill: var(--off-face); stroke: var(--outside); stroke-width: 2.5; }
+  .src-strip { fill: var(--code); }
+  .src-path { font-size: 11px; fill: var(--ink-2);
+              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .src-line { font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .src-line.add { fill: var(--code-add); } .src-line.del { fill: var(--code-del); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 22px 2px 0; font-size: 13.5px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 46px; height: 18px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .src { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .band-wide, .band-mid, .band-narrow { display: none; }
+  .band-wide { display: block; }
+  @media (max-width: 1100px) {
+    body { padding: 32px 26px 56px; }
+    h1 { font-size: 26px; }
+    .band-wide { display: none; } .band-mid { display: block; }
+  }
+  @media (max-width: 680px) {
+    body { padding: 24px 14px 48px; }
+    h1 { font-size: 22px; }
+    figure { padding: 16px 10px 14px; border-radius: 11px; }
+    .band-mid { display: none; } .band-narrow { display: block; }
+    .legend { gap: 10px 16px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">TSK-014 · qualification harness review</p>
+  <h1>The qualification review, round by round</h1>
+  <p class="lede">Seven findings, eight rounds of exact review. Each finding keeps its own line across
+    the rounds, and where a later round had to come back to an earlier one, <b>the return is drawn</b>
+    in the lane that line reserves beneath itself. One thing that arrived did not come from a round at
+    all, and it sits <b>outside the axis</b>, behind its own boundary. Under each line is the region of
+    source that round actually changed.</p>
+
+  <figure>
+    <div class="band-wide" id="wide"></div>
+    <div class="band-mid" id="mid"></div>
+    <div class="band-narrow" id="narrow"></div>
+    <div class="legend" id="legend"></div>
+  </figure>
+
+  <details>
+    <summary>Every round, with its commit</summary>
+    <table id="facts">
+      <thead><tr><th>Round</th><th>Commit</th><th>Subject</th><th>Date</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/p3-convergence.js</code>. Every round is matched against
+    <code>git log</code>, every quoted source line against <code>git show</code> character for character.</p>
+</div>
+
+<script src="../../../shared/p3-convergence.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const P = window.p3Convergence;
+  const roundIndex = new Map(P.rounds.map((r, i) => [r.id, i]));
+  const base = (path) => path.split("/").pop();
+
+  // The source region a finding's line points at: the hunk of the last round
+  // that carries one, and the first line that round actually changed there.
+  const anchorOf = (finding) => {
+    const cell = [...finding.cells].reverse().find((c) => c.hunk);
+    if (!cell) return null;
+    const changed = cell.hunk.lines.find((l) => l.startsWith("+") || l.startsWith("-"))
+      ?? cell.hunk.lines[0];
+    return { round: cell.round, path: cell.hunk.path, header: cell.hunk.header, line: changed };
+  };
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svg = (w, h, title, desc) => {
+    const root = n("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+    const tid = `t${++svg.seq}`, did = `d${svg.seq}`;
+    root.setAttribute("aria-labelledby", `${tid} ${did}`);
+    root.append(n("title", { id: tid }, title), n("desc", { id: did }, desc));
+    const defs = n("defs");
+    const pattern = n("pattern", { id: `p3a-hatch-${svg.seq}`, width: 6, height: 6,
+      patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
+    pattern.append(n("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: "currentColor", "stroke-width": 1, opacity: .35 }));
+    defs.append(pattern);
+    root.append(defs);
+    root.dataset.hatch = `url(#p3a-hatch-${svg.seq})`;
+    return root;
+  };
+  svg.seq = 0;
+  const TITLE = "Seven review findings against eight ordered rounds";
+  const DESC = "Each finding is one row and each round one column, ordered left to right. A hollow "
+    + "marker is where a finding was raised, a filled marker where it finally closed, a dashed marker "
+    + "a round that widened what an earlier fix proves without that fix having failed, and a ringed "
+    + "marker a round that had to re-open the finding; that ring means re-opened and nothing else. A short bar under a cell is a bounded remainder recorded in that round and still open. Every re-opening draws a link back to what it answers: a dashed arc dipping below the row and ending in a filled arrowhead when the answer came from an earlier round, and a straight entry from the reserved exterior column ending in an open square when it did not. Every re-opening draws an arc back to the round "
+    + "it re-opened, in a lane the row reserves beneath its own text. One column stands outside the "
+    + "round axis behind a dashed hatched boundary; it is not a round, and the arc arriving from it is "
+    + "drawn heavier than the returns that came from a previous fix. Beneath each row is the file, "
+    + "hunk and changed line of the source that row's last recorded round touched.";
+
+  const STATE_R = 8;
+
+  function marks(g, finding, cx, cy) {
+    const cell = finding;
+    const states = cell.states;
+    if (states.includes("reopened")) {
+      g.append(n("circle", { class: `cell-reopen${cell.cause === "outside-harness" ? " outside" : ""}`,
+        cx, cy, r: STATE_R + 2.5 }));
+    }
+    if (states.includes("closed")) g.append(n("circle", { class: "cell-closed", cx, cy, r: STATE_R - 1.5 }));
+    else if (states.includes("extended")) g.append(n("circle", { class: "cell-ext", cx, cy, r: STATE_R - 1.5 }));
+    else if (states.includes("opened") || states.includes("reopened")) {
+      g.append(n("circle", { class: "cell-open", cx, cy, r: STATE_R - 1.5 }));
+    }
+    if (states.includes("residual")) {
+      g.append(n("line", { class: "cell-res", x1: cx - 5, y1: cy + STATE_R + 7, x2: cx + 5, y2: cy + STATE_R + 7 }));
+    }
+  }
+
+  function build(W, opts) {
+    const { leftW, colW, rowH, arcH, srcH, H0, offW, titleSize } = opts;
+    const axisX = leftW;
+    const axisW = P.rounds.length * colW;
+    const offX = axisX + axisW + 26;
+    const rowTotal = rowH + arcH + srcH;
+    const H = H0 + P.findings.length * rowTotal + 16;
+    const s = svg(W, H, TITLE, DESC);
+    const hatch = s.dataset.hatch;
+    const cx = (id) => axisX + (roundIndex.get(id) + 0.5) * colW;
+    const rowY = (r) => H0 + r * rowTotal;
+
+    // The region that is explicitly not on the axis, drawn as a place rather
+    // than described in a footnote.
+    const off = n("g", { style: `color: var(--off-line)` });
+    s.append(off);
+    off.append(n("rect", { class: "off-band", x: offX, y: H0 - 54, width: offW, height: H - H0 + 34, rx: 8 }));
+    off.append(n("rect", { x: offX, y: H0 - 54, width: offW, height: H - H0 + 34, rx: 8, fill: hatch, stroke: "none" }));
+    off.append(n("rect", { class: "off-edge", x: offX, y: H0 - 54, width: offW, height: H - H0 + 34, rx: 8 }));
+    off.append(n("text", { class: "off-title", x: offX + 12, y: H0 - 34 }, "not a round"));
+
+    const grid = n("g");
+    s.append(grid);
+    P.rounds.forEach((round, i) => {
+      grid.append(n("line", { class: "grid-line", x1: axisX + i * colW, y1: H0 - 40, x2: axisX + i * colW, y2: H - 16 }));
+      grid.append(n("text", { class: "round-head", x: axisX + (i + 0.5) * colW, y: H0 - 40, "text-anchor": "middle" }, round.id));
+      grid.append(n("text", { class: "round-date", x: axisX + (i + 0.5) * colW, y: H0 - 26, "text-anchor": "middle" }, round.sha));
+    });
+    grid.append(n("line", { class: "grid-line", x1: axisX + axisW, y1: H0 - 40, x2: axisX + axisW, y2: H - 16 }));
+
+    P.findings.forEach((finding, r) => {
+      const y = rowY(r), cy = y + 18;
+      const g = n("g");
+      s.append(g);
+      g.append(n("text", { class: "find-id", x: 2, y: cy - 4 }, finding.id));
+      g.append(n("text", { class: "find-title", x: 2, y: cy + 13, style: `font-size:${titleSize}px` },
+        finding.title));
+
+      for (const cell of finding.cells) marks(g, cell, cx(cell.round), cy);
+
+      // Returns live in the lane this row reserves under its own text, so an
+      // arc never crosses another row's words.
+      const lane = y + rowH + arcH - 8;
+      for (const cell of finding.cells) {
+        if (!cell.states.includes("reopened")) continue;
+        const outside = cell.cause === "outside-harness";
+        const from = cx(cell.round), to = cx(cell.answers);
+        const link = n("g", { "data-state": outside ? "external" : "return", "data-distinction": "reopen-origin" });
+        g.append(link);
+        link.append(n("path", { class: outside ? "arc-outside" : "arc-self",
+          d: `M${from},${cy + STATE_R + 4} C${from},${lane} ${to},${lane} ${to},${cy + STATE_R + 4}` }));
+        if (outside) {
+          link.append(n("rect", { class: "term-outside", "data-channel": "terminal", x: to - 6, y: cy + STATE_R + 2, width: 12, height: 12, rx: 1.5 }));
+        } else {
+          link.append(n("path", { class: "arrow", "data-channel": "terminal", d: `M${to},${cy + STATE_R + 2} l6,9 l-12,0 z` }));
+        }
+        if (outside && cell.origin) {
+          const ox = offX + offW / 2;
+          g.append(n("circle", { class: "off-node", cx: ox, cy, r: 7 }));
+          link.append(n("path", { class: "arc-outside", "data-channel": "entry", d: `M${ox - 7},${cy} H${from + STATE_R + 4}` }));
+          g.append(n("path", { class: "arrow outside", d: `M${from + STATE_R + 2},${cy} l7,-4.5 l0,9 z` }));
+          /* W4 repair. The identifying labels of the one cause that arrived
+             from outside the harness were left-anchored inside the off-axis
+             column and ran past the figure at the narrow band: "Playwright 1.55"
+             overshot the frame by 8.3 CSS px and was cut by it. Since the
+             identity of that cause is the payload of the whole "not a round"
+             annotation, what was lost was the answer to the second half of the
+             case's question. They are now fitted to the column: centred, and
+             bounded by an explicit textLength so containment does not depend on
+             a font metric. */
+          const oxMid = offX + offW / 2;
+          const fit = Math.max(40, offW - 24);
+          off.append(n("text", { class: "off-sub", x: oxMid, y: cy - 16, "text-anchor": "middle",
+            textLength: fit, lengthAdjust: "spacingAndGlyphs" }, cell.origin.label));
+          off.append(n("text", { class: "off-sub", x: oxMid, y: cy + 26, "text-anchor": "middle",
+            textLength: fit, lengthAdjust: "spacingAndGlyphs" }, cell.origin.detail));
+        }
+      }
+
+      // Row-level depth: the source this row's work actually landed in.
+      const anchor = anchorOf(finding);
+      if (anchor) {
+        const sy = y + rowH + arcH;
+        g.append(n("rect", { class: "src-strip", x: 2, y: sy, width: W - 4 - (offW + 26), height: srcH - 10, rx: 5 }));
+        g.append(n("text", { class: "src-path", x: 12, y: sy + 13, style: "font-size:11px" },
+          `${base(anchor.path)}  ${anchor.header}  ·  ${anchor.round}`));
+        const kind = anchor.line.startsWith("+") ? "add" : (anchor.line.startsWith("-") ? "del" : "");
+        /* W4 repair: the excerpt was cut to a fixed 112 characters, which fits at
+           one width and not at another. It is now cut to what the strip can
+           actually hold at this width and this size, and a cut is marked. */
+        {
+          const strip = W - 4 - (offW + 26) - 24;
+          const fits = Math.max(12, Math.floor(strip / 6.75));
+          const cut = anchor.line.length > fits;
+          g.append(n("text", { class: `src-line ${kind}`, x: 12, y: sy + 26, style: "font-size:11px" },
+            cut ? `${anchor.line.slice(0, fits - 1)}…` : anchor.line));
+        }
+      }
+    });
+    return s;
+  }
+
+  const wide = () => build(1180, { leftW: 262, colW: 76, rowH: 42, arcH: 40, srcH: 40, H0: 92, offW: 246, titleSize: 12.5 });
+  const mid = () => build(880, { leftW: 206, colW: 54, rowH: 40, arcH: 36, srcH: 38, H0: 92, offW: 180, titleSize: 11.5 });
+
+  // -------------------------------------------------------------- narrow
+  // The page gives up its one shared axis; each finding keeps its own. The
+  // ticks stay ordered, the returns stay drawn inside that finding's own axis,
+  // and the arrival that is not a round keeps a reserved place outside the
+  // ticks rather than becoming a sentence.
+  function narrow() {
+    /* D15. W4 drew the hatched exterior column inside EVERY finding's block —
+       seven boxes, six of them empty, for the one datum that actually arrives
+       from outside the review. The column is a property of the band, not of a
+       row, so it is drawn once, spans the band, and the single arrival attaches
+       to it from the row that owns it. Wider, too, now that it is not repeated:
+       the origin's identity no longer has to be squeezed into 66px. */
+    const W = 358, blockH = 152, H0 = 56, tickX = 10, tickW = 196, offX = 242, offW = 110;
+    const H = H0 + P.findings.length * blockH;
+    const s = svg(W, H, TITLE, DESC);
+    const hatch = s.dataset.hatch;
+    const step = tickW / (P.rounds.length - 1);
+    const tx = (id) => tickX + roundIndex.get(id) * step;
+
+    /* the reserved exterior, drawn once for the whole band */
+    const band = n("g", { style: "color: var(--off-line)" });
+    s.append(band);
+    for (const spec of [{ class: "off-band" }, { fill: hatch, stroke: "none" }, { class: "off-edge" }]) {
+      band.append(n("rect", { ...spec, x: offX, y: H0 - 24, width: offW, height: H - H0 + 12, rx: 6 }));
+    }
+    band.append(n("text", { class: "off-title", x: offX + 6, y: H0 - 8, style: "font-size:11px" }, "not a round"));
+    band.append(n("text", { class: "off-sub", x: offX + 6, y: H0 + 6, style: "font-size:11px" }, "outside the"));
+    band.append(n("text", { class: "off-sub", x: offX + 6, y: H0 + 18, style: "font-size:11px" }, "review"));
+
+    P.findings.forEach((finding, r) => {
+      const top = H0 + r * blockH, cy = top + 64;
+      const g = n("g", { style: "color: var(--off-line)" });
+      s.append(g);
+      g.append(n("text", { class: "find-id", x: 2, y: top + 14 }, finding.id));
+      /* D14. The title was cut at 40 characters. It wraps to two lines instead,
+         because a finding's name is the row's subject and a truncated subject
+         is a truncated row. */
+      {
+        const budget = Math.floor((offX - 34) / 6.0);
+        const words = finding.title.split(" ");
+        const lines = []; let line = "";
+        for (const w of words) {
+          const next = line ? `${line} ${w}` : w;
+          if (next.length > budget && line) { lines.push(line); line = w; } else line = next;
+          if (lines.length === 2) break;
+        }
+        if (lines.length < 2 && line) lines.push(line);
+        lines.forEach((l, i) => g.append(n("text", { class: "find-title", x: 26, y: top + 14 + i * 13,
+          style: "font-size:11.5px" }, l)));
+      }
+
+      g.append(n("line", { class: "grid-line", x1: tickX, y1: cy, x2: tickX + tickW, y2: cy }));
+      P.rounds.forEach((round, i) => {
+        g.append(n("line", { class: "grid-line", x1: tickX + i * step, y1: cy - 7, x2: tickX + i * step, y2: cy + 7 }));
+        g.append(n("text", { class: "round-date", x: tickX + i * step, y: top + 46, "text-anchor": "middle",
+          style: "font-size:11px" }, round.id));
+      });
+      for (const cell of finding.cells) marks(g, cell, tx(cell.round), cy);
+      const lane = cy + 34;
+      for (const cell of finding.cells) {
+        if (!cell.states.includes("reopened")) continue;
+        const outside = cell.cause === "outside-harness";
+        const from = tx(cell.round), to = tx(cell.answers);
+        const link = n("g", { "data-state": outside ? "external" : "return", "data-distinction": "reopen-origin" });
+        g.append(link);
+        link.append(n("path", { class: outside ? "arc-outside" : "arc-self",
+          d: `M${from},${cy + STATE_R + 3} C${from},${lane} ${to},${lane} ${to},${cy + STATE_R + 3}` }));
+        if (outside) {
+          link.append(n("rect", { class: "term-outside", "data-channel": "terminal", x: to - 5.5, y: cy + STATE_R + 1, width: 11, height: 11, rx: 1.5 }));
+        } else {
+          link.append(n("path", { class: "arrow", "data-channel": "terminal", d: `M${to},${cy + STATE_R + 1} l5.5,8 l-11,0 z` }));
+        }
+        if (outside && cell.origin) {
+          g.append(n("circle", { class: "off-node", cx: offX + offW / 2, cy, r: 6 }));
+          link.append(n("path", { class: "arc-outside", "data-channel": "entry", d: `M${offX + offW / 2 - 6},${cy} H${from + STATE_R + 3}` }));
+
+          // The origin's detail is two tokens joined by a cross; at this width
+          // it is set as two lines rather than clipped to one.
+          /* W4 repair. At 11px these two tokens overran the 66px column and the
+             frame by 29.7 CSS px, so the identity of the one cause that arrived
+             from outside the harness — the payload of this whole annotation —
+             was cut off the page. They are now fitted to the column by an
+             explicit textLength, so containment does not depend on a font
+             metric at any width. */
+          /* The one datum this whole reserved column exists to name must fit
+             inside it. W4 squeezed it with textLength; the first W5 cut let it
+             run off the right edge of the figure. It is wrapped to the column's
+             real character budget instead, so neither the glyphs nor the frame
+             have to give. */
+          const budget = Math.max(6, Math.floor((offW - 12) / 6.65));
+          const parts = cell.origin.detail.split(" × ").flatMap((part) => {
+            const out = []; let line = "";
+            for (const w of part.split(" ")) {
+              const next = line ? `${line} ${w}` : w;
+              if (next.length > budget && line) { out.push(line); line = w; } else line = next;
+            }
+            if (line) out.push(line);
+            return out;
+          });
+          parts.forEach((part, line) => {
+            g.append(n("text", { class: "off-sub", x: offX + 5, y: cy + 18 + line * 12,
+              style: "font-size:11px" }, part));
+          });
+        }
+      }
+      const anchor = anchorOf(finding);
+      if (anchor) {
+        const sy = top + blockH - 40;
+        g.append(n("rect", { class: "src-strip", x: 2, y: sy, width: W - 4, height: 34, rx: 5 }));
+        g.append(n("text", { class: "src-path", x: 8, y: sy + 13, style: "font-size:11px" },
+          `${base(anchor.path)} ${anchor.header}`));
+        const kind = anchor.line.startsWith("+") ? "add" : (anchor.line.startsWith("-") ? "del" : "");
+        /* W4 repair: the excerpt was cut to a fixed 54 characters, which at 11px
+           ran 0.7px past the frame. It is cut to what this width holds, and the
+           cut is marked rather than silent. */
+        {
+          const fits = Math.max(12, Math.floor((W - 20) / 6.75));
+          const cut = anchor.line.length > fits;
+          g.append(n("text", { class: `src-line ${kind}`, x: 8, y: sy + 27, style: "font-size:11px" },
+            cut ? `${anchor.line.slice(0, fits - 1)}…` : anchor.line));
+        }
+      }
+    });
+    return s;
+  }
+
+  document.getElementById("wide").append(wide());
+  document.getElementById("mid").append(mid());
+  document.getElementById("narrow").append(narrow());
+
+  const legendMarks = [
+    ["raised here", '<circle cx="12" cy="9" r="6.5" class="cell-open"/>'],
+    ["closed here", '<circle cx="12" cy="9" r="6.5" class="cell-closed"/>'],
+    ["widened, not re-opened", '<circle cx="12" cy="9" r="6.5" class="cell-ext"/>'],
+    ["a bounded remainder, still open", '<line x1="5" y1="9" x2="19" y2="9" class="cell-res"/>'],
+    ["came back to an earlier round — a dipped arc, ending in an arrowhead",
+      '<path d="M4,3 C4,14 30,14 30,3" class="arc-self"/><path d="M30,3 l4.5,7 l-9,0 z" class="arrow"/>'],
+    ["did not come from a round — a straight entry, ending in an open square",
+      '<path d="M2,9 H29" class="arc-outside"/><rect x="29" y="3.5" width="11" height="11" rx="1.5" class="term-outside"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks2] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 46 18" aria-hidden="true">${marks2}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const round of P.rounds) {
+    const tr = document.createElement("tr");
+    for (const value of [round.id, round.sha, round.subject, round.date]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(P.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

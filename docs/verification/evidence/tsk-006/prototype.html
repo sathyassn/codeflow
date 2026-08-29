@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-variant="briefing">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>CodeFlow presentation prototype study</title>
+    <script>
+      (() => {
+        const query = new URLSearchParams(location.search).get("theme");
+        const saved = localStorage.getItem("cf-present-theme");
+        const system = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.dataset.theme = ["light", "dark"].includes(query)
+          ? query
+          : ["light", "dark"].includes(saved) ? saved : system;
+      })();
+    </script>
+    <link rel="stylesheet" href="prototype.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to presentation</a>
+    <header class="chrome" aria-label="Presentation controls">
+      <div class="identity">
+        <span class="status-dot" aria-hidden="true"></span>
+        <strong>cf-present study</strong>
+        <span>EPC-005 · revision 3</span>
+      </div>
+      <nav class="variant-nav" aria-label="Prototype direction">
+        <a href="?variant=briefing" data-variant-link="briefing">Briefing</a>
+        <a href="?variant=workbench" data-variant-link="workbench">Workbench</a>
+        <a href="?variant=map" data-variant-link="map">Decision map</a>
+      </nav>
+      <div class="controls">
+        <span id="feedback-count" aria-live="polite">1 open note</span>
+        <button class="theme-toggle" type="button" aria-pressed="false">
+          <span aria-hidden="true">◐</span>
+          <span class="sr-only theme-state">Light mode active; switch to dark mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="content" class="shell">
+      <article class="variant briefing" aria-labelledby="briefing-title">
+        <header class="briefing-hero">
+          <div>
+            <p class="eyebrow">Integration strategy · decision briefing</p>
+            <h1 id="briefing-title">Keep related work together without hiding its dependencies.</h1>
+            <div class="meta-line">
+              <span><strong>Decision owner</strong> Operator</span>
+              <span><strong>Evidence</strong> 7 checks</span>
+              <span><strong>Review</strong> 1 note</span>
+            </div>
+          </div>
+          <div class="briefing-outcome">
+            <strong>Recommended outcome</strong>
+            Use one integration branch for a coherent multi-task epic. Partition unrelated work before branches are allocated.
+          </div>
+        </header>
+        <div class="briefing-body">
+          <aside class="briefing-outline" aria-label="Briefing outline">
+            <p class="eyebrow">On this page</p>
+            <ol>
+              <li><a href="#brief-context">Context</a></li>
+              <li><a href="#brief-flow">Flow</a></li>
+              <li><a href="#brief-options">Options</a></li>
+              <li><a href="#brief-change">Change</a></li>
+              <li><a href="#brief-evidence">Evidence</a></li>
+            </ol>
+          </aside>
+          <div class="briefing-content">
+            <section id="brief-context">
+              <div class="section-heading">
+                <div><p class="eyebrow">01 · Context</p><h2>Why the landing shape matters</h2></div>
+                <button class="anchor-button" data-annotate="Context" aria-label="Comment on context">＋</button>
+              </div>
+              <p class="lead-rule">A batch can contain one durable outcome, several unrelated outcomes, or work whose order is not obvious. Treating every batch as one epic creates false coupling; sending every task directly to main makes the combined behavior hard to review.</p>
+              <div class="decision-strip"><span class="decision-mark">D</span><div><strong>Decision boundary</strong><p>The planning pass establishes coherent outcome and dependency edges before task worktrees exist.</p></div></div>
+            </section>
+            <section id="brief-flow">
+              <div class="section-heading">
+                <div><p class="eyebrow">02 · Flow</p><h2>One graph, serialized landings</h2></div>
+                <button class="anchor-button" data-annotate="Flow" aria-label="Comment on flow">＋</button>
+              </div>
+              <figure class="flow-figure" aria-labelledby="brief-flow-caption">
+                <div class="flow-row">
+                  <div class="flow-step"><b>Plan v2</b><span>Set nodes and edges</span></div><span class="flow-arrow"></span>
+                  <div class="flow-step"><b>Parallel tasks</b><span>Independent nodes only</span></div><span class="flow-arrow"></span>
+                  <div class="flow-step"><b>Integration</b><span>Land in graph order</span></div><span class="flow-arrow"></span>
+                  <div class="flow-step"><b>Final PR</b><span>Review combined outcome</span></div>
+                </div>
+                <figcaption id="brief-flow-caption">The integration branch is a review boundary, not a holding pen.</figcaption>
+              </figure>
+            </section>
+            <section id="brief-options">
+              <div class="section-heading">
+                <div><p class="eyebrow">03 · Options</p><h2>What was compared</h2></div>
+                <button class="anchor-button" data-annotate="Options" aria-label="Comment on options">＋</button>
+              </div>
+              <div class="table-scroll">
+                <table class="comparison">
+                  <thead><tr><th>Approach</th><th>Dependency clarity</th><th>Combined review</th><th>Main risk</th></tr></thead>
+                  <tbody>
+                    <tr><td>Every task → main</td><td>Visible per task</td><td>Fragmented</td><td>Intermediate states escape</td></tr>
+                    <tr class="selected"><td>Coherent epic → integration</td><td>Explicit graph</td><td>One final body</td><td>Requires disciplined serialization</td></tr>
+                    <tr><td>Every batch → one branch</td><td>Often fabricated</td><td>Large but incoherent</td><td>Unrelated work is coupled</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+            <section id="brief-change">
+              <div class="section-heading">
+                <div><p class="eyebrow">04 · Exact change</p><h2>The contract in the task record</h2></div>
+                <button class="anchor-button" data-annotate="Exact change" aria-label="Comment on code change">＋</button>
+              </div>
+              <div class="code-block">
+                <div class="code-bar"><span>project-management/tasks/TSK-006.md</span><span>YAML</span></div>
+                <pre><code><del class="diff-remove"><span aria-hidden="true">- </span><span class="sr-only">Deleted line: </span>integration_target: "main"</del><ins class="diff-add"><span aria-hidden="true">+ </span><span class="sr-only">Added line: </span>integration_target: "integration/EPC-005-presentation-system"</ins>  depends_on: [TSK-005]</code></pre>
+              </div>
+            </section>
+            <section id="brief-evidence">
+              <div class="section-heading">
+                <div><p class="eyebrow">05 · Evidence</p><h2>What is proven—and what is not</h2></div>
+                <button class="anchor-button" data-annotate="Evidence" aria-label="Comment on evidence">＋</button>
+              </div>
+              <ul class="evidence-list">
+                <li data-state="pass">Task graph is acyclic <span>PASS · validate --docs</span></li>
+                <li data-state="pass">Every task names the shared target <span>PASS · manifest check</span></li>
+                <li data-state="fail">Legacy direct-to-main target <span>FAIL · policy check</span></li>
+                <li data-state="pending">Independent work-start canary <span>PENDING · queued</span></li>
+                <li data-state="not-run">Combined UX behavior <span>NOT RUN · awaits TSK-011</span></li>
+              </ul>
+              <div class="question"><strong>Settled compact behavior</strong><p>The route becomes a horizontal strip; the feedback queue follows the artifact or opens as an explicit non-modal sheet.</p></div>
+              <div class="feedback-composer briefing-feedback">
+                <label for="briefing-feedback">Feedback on <span class="feedback-target">whole briefing</span></label>
+                <textarea id="briefing-feedback" placeholder="Ask a question or request a change"></textarea>
+                <div class="feedback-actions"><button class="primary" type="button" data-send-feedback>Queue note</button></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </article>
+
+      <article class="variant workbench" aria-labelledby="workbench-title">
+        <div class="workbench-layout">
+          <aside class="workbench-index">
+            <p class="eyebrow">Review</p>
+            <nav aria-label="Artifact sections" data-section-route>
+              <a href="#work-summary" data-short="S" aria-current="location">Summary</a>
+              <a href="#work-plan" data-short="P">Plan</a>
+              <a href="#work-compare" data-short="C">Compare</a>
+              <a href="#work-diff" data-short="D">Diff</a>
+              <a href="#work-proof" data-short="E">Evidence</a>
+            </nav>
+          </aside>
+          <div class="workbench-canvas">
+            <header id="work-summary">
+              <p class="eyebrow">Plan v2 · ready for review</p>
+              <h1 id="workbench-title">Integration branch policy</h1>
+              <p class="lede">A focused review surface keeps the artifact and its unresolved feedback visible at the same time.</p>
+              <div class="meta-line"><span><strong>Scope</strong> 6 tasks</span><span><strong>Risk</strong> Medium</span><span><strong>Verdict</strong> Changes requested</span></div>
+            </header>
+            <section class="workbench-section" id="work-plan">
+              <div class="section-heading"><div><p class="eyebrow">Plan graph</p><h2>Dependency order</h2></div><button class="anchor-button" data-annotate="Plan graph" aria-label="Comment on plan graph">＋</button></div>
+              <figure class="flow-figure"><div class="flow-row"><div class="flow-step"><b>TSK-005</b><span>Design contract</span></div><span class="flow-arrow"></span><div class="flow-step"><b>006 + 008</b><span>Research in parallel</span></div><span class="flow-arrow"></span><div class="flow-step"><b>011 + 009</b><span>Build after evidence</span></div><span class="flow-arrow"></span><div class="flow-step"><b>TSK-010</b><span>Aggregate release</span></div></div><figcaption>Only dependency-free nodes share a time window; branch tips follow predecessor landings.</figcaption></figure>
+            </section>
+            <section class="workbench-section" id="work-compare">
+              <div class="section-heading"><div><p class="eyebrow">Decision table</p><h2>Landing options</h2></div><button class="anchor-button" data-annotate="Landing options" aria-label="Comment on landing options">＋</button></div>
+              <div class="table-scroll"><table class="comparison"><thead><tr><th>Option</th><th>Review quality</th><th>Recovery</th><th>Decision</th></tr></thead><tbody><tr><td>Direct task PRs</td><td>Strong locally</td><td>Simple revert</td><td>Reject for coherent body</td></tr><tr class="selected"><td>Integration branch</td><td>Unit + aggregate</td><td>Task commits preserved</td><td>Recommend</td></tr><tr><td>Monolithic feature branch</td><td>Combined only</td><td>Hard to isolate</td><td>Reject</td></tr></tbody></table></div>
+            </section>
+            <section class="workbench-section" id="work-diff">
+              <div class="section-heading"><div><p class="eyebrow">Proposed patch</p><h2>Task target</h2></div><button class="anchor-button" data-annotate="Task target diff" aria-label="Comment on diff">＋</button></div>
+              <div class="code-block"><div class="code-bar"><span>TSK-006.md</span><span>1 addition · 1 deletion</span></div><pre><code><del class="diff-remove"><span aria-hidden="true">- </span><span class="sr-only">Deleted line: </span>integration_target: "main"</del><ins class="diff-add"><span aria-hidden="true">+ </span><span class="sr-only">Added line: </span>integration_target: "integration/EPC-005-presentation-system"</ins></code></pre></div>
+            </section>
+            <section class="workbench-section" id="work-proof">
+              <div class="section-heading"><div><p class="eyebrow">Verification</p><h2>Evidence envelope</h2></div><button class="anchor-button" data-annotate="Evidence envelope" aria-label="Comment on evidence">＋</button></div>
+              <ul class="evidence-list"><li data-state="pass">Graph references resolve <span>PASS · 18 ms</span></li><li data-state="pass">Cycle check <span>PASS · 2 ms</span></li><li data-state="pass">Work-start anchors predecessor <span>PASS · 41 ms</span></li><li data-state="not-run">Aggregate UI behavior <span>NOT RUN</span></li></ul>
+            </section>
+          </div>
+          <aside class="review-rail" aria-label="Feedback queue">
+            <p class="eyebrow">Feedback queue</p><h2>1 unresolved note</h2>
+            <div class="review-note"><span class="review-state">Open</span><p>Show the predecessor commit beside each integration landing.</p><small>Plan graph · selected node</small></div>
+            <div class="feedback-composer">
+              <label for="workbench-feedback">Add feedback to <span class="feedback-target">whole artifact</span></label>
+              <textarea id="workbench-feedback" placeholder="Ask a question or request a change"></textarea>
+              <div class="feedback-actions"><button type="button">Save draft</button><button class="primary" type="button" data-send-feedback>Send</button></div>
+            </div>
+          </aside>
+        </div>
+      </article>
+
+      <article class="variant map" aria-labelledby="map-title">
+        <header class="map-header">
+          <p class="eyebrow">Decision map · explore by consequence</p>
+          <h1 id="map-title">From a task batch to one reviewable outcome</h1>
+          <p class="lede">A spatial route makes dependencies and decisions primary. Details stay attached to the node that gives them meaning.</p>
+        </header>
+        <div class="map-grid">
+          <div class="map-canvas" aria-label="Decision path">
+            <section class="map-node" data-node="Request" data-inspector-copy="Seven requested changes span presentation, documentation, and release work.">
+              <div class="section-heading"><div><p class="eyebrow">Input</p><h2>Task batch arrives</h2></div><button class="anchor-button" data-annotate="Task batch" aria-label="Comment on task batch">＋</button></div>
+              <p>Seven requested changes span presentation, documentation, and release work.</p>
+              <button class="inspect-node" type="button" data-inspect-node aria-controls="map-inspector" aria-pressed="false">Inspect <span class="sr-only">Task batch arrives</span></button>
+            </section>
+            <section class="map-node" data-node="Partition" data-inspector-copy="The key decision is not “use an integration branch.” It is deciding which work belongs to one durable outcome.">
+              <div class="section-heading"><div><p class="eyebrow">Decision 1</p><h2>Partition by outcome</h2></div><button class="anchor-button" data-annotate="Partition decision" aria-label="Comment on partition decision">＋</button></div>
+              <p>One durable presentation system is coherent. An unrelated billing fix stays outside this epic.</p>
+              <button class="inspect-node" type="button" data-inspect-node aria-controls="map-inspector" aria-pressed="true">Inspect <span class="sr-only">Partition by outcome</span></button>
+            </section>
+            <section class="map-node" data-node="Graph" data-inspector-copy="The graph records only dependencies that change when work can safely begin or land.">
+              <div class="section-heading"><div><p class="eyebrow">Decision 2</p><h2>Draw real dependencies</h2></div><button class="anchor-button" data-annotate="Dependency graph" aria-label="Comment on dependency graph">＋</button></div>
+              <div class="code-block"><pre><code>TSK-005 ─┬─&gt; 006 ─&gt; 011 ─&gt; 007 ─┐
+         └─&gt; 008 ───────&gt; 009 ───┼─&gt; 010</code></pre></div>
+              <button class="inspect-node" type="button" data-inspect-node aria-controls="map-inspector" aria-pressed="false">Inspect <span class="sr-only">Draw real dependencies</span></button>
+            </section>
+            <section class="map-node" data-node="Parallel" data-inspector-copy="Research nodes 006 and 008 can run together because neither depends on the other.">
+              <div class="section-heading"><div><p class="eyebrow">Execution</p><h2>Parallel where independent</h2></div><button class="anchor-button" data-annotate="Parallel execution" aria-label="Comment on parallel execution">＋</button></div>
+              <p>Research nodes 006 and 008 run together. Each build begins only from an integration tip containing its predecessor.</p>
+              <button class="inspect-node" type="button" data-inspect-node aria-controls="map-inspector" aria-pressed="false">Inspect <span class="sr-only">Parallel where independent</span></button>
+            </section>
+            <section class="map-node" data-node="Land" data-inspector-copy="Each completed task lands in dependency order while preserving its reviewable commit.">
+              <div class="section-heading"><div><p class="eyebrow">Landing</p><h2>Serialize integration</h2></div><button class="anchor-button" data-annotate="Integration landing" aria-label="Comment on integration landing">＋</button></div>
+              <div class="code-block"><div class="code-bar"><span>task metadata</span><span>diff</span></div><pre><code><ins class="diff-add"><span aria-hidden="true">+ </span><span class="sr-only">Added line: </span>integration_target: "integration/EPC-005-presentation-system"</ins>  depends_on: [TSK-005]</code></pre></div>
+              <button class="inspect-node" type="button" data-inspect-node aria-controls="map-inspector" aria-pressed="false">Inspect <span class="sr-only">Serialize integration</span></button>
+            </section>
+            <section class="map-node" data-node="Prove" data-inspector-copy="Task evidence and combined evidence remain distinct so a passing unit cannot imply an unrun whole.">
+              <div class="section-heading"><div><p class="eyebrow">Evidence gate</p><h2>Review unit and whole</h2></div><button class="anchor-button" data-annotate="Evidence gate" aria-label="Comment on evidence gate">＋</button></div>
+              <ul class="evidence-list"><li data-state="pass">Task checks <span>PASS</span></li><li data-state="pass">Cross-lineage review <span>PASS</span></li><li data-state="pending">Combined behavior <span>PENDING</span></li></ul>
+              <button class="inspect-node" type="button" data-inspect-node aria-controls="map-inspector" aria-pressed="false">Inspect <span class="sr-only">Review unit and whole</span></button>
+            </section>
+          </div>
+          <aside class="map-inspector" id="map-inspector" aria-labelledby="map-inspector-title" aria-live="polite" tabindex="-1">
+            <p class="eyebrow">Node inspector</p><h2 class="inspector-title" id="map-inspector-title">Partition by outcome</h2>
+            <p class="inspector-copy">The key decision is not “use an integration branch.” It is deciding which work belongs to one durable outcome.</p>
+            <div class="question"><strong>Use boundary</strong><p>A graph-shaped document replaces the default reading path only when topology carries the meaning.</p></div>
+            <div class="feedback-composer"><label for="map-feedback">Feedback on <span class="feedback-target">Partition decision</span></label><textarea id="map-feedback" placeholder="What should change?"></textarea><div class="feedback-actions"><button class="primary" type="button" data-send-feedback>Queue note</button></div></div>
+          </aside>
+        </div>
+      </article>
+    </main>
+    <div class="feedback-toast" role="status">Feedback queued for the agent.</div>
+    <script src="prototype.js"></script>
+  </body>
+</html>

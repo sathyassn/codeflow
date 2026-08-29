@@ -1,0 +1,8 @@
+{
+  "policy": "file: admitted only for canonical descendants of the canonical study root; everything else aborted",
+  "study_root": "/Volumes/DATA/Local/software-workspace/projects/codeflow-tsk-014-design-recovery/docs/verification/tsk-014-w2",
+  "canonical_study_root": "/Volumes/DATA/Local/software-workspace/projects/codeflow-tsk-014-design-recovery/docs/verification/tsk-014-w2",
+  "remote_requests": [],
+  "outside_study_file_requests": [],
+  "page_errors": []
+}

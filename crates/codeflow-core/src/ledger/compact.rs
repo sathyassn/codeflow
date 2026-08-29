@@ -155,6 +155,9 @@ pub fn compact_ledger_type(
     })
 }
 
+// Keep compaction's durability step fallible at every call site even on
+// targets where Rust does not expose directory fsync.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn sync_directory(path: &Path) -> Result<(), LedgerError> {
     #[cfg(unix)]
     fs::File::open(path)?.sync_all()?;

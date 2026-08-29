@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direction A — curated semantic primitives</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W5 · contract altitude · direction A</p>
+<h1>Curated semantic primitives</h1>
+<p class="sh-lede">The product ships a closed set of named typed blocks, each modelling one
+<em>kind of subject relationship</em> rather than one chart type. The document supplies typed
+data and <strong>no geometry at all</strong> — no coordinate, no scale, no mark, no colour.</p>
+
+<p>Three primitives are implemented, which is what a first shipped set would plausibly contain:
+<code>extent_on_axis</code>, <code>travel_and_stop</code> and <code>coverage_grid</code>. Every
+figure below is emitted at load by <code>primitives.js</code> from the typed record printed
+beneath it.</p>
+
+<hr class="sh-rule">
+
+<h2>The plan, through <code>extent_on_axis</code></h2>
+<p>The same unfinished EPC-005 task graph. The document says which objects sit where on an
+ordered axis, how far each can move, and which of them form the run. It says nothing about how
+that is drawn.</p>
+
+<div class="sh-figure" id="fig-plan"></div>
+<p class="sh-caption">Emitted by <code>a-primitives:extent_on_axis</code>. Resize: the primitive
+owns its own recomposition, so a document that never mentions a breakpoint still adapts.</p>
+<details class="sh-detail"><summary>The typed record the document carries</summary>
+<div class="sh-input" id="src-plan"></div></details>
+
+<h2>The evidence, through two primitives</h2>
+<p>The compound question needs both parts, and no single primitive models both. The document
+uses two, one after the other — which is what a curated catalogue makes an author do.</p>
+
+<div class="sh-figure" id="fig-travel"></div>
+<p class="sh-caption">Emitted by <code>a-primitives:travel_and_stop</code>.</p>
+
+<div class="sh-figure" id="fig-grid"></div>
+<p class="sh-caption">Emitted by <code>a-primitives:coverage_grid</code>. The two figures are
+correct and consistent, and the reader now holds the coverage and the causes in two places
+instead of one — a real cost of a fixed catalogue, visible here rather than argued.</p>
+
+<h2>What it cannot express</h2>
+<p>A record page needs to show how far a governing decision reaches across a record's own
+claims, and which claims have nothing behind them. That is neither an extent on an ordered
+axis, nor a travel through stages, nor a grid of lanes. There is nowhere for it to go.</p>
+
+<div class="sh-figure" id="fig-negative"></div>
+<p class="sh-caption">The runtime's own refusal, printed rather than described. The honest
+options at this point are: ship the subject as a table and lose the finding, or open a product
+change — a new block type, a schema version, a renderer, tests and a release — before the
+explanation can exist at all.</p>
+
+<hr class="sh-rule">
+<p class="sh-src">Subjects: <code>shared/plan-data.js</code> + <code>shared/plan-model.js</code>,
+and <code>shared/tsk007-facts.js</code>. Mechanism:
+<code>directions/a-primitives/primitives.js</code>. Chrome: <code>shared/shell.css</code>,
+byte-identical across every direction on this board.</p>
+
+</div>
+
+<script src="../../shared/svg.js"></script>
+<script src="../../shared/plan-data.js"></script>
+<script src="../../shared/plan-model.js"></script>
+<script src="../../shared/tsk007-facts.js"></script>
+<script src="./primitives.js"></script>
+<script>
+(() => {
+  const BREAKPOINTS = { wide: 1100, narrow: 720 };
+  const model = window.planModel(window.planData);
+  const facts = window.tsk007Facts;
+  const short = (title) => {
+    const words = title.split(' ');
+    let out = '';
+    for (const word of words) { if (out && `${out} ${word}`.length > 30) break; out = out ? `${out} ${word}` : word; }
+    return out.length < title.length ? `${out}…` : out;
+  };
+
+  const open = model.open.slice().sort((a, b) => model.wave(a.id) - model.wave(b.id) || a.id.localeCompare(b.id));
+  const planBlock = {
+    primitive: 'extent_on_axis',
+    id: 'a-plan',
+    title: 'The unfinished EPC-005 tasks on a wave axis',
+    description: 'The six unfinished tasks of EPC-005.',
+    unit: 'task',
+    axis: { from: 1, to: model.maxWave + 1, label: 'wave', tickPrefix: 'wave', startLabel: 'open now', endLabel: 'epic finishes' },
+    runLabel: 'one unbroken run',
+    extentLabel: 'how much later it could start',
+    capLabel: 'the wave that limits it',
+    rows: open.map((t) => ({ id: t.id, label: short(t.title), at: model.wave(t.id), extent: model.room[t.id] ?? 0 })),
+    run: model.chain,
+  };
+
+  const travelBlock = {
+    primitive: 'travel_and_stop',
+    id: 'a-travel',
+    title: 'How far each claim travelled',
+    description: 'The eight claims made about the exact qualification candidate.',
+    unit: 'claim',
+    stages: facts.stages,
+    rows: facts.claims.map((claim) => {
+      const cause = facts.causes.find((c) => c.id === facts.stops[claim.id]);
+      return { label: claim.claim, reached: facts.reachOf(claim), cause: cause ? cause.label : null };
+    }),
+  };
+
+  const gridBlock = {
+    primitive: 'coverage_grid',
+    id: 'a-grid',
+    title: 'What each claim covers, lane by lane',
+    description: 'The same eight claims against the five lanes the qualification could cover.',
+    unit: 'claim',
+    lanes: facts.lanes,
+    rows: facts.claims.map((claim) => ({ label: claim.claim, cells: claim.cells.map((c) => c.state) })),
+  };
+
+  const negativeBlock = {
+    primitive: 'reach_over_claims',
+    id: 'a-negative',
+    title: 'How far the governing decision reaches',
+    description: 'SPC-004 as a record page, with its decision lineage and its evidence.',
+  };
+
+  window.w4primitives.mount(document.getElementById('fig-plan'), planBlock, BREAKPOINTS);
+  window.w4primitives.mount(document.getElementById('fig-travel'), travelBlock, BREAKPOINTS);
+  window.w4primitives.mount(document.getElementById('fig-grid'), gridBlock, BREAKPOINTS);
+  window.w4primitives.mount(document.getElementById('fig-negative'), negativeBlock, BREAKPOINTS);
+
+  document.getElementById('src-plan').textContent = JSON.stringify(
+    { ...planBlock, rows: planBlock.rows.slice(0, 3).concat([`… ${planBlock.rows.length - 3} more rows`]) }, null, 1,
+  );
+})();
+</script>
+</body>
+</html>

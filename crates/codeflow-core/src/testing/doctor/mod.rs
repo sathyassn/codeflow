@@ -237,8 +237,15 @@ fn run_target_checks(config: &TestConfig, project_dir: &Path) -> Vec<DoctorCheck
 }
 
 fn check_path_safety(name: &str, path: &str) -> DoctorCheck {
-    // Reject absolute paths
-    if Path::new(path).is_absolute() {
+    // Config paths are portable repository-relative paths. A leading root,
+    // drive prefix (including drive-relative `C:foo`), or UNC prefix can
+    // escape the configured target directory on Windows even when the host
+    // running this check uses another path grammar.
+    let bytes = path.as_bytes();
+    let root_qualified = path.starts_with(['/', '\\'])
+        || bytes.get(1) == Some(&b':')
+        || Path::new(path).is_absolute();
+    if root_qualified {
         return DoctorCheck {
             name: name.to_string(),
             status: CheckStatus::Fail,
@@ -246,11 +253,18 @@ fn check_path_safety(name: &str, path: &str) -> DoctorCheck {
         };
     }
     // Reject parent traversal
-    if path.split('/').any(|c| c == "..") {
+    if path.split(['/', '\\']).any(|c| c == "..") {
         return DoctorCheck {
             name: name.to_string(),
             status: CheckStatus::Fail,
             message: format!("parent traversal (..) not allowed in path: {path}"),
+        };
+    }
+    if path.contains('\\') {
+        return DoctorCheck {
+            name: name.to_string(),
+            status: CheckStatus::Fail,
+            message: format!("portable path must use '/' separators: {path}"),
         };
     }
     DoctorCheck {
@@ -599,6 +613,20 @@ mod tests {
         let check = check_path_safety("test", "../etc/report.xml");
         assert_eq!(check.status, CheckStatus::Fail);
         assert!(check.message.contains("parent traversal"));
+    }
+
+    #[test]
+    fn check_report_path_windows_forms_fail_on_every_host() {
+        for path in [
+            r"C:\reports\result.xml",
+            r"C:reports\result.xml",
+            r"\\server\share\result.xml",
+            r"reports\..\result.xml",
+            r"reports\result.xml",
+        ] {
+            let check = check_path_safety("test", path);
+            assert_eq!(check.status, CheckStatus::Fail, "accepted {path}");
+        }
     }
 
     // Check 3d: coverage.path safe — positive

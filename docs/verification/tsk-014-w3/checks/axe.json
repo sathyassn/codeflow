@@ -1,0 +1,574 @@
+{
+  "browser_version": "150.0.7871.129",
+  "playwright_core_version": "1.62.1",
+  "axe_core_version": "4.10.3",
+  "results": [
+    {
+      "render": "p1-a-critical-path-and-room-light-desktop",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-tablet",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-mobile",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-desktop",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-tablet",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-mobile",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-desktop",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-tablet",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-mobile",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-desktop",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-tablet",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-mobile",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-desktop",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-tablet",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-mobile",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-desktop",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-tablet",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-mobile",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-desktop",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-tablet",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-mobile",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-desktop",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-tablet",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-mobile",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-desktop",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-tablet",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-mobile",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-desktop",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-tablet",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-mobile",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p3-b-source-region-history-light-desktop",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p3-b-source-region-history-light-tablet",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p3-b-source-region-history-light-mobile",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p3-b-source-region-history-dark-desktop",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p3-b-source-region-history-dark-tablet",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p3-b-source-region-history-dark-mobile",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-desktop",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-tablet",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-mobile",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-desktop",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-tablet",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-mobile",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-b-the-spine-light-desktop",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-b-the-spine-light-tablet",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-b-the-spine-light-mobile",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-b-the-spine-dark-desktop",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-b-the-spine-dark-tablet",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-b-the-spine-dark-mobile",
+      "page": "cases/d1/b-the-spine/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-c-write-authority-map-light-desktop",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-c-write-authority-map-light-tablet",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-c-write-authority-map-light-mobile",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-desktop",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-tablet",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-mobile",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d2-a-decision-reach-light-desktop",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d2-a-decision-reach-light-tablet",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d2-a-decision-reach-light-mobile",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d2-a-decision-reach-dark-desktop",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d2-a-decision-reach-dark-tablet",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d2-a-decision-reach-dark-mobile",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d2-b-evidence-margin-light-desktop",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d2-b-evidence-margin-light-tablet",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d2-b-evidence-margin-light-mobile",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-desktop",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "dark",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-tablet",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "dark",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-mobile",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "mode": "dark",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p1-baseline-light-desktop",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p1-baseline-light-tablet",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p1-baseline-light-mobile",
+      "page": "baselines/p1/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p2-baseline-light-desktop",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p2-baseline-light-tablet",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p2-baseline-light-mobile",
+      "page": "baselines/p2/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "p3-baseline-light-desktop",
+      "page": "baselines/p3/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "p3-baseline-light-tablet",
+      "page": "baselines/p3/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "p3-baseline-light-mobile",
+      "page": "baselines/p3/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d1-baseline-light-desktop",
+      "page": "baselines/d1/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d1-baseline-light-tablet",
+      "page": "baselines/d1/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d1-baseline-light-mobile",
+      "page": "baselines/d1/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    },
+    {
+      "render": "d2-baseline-light-desktop",
+      "page": "baselines/d2/baseline.html",
+      "mode": "light",
+      "viewport": "desktop",
+      "violations": []
+    },
+    {
+      "render": "d2-baseline-light-tablet",
+      "page": "baselines/d2/baseline.html",
+      "mode": "light",
+      "viewport": "tablet",
+      "violations": []
+    },
+    {
+      "render": "d2-baseline-light-mobile",
+      "page": "baselines/d2/baseline.html",
+      "mode": "light",
+      "viewport": "mobile",
+      "violations": []
+    }
+  ]
+}

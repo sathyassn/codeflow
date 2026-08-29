@@ -1,0 +1,506 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "smallest": 11,
+    "node": "produced",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "smallest": 11,
+    "node": "produced",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "smallest": 11,
+    "node": "earliest wave",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "smallest": 11,
+    "node": "earliest wave",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "smallest": 11,
+    "node": "produced",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "smallest": 11,
+    "node": "run, but not at this candidate",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "smallest": 11,
+    "node": "produced",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-d-authored-svg-light-desktop",
+    "smallest": 11.5,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-d-authored-svg-light-tablet",
+    "smallest": 11.5,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-d-authored-svg-light-mobile",
+    "smallest": 11,
+    "node": "earliest wave · later start",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-d-authored-svg-dark-desktop",
+    "smallest": 11.5,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-d-authored-svg-dark-tablet",
+    "smallest": 11.5,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-d-authored-svg-dark-mobile",
+    "smallest": 11,
+    "node": "earliest wave · later start",
+    "belowFloor": []
+  },
+  {
+    "render": "dir-e-raster-light-desktop",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "dir-e-raster-light-tablet",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "dir-e-raster-light-mobile",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "dir-e-raster-dark-desktop",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "dir-e-raster-dark-tablet",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "dir-e-raster-dark-mobile",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "smallest": 11,
+    "node": "auth token schema",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "smallest": 11,
+    "node": "auth token schema",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "smallest": 11,
+    "node": "auth token schema",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "smallest": 11,
+    "node": "auth token schema",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "smallest": 11,
+    "node": "auth token schema",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "smallest": 11,
+    "node": "auth token schema",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "smallest": 11,
+    "node": "changes rarely",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "smallest": 11,
+    "node": "changes rarely",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "smallest": 11,
+    "node": "changes rarely",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "smallest": 11,
+    "node": "changes rarely",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "smallest": 11,
+    "node": "changes rarely",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "smallest": 11,
+    "node": "changes rarely",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "smallest": 11,
+    "node": "ADR-0049",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "smallest": 11,
+    "node": "ADR-0049",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "smallest": 11,
+    "node": "§ Behavior 1",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "smallest": 11,
+    "node": "ADR-0049",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "smallest": 11,
+    "node": "ADR-0049",
+    "belowFloor": []
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "smallest": 11,
+    "node": "§ Behavior 1",
+    "belowFloor": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "smallest": 11,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "smallest": 11,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "smallest": 11,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "smallest": 11,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "smallest": 11,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "smallest": 11,
+    "node": "open now",
+    "belowFloor": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "smallest": 11,
+    "node": "macOS arm64",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "smallest": 11,
+    "node": "the pinned browser toolchain",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "smallest": 11,
+    "node": "the pinned browser toolchain",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "smallest": 11,
+    "node": "the pinned browser toolchain",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "smallest": 11,
+    "node": "the pinned browser toolchain",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "smallest": 11,
+    "node": "the pinned browser toolchain",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "smallest": 11,
+    "node": "the pinned browser toolchain",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-b-source-region-history-light-desktop",
+    "smallest": 11,
+    "node": "R8",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-b-source-region-history-light-tablet",
+    "smallest": 11,
+    "node": "R8",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-b-source-region-history-light-mobile",
+    "smallest": 11,
+    "node": "R8",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-b-source-region-history-dark-desktop",
+    "smallest": 11,
+    "node": "R8",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-b-source-region-history-dark-tablet",
+    "smallest": 11,
+    "node": "R8",
+    "belowFloor": []
+  },
+  {
+    "render": "p3-b-source-region-history-dark-mobile",
+    "smallest": 11,
+    "node": "R8",
+    "belowFloor": []
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "smallest": null,
+    "node": null,
+    "belowFloor": []
+  }
+]

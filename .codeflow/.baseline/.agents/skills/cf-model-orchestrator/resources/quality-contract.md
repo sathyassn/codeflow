@@ -55,10 +55,21 @@ system records `conform` and names that authority. A new or materially reshaped
 user-facing surface applies `cf-design` and records the creator intent,
 audience/job/context evidence, experience target, language and voice,
 applicable appearance modes, systems and operator direction, proportionate
-research/options, settled direction, accessibility target, and fidelity plan.
-Collapse irrelevant dimensions instead of filling a template. Do not create a
-separate design document unless the project needs a durable product or
+research/options, subject and governing idea, user action and primary
+composition, settled direction, earned system scope, accessibility target,
+pre-registered review rubric, and fidelity plan. Collapse irrelevant dimensions
+instead of filling a template. While the operator owns an open material
+direction or composition, an operator-visible rendered board settles it before
+implementation; agreement between model seats is not that decision. Do not
+create a separate design document unless the project needs a durable product or
 design-system decision at its normal spec/ADR altitude.
+
+Design exploration remains bounded after direction selection: vary only a
+named unresolved choice that can materially change the outcome, retain
+proportionate source/rights/consent/transformation and product-use evidence for
+material references or assets, never send private material to an external
+service without explicit authority, and bind material feedback to the exact
+reviewed version plus accepted/rejected rationale in Plan vN+1.
 
 ## Design and implementation quality
 
@@ -448,8 +459,9 @@ green run wastes resources. A code-only review is not UI verification. If no UI
 changed, record `UI: N/A — no user-facing surface changed`.
 
 Compare the rendered result with the settled intent using only applicable
-dimensions—hierarchy, interaction, content, type and colour roles, layout,
-spacing, imagery, density, motion, states, and platform fit. Distinguish an
+dimensions—governing idea and composition, hierarchy, interaction, content,
+visual/verbal coherence, type and colour roles, layout, spacing, imagery,
+density, motion, states, appearance modes, and platform fit. Distinguish an
 approved improvement or evidenced implementation constraint from unjustified
 drift. A changed design contract or material direction creates Plan vN+1; a
 reviewer's unsupported taste does not.

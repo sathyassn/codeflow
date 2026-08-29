@@ -423,6 +423,25 @@ fn sandbox_denies_secret_stores_to_every_subprocess() {
 }
 
 #[test]
+fn sandbox_reallows_only_immutable_plugin_code_under_claude_state() {
+    for name in preset_files() {
+        let value = load(&name);
+        let allow_read = value["sandbox"]["filesystem"]["allowRead"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: sandbox.filesystem.allowRead missing"));
+        let allow_read: Vec<&str> = allow_read
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert_eq!(
+            allow_read,
+            ["~/.claude/plugins/cache"],
+            "{name}: sandbox may reallow installed plugin code, not mutable plugin state"
+        );
+    }
+}
+
+#[test]
 fn deny_extends_to_pure_secret_home_stores() {
     // Read protection reaches beyond the project cwd to the home-dir secret
     // stores an agent must never read (ADR-0008), while keeping the cwd globs.

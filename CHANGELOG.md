@@ -6,20 +6,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-> **Next release: `v3.0.0` (MAJOR).** Test configurations that use the
-> unsupported `changed_files` coverage scope must migrate to `per_file`,
-> `per_package`, `per_module`, or `global`. That explicit contract break requires
-> a major bump from `v2.1.0`. Full-tier consumers must also repair canonical
-> work records before updating: `validate --docs` now blocks filename/ID
-> mismatches, malformed or dangling work relationships, completed tasks with
-> unchecked acceptance criteria, and approved/implemented specs with unresolved
-> open questions. Run the current `codeflow validate --docs`, fix every reported
-> record on a planning branch, and merge that repair before installing v3. The
-> feature additions below do not reduce these managed-contract changes to a
-> minor release.
+## [3.0.0] - 2026-08-02
+
+> **Breaking migrations.** Before installing v3:
+>
+> - replace every `changed_files` coverage scope with `per_file`, `per_package`,
+>   `per_module`, or `global`;
+> - rename or remove test modes outside `quick`, `essential`, and `full`;
+> - set `security.dangerous_commands` to `block`, or remove the key to accept
+>   the non-relaxable default; and
+> - repair canonical work records reported by `codeflow validate --docs`,
+>   including filename/ID mismatches, malformed or dangling relationships,
+>   completed tasks with unchecked acceptance criteria, and approved or
+>   implemented specs with unresolved open questions.
+>
+> Make those repairs on a planning branch and merge them before updating. These
+> contract changes require a major bump from `v2.1.0`; feature additions do not
+> reduce the release to a minor version.
 
 ### Fixed
 
+- **Presentation qualification now exercises the real owned runtime and offline
+  export boundary.** A full-only gate drives the CLI, authenticated loopback
+  service, isolated headless browser profiles, feedback/update/reopen flow,
+  enhanced export, accessibility, network/console state, and exact bounded
+  teardown. The real journey corrected strict-cookie bootstrap handoff and
+  template payload extraction defects that raw HTTP and synthetic browser tests
+  had missed. An injected failure proves the primary error survives exhaustive
+  exact-owned cleanup, and runner children start from an explicit functional
+  environment rather than inheriting unrelated host values. Executable child
+  canaries cover the complete provider-secret deny set without leaking coverage
+  profiles. Windows qualification now fails closed unless an externally
+  provisioned disposable profile confines the actual Local AppData Known
+  Folder; the outer native lane still owns profile or VM teardown proof.
+  Greenfield/brownfield initialized-baseline parity, idempotent update, narrow
+  cleanup, reproducible locked assets, exact CI Node/npm tooling, binary Git
+  attributes, and isolated deterministic release payload-size deltas now have
+  owning checks. Interrupted presentation creation is recoverable even before
+  its transaction marker is written. Documentation-portal stale stubs retain
+  only a bounded unavailable identity so current records can link to the safe
+  diagnostic without republishing stale content, and a parity gate keeps the
+  dogfood runtime identical to the shipped starter on every supported host.
+  Producer and verifier now share one strict unavailable-identity grammar,
+  while the local aggregate and CI both enforce the reciprocal documentation
+  graph instead of leaving that check to a separate hosted step.
+- **Claude's OS sandbox now keeps installed plugin code executable without
+  exposing mutable plugin or private Claude state.** The broad `~/.claude`
+  subprocess-read denial remains, while the higher-precedence filesystem
+  carveout permits only `~/.claude/plugins/cache`; plugin job data, credentials,
+  histories, sessions, settings, memory, and other private state remain denied.
+  Updates retire superseded CodeFlow-managed sandbox array entries from the
+  prior shipped baseline while preserving project-owned entries.
 - **Delegate interruption coverage now waits for the process handler.** The
   SIGINT lifecycle test allows a bounded child-initialization window, avoiding
   a false failure under parallel or instrumented test startup while still
@@ -61,6 +98,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Repository guide portals are now explicit, source-linked, and verifiable.**
+  Standard/full projects receive the concise cross-harness `cf-docs-portal`
+  workflow, while the exact-pinned Starlight/Pagefind starter remains absent
+  until `codeflow portal setup --path <dir>` adopts it offline. Adopted files
+  reconcile through ordinary never-clobber updates and opaque pristine
+  baselines; `codeflow validate --portal <dir>` checks bounded evidence claims
+  against repository/output bytes without executing project code. CodeFlow
+  dogfoods the optional utility under `docs-portal/`. The pinned GFM adapter
+  now requires one clean committed runtime/source/media snapshot, reads source
+  claims from bounded Git blobs, detects index-masked worktree changes, rebuilds
+  broken-source routes as bounded non-searchable current-source error pages
+  without walking or republishing history, uses bounded batched Git reads,
+  stable no-follow publication copies, raster-dimension limits, and
+  locale-independent ordering, neutralizes derived metadata, and
+  publishes under recoverable corpus and whole-workflow leases (ADR-0048,
+  CAP-015). Canonical routes retain exact NFC case and punctuation while URL
+  boundaries encode segments; shared JavaScript/Rust authority fixtures cover
+  strict frontmatter, repository URLs, and SHA-1/SHA-256 object IDs. Committed
+  non-reserved public files are also snapshot-authoritative. CodeFlow's full
+  strict gate now blocks on locked portal tests/build/Rust validation on Ubuntu,
+  with the authority/path suite repeated on Windows; generic consumer CI stays
+  opt-in. Compressed release embedding keeps the offline starter within the
+  ADR-0048 binary budget.
+
+- **Multi-task epics now default to one topology-aware integration branch.**
+  Planning creates the shared non-protected target from the intended protected
+  branch before task allocation; independent nodes may branch concurrently
+  within the host resource budget, dependent nodes branch from the updated
+  integration tip only after predecessors land, and landings remain serialized.
+  Aggregate verification and both-primary review run on the combined diff
+  before one final human-reviewed PR. A different landing shape requires a
+  recorded Plan vN rationale and dual approval rather than convenience.
 - **Product language and appearance are now explicit, contextual design
   dimensions.** `cf-design` records language/voice and applicable appearance
   modes inside the proportionate `DESIGN_INTENT`, while `cf-editorial-review`
@@ -70,6 +139,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   localization honesty, preference/persistence verification, and the boundary
   that prevents CodeFlow utility defaults from becoming product design
   authority.
+- **Design refinement and asset sourcing now stay bounded and attributable.**
+  After a direction is selected, `cf-design` varies only a named unresolved
+  material choice and stops when it is settled. An on-demand reference keeps
+  inspiration distinct from user evidence, records proportionate rights,
+  consent, transformation, and product-use provenance, refuses unauthorized
+  private-data uploads, and binds material revision feedback to the exact
+  reviewed version without adding a provider catalog or design database.
 - **Durable work now has one explicit, adaptable authority and a stable start
   boundary (ADR-0046).** Full-tier scaffolds write independent `EPC-NNN`,
   `SPC-NNN`, and `TSK-NNN` records in one flat Git Markdown workgraph. Tasks
@@ -401,6 +477,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bounded interactive review documents (ADR-0049, ADR-0050, ADR-0052).** Standard/full
+  scaffolds gain the cross-harness `cf-present` skill and managed public
+  document, primitive-token, and history schemas. The new `codeflow present`
+  surface opens, updates, lists, resumes, exports, closes, and clears immutable
+  local review sessions and delivers stable feedback envelopes at least once.
+  One loopback-only authenticated service and a CodeFlow-owned isolated browser
+  profile render a closed accessible block catalog with light/dark utility
+  modes, inert HTML sandboxing, strict optional project primitive tokens, and
+  self-contained read-only export. Versioned state is owner-private, project-
+  keyed, and quota bounded; browser-owned profile/cache and small runtime
+  controls use a separate derived owner-private root. Cleanup is identity-
+  scoped; event recovery uses one bounded
+  opened handle, diagram count/source/enhancement are capped, and native
+  adapters use trusted platform paths, exact process identity, a shared
+  allowlist-only child environment, creation-only Windows ACL hardening, and
+  read-only owner/DACL verification. No daemon, remote viewer, product UI
+  framework, or documentation portal is introduced. Native-path project keys,
+  serialized creation quota enforcement, collection cardinality, versioned feedback
+  resolution, exact re-anchoring/visible orphan states, and fail-closed orphan
+  process recovery keep the bounded contract explicit. Native platform and
+  browser qualification remains the explicit CAP-016/TSK-007 release boundary.
+  All durable growth now reserves capacity before publication under one
+  project-to-session-to-runtime-control lock order, while exact retries and
+  cleanup remain usable for legacy over-quota state. Exact accepted and terminal
+  feedback retries converge without growth; retention recomputes after each
+  eviction; selected cleanup reports a retained named session while remaining
+  isolated from unrelated state; interrupted creates, atomic temporaries, and
+  trash recover only from exact names plus matching transaction proof; and relative Unicode export remains
+  create-new and owner-private. One strict feedback ledger rejects impossible
+  transitions; browser cleanup re-qualifies identity before forced escalation;
+  exports are owner-private from creation; and browser limits mirror the
+  server's note, text, selector, and payload bounds. Browser launch is serialized
+  around one consumed record per attempt, reused PIDs take bounded exact-marker
+  recovery, Windows proves real profile-resource release without assuming a
+  POSIX lock file, every Windows append/lease file is private at creation, and
+  Unix state-root environment paths cannot resolve into the worktree.
+
 - **Transport-neutral durable delegate lifecycle (ADR-0036).** New
   `codeflow delegate init|arm|wait` commands and a schema-v2
   `hook delegate-turn --state-dir` mode drive a delegated harness turn through
@@ -598,6 +711,7 @@ set) shares no code with it and is preserved at the `v1-final` tag.
 - cargo-dist release pipeline with prebuilt binaries for macOS (arm64/x64) and
   Linux (x64) and a shell installer.
 
-[Unreleased]: https://github.com/sathyassn/codeflow/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/sathyassn/codeflow/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/sathyassn/codeflow/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/sathyassn/codeflow/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sathyassn/codeflow/releases/tag/v2.0.0

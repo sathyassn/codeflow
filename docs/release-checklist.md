@@ -8,8 +8,9 @@ named human release decision.
 
 ## 1. Scope and version
 
-- [ ] The release branch starts at the latest protected `main` and contains
-      only the intended release changes.
+- [ ] The release branch starts at the latest protected `main`, or at the clean
+      accepted integration candidate for one coherent epic, and contains only
+      the intended release changes.
 - [ ] Conventional commits resolve to the intended SemVer bump; breaking
       changes and migrations are explicit.
 - [ ] `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, release notes, and the proposed
@@ -25,6 +26,28 @@ named human release decision.
 - [ ] Secret scanning, dependency audit, policy validation, and the repository
       integrity/managed-drift checks pass or have a documented, human-approved
       disposition that does not weaken a non-relaxable floor.
+- [ ] A fresh authenticated mirror inventories every remote branch and tag,
+      hosted pull-request head and merge ref, and any other fetchable or
+      servable ref. Record its ref digest; inventory forbidden runtime paths;
+      run both raw and configured redacted Gitleaks scans; and reject broad
+      path/directory allowlists that could hide a future secret.
+- [ ] The operator-approved publication boundary is complete before visibility
+      changes. For a sanitized public repository, retain the original remote as
+      a sealed private archive and publish only selected clean refs—never a
+      mirror push. For a history rewrite, separately purge retained hosted PR
+      refs and caches. Rescan resulting public refs and regenerated exact
+      fingerprints rather than reusing pre-rewrite commit IDs.
+- [ ] Hosted PR/issue/review text, releases and assets, Actions logs/artifacts,
+      Pages, and packages have an explicit audited or removed disposition. An
+      ordinary branch scan does not prove those provider-owned surfaces safe.
+- [ ] Presentation document/token/history schemas match the Rust contracts and
+      adversarial fixtures; service request/auth/bootstrap/sandbox/export
+      matrices, crash recovery, concurrent feedback, retention, and
+      identity-scoped cleanup pass without exposing secrets or private state.
+- [ ] The committed presentation web distribution rebuilds byte-identically
+      from its exact lockfile and toolchain; integrity hashes, Brotli/export
+      budgets, license inventory, CycloneDX SBOM, package audit, and release
+      binary-delta limits pass. Consumer builds still require no Node toolchain.
 - [ ] CodeFlow's repository-specific CodeQL state is honest. Before public
       launch it remains pending and no CodeQL workflow is shipped in the
       portable scaffold. After public launch, GitHub default setup for Rust uses
@@ -46,17 +69,61 @@ named human release decision.
 - [ ] `cargo dist plan --output-format=json` lists the two macOS archives, the
       Linux x86-64 archive, the Windows x86-64 MSVC archive, and both shell and
       PowerShell installers on native runners.
-- [ ] Optional host-agnostic `cargo-xwin` and `cargo-zigbuild` checks pass; their
-      versions and host are recorded. These are compile/link evidence only.
+- [ ] Optional host-agnostic `cargo-xwin` target clippy/build and
+      `cargo-zigbuild` checks pass; their versions and host are recorded. These
+      are static-analysis/compile/link evidence only.
 - [ ] Native macOS, Linux, and Windows build/test canaries pass. Record the OS,
       architecture, Rust version, and exact command. WSL2 is recorded as Linux,
       not as native Windows.
+- [ ] Each claimed presentation platform opens only a task-owned isolated
+      browser/profile, passes the qualified Brotli and full review journey,
+      preserves light/dark/system and accessibility behavior, exports offline,
+      and proves close/crash/retention teardown. An unqualified adapter fails
+      closed and `--no-launch` remains usable.
+- [ ] Presentation platform evidence covers Windows Unicode known-folder and
+      profile paths, creation-time ACL hardening, read-only rejection of weak
+      owners/DACL inheritance/trustees, trusted system tools, exact quoted
+      process identity, file URLs, and process-tree cleanup; Linux/WSL2 bounded
+      no-follow `/proc` identity and process-group cleanup; and the equivalent
+      macOS ownership checks. Every external child proves the shared restricted
+      environment excludes provider-secret environment canaries. Cross-target compilation
+      does not replace these native cases.
+- [ ] Browser evidence includes the bounded dense multi-diagram corpus, records
+      long-task behavior, and proves that budget exhaustion leaves escaped
+      source without blocking feedback, export, close, or cleanup.
+- [ ] Presentation adversarial evidence covers invalid native-path bytes,
+      per-block and aggregate collection amplification, impossible and
+      concurrent project quotas across create, update, runtime, and feedback
+      mutations; zero-growth retries and cleanup in legacy over-quota state;
+      malformed, duplicate, post-terminal, and concurrent feedback transitions;
+      exact/ambiguous/missing feedback re-anchoring; stale/cross-session
+      resolution and concurrent identical/conflicting terminal retries;
+      client/server review-limit parity; relative and Unicode owner-private
+      export creation; derived-runtime separation during live browser-profile
+      writes; exact-name create/trash recovery with matching transaction proof;
+      multi-eviction size recomputation; selected cleanup isolation and an
+      actionable retained-session result; structured bulk partial failure;
+      service crash → close → clear convergence; and leader-loss cleanup through
+      one serialized, consumed record per launch attempt. PID-reuse cases never
+      signal the reused PID and retain state unless bounded exact marker/process
+      and native resource absence is proven. Windows resource proof walks real
+      profile handles without assuming a POSIX lock file. Qualified forced
+      cleanup re-proves the exact identity after its graceful-stop window.
 - [ ] The shell installer selects the correct macOS/Linux artifact, the
       PowerShell installer selects `codeflow.exe` on native Windows, and WSL2
       selects the Linux artifact. Each installed binary reports the release
       version and passes `codeflow doctor` in a disposable greenfield repo.
 - [ ] A brownfield update canary preserves user-owned files and intentional
       sidecars, reports conflicts, and is idempotent when repeated.
+- [ ] Portal starter bytes, archive-equivalent bytes, and release-binary delta
+      remain within ADR-0048. A non-adopter receives no portal workspace,
+      lockfile, or baseline; an adopter passes setup/update/conflict/idempotence,
+      locked install/build/audit/upgrade, `validate --portal`, source/manifest
+      negative fixtures, and Chromium/Firefox/WebKit accessibility journeys.
+      CodeFlow itself runs the `docs-portal` target through
+      `codeflow test --mode full --strict` locally and on Ubuntu, plus the
+      authority/path suite on Windows. Generic consumer CI remains portal-free
+      until adoption. Generated output is not published by these checks.
 
 ## 4. Harness and model qualification
 

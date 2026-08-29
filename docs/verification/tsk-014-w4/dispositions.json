@@ -1,0 +1,329 @@
+{
+  "study": "tsk-014-w4",
+  "source_of_truth_for_before": "../tsk-014-w3/registry.json → invalidated_bands",
+  "note": "One entry per W3 invalidated band. `before` is copied verbatim from the W3 registry so the audit history cannot drift; `after` is the disposition this study authored. A11 fails when a band has no entry, or when an entry names a W4 artefact that does not exist.",
+  "independent_recheck": "checks/w3-recheck.json re-measured all fourteen W3 bands with a corrected containment probe (client rects on both sides, in CSS pixels; the W3 harness compared getBBox against viewBox.baseVal, and an intermediate formulation in this study compared through getCTM — both mix coordinate systems). Under the corrected probe every one of the ten machine-visible W3 findings is confirmed and none is an artefact. The remaining four are the p1-a and p2-a mobile bands, which W3 itself recorded as machine_visible:false composition failures; the probe agrees they are inside their frames, which is what W3 said.",
+  "counts": {
+    "total": 14,
+    "repaired": 10,
+    "replaced": 4,
+    "withdrawn": 0
+  },
+  "entries": [
+    {
+      "w3_render": "p3-a-convergence-with-source-depth-light-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "material",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "The off-axis arrival's label is drawn past the figure's viewBox: 'Playwright 1.55' overshoots by 8.8px and is cut by the frame, and 'Chrome 150' sits on the hatched region's dashed boundary. The identity of the external cause is the payload of the 'not a round' annotation, so what is lost is the answer to the second half of P3's question.",
+        "machine_visible": true,
+        "found_by": "host-reported, independently confirmed and corrected by the audit"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "mechanical",
+        "now": "cases/p3/a-convergence-with-source-depth",
+        "what_changed": "The off-axis arrival column is given its own measured width and the two identifying labels are laid out inside it, so neither overshoots the viewBox and neither sits on the hatched region's boundary."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-a-convergence-with-source-depth-dark-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "material",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "The same clipping as the light mobile render; the geometry is mode-independent.",
+        "machine_visible": true,
+        "found_by": "host-reported, independently confirmed and corrected by the audit"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "mechanical",
+        "now": "cases/p3/a-convergence-with-source-depth",
+        "what_changed": "As the light mobile band; the geometry is mode-independent."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-b-source-region-history-light-desktop",
+      "w3_band": "desktop",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "legibility",
+        "failure_severity": "minor",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "Ten rail tick labels overshoot their viewBox by 1.8px vertically and lose their descenders. Small, but it is the round axis this candidate's whole encoding is read against.",
+        "machine_visible": true,
+        "found_by": "independent Claude design-primary audit, 2026-08-04"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "mechanical",
+        "now": "cases/p3/b-source-region-history",
+        "what_changed": "The rail viewBox is extended to include the tick labels' descenders, so the round axis this candidate is read against is no longer clipped."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-b-source-region-history-dark-desktop",
+      "w3_band": "desktop",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "legibility",
+        "failure_severity": "minor",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "Ten rail tick labels overshoot their viewBox by 1.8px vertically and lose their descenders, exactly as in the light render; the geometry is mode-independent.",
+        "machine_visible": true,
+        "found_by": "independent Claude design-primary audit, 2026-08-04"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "mechanical",
+        "now": "cases/p3/b-source-region-history",
+        "what_changed": "As the light desktop band; the geometry is mode-independent."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-b-source-region-history-light-tablet",
+      "w3_band": "tablet",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "material",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "Two quoted-source blocks silently hide 7px and 29px of their own content, and the rail tick labels overshoot as at desktop.",
+        "machine_visible": true,
+        "found_by": "independent Claude design-primary audit, 2026-08-04"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "design decision",
+        "now": "cases/p3/b-source-region-history",
+        "what_changed": "The quoted source no longer sits in a fixed-width column with hidden overflow. Quoted lines wrap with a hanging indent that keeps the continuation visibly subordinate to its own line, so every verified character is on the page at every width. The round-mark strip and the file-order reading are unchanged.",
+        "why_this_and_not_withdrawal": "Withdrawing the band would remove the one candidate whose carrier verdict is not `needs-new-block`, and the defect was never the encoding — it was that the page cropped the line its own A6 contract verifies character for character."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-b-source-region-history-dark-tablet",
+      "w3_band": "tablet",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "material",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "Two quoted-source blocks silently hide 7px and 29px of their own content and the rail tick labels overshoot, exactly as in the light render; the geometry is mode-independent.",
+        "machine_visible": true,
+        "found_by": "independent Claude design-primary audit, 2026-08-04"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "design decision",
+        "now": "cases/p3/b-source-region-history",
+        "what_changed": "As the light tablet band; the geometry is mode-independent."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-b-source-region-history-light-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "disqualifying",
+        "failing_axes": [
+          "fact presence",
+          "idea survival"
+        ],
+        "what_failed_verbatim": "Thirteen quoted-source blocks silently hide up to 430px of a 332px container — more than half of most quoted lines is not on the page, with no ellipsis, fade or affordance in a still frame — and the file-level round rail itself hides 133px of 360 and runs off the right edge. The candidate's A6 contract is that every quoted diff line matches `git show` character for character; the render does not carry the line it verifies.",
+        "machine_visible": true,
+        "found_by": "host-reported, independently confirmed and corrected by the audit"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "design decision",
+        "now": "cases/p3/b-source-region-history",
+        "what_changed": "As the tablet band, and it matters more here: the W3 render hid up to 430px of a 332px container with no ellipsis, fade or affordance in a still frame. Wrapping removes the crop rather than signposting it. The file-level round rail is bounded to the figure width instead of running off the right edge."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p3-b-source-region-history-dark-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "disqualifying",
+        "failing_axes": [
+          "fact presence",
+          "idea survival"
+        ],
+        "what_failed_verbatim": "Thirteen quoted-source blocks hide up to 430px of a 332px container and the file-level round rail hides 133px of 360, exactly as in the light render; the geometry is mode-independent.",
+        "machine_visible": true,
+        "found_by": "host-reported, independently confirmed and corrected by the audit"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "design decision",
+        "now": "cases/p3/b-source-region-history",
+        "what_changed": "As the light mobile band; the geometry is mode-independent."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p2-baseline-light-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "material",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "The plain baseline overflows the document horizontally at 390px (475px of content in a 390px viewport), so part of the control is off the page.",
+        "machine_visible": true,
+        "found_by": "independent Claude design-primary audit, 2026-08-04; not previously reported by anyone"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "mechanical, but constrained",
+        "now": "baselines/p2",
+        "what_changed": "The plain control wraps within 390px instead of overflowing it. Nothing else changed: no colour was added, no geometry, no figure, and the same stylesheet still serves all five baselines. A control that becomes a design stops being a control."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "d1-baseline-light-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "containment",
+        "failure_severity": "material",
+        "failing_axes": [
+          "fact presence"
+        ],
+        "what_failed_verbatim": "The plain baseline overflows the document horizontally at 390px — 477px of content in a 390px viewport — so part of the control is off the page.",
+        "machine_visible": true,
+        "found_by": "independent Claude design-primary audit, 2026-08-04; not previously reported by anyone"
+      },
+      "after": {
+        "disposition": "repaired",
+        "kind": "mechanical, but constrained",
+        "now": "baselines/d1",
+        "what_changed": "As the p2 baseline, and under the same constraint."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p1-a-critical-path-and-room-light-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "composition",
+        "failure_severity": "disqualifying",
+        "failing_axes": [
+          "fact presence",
+          "idea survival"
+        ],
+        "what_failed_verbatim": "Everything is inside the frame, so no containment probe sees this. All room tracks share one gutter at a single x: TSK-013 (room 2, boundary 1 to 3) and TSK-009 (room 1, boundary 2 to 3) are drawn at the same x and merge into one continuous column, so the reader cannot recover which task has how much room. Three different caps land on boundary 3 — TSK-013's limit, TSK-009's limit, and TSK-007's zero-room cap — and render as a single mark. The remaining zero-room caps are occluded by the tracks or orphaned: TSK-010's sits alone below the last row, attached to nothing.",
+        "machine_visible": false,
+        "found_by": "independent Claude design-primary audit, 2026-08-04; not previously reported by anyone"
+      },
+      "after": {
+        "disposition": "replaced",
+        "kind": "design decision",
+        "now": "cases/p1/a-critical-path-and-room",
+        "what_changed": "The narrow composition is replaced, not adjusted, and was declared in registry.json before it was drawn. Extent no longer rotates with the axis into a shared gutter. Each task's later start is measured horizontally inside that task's own row against one shared wave scale drawn at the head of the figure. Two tasks can no longer occupy one column because no two rows are the same row, and a zero-room cap sits against its own card instead of floating below the last row.",
+        "why_replacement_not_repair": "The defect was the declared geometry, not its execution. A shared gutter measured down the page collides whenever two tasks have overlapping room, which is the normal case, so separating the marks inside it would have preserved a premise that fails on the next dataset."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p1-a-critical-path-and-room-dark-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "composition",
+        "failure_severity": "disqualifying",
+        "failing_axes": [
+          "fact presence",
+          "idea survival"
+        ],
+        "what_failed_verbatim": "The room tracks merge into one continuous column, three caps collapse onto boundary 3, and TSK-010's zero-room cap is orphaned below the last row, exactly as in the light render; the geometry is mode-independent.",
+        "machine_visible": false,
+        "found_by": "independent Claude design-primary audit, 2026-08-04; not previously reported by anyone"
+      },
+      "after": {
+        "disposition": "replaced",
+        "kind": "design decision",
+        "now": "cases/p1/a-critical-path-and-room",
+        "what_changed": "As the light mobile band; the geometry is mode-independent."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p2-a-stopped-provenance-light-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "composition",
+        "failure_severity": "disqualifying",
+        "failing_axes": [
+          "idea survival"
+        ],
+        "what_failed_verbatim": "Everything is inside the frame. Each stop is drawn as a long horizontal rule running from the figure's left edge across roughly 40% of empty width to the rail, where it reads as a section divider rather than as a stop on a rail; and each stop's cause caption is left-aligned at the far edge, directly abutting the NEXT claim's title with no separation, so the cause attaches visually to the wrong claim.",
+        "machine_visible": false,
+        "found_by": "independent Claude design-primary audit, 2026-08-04; not previously reported by anyone"
+      },
+      "after": {
+        "disposition": "replaced",
+        "kind": "design decision",
+        "now": "cases/p2/a-stopped-provenance",
+        "what_changed": "The narrow composition is replaced and was declared before drawing. Each claim becomes a bounded lane with its own edge; the rail runs down inside that lane, inset from both edges so a stop can never span the figure's width; the stop is a cross-tick on the rail rather than a rule; and the cause caption sits inside the same lane, indented to the rail, so it can no longer abut the next claim's title.",
+        "why_replacement_not_repair": "A stop drawn as a full-width rule reads as a section divider wherever the rail sits, and moving the caption alone would leave the stop mark still spanning the figure. P2's registered question is attribution, and attribution is what the band lost."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    },
+    {
+      "w3_render": "p2-a-stopped-provenance-dark-mobile",
+      "w3_band": "mobile",
+      "before": {
+        "evidence_status": "inadmissible — no timed or blind observation gate may be recorded from this render",
+        "failure_kind": "composition",
+        "failure_severity": "disqualifying",
+        "failing_axes": [
+          "idea survival"
+        ],
+        "what_failed_verbatim": "Each stop reads as a section divider across empty width and each cause caption abuts the next claim's title, exactly as in the light render; the geometry is mode-independent.",
+        "machine_visible": false,
+        "found_by": "independent Claude design-primary audit, 2026-08-04; not previously reported by anyone"
+      },
+      "after": {
+        "disposition": "replaced",
+        "kind": "design decision",
+        "now": "cases/p2/a-stopped-provenance",
+        "what_changed": "As the light mobile band; the geometry is mode-independent."
+      },
+      "w3_untouched": "../tsk-014-w3 is append-only evidence and is not edited by this study. The W3 render, its registration and its failure record stay exactly as the audit left them."
+    }
+  ]
+}

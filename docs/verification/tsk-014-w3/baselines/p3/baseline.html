@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qualification harness review — plain baseline</title>
+<style>
+/* The plain baseline. Deliberately ordinary: this is what the same facts look
+   like with no composition at all — a heading, some sentences, a table. It is
+   shared by all five baselines on purpose, because the baseline is not a design
+   and must not become one. Candidates never share a stylesheet. */
+:root {
+  color-scheme: light dark;
+  --ink: #1a1a1a; --ink-2: #4a4a4a; --page: #ffffff; --rule: #d4d4d4; --code: #f4f4f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e8e8e8; --ink-2: #b0b0b0; --page: #101010; --rule: #333333; --code: #1c1c1c; }
+}
+* { box-sizing: border-box; }
+html { background: var(--page); }
+body {
+  margin: 0 auto; padding: 40px 24px 64px; max-width: 46rem; color: var(--ink); background: var(--page);
+  font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; font-weight: 700; }
+.meta { margin: 0 0 24px; font-size: 13px; color: var(--ink-2);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+h2 { font-size: 17px; margin: 30px 0 8px; font-weight: 650; }
+p, li { font-size: 15.5px; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0 0; font-size: 14px; }
+th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 650; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px;
+       background: var(--code); padding: 1px 4px; border-radius: 3px; }
+blockquote { margin: 8px 0 0; padding-left: 12px; border-left: 3px solid var(--rule); color: var(--ink-2);
+             font-size: 14px; }
+.note { font-size: 13px; color: var(--ink-2); margin-top: 26px; }
+</style>
+</head>
+<body>
+<h1>The qualification harness review</h1>
+<p class="meta">project-management/tasks/TSK-014.md · eight commits</p>
+
+<p>Eight rounds of exact review produced seven findings. For each finding the table gives the rounds
+  it appears in and what each of those rounds did to it.</p>
+
+<table id="findings">
+  <thead><tr><th>Finding</th><th>Round</th><th>State</th><th>What that round did</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>The rounds</h2>
+<table id="rounds">
+  <thead><tr><th>Round</th><th>Commit</th><th>Subject</th><th>Date</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<p class="note">Derived from the same <code>shared/p3-convergence.js</code> the candidates use, so the
+  facts are identical and only the presentation differs.</p>
+
+<script src="../../shared/p3-convergence.js"></script>
+<script>
+(() => {
+  const P = window.p3Convergence;
+  const body = document.querySelector("#findings tbody");
+  for (const finding of P.findings) {
+    for (const cell of finding.cells) {
+      const tr = document.createElement("tr");
+      const state = cell.states.join(", ")
+        + (cell.cause ? ` (cause: ${cell.cause === "outside-harness" ? "not from a round" : "the previous fix"})` : "");
+      for (const value of [`${finding.id} — ${finding.title}`, cell.round, state, cell.what]) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.append(td);
+      }
+      body.append(tr);
+    }
+  }
+  const rounds = document.querySelector("#rounds tbody");
+  for (const round of P.rounds) {
+    const tr = document.createElement("tr");
+    for (const value of [round.id, round.sha, round.subject, round.date]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    rounds.append(tr);
+  }
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

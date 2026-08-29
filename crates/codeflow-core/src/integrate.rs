@@ -683,9 +683,10 @@ mod tests {
                 .trim()
                 .to_string();
         assert_eq!(root_head, "main", "root worktree stays on main");
+        let landed = fs::read_to_string(dir.path().join("feature.txt")).unwrap();
         assert_eq!(
-            fs::read_to_string(dir.path().join("feature.txt")).unwrap(),
-            "feature\n",
+            landed.lines().collect::<Vec<_>>(),
+            ["feature"],
             "target worktree files must match the landed tree"
         );
         let status = git(dir.path(), &["status", "--porcelain"]);
@@ -696,10 +697,19 @@ mod tests {
     #[test]
     fn successful_ref_update_warns_when_checkout_restore_fails() {
         let dir = repo_with_feature_branch();
-        write_test_config(
-            dir.path(),
-            "mkdir -p .git/hooks; printf '#!/bin/sh\\nexit 1\\n' > .git/hooks/post-checkout; chmod +x .git/hooks/post-checkout",
-        );
+        let hooks = dir.path().join(".codeflow/test-hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        let post_checkout = hooks.join("post-checkout");
+        fs::write(&post_checkout, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mut permissions = fs::metadata(&post_checkout).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&post_checkout, permissions).unwrap();
+        }
+        write_test_config(dir.path(), "git config core.hooksPath .codeflow/test-hooks");
 
         let outcome = integrate(dir.path(), "feat/x", "main")
             .expect("the landed ref is a partial success, not a failed integration");
@@ -722,14 +732,31 @@ mod tests {
     #[test]
     fn rejects_a_branch_that_moved_during_the_test_gate() {
         let dir = repo_with_feature_branch();
-        // The gate command force-advances feat/x mid-run, then exits 0 (gate passes).
-        write_test_config(dir.path(), "git commit --allow-empty -m moved; true");
+        // Prepare an untested descendant, then make the passing gate advance
+        // feat/x to it. update-ref needs no ambient Git identity and returns a
+        // failure if the intended mutation does not happen.
+        git(dir.path(), &["checkout", "-b", "untested", "feat/x"]);
+        commit_file(
+            dir.path(),
+            "untested.txt",
+            "untested\n",
+            "test: add untested change",
+        );
+        git(dir.path(), &["checkout", "main"]);
+        write_test_config(
+            dir.path(),
+            "git update-ref refs/heads/feat/x refs/heads/untested",
+        );
 
         let before = branch_oid(dir.path(), "main");
         let err = integrate(dir.path(), "feat/x", "main").expect_err("must refuse");
         assert!(
             matches!(err, IntegrateError::MergeFailed { .. }),
             "expected a moved-branch refusal, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("moved during integrate"),
+            "refusal must identify the tested-tip race: {err}"
         );
         assert_eq!(
             branch_oid(dir.path(), "main"),

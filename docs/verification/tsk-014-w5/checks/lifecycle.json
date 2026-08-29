@@ -1,0 +1,14 @@
+{
+  "browser": "151.0.7922.34",
+  "playwright": "1.62.1",
+  "axe": "4.10.3",
+  "headless": true,
+  "headed_launches": 0,
+  "operator_browser_touched": false,
+  "profile_root": "/var/folders/2w/1mz3t_ds4m58j8m5jzfvrqgw0000gn/T/cf-w4-render-cWwYm4",
+  "profile_removed": true,
+  "renders": 90,
+  "pages": 15,
+  "shell_digest_on_disk": "9cb87591462517ed2db4a53aaca1ecb7ac2a11dba5037db10f9f538bf7fba2d0",
+  "weaker_than_w3": "This harness does not reimplement W3 process-inventory ownership. It closes through Playwright and proves its own profile root absent. A surviving browser process would not be detected here."
+}

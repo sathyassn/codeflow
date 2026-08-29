@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EPC-005 — every route left to the finish</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #101418;      --ink-2: #495260;   --ink-3: #5c6573;
+    --page: #f6f7f9;     --panel: #ffffff;   --rule: #dadee5;
+    --grid: #e8ebf0;
+    --route: #1d3557;    --route-soft: #93a2ba;
+    --shared: #6b4a86;   --shared-soft: #efe7f6;
+    --sink: #14303f;
+    --shadow: 0 1px 2px rgba(16, 20, 24, .06), 0 10px 28px -18px rgba(16, 20, 24, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef1f5;     --ink-2: #b6bec9;  --ink-3: #8f98a6;
+      --page: #0e1115;    --panel: #161a20;  --rule: #2a3039;
+      --grid: #222831;
+      --route: #cfe0f5;   --route-soft: #6b7787;
+      --shared: #d3b6ec;  --shared-soft: #2b2135;
+      --sink: #a9d8ef;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 40px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -.015em; margin: 0 0 12px; font-weight: 640; }
+  .lede { margin: 0 0 30px; max-width: 64ch; color: var(--ink-2); font-size: 16.5px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 22px 26px 18px; box-shadow: var(--shadow); }
+  svg { display: block; width: 100%; height: auto; }
+  .scale-line { stroke: var(--grid); stroke-width: 1; }
+  .scale-label { font-size: 11px; fill: var(--ink-3); }
+  .route-line { stroke: var(--route-soft); stroke-width: 2; fill: none; }
+  .route-line.longest { stroke: var(--route); stroke-width: 5; stroke-linecap: round; }
+  .stop { fill: var(--panel); stroke: var(--route-soft); stroke-width: 2; }
+  .stop.longest { stroke: var(--route); stroke-width: 3; }
+  .stop.sink { stroke: var(--sink); stroke-width: 3; }
+  .stop-id { font-size: 12.5px; font-weight: 640; fill: var(--ink);
+             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .route-len { font-size: 22px; font-weight: 660; fill: var(--ink); letter-spacing: -.01em; }
+  .route-len tspan { font-size: 11.5px; font-weight: 500; fill: var(--ink-3); letter-spacing: .02em; }
+  .route-rank { font-size: 11px; fill: var(--ink-3); letter-spacing: .07em; text-transform: uppercase; }
+  .share-band { fill: var(--shared-soft); }
+  .share-edge { stroke: var(--shared); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
+  .share-label { font-size: 11.5px; fill: var(--shared); font-weight: 600;
+                 font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 26px; margin: 22px 2px 0; font-size: 13.5px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 46px; height: 16px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 14px; width: 100%; }
+  th, td { text-align: left; padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule); }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .src { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .band-wide, .band-mid, .band-narrow { display: none; }
+  .band-wide { display: block; }
+  @media (max-width: 1080px) {
+    body { padding: 32px 28px 56px; }
+    h1 { font-size: 26px; }
+    .band-wide { display: none; } .band-mid { display: block; }
+  }
+  @media (max-width: 640px) {
+    body { padding: 24px 16px 48px; }
+    h1 { font-size: 22px; }
+    figure { padding: 16px 14px 14px; border-radius: 11px; }
+    .band-mid { display: none; } .band-narrow { display: block; }
+    .legend { gap: 10px 18px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">EPC-005 · presentation system</p>
+  <h1>Every route left to the finish</h1>
+  <p class="lede">Four routes still run from something startable today to
+    <b>TSK-010</b>, where the epic ends. Each route is drawn as one object and
+    measured by <b>how many tasks stand on it</b>. Where routes pass through the
+    same task, the drawing keeps that task in each of them.</p>
+
+  <figure>
+    <div class="band-wide" id="wide"></div>
+    <div class="band-mid" id="mid"></div>
+    <div class="band-narrow" id="narrow"></div>
+    <div class="legend" id="legend"></div>
+  </figure>
+
+  <details>
+    <summary>The same four routes as a table</summary>
+    <table id="facts">
+      <thead><tr><th>Route</th><th>Tasks on it</th><th>Length</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Derived at load from <code>shared/plan-model.js</code> over the frontmatter of
+    <code>project-management/tasks/TSK-*.md</code>. No value on this page is typed by hand.</p>
+</div>
+
+<script type="application/json" id="plan-data">
+{
+  "tasks": [
+    { "id": "TSK-005", "title": "strengthen editorial and product design contracts", "status": "complete", "deps": [], "specs": ["SPC-003"], "target": "main" },
+    { "id": "TSK-006", "title": "research and prototype the presentation experience", "status": "complete", "deps": ["TSK-005"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-007", "title": "verify and qualify the presentation utility", "status": "blocked", "deps": ["TSK-011"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-008", "title": "research and prototype documentation portals", "status": "complete", "deps": ["TSK-005"], "specs": ["SPC-005"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-009", "title": "build and qualify the documentation portal utility", "status": "blocked", "deps": ["TSK-008", "TSK-014"], "specs": ["SPC-005"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-010", "title": "integrate and release the CodeFlow system", "status": "todo", "deps": ["TSK-007", "TSK-009", "TSK-013", "TSK-014"], "specs": [], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-011", "title": "build the interactive presentation utility", "status": "blocked", "deps": ["TSK-006", "TSK-014"], "specs": ["SPC-004"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-012", "title": "refine design exploration, sourcing, and revision contracts", "status": "cancelled", "deps": ["TSK-005"], "specs": ["SPC-006"], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-013", "title": "prepare the v3 release candidate", "status": "in_progress", "deps": [], "specs": [], "target": "integration/EPC-005-presentation-system" },
+    { "id": "TSK-014", "title": "recover the design method and utility directions", "status": "in_progress", "deps": ["TSK-005", "TSK-006", "TSK-008"], "specs": ["SPC-004", "SPC-005", "SPC-006"], "target": "integration/EPC-005-presentation-system" }
+  ]
+}
+</script>
+<script src="../../../shared/plan-model.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const model = window.planModel(JSON.parse(document.getElementById("plan-data").textContent));
+  const routes = model.paths;
+  const longest = model.longestPathLength;
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svg = (w, h, title, desc) => {
+    const root = n("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+    const tid = `t${++svg.seq}`, did = `d${svg.seq}`;
+    root.setAttribute("aria-labelledby", `${tid} ${did}`);
+    root.append(n("title", { id: tid }, title), n("desc", { id: did }, desc));
+    return root;
+  };
+  svg.seq = 0;
+  const TITLE = "Every remaining route through EPC-005 to its final task";
+  const DESC = "Each route is one horizontal line running left to right, from a task that can be "
+    + "started today to TSK-010. Routes are stacked longest first, and a route's line stops where "
+    + "its own tasks stop, against a shared scale of positions so two routes can be compared by how "
+    + "far each reaches. The heaviest line is the one that reaches furthest. Where the same task "
+    + "stands on more than one route, a dashed band joins its stops down the stack.";
+
+  // ---------------------------------------------------------------- wide
+  const ORDINAL = ["1st", "2nd", "3rd", "4th", "5th", "6th"];
+
+  function build(W, opts) {
+    const { rowH, x0, step, dotR, idSize, H0 } = opts;
+    const H = H0 + (routes.length - 1) * rowH + 78;
+    const s = svg(W, H, TITLE, DESC);
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+    const posX = (i) => x0 + i * step;
+    const rowY = (r) => H0 + r * rowH;
+
+    // One shared scale of positions, so "reaches further" is measured rather
+    // than asserted: a route's line stops at the position its own tasks stop.
+    const scale = g();
+    for (let i = 0; i < longest; i += 1) {
+      scale.append(n("line", { class: "scale-line", x1: posX(i), y1: H0 - 44, x2: posX(i), y2: H - 30 }));
+      scale.append(n("text", { class: "scale-label", x: posX(i), y: H0 - 52, "text-anchor": "middle" },
+        i === longest - 1 ? `${ORDINAL[i]} — the finish` : ORDINAL[i]));
+    }
+    scale.append(n("text", { class: "scale-label", x: 8, y: H0 - 52 }, "position along the route"));
+
+    // Where the same task stands at the same position on several routes, the
+    // repeats are tied together. Nothing is merged: the task stays on each
+    // route it is actually on.
+    const ties = g();
+    const seen = new Map();
+    routes.forEach((route, r) => route.forEach((id, i) => {
+      const key = `${id}@${i}`;
+      if (!seen.has(key)) seen.set(key, { id, i, rows: [] });
+      seen.get(key).rows.push(r);
+    }));
+    for (const { i, rows } of seen.values()) {
+      if (rows.length < 2) continue;
+      // The tie runs beside the column, not through it: a route that does not
+      // carry this task has its own stop in the same column and must not look
+      // as though the tie passes through it.
+      const x = posX(i), tieX = x - dotR - 17;
+      ties.append(n("line", { class: "share-edge", x1: tieX, y1: rowY(Math.min(...rows)), x2: tieX, y2: rowY(Math.max(...rows)) }));
+      for (const r of rows) {
+        ties.append(n("circle", { class: "share-band", cx: x, cy: rowY(r), r: dotR + 7 }));
+        ties.append(n("line", { class: "share-edge", x1: tieX, y1: rowY(r), x2: x - dotR - 5, y2: rowY(r) }));
+      }
+    }
+
+    const lines = g();
+    routes.forEach((route, r) => {
+      const isLongest = route.length === longest;
+      const y = rowY(r);
+      lines.append(n("line", {
+        class: `route-line${isLongest ? " longest" : ""}`,
+        x1: posX(0), y1: y, x2: posX(route.length - 1), y2: y,
+      }));
+      route.forEach((id, i) => {
+        lines.append(n("circle", { class: `stop${isLongest ? " longest" : ""}${i === route.length - 1 ? " sink" : ""}`,
+          cx: posX(i), cy: y, r: dotR }));
+        lines.append(n("text", { class: "stop-id", x: posX(i), y: y + dotR + idSize + 3, "text-anchor": "middle",
+          style: `font-size:${idSize}px` }, id));
+      });
+      lines.append(n("text", { class: "route-rank", x: 8, y: y - 14 }, `route ${r + 1}`));
+      const len = n("text", { class: "route-len", x: 8, y: y + 9 }, String(route.length));
+      len.append(n("tspan", { dx: 5 }, route.length === 1 ? "task" : "tasks"));
+      lines.append(len);
+    });
+    return s;
+  }
+
+  const wide = () => build(1180, { rowH: 116, x0: 250, step: 232, dotR: 13, idSize: 12.5, H0: 104 });
+  const mid = () => build(880, { rowH: 108, x0: 204, step: 176, dotR: 12, idSize: 11.5, H0: 100 });
+
+  // -------------------------------------------------------------- narrow
+  // The stack of measured lines cannot survive 358 units. Each route becomes
+  // its own row of linked stops with its reach drawn as the row's own extent
+  // against the same shared scale, so the comparison stays a comparison of
+  // drawn extents and never becomes a column of numbers.
+  function narrow() {
+    const W = 358, rowH = 108, x0 = 26, step = 100, dotR = 11, H0 = 78;
+    const H = H0 + routes.length * rowH;
+    const s = svg(W, H, TITLE, DESC);
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+    const reach = (len) => x0 + (len - 1) * step;
+
+    const scale = g();
+    scale.append(n("line", { class: "scale-line", x1: x0, y1: 40, x2: x0 + (longest - 1) * step, y2: 40 }));
+    for (let i = 0; i < longest; i += 1) {
+      scale.append(n("line", { class: "scale-line", x1: x0 + i * step, y1: 34, x2: x0 + i * step, y2: H - 12 }));
+    }
+    scale.append(n("text", { class: "scale-label", x: x0, y: 26 }, "start"));
+    scale.append(n("text", { class: "scale-label", x: x0 + (longest - 1) * step, y: 26, "text-anchor": "end" }, "the finish"));
+
+    const ties = g();
+    const seen = new Map();
+    routes.forEach((route, r) => route.forEach((id, i) => {
+      const key = `${id}@${i}`;
+      if (!seen.has(key)) seen.set(key, { i, rows: [] });
+      seen.get(key).rows.push(r);
+    }));
+    for (const { i, rows } of seen.values()) {
+      if (rows.length < 2) continue;
+      const x = x0 + i * step, tieX = x - dotR - 13;
+      const y = (r) => H0 + r * rowH;
+      ties.append(n("line", { class: "share-edge", x1: tieX, y1: y(Math.min(...rows)), x2: tieX, y2: y(Math.max(...rows)) }));
+      for (const r of rows) {
+        ties.append(n("circle", { class: "share-band", cx: x, cy: y(r), r: dotR + 6 }));
+        ties.append(n("line", { class: "share-edge", x1: tieX, y1: y(r), x2: x - dotR - 4, y2: y(r) }));
+      }
+    }
+
+    const lines = g();
+    routes.forEach((route, r) => {
+      const isLongest = route.length === longest;
+      const y = H0 + r * rowH;
+      lines.append(n("text", { class: "route-rank", x: x0, y: y - 26 }, `route ${r + 1}`));
+      lines.append(n("line", { class: `route-line${isLongest ? " longest" : ""}`,
+        x1: x0, y1: y, x2: reach(route.length), y2: y }));
+      route.forEach((id, i) => {
+        lines.append(n("circle", { class: `stop${isLongest ? " longest" : ""}${i === route.length - 1 ? " sink" : ""}`,
+          cx: x0 + i * step, cy: y, r: dotR }));
+        const label = n("text", { class: "stop-id", x: x0 + i * step, y: y + dotR + 15, "text-anchor": "middle",
+          style: "font-size:11px" }, id);
+        lines.append(label);
+      });
+      const len = n("text", { class: "route-len", x: x0, y: y + 56, style: "font-size:18px" }, String(route.length));
+      len.append(n("tspan", { dx: 4 }, route.length === 1 ? "task" : "tasks"));
+      lines.append(len);
+    });
+    return s;
+  }
+
+  document.getElementById("wide").append(wide());
+  document.getElementById("mid").append(mid());
+  document.getElementById("narrow").append(narrow());
+
+  const legendMarks = [
+    ["the route that reaches furthest", '<line x1="2" y1="8" x2="44" y2="8" class="route-line longest"/><circle cx="23" cy="8" r="5" class="stop longest"/>'],
+    ["a shorter route", '<line x1="2" y1="8" x2="30" y2="8" class="route-line"/><circle cx="16" cy="8" r="4.5" class="stop"/>'],
+    ["where the epic ends", '<circle cx="12" cy="8" r="5.5" class="stop sink"/>'],
+    ["one task standing on several routes", '<circle cx="10" cy="8" r="7" class="share-band"/><circle cx="36" cy="8" r="7" class="share-band"/><line x1="10" y1="8" x2="36" y2="8" class="share-edge"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 46 16" aria-hidden="true">${marks}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  routes.forEach((route, r) => {
+    const tr = document.createElement("tr");
+    for (const value of [`route ${r + 1}`, route.join(" then "), `${route.length} tasks`]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  });
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

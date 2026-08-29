@@ -6,22 +6,67 @@
      When an area outgrows this file, graduate it to docs/architecture/<area>.md
      and leave a one-line pointer behind. -->
 
-## Overview
+## Concept
 
-A two-crate Cargo workspace that builds one binary with the scaffold embedded.
-`codeflow-core` is the engine library — all mechanics live here. `codeflow-cli`
-is a thin dispatcher: `main.rs` is a clap command surface over 17 subcommands
+One Rust binary installs the AI-development discipline layer into any
+repository: it scaffolds the rules, enforces them while agents work, verifies
+the result, and remembers why — while the harness does the developing.
+
+```text
+SCAFFOLD ────────► ENFORCE ─────────────► VERIFY ─────────► REMEMBER
+init · update      git hooks · guards     codeflow test     ledger · records
+seed the rules     · ci — one policy      · validate        · recall
+                   source
+
+         the harness (Claude Code, Codex, …) does the developing
+```
+
+The consuming repo is its own first consumer, so `assets/` is as much the
+product as the code: the scaffold content this repository ships is the same
+content it runs under.
+
+## Architecture
+
+A three-crate Cargo workspace builds one binary with the scaffold and
+presentation renderer embedded; enforcement is structural — four planes read
+one policy source, so no single harness is a required trust anchor.
+
+```text
+crates/codeflow-cli ────── thin clap dispatcher (21 subcommands)
+        │ calls
+crates/codeflow-core ───── scaffold · enforcement · records/knowledge · support
+crates/codeflow-present ── bounded local review sessions (ADR-0049)
+        ▲ embeds
+assets/ ────── base scaffold · docs-portal starter ── rust-embed → one binary
+```
+
+```cf-stage
+.codeflow/policy.json | one source of truth @accent
+->
+git client hooks | pre-commit · commit-msg · pre-merge-commit · reference-transaction · pre-push
+PreToolUse guards | git-guard · exec-guard, in-session
+codeflow ci | the same git standards, server-side
+remote protection | where the host arms it
+->
+protected branches | human-merged PRs on green CI @positive
+caption: local planes are fast feedback — CI and remote protection are the authoritative perimeter
+```
+
+`codeflow-core` owns the discipline engine, `codeflow-present` owns bounded
+local review sessions, and `codeflow-cli` is a thin dispatcher: `main.rs` is a
+clap command surface over 21 subcommands
 (`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
 `status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`,
-`delegate`) — most a small handler in `cmd/` that
+`spec`, `work`, `delegate`, `present`, `portal`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
-read `assets/` from disk for instant scaffold iteration). The consuming repo is
-its own first consumer, so `assets/` is as much the product as the code.
+read `assets/` from disk for instant scaffold iteration).
 
-## Areas
+## Technical
 
-### engine — `crates/codeflow-core` + `crates/codeflow-cli`
+Per-area depth: engine internals, the shipped scaffold, and the docs layer.
+
+### engine — `crates/codeflow-core` + `crates/codeflow-cli` + `crates/codeflow-present`
 
 Core modules grouped by responsibility:
 
@@ -144,6 +189,10 @@ Fail severity.
 Rationale, the full invariant set, and the canonical prompt-boundary amendment:
 ADR-0036 and ADR-0037.
 
+Interactive presentation is a separate bounded engine surface
+(`codeflow-present`, ADR-0049, ADR-0050, and ADR-0052); the area outgrew this
+file and is graduated to [architecture/present.md](architecture/present.md).
+
 Records follow the markdown-truth design (D17): markdown + YAML frontmatter is
 the source of truth, the JSONL ledger is the append-only event log, and SQLite
 FTS5 is a rebuildable cache — no database-as-authority, no embeddings. Core
@@ -205,7 +254,11 @@ collapsible intent dimensions governed by project evidence; utility defaults
 cannot become consuming-product authority. Rendered review grades
 evidence-backed drift from the brief, intent, accessibility target, or observed
 behavior; taste alone is not a blocking finding. Concrete model releases stay
-in qualified bindings (ADR-0043).
+in qualified bindings. After direction selection, refinement stays bounded to
+a named unresolved material choice; external references and assets retain
+proportionate authority, rights/privacy, transformation, and product-use
+evidence; and material feedback binds Plan vN+1 to the exact reviewed version
+without creating a second design database (ADR-0043, ADR-0051).
 Multi-task plans additionally settle one acyclic task graph whose evidence
 guards represent genuine decisions, not repeated quality gates. Durable task
 metadata preserves its structural candidate predecessors, while Plan evidence
@@ -327,6 +380,49 @@ files, which split by how `update` treats them — schema-versioned config
 reported and never mutating a value you set, while the write-once doc seeds (all
 of `docs/`) are seeded once at init and never touched again — yours to edit and
 own. `scaffold-manifest.toml` is the update contract.
+
+`codeflow present` is the session review CLI for that same utility craft:
+agents author this session's catalog document; the runtime owns chrome and
+Comment. It is not a documentation portal and not a clone of the
+design-exploration board.
+
+The optional documentation portal is a separate managed bundle, not part of
+that default scaffold. One starter source lives under `assets/docs-portal/`
+and is embedded in the binary. `codeflow portal setup --path <dir>` explicitly
+adopts it and records its root, version, ownership, pristine hashes, and opaque
+content-addressed baselines in `.codeflow/`; ordinary `codeflow update` then
+reconciles it by the same never-clobber semantics. A non-adopter receives no
+portal directory, Node workspace, lockfile, or baseline. The project-owned
+configuration names authoritative source Markdown; the exact-pinned Node adapter
+is the sole author of disposable Starlight content, Pagefind output, Markdown
+twins, `llms.txt`, and a bounded evidence manifest. It accepts only one clean
+committed configuration/runtime/source/media snapshot: source claims come from
+bounded Git blobs, while every configured input and the runtime must match
+committed bytes even when index flags hide worktree changes. The Rust verifier
+independently derives complete source coverage and semantic routes from the
+committed configuration and tree. Generated Markdown, media, and `llms.txt`
+namespaces are replaced in full while bounded project-owned public files
+outside them are read from committed blobs, checked against the worktree, and
+then preserved; active untracked or index-masked public content fails closed.
+Route identity retains exact NFC source-path case and punctuation, while URL
+boundaries encode each path segment and portable case folding is used only to
+reject collisions. Both JavaScript production and Rust verification consume a
+shared authority fixture for bounded configuration/frontmatter semantics, and
+the route contract is qualified through a real Starlight build rather than a
+string-only unit test. It parses GFM
+through a syntax tree and publishes all generated roots transactionally under
+one workflow lease with locale-independent ordering. Commit inventory and blob
+reads are batched and bounded. The locked installer verifies the exact set of
+dependency lifecycle scripts before disabling them; install, build, preview,
+browser, and Git children receive only a small non-secret environment allowlist.
+Git prompts, lazy fetching, replacement objects, fsmonitor, pagers, optional
+locks, and inherited redirection are additionally disabled. A broken current source
+gets only a bounded visible error page at its stable route, outside the active
+graph, search, previews, and current-content indexes; history is never walked
+or republished. `codeflow validate --portal <dir>` is a read-only Rust verifier
+over those byte claims—including portable paths, configured-tree coverage,
+exact source-derived graph edges, bounded raster dimensions, and error-page exclusion—and never executes
+or rewrites installed project code (ADR-0048).
 
 ### docs — `docs/`
 

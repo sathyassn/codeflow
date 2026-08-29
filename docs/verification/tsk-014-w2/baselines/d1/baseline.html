@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D1 baseline — starting work on codeflow as ordinary Markdown</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 50rem; margin: 0 auto; padding: 2rem 1rem;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid GrayText; padding: .35rem .5rem; text-align: left; font-size: .9rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  ol, ul { padding-left: 1.4rem; }
+  @media (max-width: 640px) { table, thead, tbody, tr, th, td { display: block; } thead { display: none; }
+    tr { margin-bottom: 1rem; } td { border: 0; border-bottom: 1px solid GrayText; }
+    td::before { content: attr(data-label) ": "; font-weight: 700; } }
+</style>
+</head>
+<body>
+<h1>Starting work on codeflow</h1>
+
+<h2>What this repository is</h2>
+<p>One Rust binary plus an embedded scaffold that scaffolds, enforces, verifies and
+remembers, while the harness does the developing. 13 capabilities shipped, 3
+building. Not a runtime harness, agent framework, process-enforcement engine, or
+GUI product.</p>
+
+<h2>The six layers</h2>
+<table>
+  <thead><tr><th>Layer</th><th>Lives in</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Layer">WHY — purpose, users, scope, non-goals</td><td data-label="Lives in"><code>docs/product.md</code></td></tr>
+    <tr><td data-label="Layer">RULES — how we work</td><td data-label="Lives in"><code>AGENTS.md</code> + the agent skills</td></tr>
+    <tr><td data-label="Layer">WHAT — what the system does</td><td data-label="Lives in"><code>docs/capabilities.md</code></td></tr>
+    <tr><td data-label="Layer">HOW — structure and decisions</td><td data-label="Lives in"><code>docs/architecture.md</code>, <code>docs/decisions/</code></td></tr>
+    <tr><td data-label="Layer">WORK — planned and active work</td><td data-label="Lives in"><code>project-management/</code></td></tr>
+    <tr><td data-label="Layer">TRACE — what happened and why</td><td data-label="Lives in">ledger + <code>codeflow recall</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Preconditions for starting a task</h2>
+<ol>
+  <li>The branch prefix is in the policy whitelist.</li>
+  <li>The branch is <code>task/TSK-NNN-&lt;slug&gt;</code> and resolves to a visible task record.</li>
+  <li>The visible durable workgraph validates.</li>
+  <li>The declared <code>integration_target</code> is a stable, resolvable, non-task branch and matches the record's declaration.</li>
+  <li>At the merge-base with that target, the task record exists.</li>
+  <li>Its status is <code>todo</code> or <code>in_progress</code>.</li>
+  <li>Its epic resolves, or it carries a <code>standalone_reason</code>.</li>
+  <li>Every spec it and its epic require is <code>approved</code> or <code>implemented</code>.</li>
+  <li>Every dependency is <code>complete</code>.</li>
+</ol>
+
+<h2>Which gate refuses you</h2>
+<table>
+  <thead><tr><th>Rule</th><th>Plane</th><th>Refuses</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Rule"><code>work.stable_planning_anchor</code></td><td data-label="Plane"><code>codeflow work start</code>, pre-commit, <code>codeflow ci</code></td><td data-label="Refuses">preconditions 4–9</td></tr>
+    <tr><td data-label="Rule"><code>work.task_record</code></td><td data-label="Plane">pre-commit, <code>codeflow ci</code></td><td data-label="Refuses">precondition 2</td></tr>
+    <tr><td data-label="Rule"><code>work.valid_graph</code></td><td data-label="Plane">pre-commit, <code>codeflow ci</code></td><td data-label="Refuses">precondition 3</td></tr>
+    <tr><td data-label="Rule"><code>git.branch_naming</code></td><td data-label="Plane">pre-push, <code>codeflow ci</code></td><td data-label="Refuses">precondition 1</td></tr>
+    <tr><td data-label="Rule"><code>git.secret_scan</code></td><td data-label="Plane">pre-commit</td><td data-label="Refuses">staged credentials; never relaxed</td></tr>
+    <tr><td data-label="Rule"><code>git.commit_format</code>, <code>git.commit_body</code>, <code>git.ai_attribution</code>, <code>git.commit_emoji</code></td><td data-label="Plane">commit-msg, <code>codeflow ci</code></td><td data-label="Refuses">the commit message</td></tr>
+    <tr><td data-label="Rule"><code>git.commit_to_protected</code>, <code>git.merge_to_protected</code>, <code>git.push_to_protected</code>, <code>git.force_push_protected</code>, <code>git.delete_protected</code>, <code>git.local_ref_protection</code></td><td data-label="Plane">pre-commit, pre-merge-commit, pre-push, reference-transaction</td><td data-label="Refuses">mutating a protected branch</td></tr>
+    <tr><td data-label="Rule"><code>git.hard_reset_protected</code>, <code>git.no_verify_bypass</code>, <code>git.override_token_laundering</code>, <code>git.hook_integrity</code></td><td data-label="Plane"><code>git-guard</code> (PreToolUse, in-session)</td><td data-label="Refuses">the command, before it runs</td></tr>
+  </tbody>
+</table>
+
+<h2>On this repository</h2>
+<p>Remote branch protection is unavailable and not pursued. The authoritative
+perimeter is server-side CI plus human-merged PRs; the local hooks and the
+in-session guard are fast feedback, not the boundary.</p>
+</body>
+</html>

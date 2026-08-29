@@ -337,7 +337,9 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
     let agents = read("assets/base/AGENTS.md.tmpl");
-    let claude = read("assets/base/CLAUDE.md.tmpl");
+    // Git may materialize text assets with CRLF on Windows. This contract
+    // pins the authored line break, not the checkout's newline convention.
+    let claude = read("assets/base/CLAUDE.md.tmpl").replace("\r\n", "\n");
     let ensemble =
         read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
 

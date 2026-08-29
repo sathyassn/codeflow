@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orient — what you may write, and what writes itself</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #15181d;      --ink-2: #464e59;   --ink-3: #58606c;
+    --page: #fbfbfc;     --panel: #ffffff;   --rule: #dcdfe5;
+    --yours: #1f4d3d;    --yours-face: #edf5f1;
+    --cond: #6a5116;     --cond-face: #f8f3e6;
+    --refuse: #6b2740;   --refuse-face: #f8eef2;
+    --perim: #6b2740;
+    --chip-ink: #2c333d;
+    --shadow: 0 1px 2px rgba(21, 24, 29, .05), 0 12px 30px -20px rgba(21, 24, 29, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef0f4;     --ink-2: #b0b8c4;  --ink-3: #8a939f;
+      --page: #0d1014;    --panel: #15181e;  --rule: #282e37;
+      --yours: #7fd3ae;   --yours-face: #14231d;
+      --cond: #e5c37c;    --cond-face: #241f12;
+      --refuse: #f0a6c1;  --refuse-face: #25161d;
+      --perim: #f0a6c1;
+      --chip-ink: #cdd5df;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 30px -20px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 44px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 32px; line-height: 1.16; letter-spacing: -.018em; margin: 0 0 14px; font-weight: 640; }
+  .lede { margin: 0 0 34px; max-width: 64ch; color: var(--ink-2); font-size: 17px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .map { position: relative; }
+  .band { position: relative; border-radius: 14px; padding: 18px 20px 20px; margin: 0 0 18px; }
+  .band[data-band="yours"] { background: var(--yours-face); }
+  .band[data-band="conditional"] { background: var(--cond-face); }
+  .band[data-band="refuses"] { background: var(--refuse-face); }
+  .band > h2 { margin: 0 0 3px; font-size: 15px; font-weight: 700; letter-spacing: .02em; }
+  .band[data-band="yours"] > h2 { color: var(--yours); }
+  .band[data-band="conditional"] > h2 { color: var(--cond); }
+  .band[data-band="refuses"] > h2 { color: var(--refuse); }
+  .band > .band-note { margin: 0 0 16px; font-size: 13px; color: var(--ink-2); }
+
+  /* The perimeter is a drawn boundary, not a heading: it is the line the
+     repository will not let an ordinary edit cross. */
+  .perimeter { position: relative; margin: 4px 0 22px; }
+  .perimeter hr { border: 0; border-top: 3px solid var(--perim); margin: 0; }
+  .perimeter span {
+    position: absolute; top: -11px; left: 24px; background: var(--page); padding: 0 12px;
+    font-size: 12px; letter-spacing: .09em; text-transform: uppercase; font-weight: 700; color: var(--perim);
+  }
+
+  .groups { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .group { background: var(--panel); border: 1px solid var(--rule); border-radius: 11px;
+           padding: 12px 14px 13px; box-shadow: var(--shadow); flex: 1 1 240px; min-width: 220px; }
+  .group h3 { margin: 0 0 2px; font-size: 13px; font-weight: 660; }
+  .group p { margin: 0 0 10px; font-size: 12px; color: var(--ink-3); }
+  .paths { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 7px; }
+  .paths code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+    color: var(--chip-ink); border: 1.5px solid var(--rule); border-radius: 6px; padding: 3px 8px;
+    display: inline-block;
+  }
+  /* Each authority class carries its own edge, so the partition survives with
+     no colour at all. */
+  .group[data-a="human-owned"] code { border-style: solid; }
+  .group[data-a="project-owned"] code { border-style: double; border-width: 4px; }
+  .group[data-a="ship-flow-only"] code { border-style: dotted; }
+  .group[data-a="cli-allocated"] code { border-style: dashed; }
+  .group[data-a="append-only"] code { border-style: solid; border-top-width: 5px; }
+  .group[data-a="generated"] code { border-style: solid; text-decoration: line-through;
+                                     text-decoration-thickness: 1.5px; color: var(--ink-3); }
+  .group[data-a="tool-maintained"] code {
+    border-style: solid;
+    background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--refuse) 24%, transparent) 0 2px, transparent 2px 6px);
+  }
+
+  /* The one artefact whose authority is split is drawn across the boundary
+     rather than assigned to a side. */
+  .straddle {
+    position: relative; margin: 16px 0 0; border: 2px dashed var(--perim); border-radius: 11px;
+    padding: 12px 16px 14px; background: var(--panel);
+  }
+  .straddle h3 { margin: 0 0 6px; font-size: 13.5px; font-weight: 680; }
+  .straddle .halves { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; }
+  .straddle .half { font-size: 12.5px; color: var(--ink-2); }
+  .straddle .half b { display: block; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  .straddle .half.yours b { color: var(--yours); }
+  .straddle .half.refuses b { color: var(--refuse); }
+  .straddle .cut { width: 3px; align-self: stretch; background: var(--perim); border-radius: 2px; }
+
+  .outside {
+    margin: 22px 0 0; border: 2px dotted var(--ink-3); border-radius: 12px; padding: 14px 18px 16px;
+  }
+  .outside h2 { margin: 0 0 3px; font-size: 14px; font-weight: 700; color: var(--ink-2); }
+  .outside p { margin: 0 0 12px; font-size: 12.5px; color: var(--ink-3); }
+
+  details { margin: 28px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  blockquote { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  .src { margin: 24px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  @media (max-width: 1120px) {
+    body { padding: 34px 26px 56px; }
+    h1 { font-size: 27px; }
+    /* Both sides of the perimeter stay visible; the groups wrap within their
+       own side rather than being re-cut into one column. */
+    .group { flex: 1 1 46%; min-width: 200px; }
+  }
+  @media (max-width: 700px) {
+    body { padding: 24px 15px 48px; }
+    h1 { font-size: 22px; }
+    .lede { font-size: 15.5px; }
+    /* The perimeter becomes a division the page scrolls through. Every group
+       keeps its side of it, and the split artefact is still drawn across the
+       division rather than assigned to one side. */
+    .group { flex: 1 1 100%; min-width: 0; }
+    .perimeter span { left: 12px; font-size: 11px; }
+    .straddle .halves { grid-template-columns: 1fr; gap: 10px; }
+    .straddle .cut { width: auto; height: 3px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Orient · codeflow</p>
+  <h1>What you may write, and what writes itself</h1>
+  <p class="lede">Before you edit anything here, it is worth knowing which files will accept an edit.
+    Every path this repository's six layers name is placed below by <b>who is allowed to write it</b>,
+    and a single line runs between the parts an ordinary change may touch and the parts that will
+    refuse it.</p>
+
+  <div class="map" id="map"></div>
+
+  <details>
+    <summary>Every rule, in the contract's own words</summary>
+    <table id="facts">
+      <thead><tr><th>Authority</th><th>What it means</th><th>The contract's sentence</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/repo-layers.js</code>. Every path is checked to exist in this
+    checkout, and every rule below is quoted verbatim from <code>AGENTS.md</code>.</p>
+</div>
+
+<script src="../../../shared/repo-layers.js"></script>
+<script>
+(() => {
+  const R = window.repoLayers;
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const bandNote = {
+    yours: "you open the file and change it",
+    conditional: "you change it, but only in one flow",
+    refuses: "an edit here is overwritten, refused, or simply has nowhere to land",
+  };
+
+  const inTree = R.paths.filter((p) => p.inTree);
+  const outside = R.paths.filter((p) => !p.inTree);
+  const split = R.paths.find((p) => p.split);
+  const map = document.getElementById("map");
+
+  for (const band of R.bands) {
+    const section = el("section", "band");
+    section.dataset.band = band.id;
+    section.append(el("h2", null, band.label), el("p", "band-note", bandNote[band.id]));
+
+    const groups = el("div", "groups");
+    for (const authority of R.authorities.filter((a) => a.band === band.id)) {
+      const paths = inTree.filter((p) => p.authority === authority.id && p !== split);
+      const splitHere = split && split.authority === authority.id;
+      if (!paths.length && !splitHere) continue;
+      const group = el("div", "group");
+      group.dataset.a = authority.id;
+      group.append(el("h3", null, authority.label), el("p", null, authority.rule));
+      const list = el("ul", "paths");
+      for (const path of paths) {
+        const li = el("li");
+        li.append(el("code", null, path.path));
+        list.append(li);
+      }
+      group.append(list);
+      if (!paths.length) group.append(el("p", null, "only the split artefact below"));
+      groups.append(group);
+    }
+    section.append(groups);
+
+    if (band.id === "yours" && split) {
+      const straddle = el("div", "straddle");
+      straddle.append(el("h3", null, `${split.path} is on both sides of the line`));
+      const halves = el("div", "halves");
+      const left = el("div", "half yours");
+      left.append(el("b", null, "yours"), document.createTextNode("everything outside the managed markers is this project's, and you extend it freely"));
+      const right = el("div", "half refuses");
+      right.append(el("b", null, "not yours"), document.createTextNode(split.note));
+      halves.append(left, el("div", "cut"), right);
+      straddle.append(halves);
+      section.append(straddle);
+    }
+
+    map.append(section);
+    if (band.id === "conditional") {
+      const perimeter = el("div", "perimeter");
+      perimeter.append(el("hr"), el("span", null, "an ordinary edit stops here"));
+      map.append(perimeter);
+    }
+  }
+
+  if (outside.length) {
+    const box = el("div", "outside");
+    box.append(el("h2", null, "And one layer has no path at all"));
+    box.append(el("p", null,
+      "The part of this repository that changes most often is the part with nothing in the working tree to open."));
+    const groups = el("div", "groups");
+    for (const path of outside) {
+      const group = el("div", "group");
+      group.dataset.a = path.authority;
+      group.append(el("h3", null, path.path), el("p", null, path.note ?? ""));
+      const list = el("ul", "paths");
+      const li = el("li");
+      li.append(el("code", null, R.authorities.find((a) => a.id === path.authority).label));
+      list.append(li);
+      group.append(list);
+      groups.append(group);
+    }
+    box.append(groups);
+    map.append(box);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const authority of R.authorities) {
+    const tr = document.createElement("tr");
+    for (const value of [authority.label, authority.rule]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    const said = document.createElement("td");
+    const bq = document.createElement("blockquote");
+    bq.textContent = `“${authority.quote.text}”`;
+    said.append(bq);
+    tr.append(said);
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(R.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

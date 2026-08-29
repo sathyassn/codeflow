@@ -1,0 +1,395 @@
+{
+  "study": "tsk-014-w4",
+  "supersedes_board": "docs/verification/tsk-014-w3",
+  "rubric": "rubric.v4.md",
+  "note": "Written before any W4 candidate, direction demonstration or portal page existed, and pinned by registry.lock.json written in the same state. What that priority is worth is stated in pre_registration_evidence rather than asserted. A field that cannot be checked is marked so explicitly.",
+
+  "pre_registration_evidence": {
+    "claim": "rubric.v4.md and this registry were written before any W4 artefact existed.",
+    "what_the_files_can_show": "Both files are pinned by digest in rubric.v4.lock.json and registry.lock.json. Both locks were written while cases/, directions/, portal/, baselines/ and renders/ did not exist. tools/verify.mjs asserts both digests and asserts that both files' modification times precede every authored artefact and every render in this working tree.",
+    "what_the_files_cannot_show": "The mtime ordering does not survive a fresh Git checkout, so a later reader cannot re-observe it; the digests do survive and pin the bytes, not the moment. Neither proves the author's intent preceded the drawing — only that these bytes did.",
+    "how_this_differs_from_w3": "W3's registry.json carried no lock at all, and its inode postdated seven of eleven candidate pages. Two of one candidate's composition declarations were rewritten, in one edit, after its renders had been inspected, and the study then claimed only marker tokens had changed. Both claims were withdrawn by an independent audit. This registry is locked before authoring precisely so that failure cannot be repeated quietly; if a declaration here is changed later, amendments records it and A8 fails when it is empty while a change is known.",
+    "standing": "The digests are durable and checkable. The ordering is witnessed in this checkout only. Read amendments before weighing A2, A3, A4 or A9."
+  },
+
+  "thresholds": {
+    "note": "Declared once, by this study, because the project records none. rubric.v4.md names no size, palette or viewport; every gate that needs a number reads it from here.",
+    "viewports": {
+      "desktop": { "width": 1440, "height": 900 },
+      "tablet": { "width": 900, "height": 1200 },
+      "mobile": { "width": 390, "height": 844 }
+    },
+    "modes": ["light", "dark"],
+    "legibility_floor_px": 11,
+    "legibility_target_px": 12,
+    "legibility_scope": "every text node inside a figure element, measured from computed style on the rendered page",
+    "accessibility_target": "WCAG 2.2 AA; automated axe over the WCAG 2.0/2.1/2.2 A and AA tags is partial evidence, never proof of conformance"
+  },
+
+  "altitudes": [
+    {
+      "id": "contract",
+      "decides": "which content model should carry drawn explanation in cf-present at all, and what each one makes impossible",
+      "artefacts": "directions/",
+      "gates": ["A9", "A10", "A12", "A13", "A14", "G4", "G5", "G7", "G8", "G9", "G10"],
+      "why_first": "Ten of W3's eleven candidates were qualified negative against the product's real contract. Selecting a composition winner under a carrier the product will not build chooses which drawing to fail to ship."
+    },
+    {
+      "id": "composition",
+      "decides": "given a carrier, which encoding explains this subject best",
+      "artefacts": "cases/, portal/",
+      "gates": ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A11", "A12", "A13", "A14", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"]
+    }
+  ],
+
+  "board_reassessment": {
+    "note": "Responsibility 2 of the recovery brief: the board itself is reassessed, not only the bands that failed. Each case is checked for whether it asks a real user question, whether siblings differ in unit/axis/relationship rather than styling, whether the visible composition makes the relationship discoverable without printing the answer, whether the three contexts preserve the governing idea by deliberate recomposition, and whether the plain baselines remain honest controls.",
+    "cases": [
+      {
+        "case": "p1",
+        "question_verdict": "kept",
+        "why": "The operator's real decision when approving a plan is which task to protect. The question asks for consequence, not lookup, and a candidate showing only order or only dependency incidence cannot separate a task with room from one without.",
+        "sibling_verdict": "kept — unit task/axis wave position against unit path/axis path length is a difference in what is measured, not in styling",
+        "changes": ["a-critical-path-and-room's narrow composition is replaced, not repaired: see dispositions.json"]
+      },
+      {
+        "case": "p2",
+        "question_verdict": "kept",
+        "why": "Acceptance of an evidence set turns on the causes of its gaps. An encoding that renders absence as a blank cell answers coverage and not cause.",
+        "sibling_verdict": "kept — unit claim+rail/axis derivation stage against unit missing piece/axis cause",
+        "changes": [
+          "a-stopped-provenance's narrow composition is replaced: the W3 narrow band drew each stop as a rule spanning the figure's full width, which reads as a section divider rather than a stop on a rail, and left each cause caption abutting the next claim's title",
+          "a-stopped-provenance declares five cell states, not four: the W3 page drew notclaimed and keyed four"
+        ]
+      },
+      {
+        "case": "p3",
+        "question_verdict": "kept",
+        "why": "Attribution decides whether the harness or its environment is the thing to fix, and an encoding with no ordered round axis cannot separate a re-opening from an ordinary later edit.",
+        "sibling_verdict": "kept — unit finding/axis round against unit source region/axis file position",
+        "changes": [
+          "a-convergence-with-source-depth: mechanical containment repair of the off-axis arrival label",
+          "b-source-region-history: the premise is kept and the defect is the quotation column. The W3 page put real diff text in a fixed column with hidden overflow at every width, so the render did not carry the line its own source contract verifies. The quoted lines now wrap with a hanging indent instead of being cropped, and the round rail's tick labels sit inside the viewBox."
+        ]
+      },
+      {
+        "case": "d1",
+        "question_verdict": "kept",
+        "why": "Orientation is exactly the pairing of location with the discipline that governs it. W2's lookup question was already withdrawn for being decided by its own shape.",
+        "sibling_verdict": "kept — volatility stratification, spine descent, and write-authority partition are three different primary axes",
+        "changes": [
+          "c-write-authority-map: the W3 registration said the one split-authority path is drawn straddling the perimeter and the page drew it wholly inside the editable region with a miniature internal divider. Neither was moved in W3 because the judging seat may not redraw. Here the straddle is declared and will be drawn.",
+          "the plain baseline is re-authored so it does not overflow a 390px viewport"
+        ]
+      },
+      {
+        "case": "d2",
+        "question_verdict": "kept",
+        "why": "Trust in a record is exactly authority plus evidence, and the two parts want opposite geometry. Registered as a decomposition, not a competition.",
+        "sibling_verdict": "kept",
+        "changes": []
+      },
+      {
+        "case": "p2-baseline",
+        "question_verdict": "n/a — control",
+        "why": "A control the reader cannot see whole makes the comparison unfair in the baseline's favour as well as the candidate's.",
+        "sibling_verdict": "n/a",
+        "changes": ["re-authored to fit a 390px viewport by wrapping, not by becoming a design: no new colour, no new geometry, no figure"]
+      }
+    ]
+  },
+
+  "contexts": {
+    "note": "The intermediate width is not a convention: every candidate declares the two widths at which its own composition changes, and the intermediate render must land strictly between them, so the intermediate frame always shows a composition neither of the other two frames shows.",
+    "rule": "for every candidate, narrow_breakpoint < tablet.width < wide_breakpoint, and the page must declare a max-width media query at each of its two breakpoints",
+    "motion": {
+      "policy": "declared-per-artefact",
+      "why": "W3 declared none-authored globally. W4 keeps that for every case candidate, and declares it separately per direction: a content model that owns motion is a materially different model from one that cannot express it, and that difference is part of what the contract altitude decides.",
+      "evidence": "checks/motion.json — per render, document.getAnimations() and a computed-style sweep for a running animation or a non-zero transition duration, captured under both prefers-reduced-motion settings"
+    }
+  },
+
+  "carrier_contracts": {
+    "cf_present": {
+      "schema": ".codeflow/schemas/present/document-v1.schema.json",
+      "closed_block_types": ["narrative", "bullets", "callout", "comparison", "decision", "table", "status", "code", "diff", "tree", "diagram", "media", "disclosure", "tabs", "feedback_prompt", "html"],
+      "drawn_geometry_paths": [
+        {
+          "block": "diagram",
+          "how": "Mermaid source compiled in the parent document and inlined as hardened SVG",
+          "gets": "document tokens, resolved mode, useMaxWidth sizing, role=img with title and desc",
+          "loses": "a mark cannot be placed at a computed position, a bar cannot be sized to a quantity, empty space cannot be reserved, and a region cannot be hatched",
+          "source": "crates/codeflow-present/web/src/diagram.ts"
+        },
+        {
+          "block": "html",
+          "how": "served from /sandbox/<revision>/<opaque-id> into a bare-sandbox iframe under default-src 'none'; script-src 'none'",
+          "gets": "arbitrary inert markup and inline SVG",
+          "loses": "inline CSS may not contain '@', so no media query, no prefers-color-scheme, no prefers-reduced-motion and no @font-face; no script, so the block cannot size its own frame; the review stylesheet constrains only its inline size",
+          "source": "crates/codeflow-present/src/safe_html.rs"
+        },
+        {
+          "block": "media",
+          "how": "a bounded base64 PNG/JPEG/GIF/WebP/MP4/WebM/MP3/Ogg inlined as a data URI",
+          "gets": "anything that can be rasterised, up to 4 MiB decoded",
+          "loses": "mode, responsive recomposition, text scaling, selection, machine-readable structure, and any accessible equivalent beyond alt and caption",
+          "source": ".codeflow/schemas/present/document-v1.schema.json"
+        }
+      ],
+      "verbatim_constraint": "if lower.contains('@')",
+      "verbatim_constraint_source": "crates/codeflow-present/src/safe_html.rs"
+    },
+    "docs_portal": {
+      "generator": "Astro/Starlight over a repository-owned content graph",
+      "config": "docs-portal/portal.config.json",
+      "raw_html_in_source": "escaped outside code fences, with no configuration bypass",
+      "raw_html_source": ".agents/skills/cf-docs-portal/SKILL.md",
+      "consequence": "a portal composition can only be emitted by the generator; there the constraint ends, because the portal's composition lives in a real stylesheet with media queries, colour-scheme handling and reduced motion all available"
+    }
+  },
+
+  "directions": [
+    {
+      "id": "a-primitives",
+      "title": "Curated semantic primitives",
+      "one_line": "The product ships a closed set of named typed blocks, each modelling one kind of subject relationship. The document supplies typed data and no geometry.",
+      "composition_authority": "product code",
+      "document_supplies": "typed data conforming to a named primitive's schema",
+      "runtime_owns": "geometry, scales, tokens, mode, responsive recomposition, legend, accessible description, non-colour channels",
+      "mechanism": "directions/a-primitives/primitives.js — one exported renderer per primitive, taking a JSON record and returning SVG",
+      "demonstrates_with": ["p1 plan model", "p2 coverage and stops"],
+      "negative_artefact": "d2 record authority — reach as extent against a record's own claims, which no shipped primitive models",
+      "reach": "exactly the relationships the shipped primitives model, rendered consistently and accessibly every time, with no way for a document to draw a wrong or ugly figure",
+      "cannot_express": "any relationship no primitive models; two relationships composed in one frame; a subject whose shape is genuinely one of a kind",
+      "extension_path": "new product code — a new block type, a schema version, a renderer, tests, and a release",
+      "motion": "none authored",
+      "declared_states": ["run", "room", "cap", "blocked", "reached", "stopped", "reserved", "notrun", "na", "notclaimed"]
+    },
+    {
+      "id": "b-scene",
+      "title": "Bounded declarative scene grammar",
+      "one_line": "One new typed block carries a scene: named scales over declared domains, a closed set of marks positioned by those scales, registers, per-band recomposition and non-colour state channels. The runtime compiles it; the document composes it.",
+      "composition_authority": "the document",
+      "document_supplies": "a scene: scales, marks, registers, bands, states, legend and description",
+      "runtime_owns": "the compiler, tokens, mode, the mark vocabulary, containment, and refusal of anything outside the grammar",
+      "mechanism": "directions/b-scene/scene.js — a compiler from a scene document to SVG, with no imperative hook the document can reach",
+      "demonstrates_with": ["p1 plan model", "p2 coverage and stops", "d2 record authority"],
+      "negative_artefact": "a force-directed dependency layout, which the grammar has no operator to compute",
+      "reach": "any composition expressible as marks placed by declared scales — including every one of W3's eleven candidates that the closed catalogue refused",
+      "cannot_express": "anything needing a layout algorithm the grammar does not implement (force layout, treemap, text flow around marks, automatic label de-collision); anything needing per-datum imperative logic",
+      "extension_path": "a new subject form is a new scene in a document, with no product change. A new mark kind or scale type is product code.",
+      "motion": "none authored; the grammar reserves no motion operator in this demonstration",
+      "declared_states": ["run", "room", "cap", "blocked", "reached", "stopped", "reserved", "notrun", "na", "notclaimed", "governed", "ungoverned", "backed", "absent"]
+    },
+    {
+      "id": "c-recipes",
+      "title": "Project-neutral recipe library",
+      "one_line": "The runtime executes primitives; a versioned library of named, parameterised recipes ships as a managed skill asset. The document names a recipe and binds real data to its slots.",
+      "composition_authority": "a reviewed library, versioned with the skill rather than the binary",
+      "document_supplies": "a recipe name and a binding of its declared slots to real data",
+      "runtime_owns": "the executor, the primitive renderers, tokens, mode, and refusal of an unknown recipe or an unbound slot",
+      "mechanism": "directions/c-recipes/recipes.js — a recipe registry plus a binder that compiles a named recipe and its bindings into primitive calls",
+      "demonstrates_with": ["p1 plan model", "p2 coverage and stops"],
+      "negative_artefact": "the same d2 record authority, to show what a library that has no recipe for a subject actually does",
+      "reach": "whatever the library covers, uniformly, with a name a later reader can look up and a review gate on each addition",
+      "cannot_express": "a genuinely novel relationship, until a recipe for it is written and reviewed",
+      "extension_path": "contribute a recipe — a managed asset, reviewed and versioned with the skill, with no binary release",
+      "motion": "none authored",
+      "declared_states": ["run", "room", "cap", "blocked", "reached", "stopped", "reserved", "notrun", "na", "notclaimed"]
+    },
+    {
+      "id": "d-authored-svg",
+      "title": "Authored SVG under a runtime service contract",
+      "one_line": "The document carries inline SVG the agent drew, and the runtime supplies what the sandboxed escape cannot: token substitution, mode, a declared responsive variant set, viewBox sizing and an enforced legend and description.",
+      "composition_authority": "the authoring agent, per document",
+      "document_supplies": "up to three SVG variants with declared breakpoints, a token vocabulary reference, a legend and a description",
+      "runtime_owns": "sanitisation, token substitution, mode resolution, variant selection, and the legend/description requirement",
+      "mechanism": "directions/d-authored-svg/service.js — the token, mode and variant service applied to author-supplied SVG at load",
+      "demonstrates_with": ["p1 plan model", "p2 coverage and stops"],
+      "negative_artefact": "the same subject drawn twice by the same contract with no shared authority, to show what does not accumulate",
+      "reach": "maximal — anything an agent can draw",
+      "cannot_express": "nothing, and that is the finding: the model has no way to know whether what was drawn is right, no reuse between documents, no accumulated quality, and every explanation pays full authoring cost again",
+      "extension_path": "there is nothing to extend and nothing accumulates",
+      "motion": "none authored; the contract could carry it and the demonstration does not",
+      "security_delta": "moving author-supplied SVG out of the opaque-origin sandbox iframe and into the parent document is the material change and is judged as such, not assumed safe",
+      "declared_states": ["run", "room", "cap", "blocked", "reached", "stopped", "reserved", "notrun", "na", "notclaimed"]
+    },
+    {
+      "id": "e-raster",
+      "title": "Pre-rendered raster through the existing media block",
+      "one_line": "No contract change at all. The agent renders its own figure out of band and embeds a bounded PNG.",
+      "composition_authority": "the authoring agent, out of band",
+      "document_supplies": "a base64 PNG and its alt text",
+      "runtime_owns": "byte bounds and the data URI",
+      "mechanism": "directions/e-raster/raster.js — the demonstration embeds a PNG produced from another direction's output at authoring time, exactly as an agent would have to",
+      "demonstrates_with": ["p1 plan model"],
+      "negative_artefact": "the same PNG in dark mode and at 390px, which is the whole finding",
+      "reach": "anything that can be rasterised",
+      "cannot_express": "mode, responsive recomposition, text scaling, selection, machine-readable structure, or any accessible equivalent beyond alt",
+      "extension_path": "none needed and none possible",
+      "motion": "not applicable",
+      "declared_states": []
+    }
+  ],
+
+  "portal_families": [
+    {
+      "id": "orient-model",
+      "demonstrated": true,
+      "surface_job": "Bring a reader who has never seen this repository into it with a usable model of where knowledge lives and what may be done to it.",
+      "subject_native_form": "the repository's own six layers, ordered by how often each changes, with write authority as a mark on each and the traceability spine drawn as the descent that connects them",
+      "against_shipped": "the built portal renders this layer as an unordered list of three links under a one-sentence description, with every ADR title dumped into the sidebar in file order",
+      "source_facts_needed": ["layer change cadence", "write authority per layer"],
+      "source_facts_status": "not carried by the content graph today — a declared layer model would be needed",
+      "responsive": "the volatility axis stays an axis at every width; at the narrow band the strata become full-width rows whose height still encodes position on that axis"
+    },
+    {
+      "id": "record-trust",
+      "demonstrated": true,
+      "surface_job": "Let a reader trust or distrust the record in front of them: which accepted decision still governs it, how far that decision reaches, and which claims have nothing behind them.",
+      "subject_native_form": "the record's claims in reading order, each carrying a reserved evidence position at its own eye level, with each governing decision drawn as a span covering exactly the claims it reaches",
+      "against_shipped": "the built portal renders SPC-004 as Markdown with a provenance line and a Record context section listing referenced records and inverse links; neither reach nor missing evidence is visible at all",
+      "source_facts_needed": ["supersession scope against the claims it covers", "claim-level evidence link", "deliberate absence as distinct from unrecorded"],
+      "source_facts_status": "not carried by the content graph today",
+      "responsive": "the evidence margin becomes a reserved band beneath each claim, keeping its full height when empty"
+    },
+    {
+      "id": "area-drilldown",
+      "demonstrated": true,
+      "surface_job": "In a monorepo, let a reader see the whole system's shared boundaries before an area, and then enter an area by what it owns rather than by which folder it sits in.",
+      "subject_native_form": "areas drawn as spans over the shared contracts they touch, so an area that owns a contract, an area that consumes one, and a contract with no owner are three visibly different shapes",
+      "against_shipped": "not applicable — this repository is a single project and the shipped portal has no monorepo surface; the demonstration uses a declared monorepo fixture and says so",
+      "source_facts_needed": ["area ownership of a shared contract", "consumption edges between areas"],
+      "source_facts_status": "partially derivable from source_roots and declared layers; ownership is not",
+      "responsive": "spans rotate to run down the page and keep measured extent as height"
+    },
+    {
+      "id": "capability-reach",
+      "demonstrated": false,
+      "why_not_demonstrated": "Specified but not built in this turn. Recorded so the family set is honest rather than trimmed to what was finished.",
+      "surface_job": "Show what the system does, which journeys it serves, and which records produced it.",
+      "subject_native_form": "a capability drawn as reach across the surfaces it touches, with its producing records attached at the point they enter"
+    },
+    {
+      "id": "code-drilldown",
+      "demonstrated": false,
+      "why_not_demonstrated": "Specified but not built in this turn.",
+      "surface_job": "Take a reader from a named surface to the module that implements it, with provenance intact.",
+      "subject_native_form": "a module in its position on the spine, with its real dependency edges and the commit that last moved it"
+    },
+    {
+      "id": "search-find",
+      "demonstrated": false,
+      "why_not_demonstrated": "Specified but not built in this turn.",
+      "surface_job": "Return a result a reader can place, not a flat list of page titles.",
+      "subject_native_form": "results grouped by layer and kind, each carrying the layer's own discipline so the reader knows what they may do with what they found"
+    }
+  ],
+
+  "cases": [
+    {
+      "id": "p1",
+      "surface": "cf-present",
+      "subject": "the unfinished EPC-005 task graph",
+      "surface_job": "An operator is shown a plan inside a review document and must decide where the schedule risk is before approving or redirecting it. The job is judgement about consequence, not lookup of a field.",
+      "question": "If exactly one unfinished EPC-005 task slipped by one wave, which tasks would move the finish and which would not?",
+      "compound": { "is_compound": false },
+      "shared_source": "shared/plan-model.js",
+      "forbidden_phrases": ["moves the finish", "move the finish", "sets the finish", "critical chain", "longest chain", "longest path", "can wait", "could wait", "start today"],
+      "forbidden_patterns": [
+        { "pattern": "TSK-\\d{3}\\s*(?:→|->|>)\\s*TSK-\\d{3}", "why": "the chain written out as a run of arrows states the relationship the geometry exists to show" },
+        { "pattern": "TSK-\\d{3}[^\\n]{0,60}\\b(?:one|two|three|1|2|3)\\s+waves?\\s+of\\s+room", "why": "attaching a room quantity to a named task in prose answers the question in a sentence" },
+        { "pattern": "\\b(?:four|4)[- ]task\\b", "why": "names the length of the chain the reader is asked to find" }
+      ],
+      "candidates": ["a-critical-path-and-room"]
+    },
+    {
+      "id": "p2",
+      "surface": "cf-present",
+      "subject": "the TSK-007 qualification evidence at exact candidate 82671551",
+      "surface_job": "A reviewer is shown an evidence set and must judge what it does not cover before accepting it. The job is to see the shape of what is missing, and why each piece is missing, without the absences being smoothed away.",
+      "question": "Which platforms carry executed evidence for the exact candidate, and for each platform that does not, what kind of thing stopped it?",
+      "compound": {
+        "is_compound": true,
+        "parts": ["platform coverage", "cause of each absence"],
+        "handling": "explicit-optimisation",
+        "why_not_decomposed": "coverage is only interpretable through the causes, so both candidates carry both and each declares which part its axis optimises"
+      },
+      "shared_source": "shared/tsk007-facts.js",
+      "forbidden_phrases": ["only macOS", "macOS arm64 only", "one platform deep", "blocked by authorization", "rather than by a test", "rather than a test failure", "four of six", "two of six"],
+      "forbidden_patterns": [
+        { "pattern": "\\b(?:four|4|six|6)\\s+of\\s+(?:four|4|six|6)\\b", "why": "a counted summary of how many claims stop short is the answer, not a label" },
+        { "pattern": "no\\s+(?:other\\s+)?platform[^\\n]{0,40}(?:evidence|run|executed)", "why": "states the coverage finding in prose" }
+      ],
+      "candidates": ["a-stopped-provenance"]
+    }
+  ],
+
+  "candidates": [
+    {
+      "case": "p1",
+      "id": "a-critical-path-and-room",
+      "carried_from": "docs/verification/tsk-014-w3/cases/p1/a-critical-path-and-room",
+      "primary_unit": "an unfinished task",
+      "primary_axis": "wave position — the earliest wave the task can occupy",
+      "encoded_relationship": "consequence of delay: one unbroken line threads the tasks it passes through, and every task carries a cap on the same wave scale — set out along a ticked track where a later start exists, flush on the task's own wave line where none does, so having none is drawn rather than left out",
+      "wide_composition": "the wave axis runs left to right; each task sits at its earliest wave; the unbroken run is one solid line threading the tasks it passes through; a later start is drawn as a ticked track extending rightward from the task's own row, ending in a cap on the wave line that limits it",
+      "intermediate_composition": "the single field splits into two registers against the same horizontal wave axis, separated by a drawn divider: the unbroken run above it, everything that can start later below it with its track",
+      "narrow_composition": "REPLACED, and declared here before drawing. The axis rotates: waves become rows down the page and the run descends through them. Extent does NOT rotate with the axis and does NOT share a gutter. Each task's later start is measured horizontally inside that task's own row, against one shared wave scale drawn once at the head of the figure, ending in a cap at the wave that limits it. A task with no room carries a cap flush against its own card, in its own row. Two tasks can no longer occupy one column, because no two rows are the same row.",
+      "why_replaced": "The W3 narrow band measured every task's later start downward in one shared gutter at a single x. TSK-013's and TSK-009's tracks merged into one continuous column, three caps landed on the same wave boundary and rendered as one mark, and one zero-room cap was orphaned below the last row attached to nothing. The reader could not recover which task had how much room, which is the question. Everything was inside the frame, so no containment probe saw it.",
+      "wide_breakpoint": 1100,
+      "narrow_breakpoint": 720,
+      "states": [
+        { "id": "run", "means": "on the unbroken run", "non_colour_marker": "stroke-width" },
+        { "id": "room", "means": "can start later without moving the finish", "non_colour_marker": "stroke-dasharray" },
+        { "id": "cap", "means": "the wave that limits a later start", "non_colour_marker": "cap-tick" }
+      ],
+      "carrier": {
+        "verdict": "needs-new-block",
+        "loss": "The encoding is position on an axis plus a drawn link plus a length-proportional extent. `table` and `status` keep every fact and lose all three. `diagram` can draw the link but cannot place a task at a computed wave position or size an extent to a quantity. The sandboxed escape block can draw it, but with no media query it cannot switch to either declared alternate composition and cannot follow the document's mode."
+      }
+    },
+    {
+      "case": "p2",
+      "id": "a-stopped-provenance",
+      "carried_from": "docs/verification/tsk-014-w3/cases/p2/a-stopped-provenance",
+      "primary_unit": "a claim and the rail its evidence travels along",
+      "primary_axis": "derivation stage, from what produced the evidence to what accepted it",
+      "encoded_relationship": "distance travelled and where it stopped: a filled run up to the stopping node, then a reserved open remainder that is drawn rather than omitted, with each rail head carrying the platform coverage that claim actually has",
+      "wide_composition": "rails run left to right through four stage columns; the filled run ends at a stop mark; the untravelled remainder stays drawn as an open rail to the last stage; the coverage strip sits beside each rail head",
+      "intermediate_composition": "rails keep their horizontal stage axis and the coverage strip moves above the rail head rather than beside it",
+      "narrow_composition": "REPLACED, and declared here before drawing. Each claim becomes a bounded lane with its own left edge. The rail runs down inside that lane, inset from both edges so it can never span the figure's width. The stop is a short cross-tick on the rail, not a rule; its cause caption sits inside the same lane, indented to the rail, above the lane's own lower edge. The untravelled remainder stays drawn below the stop to the lane's foot. The coverage strip is the lane's head row.",
+      "why_replaced": "The W3 narrow band drew each stop as a long horizontal rule running from the figure's left edge across roughly 40% of empty width to the rail, which reads as a section divider rather than as a stop on a rail; and each cause caption was left-aligned at the far edge, directly abutting the next claim's title with no separation, so the cause attached visually to the wrong claim. Attribution is exactly what P2's question asks for.",
+      "wide_breakpoint": 1080,
+      "narrow_breakpoint": 700,
+      "states": [
+        { "id": "reached", "means": "the stages the evidence reached", "non_colour_marker": "stroke-width" },
+        { "id": "stopped", "means": "where it stops", "non_colour_marker": "stop-tick" },
+        { "id": "reserved", "means": "the stages it did not reach, drawn rather than omitted", "non_colour_marker": "stroke-dasharray" },
+        { "id": "executed", "means": "an executed run on that lane", "non_colour_marker": "cell-solid" },
+        { "id": "bounded", "means": "exists, not promoted here", "non_colour_marker": "cell-outline" },
+        { "id": "notrun", "means": "no run at all", "non_colour_marker": "cell-hatch" },
+        { "id": "na", "means": "the lane does not apply", "non_colour_marker": "cell-blank" },
+        { "id": "notclaimed", "means": "the claim does not reach this lane", "non_colour_marker": "cell-cross" }
+      ],
+      "states_note": "Five cell states are declared, and five will be keyed. W3 declared four, drew five, keyed four, and named four in its accessible description; the cross on the Chromium claim's second lane appeared in none of them. A12 now compares all four sets.",
+      "carrier": {
+        "verdict": "needs-new-block",
+        "loss": "`status` has exactly the right state vocabulary — pass, fail, pending, not_run — and no geometry at all, so the distance a claim travelled before stopping disappears entirely. A table renders the untravelled remainder as an empty cell, which is the one thing this encoding exists to avoid."
+      }
+    }
+  ],
+
+  "amendments": [],
+  "amendments_note": "Empty at registration. Any post-registration change to a registered field is appended here with its field, candidate, timing, reason, and which of drawing or declaration moved first — never applied by editing the field silently. A8 fails when this array is empty while a change is known.",
+
+  "invalidated_bands": [],
+  "invalidated_bands_note": "Populated by tools/render.mjs and the author's own inspection. Every entry carries both an admissibility verdict and the demonstrated failure that made it so — kind, severity, failing axes. Inadmissible is not neutral.",
+
+  "convergence_hypotheses": {
+    "note": "Recorded as hypothesis only. One study, one author and mutually exclusive artefacts earn no system layer, and nothing here is promoted into a shared visual primitive.",
+    "observed": [
+      "reserved-absence — several artefacts draw a deliberate absence as occupied space rather than an empty cell. Untested against subject independence, real coexistence, or an accepted product surface with a reuse need."
+    ]
+  }
+}

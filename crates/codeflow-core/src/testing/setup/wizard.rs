@@ -206,7 +206,7 @@ pub fn run_add_target_wizard(
     let cwd = if cwd.is_empty() || cwd == "." {
         None
     } else {
-        if std::path::Path::new(&cwd).is_absolute() || cwd.split('/').any(|c| c == "..") {
+        if !is_safe_relative_cwd(&cwd) {
             return Err(WizardError::InvalidCwd(cwd));
         }
         Some(cwd)
@@ -254,6 +254,25 @@ pub fn run_add_target_wizard(
     let _ = repo_root;
 
     Ok(Some(target))
+}
+
+/// Return whether a configured working directory is a portable relative path.
+///
+/// A config may be authored on a different operating system from the runner,
+/// so validate both separator conventions and reject Windows drive-relative
+/// paths (`C:foo`) even when this code is running on Unix.
+fn is_safe_relative_cwd(cwd: &str) -> bool {
+    let bytes = cwd.as_bytes();
+    let has_windows_drive_prefix =
+        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let starts_at_root = matches!(bytes.first(), Some(b'/' | b'\\'));
+    let has_parent_segment = cwd.split(['/', '\\']).any(|component| component == "..");
+
+    !std::path::Path::new(cwd).is_absolute()
+        && !std::path::Path::new(cwd).has_root()
+        && !has_windows_drive_prefix
+        && !starts_at_root
+        && !has_parent_segment
 }
 
 fn ask_existing_action(prompts: &dyn PromptProvider) -> Result<ExistingConfigAction, WizardError> {
@@ -417,13 +436,15 @@ mod tests {
     }
 
     #[test]
-    fn add_target_wizard_rejects_absolute_cwd() {
+    fn add_target_wizard_rejects_portable_absolute_cwd_forms() {
         let dir = tempfile::tempdir().unwrap();
-        let prompts = ScriptedPromptProvider::new(vec!["my-target", "cargo", "/etc"]);
-        let result = run_add_target_wizard(dir.path(), &prompts);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("invalid cwd"), "got: {err}");
+        for cwd in ["/etc", r"\Windows", r"C:\Windows", r"C:Windows"] {
+            let prompts = ScriptedPromptProvider::new(vec!["my-target", "cargo", cwd]);
+            let error = run_add_target_wizard(dir.path(), &prompts)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("invalid cwd"), "{cwd}: got {error}");
+        }
     }
 
     #[test]

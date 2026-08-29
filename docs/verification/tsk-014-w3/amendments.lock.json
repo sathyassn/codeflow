@@ -1,0 +1,23 @@
+{
+  "locks": "registry.json amendments",
+  "locked_on": "2026-08-04",
+  "why": "An amendments array can be emptied as easily as a false claim can be written. These are the amendments an independent seat established from evidence outside this directory, so dropping one or quietly rewording its before/after is the exact failure the record exists to prevent. tools/verify.mjs A8 fails on either.",
+  "scope": "Only evidence-established amendments are locked. The author's own marker-token note and the two unreconciled declaration/drawing divergences are recorded in registry.json but not locked, because nothing outside that file corroborates them; a later seat may add to the array freely, and may not remove or alter these.",
+  "evidence": "Prior wordings recovered by the host from the authoring session's Claude transcript (the Edit event near line 1190 of 604c82de-9861-4d19-920e-8f69b2db575c.jsonl) and supplied to the audit session, which could not read that path itself. Corroborated against artefacts: each `after` string is byte-present in registry.json, each drawn band implements its `after` description and not its `before` one, and neither `before` string appears anywhere in this directory.",
+  "required": [
+    {
+      "id": "p1a-intermediate-composition",
+      "candidate": "a-critical-path-and-room",
+      "field": "intermediate_composition",
+      "before_sha256": "948e625a86d54616b7fc05b77d64fc7059b12e088514873ffa4edc61af569b51",
+      "after_sha256": "d68d120bc2ba668fbd4260a0508b0a5ab081ae7fa7f83bf29c07e5246141e2d4"
+    },
+    {
+      "id": "p1a-narrow-composition",
+      "candidate": "a-critical-path-and-room",
+      "field": "narrow_composition",
+      "before_sha256": "9a06b82ca2d935004bebf49848ff4ece09eb174f8f63c9fd0fc0a2dfce604736",
+      "after_sha256": "5ddecbf9512f66499480e4700d135ab443e2aceb0f13df21d8baa63a517727c9"
+    }
+  ]
+}

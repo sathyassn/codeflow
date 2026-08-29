@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D1-b — the one path from a task to a merged change, and every place it refuses you</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --run: #16181d; --stop: #8a3a12; --again: #4a6fa5; --quiet: #eceef1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --run: #e9ebf0; --stop: #f0b073; --again: #8fb4e8; --quiet: #1c1f26; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 80rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.7rem; color: var(--dim); max-width: 47rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  /* One line runs the whole page. Steps sit on it; refusals leave it sideways
+     and end in a stop bar. Nothing that leaves the line comes back to it. */
+  .runway { list-style: none; margin: 0; padding: 0; }
+  .station { display: grid; grid-template-columns: 11.5rem minmax(0, 1fr); gap: 0 1.6rem; }
+  .rail { position: relative; padding: 0 0 2rem; }
+  .rail::before { content: ""; position: absolute; right: -.8rem; top: .42rem; bottom: -.42rem;
+    border-left: 3px solid var(--run); }
+  .station:last-child .rail::before { bottom: 50%; }
+  .rail::after { content: ""; position: absolute; right: -1.15rem; top: .3rem;
+    width: .75rem; height: .75rem; border-radius: 50%; background: var(--run); }
+  .rail .do { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem;
+    font-weight: 650; word-break: break-word; }
+  .rail .says { display: block; font-size: .72rem; color: var(--dim); margin-top: .2rem; }
+
+  .off { padding: 0 0 2rem; min-width: 0; }
+  .off > .none { font-size: .76rem; color: var(--muted); }
+
+  /* A refusal branch: a tick off the line, then the rule, then the stop bar. */
+  .branch { position: relative; margin: 0 0 .9rem; padding: 0 0 0 1.4rem; }
+  .branch::before { content: ""; position: absolute; left: 0; top: .55rem; width: 1rem;
+    border-top: 2px solid var(--stop); }
+  .branch::after { content: ""; position: absolute; left: 1rem; top: .05rem; height: 1rem;
+    border-left: 4px solid var(--stop); }
+  .branch[data-kind="again"]::before { border-top-style: dashed; border-top-color: var(--again); }
+  .branch[data-kind="again"]::after { border-left-color: var(--again); border-left-width: 2px; }
+  .branch .rule { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem;
+    font-weight: 650; color: var(--stop); }
+  .branch[data-kind="again"] .rule { color: var(--again); }
+  .branch .where { font-size: .68rem; color: var(--muted); margin-left: .4rem; }
+  .branch .refuses { display: block; font-size: .76rem; color: var(--dim); margin-top: .1rem; }
+  .branch .note { display: block; font-size: .72rem; color: var(--ink); margin-top: .15rem; font-weight: 600; }
+
+  /* The fan: one branch carrying six separate reasons. Its width on the page is
+     the answer to "which gate refuses you". */
+  .fan { list-style: none; margin: .45rem 0 0; padding: 0 0 0 .9rem; border-left: 2px solid var(--stop);
+    display: grid; gap: .4rem; }
+  .fan li { font-size: .75rem; }
+  .fan .eid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650;
+    font-size: .71rem; color: var(--muted); margin-right: .3rem; }
+  .fan .err { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .68rem; color: var(--muted); margin-top: .08rem; }
+
+  .end { margin: .2rem 0 0; border-top: 1px solid var(--line); padding-top: 1rem; }
+  .end h2 { font-size: .95rem; margin: 0 0 .35rem; font-weight: 650; }
+  .end p { margin: 0 0 .5rem; font-size: .82rem; color: var(--dim); max-width: 52rem; }
+  .end p:last-child { margin-bottom: 0; }
+  .end b { color: var(--ink); }
+  .end code.hot { color: var(--stop); font-weight: 650; }
+  blockquote { margin: .5rem 0; padding-left: .7rem; border-left: 2px solid var(--line);
+    color: var(--dim); font-size: .76rem; max-width: 50rem; }
+  blockquote cite { display: block; font-style: normal; font-size: .66rem; color: var(--muted); margin-top: .1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .legend { margin-top: 1.2rem; font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; max-width: 54rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { .branch { transition: opacity .12s ease; } }
+
+  @media (max-width: 900px) {
+    /* The line stays. The branches can no longer leave it sideways, so they
+       leave it downward: same tick, same stop bar, same order, indented off the
+       rail rather than beside it. No refusal is dropped. */
+    .station { grid-template-columns: 1fr; gap: .5rem; }
+    .rail { padding-bottom: .3rem; padding-left: 1.4rem; }
+    .rail::before { right: auto; left: .35rem; top: .42rem; bottom: -.9rem; }
+    .rail::after { right: auto; left: 0; }
+    .off { padding: 0 0 1.4rem 1.4rem; border-left: 3px solid var(--quiet); margin-left: .35rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>From &ldquo;I have a task&rdquo; to a merged change — one line, and every branch off it is a refusal</h1>
+  <p class="lede">The vertical line is the only path. Everything that leaves it sideways is a gate that <strong>stops
+    you and does not put you back</strong>. The widest branch is the answer to which gate refuses you: one rule carrying
+    six separate reasons, and you meet it again at every later station.</p>
+
+  <ol class="runway" id="runway"></ol>
+
+  <div class="end" id="end"></div>
+
+  <div class="legend">
+    <div><b>Solid branch</b> — the first station where that rule can refuse you, with every reason it carries.</div>
+    <div><b>Dashed branch</b> — the same rule again, in a later plane. Not a new gate: the same read-only check.</div>
+    <div><b>Stop bar</b> — the branch ends. No gate here is advisory; each one blocks and names its cause.</div>
+  </div>
+  <p class="src">Source: <code>AGENTS.md</code>,
+    <code>crates/codeflow-core/src/workgraph/work_start.rs</code>,
+    <code>crates/codeflow-cli/src/cmd/ci.rs</code> and
+    <code>crates/codeflow-core/src/hooks/git_hook.rs</code>, through the shared subject source
+    <code>shared/repo-entry.js</code>. Every rule id is checked against the source that emits it by
+    <code>tools/verify.mjs</code>.</p>
+</main>
+
+<script src="../../../shared/repo-entry.js"></script>
+<script>
+(() => {
+  const model = window.repoEntry;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const md = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const planeNames = (ids) => ids.map((id) => model.planeById.get(id).name).join(" &middot; ");
+  const gateByRule = new Map(model.mutationGates.map((g) => [g.rule, g]));
+  const fanned = new Map();          // rule -> station id where it first fanned
+
+  document.getElementById("runway").innerHTML = model.steps.map((step) => {
+    // Group this station's precondition refusals by the rule that emits them.
+    const groups = new Map();
+    step.refuses.forEach((eid) => {
+      const e = model.preconditions.find((p) => p.id === eid);
+      if (!e) return;
+      groups.set(e.rule, [...(groups.get(e.rule) ?? []), e]);
+    });
+    const branches = [];
+
+    for (const [rule, items] of groups) {
+      const first = !fanned.has(rule);
+      if (first) fanned.set(rule, step.id);
+      branches.push(first
+        ? `<div class="branch" data-kind="first">` +
+          `<span class="rule">${rule}</span><span class="where">${planeNames(items[0].planes)}</span>` +
+          `<span class="refuses">refuses ${items.length === 1 ? "one thing" : `${items.length} separate things, all of them one check`}:</span>` +
+          `<ul class="fan">${items.map((e) => `<li><span class="eid">${e.id}</span>${md(e.must)}` +
+            `<span class="err">${esc(e.error.text)}</span></li>`).join("")}</ul></div>`
+        : `<div class="branch" data-kind="again">` +
+          `<span class="rule">${rule}</span><span class="where">${planeNames(items[0].planes)}</span>` +
+          `<span class="refuses">the same check as ${fanned.get(rule)}, in a later plane &mdash; same ${items.length} reason${items.length === 1 ? "" : "s"}, nothing new</span></div>`);
+    }
+
+    (step.gates ?? []).forEach((rule) => {
+      const g = gateByRule.get(rule);
+      if (!g) return;
+      const first = !fanned.has(rule);
+      if (first) fanned.set(rule, step.id);
+      branches.push(`<div class="branch" data-kind="${first ? "first" : "again"}">` +
+        `<span class="rule">${rule}</span><span class="where">${planeNames(g.planes)}</span>` +
+        `<span class="refuses">refuses ${md(g.refuses)}</span>` +
+        (g.note ? `<span class="note">${md(g.note)}</span>` : "") + `</div>`);
+    });
+
+    return `<li class="station"><div class="rail">` +
+      `<span class="do">${esc(step.action)}</span><span class="says">${md(step.says)}</span></div>` +
+      `<div class="off">${branches.length ? branches.join("") : `<p class="none">nothing refuses you here.</p>`}</div></li>`;
+  }).join("");
+
+  const { gate, refusedByGate, planes, siblingRules, realBoundary } = model.answer;
+  const merge = model.mutationGates.find((g) => g.rule === "git.pr_merge_to_protected");
+  document.getElementById("end").innerHTML =
+    `<h2>What the widest branch means</h2>` +
+    `<p><code class="hot">${gate}</code> carries <b>${refusedByGate.length} of the ` +
+    `${model.preconditions.length}</b> things that must already be true, because they are one question asked once: ` +
+    `is the planning record, and everything it points at, already at the merge-base with the task's declared ` +
+    `integration target? It appears at three stations because ${planes.length} planes ask it &mdash; ` +
+    `${planeNames(planes)} &mdash; not because there are three gates.</p>` +
+    `<p>The remaining ${model.preconditions.length - refusedByGate.length} are ` +
+    `${siblingRules.map((r) => `<code>${r}</code>`).join(", ")} and <code>git.branch_naming</code>.</p>` +
+    `<blockquote>${md(model.planeById.get("work-start").quote.text)}` +
+    `<cite>${model.planeById.get("work-start").quote.source}</cite></blockquote>` +
+    `<p>The last station is the only one that is a boundary: ` +
+    `<b>${realBoundary.map((id) => model.planeById.get(id).name).join(" and ")}</b> plus a human merge. ` +
+    `${model.planes.filter((p) => !p.armedHere).map((p) => `${p.name} is ${p.gist}`).join("; ")}.</p>` +
+    (merge ? `<blockquote>${md(merge.quote.text)}<cite>${merge.quote.source}</cite></blockquote>` : "");
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

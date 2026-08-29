@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1 baseline — EPC-005 plan graph as ordinary Markdown</title>
+<style>
+  /* Deliberately plain: this is the Markdown floor, styled only enough to be
+     legible in both modes. It must not be improved into a candidate. */
+  :root { color-scheme: light dark; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 46rem; margin: 0 auto; padding: 2rem 1rem;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid GrayText; padding: .35rem .5rem; text-align: left; font-size: .95rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+  @media (max-width: 640px) { table, thead, tbody, tr, th, td { display: block; } th { display: none; }
+    td { border: 0; border-bottom: 1px solid GrayText; }
+    td::before { content: attr(data-label) ": "; font-weight: 700; } }
+</style>
+</head>
+<body>
+<h1>EPC-005 plan graph</h1>
+
+<h2>Tasks</h2>
+<table>
+  <thead><tr><th>Task</th><th>Status</th><th>Depends on</th><th>Stream</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Task">TSK-005</td><td data-label="Status">complete</td><td data-label="Depends on">—</td><td data-label="Stream">method</td></tr>
+    <tr><td data-label="Task">TSK-006</td><td data-label="Status">complete</td><td data-label="Depends on">TSK-005</td><td data-label="Stream">presentation</td></tr>
+    <tr><td data-label="Task">TSK-007</td><td data-label="Status">blocked</td><td data-label="Depends on">TSK-011</td><td data-label="Stream">presentation</td></tr>
+    <tr><td data-label="Task">TSK-008</td><td data-label="Status">complete</td><td data-label="Depends on">TSK-005</td><td data-label="Stream">portal</td></tr>
+    <tr><td data-label="Task">TSK-009</td><td data-label="Status">blocked</td><td data-label="Depends on">TSK-008, TSK-014</td><td data-label="Stream">portal</td></tr>
+    <tr><td data-label="Task">TSK-010</td><td data-label="Status">todo</td><td data-label="Depends on">TSK-007, TSK-009, TSK-013, TSK-014</td><td data-label="Stream">release</td></tr>
+    <tr><td data-label="Task">TSK-011</td><td data-label="Status">blocked</td><td data-label="Depends on">TSK-006, TSK-014</td><td data-label="Stream">presentation</td></tr>
+    <tr><td data-label="Task">TSK-012</td><td data-label="Status">cancelled</td><td data-label="Depends on">TSK-005</td><td data-label="Stream">method</td></tr>
+    <tr><td data-label="Task">TSK-013</td><td data-label="Status">in_progress</td><td data-label="Depends on">—</td><td data-label="Stream">release</td></tr>
+    <tr><td data-label="Task">TSK-014</td><td data-label="Status">in_progress</td><td data-label="Depends on">TSK-005, TSK-006, TSK-008</td><td data-label="Stream">both utilities</td></tr>
+  </tbody>
+</table>
+
+<h2>Notes</h2>
+<ul>
+  <li>Startable now: TSK-013, TSK-014.</li>
+  <li>Blocked: TSK-007, TSK-009, TSK-010, TSK-011.</li>
+  <li>Longest remaining chain: TSK-014 → TSK-011 → TSK-007 → TSK-010.</li>
+  <li>Room: TSK-013 has two waves, TSK-009 has one. Everything on the longest chain has none.</li>
+  <li>TSK-012 is cancelled and is not outstanding work.</li>
+  <li>All tasks target <code>integration/EPC-005-presentation-system</code> except TSK-005, which targeted <code>main</code>.</li>
+</ul>
+</body>
+</html>

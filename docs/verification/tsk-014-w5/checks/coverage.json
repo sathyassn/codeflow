@@ -1,0 +1,902 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "page": "dir-a-primitives",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "page": "dir-a-primitives",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "page": "dir-a-primitives",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "page": "dir-a-primitives",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "page": "dir-a-primitives",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "page": "dir-a-primitives",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "page": "dir-b-scene",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "page": "dir-b-scene",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "page": "dir-b-scene",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "page": "dir-b-scene",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "page": "dir-b-scene",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "page": "dir-b-scene",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "page": "dir-c-recipes",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "page": "dir-c-recipes",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "page": "dir-c-recipes",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "page": "dir-c-recipes",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "page": "dir-c-recipes",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "scheme": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "page": "dir-c-recipes",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "page": "portal-area-drilldown",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "page": "portal-area-drilldown",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "page": "portal-area-drilldown",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "page": "portal-area-drilldown",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "page": "portal-area-drilldown",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "page": "portal-area-drilldown",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "page": "portal-orient-model",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "page": "portal-orient-model",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "page": "portal-orient-model",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "page": "portal-orient-model",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "page": "portal-orient-model",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "page": "portal-orient-model",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "page": "portal-record-trust",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "page": "portal-record-trust",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "page": "portal-record-trust",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "page": "portal-record-trust",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "page": "portal-record-trust",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "scheme": "light dark"
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "page": "portal-record-trust",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "page": "p1-a-critical-path-and-room",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "page": "p1-a-critical-path-and-room",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "page": "p1-a-critical-path-and-room",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "page": "p1-a-critical-path-and-room",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "page": "p1-a-critical-path-and-room",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "page": "p1-a-critical-path-and-room",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "page": "p2-a-stopped-provenance",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "page": "p2-a-stopped-provenance",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "page": "p2-a-stopped-provenance",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "page": "p2-a-stopped-provenance",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "page": "p2-a-stopped-provenance",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "page": "p2-a-stopped-provenance",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "page": "p3-a-convergence-with-source-depth",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "page": "p3-a-convergence-with-source-depth",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "page": "p3-a-convergence-with-source-depth",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "page": "p3-a-convergence-with-source-depth",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "page": "p3-a-convergence-with-source-depth",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "page": "p3-a-convergence-with-source-depth",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "page": "d1-baseline",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "page": "d1-baseline",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "page": "d1-baseline",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "page": "d1-baseline",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "page": "d1-baseline",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "page": "d1-baseline",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d2-baseline-light-desktop",
+    "page": "d2-baseline",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "SPC-004 authority and evidence — plain baseline",
+    "h1": "SPC-004 — the decisions attached to it, and the evidence behind its claims",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d2-baseline-light-tablet",
+    "page": "d2-baseline",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "SPC-004 authority and evidence — plain baseline",
+    "h1": "SPC-004 — the decisions attached to it, and the evidence behind its claims",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d2-baseline-light-mobile",
+    "page": "d2-baseline",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "SPC-004 authority and evidence — plain baseline",
+    "h1": "SPC-004 — the decisions attached to it, and the evidence behind its claims",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d2-baseline-dark-desktop",
+    "page": "d2-baseline",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "SPC-004 authority and evidence — plain baseline",
+    "h1": "SPC-004 — the decisions attached to it, and the evidence behind its claims",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d2-baseline-dark-tablet",
+    "page": "d2-baseline",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "SPC-004 authority and evidence — plain baseline",
+    "h1": "SPC-004 — the decisions attached to it, and the evidence behind its claims",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d2-baseline-dark-mobile",
+    "page": "d2-baseline",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "SPC-004 authority and evidence — plain baseline",
+    "h1": "SPC-004 — the decisions attached to it, and the evidence behind its claims",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d3-baseline-light-desktop",
+    "page": "d3-baseline",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Monorepo areas and shared contracts — plain baseline",
+    "h1": "Monorepo areas and shared contracts",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d3-baseline-light-tablet",
+    "page": "d3-baseline",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Monorepo areas and shared contracts — plain baseline",
+    "h1": "Monorepo areas and shared contracts",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d3-baseline-light-mobile",
+    "page": "d3-baseline",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Monorepo areas and shared contracts — plain baseline",
+    "h1": "Monorepo areas and shared contracts",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d3-baseline-dark-desktop",
+    "page": "d3-baseline",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Monorepo areas and shared contracts — plain baseline",
+    "h1": "Monorepo areas and shared contracts",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d3-baseline-dark-tablet",
+    "page": "d3-baseline",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Monorepo areas and shared contracts — plain baseline",
+    "h1": "Monorepo areas and shared contracts",
+    "scheme": "light dark"
+  },
+  {
+    "render": "d3-baseline-dark-mobile",
+    "page": "d3-baseline",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Monorepo areas and shared contracts — plain baseline",
+    "h1": "Monorepo areas and shared contracts",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-baseline-light-desktop",
+    "page": "p1-baseline",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "EPC-005 remaining tasks — plain baseline",
+    "h1": "EPC-005 — the unfinished tasks",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-baseline-light-tablet",
+    "page": "p1-baseline",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "EPC-005 remaining tasks — plain baseline",
+    "h1": "EPC-005 — the unfinished tasks",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-baseline-light-mobile",
+    "page": "p1-baseline",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "EPC-005 remaining tasks — plain baseline",
+    "h1": "EPC-005 — the unfinished tasks",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-baseline-dark-desktop",
+    "page": "p1-baseline",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "EPC-005 remaining tasks — plain baseline",
+    "h1": "EPC-005 — the unfinished tasks",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-baseline-dark-tablet",
+    "page": "p1-baseline",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "EPC-005 remaining tasks — plain baseline",
+    "h1": "EPC-005 — the unfinished tasks",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p1-baseline-dark-mobile",
+    "page": "p1-baseline",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "EPC-005 remaining tasks — plain baseline",
+    "h1": "EPC-005 — the unfinished tasks",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "page": "p2-baseline",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "page": "p2-baseline",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "page": "p2-baseline",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "page": "p2-baseline",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "page": "p2-baseline",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "page": "p2-baseline",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-baseline-light-desktop",
+    "page": "p3-baseline",
+    "mode": "light",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Qualification harness review — plain baseline",
+    "h1": "The qualification harness review",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-baseline-light-tablet",
+    "page": "p3-baseline",
+    "mode": "light",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Qualification harness review — plain baseline",
+    "h1": "The qualification harness review",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-baseline-light-mobile",
+    "page": "p3-baseline",
+    "mode": "light",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Qualification harness review — plain baseline",
+    "h1": "The qualification harness review",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-baseline-dark-desktop",
+    "page": "p3-baseline",
+    "mode": "dark",
+    "viewport": "desktop",
+    "lang": "en",
+    "title": "Qualification harness review — plain baseline",
+    "h1": "The qualification harness review",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-baseline-dark-tablet",
+    "page": "p3-baseline",
+    "mode": "dark",
+    "viewport": "tablet",
+    "lang": "en",
+    "title": "Qualification harness review — plain baseline",
+    "h1": "The qualification harness review",
+    "scheme": "light dark"
+  },
+  {
+    "render": "p3-baseline-dark-mobile",
+    "page": "p3-baseline",
+    "mode": "dark",
+    "viewport": "mobile",
+    "lang": "en",
+    "title": "Qualification harness review — plain baseline",
+    "h1": "The qualification harness review",
+    "scheme": "light dark"
+  }
+]

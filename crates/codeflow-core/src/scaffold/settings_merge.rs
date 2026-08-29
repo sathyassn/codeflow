@@ -10,9 +10,11 @@
 //!   union-added, never removed; scalar permission keys (`defaultMode`) are
 //!   set only when absent.
 //! - **sandbox entries** — recursively add missing keys and union shipped array
-//!   entries, while preserving every explicit user scalar. This lets security
-//!   additions such as fail-closed startup reach an existing partial sandbox
-//!   without silently changing a user's chosen value.
+//!   entries, while preserving every explicit user scalar. On update, the prior
+//!   shipped baseline also identifies retired managed array entries; those are
+//!   removed while user-only entries survive. This lets security additions and
+//!   boundary corrections reach existing projects without taking ownership of
+//!   project-specific sandbox configuration.
 //!
 //! Every other key — user or shipped — is preserved verbatim: shipped
 //! top-level keys (`statusLine`, `$schema`) are added only when
@@ -50,8 +52,26 @@ pub fn merge_settings(
     incoming: &str,
     report: &mut Vec<String>,
 ) -> Result<String, ScaffoldError> {
+    merge_settings_from_baseline(current, None, incoming, report)
+}
+
+/// Merges settings during update, using the prior shipped baseline to retire
+/// only CodeFlow-managed sandbox array entries that the new preset removed.
+/// User-only entries are preserved.
+///
+/// # Errors
+///
+/// Returns an error when current, previous, or incoming settings are invalid
+/// JSON, or when current or incoming settings are not top-level objects.
+pub fn merge_settings_from_baseline(
+    current: &str,
+    previous: Option<&str>,
+    incoming: &str,
+    report: &mut Vec<String>,
+) -> Result<String, ScaffoldError> {
     let mut current: Value = serde_json::from_str(current)?;
     let incoming: Value = serde_json::from_str(incoming)?;
+    let previous: Option<Value> = previous.map(serde_json::from_str).transpose()?;
 
     let Value::Object(cur) = &mut current else {
         return Err(ScaffoldError::InvalidState {
@@ -70,7 +90,12 @@ pub fn merge_settings(
         match key.as_str() {
             "hooks" => merge_hooks(cur, inc_val, report),
             "permissions" => merge_permissions(cur, inc_val, report),
-            "sandbox" => merge_sandbox(cur, inc_val, report),
+            "sandbox" => merge_sandbox(
+                cur,
+                previous.as_ref().and_then(|value| value.get("sandbox")),
+                inc_val,
+                report,
+            ),
             _ => {
                 if cur.contains_key(key) {
                     if cur[key] != *inc_val {
@@ -92,7 +117,12 @@ pub fn merge_settings(
         .map_err(ScaffoldError::from)
 }
 
-fn merge_sandbox(cur: &mut Map<String, Value>, inc_sandbox: &Value, report: &mut Vec<String>) {
+fn merge_sandbox(
+    cur: &mut Map<String, Value>,
+    previous_sandbox: Option<&Value>,
+    inc_sandbox: &Value,
+    report: &mut Vec<String>,
+) {
     let Some(inc_sandbox) = inc_sandbox.as_object() else {
         return;
     };
@@ -103,7 +133,51 @@ fn merge_sandbox(cur: &mut Map<String, Value>, inc_sandbox: &Value, report: &mut
         report.push("settings: \"sandbox\" is not an object; left untouched".to_string());
         return;
     };
+    if let Some(previous_sandbox) = previous_sandbox.and_then(Value::as_object) {
+        remove_retired_array_entries(
+            cur_sandbox,
+            previous_sandbox,
+            inc_sandbox,
+            "sandbox",
+            report,
+        );
+    }
     merge_additive_object(cur_sandbox, inc_sandbox, "sandbox", report);
+}
+
+fn remove_retired_array_entries(
+    current: &mut Map<String, Value>,
+    previous: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    path: &str,
+    report: &mut Vec<String>,
+) {
+    for (key, previous_value) in previous {
+        let Some(incoming_value) = incoming.get(key) else {
+            continue;
+        };
+        let Some(current_value) = current.get_mut(key) else {
+            continue;
+        };
+        let key_path = format!("{path}.{key}");
+        match (current_value, previous_value, incoming_value) {
+            (Value::Object(current), Value::Object(previous), Value::Object(incoming)) => {
+                remove_retired_array_entries(current, previous, incoming, &key_path, report);
+            }
+            (Value::Array(current), Value::Array(previous), Value::Array(incoming)) => {
+                current.retain(|entry| {
+                    let retired = previous.contains(entry) && !incoming.contains(entry);
+                    if retired {
+                        report.push(format!(
+                            "settings: removed retired {key_path} entry {entry}"
+                        ));
+                    }
+                    !retired
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 fn merge_additive_object(
@@ -395,6 +469,51 @@ mod tests {
         assert!(report
             .iter()
             .any(|line| line.contains("preserved user value for sandbox.enabled")));
+    }
+
+    #[test]
+    fn sandbox_update_retires_managed_array_entries_and_preserves_user_entries() {
+        let previous = r#"{
+            "sandbox": {"filesystem": {"allowRead": ["~/.claude/plugins"]}}
+        }"#;
+        let user = r#"{
+            "sandbox": {"filesystem": {"allowRead": [
+                "~/.claude/plugins",
+                "~/project-owned-reference"
+            ]}}
+        }"#;
+        let incoming = r#"{
+            "sandbox": {"filesystem": {"allowRead": ["~/.claude/plugins/cache"]}}
+        }"#;
+
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(user, Some(previous), incoming, &mut report).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        let allow_read = value["sandbox"]["filesystem"]["allowRead"]
+            .as_array()
+            .unwrap();
+
+        assert_eq!(
+            allow_read,
+            &[
+                Value::String("~/project-owned-reference".to_string()),
+                Value::String("~/.claude/plugins/cache".to_string()),
+            ]
+        );
+        assert!(report
+            .iter()
+            .any(|line| { line.contains("removed retired sandbox.filesystem.allowRead entry") }));
+        assert!(report
+            .iter()
+            .any(|line| { line.contains("added sandbox.filesystem.allowRead entry") }));
+
+        let mut second_report = vec![];
+        let second =
+            merge_settings_from_baseline(&merged, Some(incoming), incoming, &mut second_report)
+                .unwrap();
+        assert_eq!(second, merged);
+        assert!(second_report.is_empty());
     }
 
     #[test]

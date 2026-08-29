@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1-a — EPC-005 remaining work by readiness wave</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --muted: #656d7b; --line: #c9cdd6; --page: #fbfbfa;
+    --chain: #1a1c22; --room: #4a6fa5; --ready: #1d5b3f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a2aab8; --muted: #9aa2b0; --line: #3a404c; --page: #14161b;
+            --chain: #e9ebf0; --room: #8fb4e8; --ready: #7fd6ab; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 78rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.4rem; color: var(--dim); max-width: 46rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  /* Completed prerequisites are proof, not structure: they stay as a quiet
+     rail, and no edge is drawn from them, so remaining work owns the field. */
+  .landed { font-size: .74rem; color: var(--muted); border-left: 3px solid var(--line);
+    padding: .3rem .7rem; margin-bottom: 1.5rem; display: flex; flex-wrap: wrap; gap: .1rem .8rem; }
+  .landed b { color: var(--ink); font-weight: 600; }
+
+  .field { position: relative; }
+  #edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .grid { position: relative; display: grid; gap: .6rem 1.6rem; align-items: start; }
+
+  .colhead { font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; color: var(--dim);
+    padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  .colhead b { display: block; font-size: .76rem; letter-spacing: .01em; text-transform: none; color: var(--ink); }
+  .rowhead { font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; color: var(--dim);
+    align-self: center; padding-right: .4rem; }
+  .wavehead { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+    border-bottom: 1px solid var(--line); padding: .9rem 0 .25rem; margin-bottom: .1rem; }
+  .wavehead b { color: var(--ink); text-transform: none; letter-spacing: 0; font-size: .8rem; }
+
+  .node { display: block; width: 100%; text-align: left; background: transparent;
+    border: 1px solid var(--line); border-left-width: 5px; border-left-color: var(--line);
+    border-radius: 2px; padding: .45rem .6rem; color: inherit; font: inherit; }
+  .node:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .node .id { font-weight: 650; font-size: .84rem; }
+  .node .what { display: block; font-size: .74rem; color: var(--dim); margin-top: .05rem; }
+  .node .marks { display: block; font-size: .68rem; margin-top: .3rem; }
+  .node .met { display: block; font-size: .66rem; color: var(--muted); margin-top: .2rem; }
+  .node .stream { display: none; font-size: .66rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+
+  .node[data-chain="true"] { border-left-color: var(--chain); border-left-width: 6px; }
+  .node[data-chain="true"] .marks { color: var(--ink); font-weight: 650; }
+  .node[data-room="true"] { border-left-style: double; border-left-color: var(--room); }
+  .node[data-room="true"] .marks { color: var(--room); font-weight: 600; }
+  .node[data-startable="true"] .id::after { content: " ● startable today"; font-size: .7rem;
+    color: var(--ready); font-weight: 650; }
+
+  .legend { margin-top: 1.8rem; border-top: 1px solid var(--line); padding-top: .9rem;
+    font-size: .76rem; color: var(--dim); display: grid; gap: .3rem; max-width: 54rem; }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .src { margin-top: 1.1rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+  @media (prefers-reduced-motion: no-preference) { .node { transition: box-shadow .12s ease; } }
+
+  @media (max-width: 820px) {
+    /* Wave order stays the primary composition on narrow screens: waves become
+       sections in order, and stream drops to a label on the node. The content
+       is inset to leave a dedicated left gutter, so dependency strokes have
+       their own channel and never cut across a wave heading. */
+    .grid { display: block; padding-left: 1.35rem; }
+    .colhead, .rowhead { display: none; }
+    .node { margin-bottom: .5rem; }
+    .node .stream { display: block; }
+    .wavehead { position: relative; z-index: 1; background: var(--page); }
+  }
+  @media (min-width: 821px) { .wavehead { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>EPC-005 remaining work — what can start, what sets the finish, what can wait</h1>
+  <p class="lede">Only unfinished tasks are placed. Columns are <strong>readiness waves</strong> computed from real
+    <code>depends_on</code> frontmatter; lines are dependencies <em>between remaining tasks</em>. The heavy left edge
+    marks the <strong>longest chain to TSK-010</strong>; a double edge marks work with <strong>room to wait</strong>.</p>
+
+  <div class="landed" id="landed"></div>
+
+  <div class="field">
+    <svg id="edges" aria-hidden="true" focusable="false"></svg>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="legend">
+    <div><b>Wave</b> — 1 + the highest wave of a task's unfinished dependencies. Wave 1 is startable today.</div>
+    <div><b>Longest chain</b> — the longest remaining path to <code>TSK-010</code>. Every task on it has zero room.</div>
+    <div><b>Room</b> — how many waves a task can start later without moving the finish.</div>
+    <div><b>Met</b> — the completed prerequisites each remaining task already satisfies, kept as proof without drawing history into the field.</div>
+  </div>
+  <p class="src">Source: <code>project-management/tasks/TSK-005.md</code> … <code>TSK-014.md</code> frontmatter. Waves, chain membership and room are computed in this page from that data.</p>
+</main>
+
+<script type="application/json" id="plan-data">
+{
+  "source": "project-management/tasks/TSK-005.md..TSK-014.md frontmatter",
+  "sink": "TSK-010",
+  "tasks": [
+    {"id":"TSK-005","title":"strengthen editorial and product design contracts","status":"complete","deps":[],"specs":["SPC-003"],"target":"main"},
+    {"id":"TSK-006","title":"research and prototype the presentation experience","status":"complete","deps":["TSK-005"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-007","title":"verify and qualify the presentation utility","status":"blocked","deps":["TSK-011"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-008","title":"research and prototype documentation portals","status":"complete","deps":["TSK-005"],"specs":["SPC-005"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-009","title":"build and qualify the documentation portal utility","status":"blocked","deps":["TSK-008","TSK-014"],"specs":["SPC-005"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-010","title":"integrate and release the CodeFlow system","status":"todo","deps":["TSK-007","TSK-009","TSK-013","TSK-014"],"specs":[],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-011","title":"build the interactive presentation utility","status":"blocked","deps":["TSK-006","TSK-014"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-012","title":"refine design exploration, sourcing, and revision contracts","status":"cancelled","deps":["TSK-005"],"specs":["SPC-006"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-013","title":"prepare the v3 release candidate","status":"in_progress","deps":[],"specs":[],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-014","title":"recover the design method and utility directions","status":"in_progress","deps":["TSK-005","TSK-006","TSK-008"],"specs":["SPC-004","SPC-005","SPC-006"],"target":"integration/EPC-005-presentation-system"}
+  ]
+}
+</script>
+<script src="../../../shared/plan-model.js"></script>
+<script>
+(() => {
+  const model = window.planModel(JSON.parse(document.getElementById("plan-data").textContent));
+  const { open, byId, done, wave, slack, chain, startable, maxWave, streamOf } = model;
+
+  document.getElementById("landed").innerHTML =
+    `<span><b>Already landed</b> — ${model.landed.map(t => t.id).join(" · ")}</span>` +
+    `<span><b>Cancelled</b> — ${model.cancelled.map(t => t.id).join(" · ")}, not outstanding work</span>`;
+
+  const streams = ["method", "presentation", "both utilities", "portal", "release"]
+    .filter(s => open.some(t => streamOf(t) === s));
+  const grid = document.getElementById("grid");
+  const wide = () => window.matchMedia("(min-width: 821px)").matches;
+
+  function nodeEl(t) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "node";
+    el.dataset.id = t.id;
+    el.dataset.chain = String(chain.includes(t.id));
+    el.dataset.room = String(slack(t.id) > 0);
+    el.dataset.startable = String(startable.includes(t.id));
+    const mark = chain.includes(t.id)
+      ? "on the longest chain"
+      : slack(t.id) > 0 ? `can wait ${slack(t.id)} wave${slack(t.id) === 1 ? "" : "s"}` : "";
+    const met = t.deps.filter(d => done(byId.get(d)));
+    el.setAttribute("aria-label",
+      `${t.id}, ${t.title}, wave ${wave(t.id)}, stream ${streamOf(t)}, ` +
+      (startable.includes(t.id) ? "startable today, " : "") +
+      (chain.includes(t.id) ? "on the longest chain to TSK-010, no room. " : `can wait ${slack(t.id)} waves. `) +
+      (met.length ? `prerequisites already met: ${met.join(", ")}.` : ""));
+    el.innerHTML =
+      `<span class="stream">${streamOf(t)} · wave ${wave(t.id)}</span>` +
+      `<span class="id">${t.id}</span><span class="what">${t.title}</span>` +
+      `<span class="marks">${mark}</span>` +
+      (met.length ? `<span class="met">met: ${met.join(", ")}</span>` : "");
+    return el;
+  }
+
+  function build() {
+    grid.textContent = "";
+    if (wide()) {
+      grid.style.gridTemplateColumns = `max-content repeat(${maxWave}, minmax(0, 1fr))`;
+      grid.append(document.createElement("div"));
+      for (let w = 1; w <= maxWave; w++) {
+        const h = document.createElement("div");
+        h.className = "colhead";
+        h.innerHTML = `wave ${w}<b>${w === 1 ? "startable today" : "after wave " + (w - 1)}</b>`;
+        grid.append(h);
+      }
+      streams.forEach(s => {
+        const head = document.createElement("div");
+        head.className = "rowhead";
+        head.textContent = s;
+        grid.append(head);
+        for (let w = 1; w <= maxWave; w++) {
+          const cell = document.createElement("div");
+          open.filter(t => streamOf(t) === s && wave(t.id) === w).forEach(t => cell.append(nodeEl(t)));
+          grid.append(cell);
+        }
+      });
+    } else {
+      grid.style.gridTemplateColumns = "";
+      for (let w = 1; w <= maxWave; w++) {
+        const h = document.createElement("div");
+        h.className = "wavehead";
+        h.innerHTML = `wave ${w} — <b>${w === 1 ? "startable today" : "after wave " + (w - 1)}</b>`;
+        grid.append(h);
+        open.filter(t => wave(t.id) === w).forEach(t => grid.append(nodeEl(t)));
+      }
+    }
+    requestAnimationFrame(() => drawEdges());
+  }
+
+  function drawEdges() {
+    const svg = document.getElementById("edges");
+    const field = svg.parentElement.getBoundingClientRect();
+    svg.setAttribute("viewBox", `0 0 ${field.width} ${field.height}`);
+    svg.textContent = "";
+    const pos = new Map();
+    document.querySelectorAll(".node").forEach(n => {
+      const r = n.getBoundingClientRect();
+      pos.set(n.dataset.id, {
+        left: r.left - field.left, right: r.right - field.left,
+        top: r.top - field.top, bottom: r.bottom - field.top,
+        midY: r.top - field.top + r.height / 2
+      });
+    });
+    const narrow = !wide();
+    let lane = 0;
+    // Only remaining-work relationships are drawn; completed prerequisites are
+    // carried as text on the node that satisfies them.
+    open.forEach(t => t.deps.filter(d => !done(byId.get(d))).forEach(d => {
+      const from = pos.get(d), to = pos.get(t.id);
+      if (!from || !to) return;
+      const onChain = chain.includes(d) && chain.includes(t.id)
+        && chain.indexOf(d) + 1 === chain.indexOf(t.id);
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      // Narrow: run each edge down its own channel in the left gutter and turn
+      // into the node edge, so strokes never cross a heading or the text.
+      const gx = 4 + (lane++ % 3) * 5;
+      const r = 5;
+      p.setAttribute("d", narrow
+        ? `M ${from.left} ${from.bottom - 8} H ${gx + r} Q ${gx} ${from.bottom - 8} ${gx} ${from.bottom - 8 + r}` +
+          ` V ${to.top + 8 - r} Q ${gx} ${to.top + 8} ${gx + r} ${to.top + 8} H ${to.left}`
+        : `M ${from.right} ${from.midY} C ${from.right + 38} ${from.midY}, ${to.left - 38} ${to.midY}, ${to.left} ${to.midY}`);
+      p.setAttribute("fill", "none");
+      p.setAttribute("stroke", "currentColor");
+      p.setAttribute("stroke-width", onChain ? 2.2 : 1);
+      p.setAttribute("opacity", onChain ? .95 : .3);
+      svg.append(p);
+    }));
+    document.documentElement.dataset.answer = JSON.stringify(model.answer);
+    document.documentElement.dataset.ready = "true";
+  }
+
+  build();
+  let timer;
+  addEventListener("resize", () => { clearTimeout(timer); timer = setTimeout(build, 120); });
+})();
+</script>
+</body>
+</html>

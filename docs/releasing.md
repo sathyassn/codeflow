@@ -7,8 +7,8 @@ approval record for every run of this procedure.
 
 ## codeflow's own releases
 
-Version source of truth: `Cargo.toml [workspace.package] version` (both crates
-inherit it via `version.workspace = true`). Releases are conventional-commit
+Version source of truth: `Cargo.toml [workspace.package] version` (all three
+crates inherit it via `version.workspace = true`). Releases are conventional-commit
 driven and human-gated. Two tools do the work:
 
 - **git-cliff** derives the next SemVer **and** the changelog from the
@@ -21,7 +21,8 @@ driven and human-gated. Two tools do the work:
 
 Release CI uses native cargo-dist runners for macOS, Linux, and Windows so each
 binary is linked with the platform SDK and can be exercised there. For an
-earlier host-agnostic build check, the repository also provides Cargo aliases:
+earlier host-agnostic target lint and build check, the repository also provides
+Cargo aliases:
 
 ```sh
 cargo install --locked cargo-xwin --version 0.23.0
@@ -36,38 +37,86 @@ cargo cross-check-linux       # requires Zig on PATH
 cargo cross-build-linux       # requires Zig on PATH
 ```
 
-`cargo-xwin` acquires the Windows CRT/SDK inputs needed to build MSVC targets
-from macOS or Linux. `cargo-zigbuild` uses Zig as the linker for a Linux GNU
-binary with a glibc 2.17 floor. macOS artifacts still build on macOS because
+`cargo-xwin` acquires the Windows CRT/SDK inputs needed to lint and build MSVC
+targets from macOS or Linux. `cargo-zigbuild` uses Zig as the linker for a Linux
+GNU binary with a glibc 2.17 floor. macOS artifacts still build on macOS because
 Apple SDK redistribution/licensing prevents a generic bundled cross toolchain.
 Cross-build success proves compilation and linking only; it never replaces a
 native Windows/Linux/macOS test and installer canary.
 
+### Presentation renderer assets
+
+The `cf-present` browser distribution is a release input, not an install-time
+build. Use the exact Node/npm versions declared in
+`crates/codeflow-present/web/package.json`; from that directory run:
+
+```sh
+npm ci
+npm run supply-chain
+npm run check
+npm run check:browser
+```
+
+`supply-chain` refreshes the committed audit, CycloneDX SBOM, and license
+inventory. `check` proves two clean builds are byte-identical and enforces the
+raw/Brotli/export budgets and integrity manifest. `check:browser` exercises the
+representative accessible renderer and mode/review behavior in a task-owned
+browser, including a dense bounded multi-diagram corpus and long-task envelope.
+Review the generated diff; do not hand-edit the distribution or its evidence
+files. Release builds consume only the committed assets, and consumer machines
+do not need Node.
+
+Repeat the runtime journey on every claimed native platform. Windows evidence
+must cover Unicode known-folder/profile paths, creation-time ACL hardening,
+read-only rejection of weakened owner/protected-DACL/trustee/inheritance state,
+trusted system tools, exact quoted command-line identity, file URLs, and
+process-tree cleanup. All browser and auxiliary tool routes must exclude
+provider-secret environment canaries through the shared restricted environment. Linux/WSL2
+evidence must cover bounded no-follow `/proc` identity and process-group
+cleanup; macOS must prove its equivalent ownership boundary. Cross-compilation
+is useful adapter-shape evidence, but it does not satisfy these native
+qualification cases.
+
+Measure the stripped release binary against the recorded pre-presentation
+reference build, and record the embedded service/export payload contribution
+using the procedure captured for the release. Enforce the per-payload and
+combined limits in `codeflow_present::limits`; a debug binary, cross-build, or
+compressed archive size is not equivalent evidence.
+
 ### The runbook
 
-Prerequisite: install git-cliff once (`cargo install git-cliff`, or a prebuilt
+Prerequisite: install the release-pinned git-cliff version
+(`cargo install git-cliff --version 2.13.1 --locked`, or the matching prebuilt
 binary from <https://github.com/orhun/git-cliff/releases>).
 
 ```sh
-# 1. On a release branch, off the latest main:
-git switch -c chore/release main
+# 1. Refresh remote truth and choose an explicit remote-tracking base: latest
+#    main for a standalone release, or the accepted integration candidate after
+#    every required task has landed. Verify it is the reviewed commit.
+git fetch --prune --tags origin
+BASE=origin/main  # or origin/integration/EPC-NNN-<slug>
+EXPECTED="<reviewed-commit-sha>"
+test "$(git rev-parse "$BASE^{commit}")" = "$EXPECTED"
+git switch -c chore/release "$BASE"
 
 # 2. Compute the next version from the conventional commits since the last tag:
 NEXT=$(git cliff --bumped-version)        # current history resolves to v3.0.0
 echo "$NEXT"
 
-# 3. Bump the single workspace version (both crates inherit it):
+# 3. Bump the single workspace version (all three crates inherit it):
 #    edit Cargo.toml -> [workspace.package] version = "<NEXT without the leading v>"
 #    then refresh the lockfile:
 cargo build
 
-# 4. Prepend the new version's section to CHANGELOG.md — this keeps the curated
-#    past entries intact (unlike `-o`, which regenerates the whole file). Then
-#    review/refine the draft; git-cliff writes from commit subjects, so tighten
-#    the wording:
-git cliff --unreleased --tag "$NEXT" --prepend CHANGELOG.md
+# 4. Generate a review aid; do not write it over the curated changelog:
+git cliff --unreleased --tag "$NEXT" > /tmp/codeflow-release-notes.md
 
-# 5. Commit and open a PR:
+# 5. Promote the curated Unreleased body in CHANGELOG.md to a dated release,
+#    restore an empty Unreleased section above it, and reconcile the draft.
+#    Preserve human-written migrations and comparison links; rerunning this
+#    procedure must not duplicate a release section.
+
+# 6. Commit and open a PR:
 git commit -am "chore(release): $NEXT"
 git push -u origin chore/release   # then open the PR
 ```

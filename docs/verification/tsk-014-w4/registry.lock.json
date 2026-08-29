@@ -1,0 +1,20 @@
+{
+  "file": "registry.json",
+  "sha256": "a19f7e30962169dd03ff207e7607575dd831bdaabda00572e4091c0220bc7008",
+  "bytes": 33948,
+  "mtime_iso": "2026-08-04T12:53:00.252Z",
+  "pinned_at_state": "the only files in this directory were rubric.v4.md, registry.json and tools/pin.mjs; no authored candidate, direction demonstration, portal page, baseline or render existed",
+  "directories_absent_when_pinned": [
+    "cases",
+    "directions",
+    "portal",
+    "baselines",
+    "renders",
+    "checks",
+    "shared"
+  ],
+  "what_this_proves": "the bytes. The digest survives a checkout, a copy and a commit; the mtime does not, and is recorded here because this lock is the only witness that will survive one.",
+  "what_this_does_not_prove": "that the author intended this before drawing. Only that these bytes preceded every artefact. A later change to the pinned file is a lock failure, not a silent edit.",
+  "governs": "every declaration the W4 gates check against",
+  "fixes": "W3 registry.json carried no lock at all, and its inode postdated seven of eleven candidate pages"
+}

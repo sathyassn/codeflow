@@ -113,6 +113,28 @@ fn diagnostic_packs_only_compose_existing_cases() {
         !release["includes"].as_array().expect("includes").is_empty(),
         "release-smoke should prove composition rather than duplicate cases"
     );
+    assert!(release["includes"]
+        .as_array()
+        .expect("includes")
+        .iter()
+        .any(|included| included == "documentation-portal"));
+    let portal = pack_entries
+        .iter()
+        .find(|pack| pack["id"] == "documentation-portal")
+        .expect("documentation-portal pack");
+    assert_eq!(
+        portal["cases"],
+        serde_json::json!([
+            "docs-portal-declines-tiny-repository",
+            "docs-portal-adopts-layered-source-authority",
+            "docs-portal-dirty-snapshot-fails-closed",
+            "docs-portal-boundary-and-ship-routing",
+            "docs-portal-broken-current-source-is-a-bounded-stub",
+            "docs-portal-single-project-information-architecture",
+            "docs-portal-monorepo-global-to-area-drilldown",
+            "docs-portal-refuses-unjustified-split"
+        ])
+    );
 }
 
 fn json(relative: &str) -> Value {
@@ -1487,15 +1509,80 @@ fn durable_planning_canaries_pin_clarity_graph_and_anchor() {
     );
 
     let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
-    let stable_anchor = fixtures["fixtures"]
-        .as_array()
-        .expect("fixtures array")
-        .iter()
-        .find(|fixture| fixture["id"] == "valid-unmerged-planning")
-        .expect("stable-anchor fixture");
-    assert_eq!(
-        stable_anchor["state"]["target_precedes_fixture"], true,
-        "the unmerged-planning canary needs a real target branch at the parent commit"
+    let fixtures = fixtures["fixtures"].as_array().expect("fixtures array");
+    for fixture_id in [
+        "valid-unmerged-planning",
+        "multi-task-direct-main-plan",
+        "single-task-direct-target",
+    ] {
+        let fixture = fixtures
+            .iter()
+            .find(|fixture| fixture["id"] == fixture_id)
+            .unwrap_or_else(|| panic!("missing stable-anchor fixture {fixture_id}"));
+        assert_eq!(
+            fixture["state"]["target_precedes_fixture"], true,
+            "{fixture_id} needs a real target branch at the parent commit"
+        );
+    }
+}
+
+#[test]
+fn integration_branch_canaries_pin_batch_and_review_boundaries() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "multi-task-epic-defaults-to-one-integration-branch",
+                &[
+                    "supplied_batch_partitioned_by_coherent_outcome_and_dependencies",
+                    "coherent_clear_multi_task_body_confirmed",
+                    "routine_integration_shape_selected_without_operator_prompt",
+                    "plan_v_next_required_before_target_rewrite",
+                    "shared_branch_created_before_allocation_and_declared_by_all_epic_tasks",
+                    "resource_safe_parallelism_only_for_independent_nodes",
+                    "topology_drives_task_branch_tips_and_work_start",
+                    "per_task_producer_verification_and_cross_lineage_review_before_landing",
+                    "graph_order_landings_are_serialized",
+                    "aggregate_gates_and_both_family_review_on_combined_diff",
+                    "one_final_human_reviewed_pr_to_protected_target",
+                    "different_landing_shape_requires_plan_rationale_and_dual_approval",
+                ][..],
+                &[
+                    "treat_request_batch_as_automatic_epic_boundary",
+                    "ask_operator_to_choose_routine_landing_mechanism",
+                    "unclear_acceptance_bypassed",
+                    "unrelated_tasks_batched_on_integration_branch",
+                    "task_by_task_main_pr_default",
+                    "silent_target_rewrite_under_plan_v1",
+                    "integration_branch_called_optional_optimization",
+                    "dependent_task_cut_from_stale_integration",
+                    "parallelize_dependency",
+                    "final_combined_review_substituted_for_task_review",
+                    "concurrent_integration_writers",
+                    "exception_approved_for_convenience",
+                    "implementation_started",
+                    "branches_created_during_review",
+                ][..],
+            ),
+            (
+                "single-task-does-not-invent-integration-branch",
+                &[
+                    "single_independently_reviewable_outcome_detected",
+                    "standalone_reason_is_credible",
+                    "direct_task_to_protected_target_pr_is_valid",
+                    "planning_anchor_and_work_start_still_required",
+                    "human_reviews_protected_target_pr",
+                ][..],
+                &[
+                    "integration_branch_required_for_single_task",
+                    "dummy_epic_invented",
+                    "standalone_reason_ignored",
+                    "implementation_started",
+                    "branch_created_during_review",
+                ][..],
+            ),
+        ],
     );
 }
 
@@ -1657,6 +1744,19 @@ fn presentation_canaries_pin_proportionate_complete_visuals() {
                     "redundant_recap",
                 ][..],
             ),
+            (
+                "complex-review-uses-declarative-presentation",
+                &[
+                    "governing_visual_answers_release_question_before_supporting_prose",
+                    "surface_materially_outperforms_restyled_chat",
+                    "information_bearing_comparison_and_status",
+                    "explicit_feedback_prompt",
+                ][..],
+                &[
+                    "visuals_as_decorative_text_cards",
+                    "same_chat_answer_repackaged_in_panels",
+                ][..],
+            ),
         ],
     );
 }
@@ -1756,4 +1856,517 @@ fn protocol_is_native_interactive_and_cleanup_is_fail_closed() {
             "evaluation script lost {required}"
         );
     }
+}
+
+/// Returns a fixture's file overlay so a canary can be checked against the
+/// material it actually presents, not only against its signal vocabulary.
+fn fixture_overlay(id: &str) -> BTreeMap<String, String> {
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let fixture = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures array")
+        .iter()
+        .find(|fixture| fixture["id"] == id)
+        .unwrap_or_else(|| panic!("missing fixture {id}"));
+    fixture["files"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{id}: fixture files"))
+        .iter()
+        .map(|(path, body)| {
+            (
+                path.clone(),
+                body.as_str()
+                    .unwrap_or_else(|| panic!("{id}: {path} body"))
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
+fn overlay_file<'a>(overlay: &'a BTreeMap<String, String>, id: &str, path: &str) -> &'a str {
+    overlay
+        .get(path)
+        .unwrap_or_else(|| panic!("{id}: fixture lost {path}"))
+}
+
+/// TSK-014 W2 recovery, obligations 1-3. Adaptation is about the governing
+/// idea, not the fact inventory, and comprehension evidence is void when the
+/// candidate renders its own answer.
+///
+/// Both fixtures must keep their trap intact. A model that only matches
+/// vocabulary would approve the fixture's own recorded verdict, so the fixture
+/// has to keep asserting that verdict while carrying the evidence that refutes
+/// it — otherwise the canary degrades into a keyword probe.
+#[test]
+fn design_adaptation_and_channel_canaries_pin_idea_survival_and_evidence_integrity() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "design-idea-survives-adaptation",
+                &[
+                    "governing_idea_survival_separated_from_information_presence",
+                    "narrow_context_encoding_loss_named",
+                    "alternate_composition_required_for_that_context",
+                    "intermediate_context_evidence_required",
+                ],
+                &[
+                    "information_presence_accepted_as_idea_survival",
+                    "horizontal_scroll_accepted_as_adaptation",
+                    "extremes_only_coverage_treated_as_complete",
+                    "encoding_loss_treated_as_styling_defect",
+                ],
+            ),
+            (
+                "design-comprehension-channels-stay-separate",
+                &[
+                    "rendered_answer_prose_identified_in_candidate",
+                    "comprehension_and_differential_results_declared_void",
+                    "hidden_machine_channel_recognized_as_correct_separation",
+                    "rerun_required_before_any_result_is_cited",
+                ],
+                &[
+                    "result_discounted_instead_of_voided",
+                    "fast_correct_answer_treated_as_comprehension_evidence",
+                    "hidden_verification_channel_reported_as_the_defect",
+                    "baseline_differential_accepted_while_both_state_the_answer",
+                ],
+            ),
+        ],
+    );
+
+    // The adaptation fixture must state a governing idea that depends on
+    // simultaneous visibility, then claim a pass on information grounds while
+    // showing that only one lane fits and that nothing between the extremes was
+    // rendered. Remove any one of those and the case is answerable by keyword.
+    let adaptation = fixture_overlay("design-viewport-idea-survival");
+    let intent = overlay_file(&adaptation, "adaptation", "DESIGN_INTENT.md");
+    let normalized_intent = normalized(intent);
+    assert!(
+        normalized_intent.contains(&normalized("the empty cells are the finding"))
+            && normalized_intent.contains("see at once"),
+        "adaptation fixture lost the simultaneity-dependent governing idea"
+    );
+    let responsive = overlay_file(&adaptation, "adaptation", "evidence/responsive-note.md");
+    for trap in [
+        "one lane fits",
+        "horizontal",
+        "no information is lost",
+        "adaptation passes",
+    ] {
+        assert!(
+            responsive.contains(trap),
+            "adaptation fixture lost its trap: {trap}"
+        );
+    }
+    let widths = overlay_file(&adaptation, "adaptation", "evidence/widths-tested.txt");
+    assert!(
+        widths.contains("nothing between the two was rendered"),
+        "adaptation fixture lost the missing intermediate context"
+    );
+
+    // The channel fixture must keep the correct hidden channel and the
+    // disqualifying visible prose in the same candidate, and the baseline must
+    // carry the same answer sentence. Otherwise "declare it void" is guessable
+    // without distinguishing the two channels.
+    let channels = fixture_overlay("design-comprehension-channel-separation");
+    let candidate = overlay_file(&channels, "channels", "candidate-a/render-notes.md");
+    assert!(
+        candidate.contains("hidden document data attribute")
+            && candidate.contains("Nothing about that\nattribute is visible to a reader"),
+        "channel fixture lost the correctly separated machine channel"
+    );
+    assert!(
+        candidate.contains("3 of 7 findings needed more than one round"),
+        "channel fixture lost the rendered answer prose"
+    );
+    let baseline = overlay_file(&channels, "channels", "baselines/plain.md");
+    assert!(
+        baseline.contains("3 of 7 findings needed more than one round"),
+        "channel fixture lost the baseline stating the same answer"
+    );
+    let log = overlay_file(&channels, "channels", "observation-log.md");
+    assert!(
+        log.contains("Baseline differential: recorded as a pass") && log.contains("promote"),
+        "channel fixture lost the result the canary must void"
+    );
+}
+
+/// TSK-014 W2 recovery, obligations 4-6. The comparison is qualified and its
+/// carrier is named before authoring is paid for.
+#[test]
+fn design_comparison_qualification_and_carrier_canaries_pin_pre_authoring_work() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "design-comparison-qualified-before-authoring",
+                &[
+                    "question_checked_against_actual_surface_job",
+                    "question_already_answered_optimally_by_plain_baseline_flagged",
+                    "identical_declared_unit_and_axis_identified_as_one_candidate",
+                    "qualification_completed_before_authoring",
+                ],
+                &[
+                    "visual_treatment_accepted_as_structural_distinctness",
+                    "unfit_question_result_reinterpreted_after_observation",
+                    "distinctness_deferred_to_post_render_observation",
+                    "orientation_job_settled_by_a_lookup_question",
+                ],
+            ),
+            (
+                "design-carrier-feasibility-precedes-authoring",
+                &[
+                    "carrier_named_against_the_real_contract",
+                    "reserved_empty_space_identified_as_unrepresentable",
+                    "expressible_distinguished_from_faithful",
+                    "loss_settled_before_high_fidelity_authoring",
+                ],
+                &[
+                    "expressible_today_accepted_as_no_material_loss",
+                    "empty_cell_treated_as_reserved_space",
+                    "carrier_gap_deferred_until_after_selection",
+                    "encoding_silently_degraded_at_ship",
+                ],
+            ),
+        ],
+    );
+
+    // Both candidates must declare the SAME primary unit and axis while looking
+    // different, so distinctness cannot be settled by reading the styling line.
+    let qualification = fixture_overlay("design-comparison-qualification");
+    let one = overlay_file(&qualification, "qualification", "candidates/one.md");
+    let two = overlay_file(&qualification, "qualification", "candidates/two.md");
+    for shared in [
+        "Primary unit: the claim.",
+        "Primary axis: vertical reading order.",
+        "Encoded relationship: each claim followed by its supporting detail.",
+    ] {
+        assert!(
+            one.contains(shared) && two.contains(shared),
+            "qualification fixture lost the shared declaration: {shared}"
+        );
+    }
+    let one_style = one
+        .lines()
+        .find(|line| line.starts_with("Visual treatment:"))
+        .expect("candidate one styling");
+    let two_style = two
+        .lines()
+        .find(|line| line.starts_with("Visual treatment:"))
+        .expect("candidate two styling");
+    assert_ne!(
+        one_style, two_style,
+        "qualification fixture needs siblings that differ only in appearance"
+    );
+    let question = overlay_file(&qualification, "qualification", "QUESTION.md");
+    assert!(
+        question.contains("orient them") && question.contains("numbered list"),
+        "qualification fixture lost the job/question mismatch"
+    );
+
+    // The carrier fixture must present a contract that genuinely cannot hold
+    // reserved space, alongside a verdict claiming it can. The loss has to be
+    // derivable from the contract, not just asserted by the note.
+    let carrier = fixture_overlay("design-carrier-feasibility");
+    let encoding = overlay_file(&carrier, "carrier", "chosen-encoding.md");
+    assert!(
+        encoding.contains("reserved blank\nspace is the finding"),
+        "carrier fixture lost the reserved-space encoding"
+    );
+    let contract = overlay_file(&carrier, "carrier", "contract/blocks.json");
+    assert!(
+        contract.contains("\"cells\": \"text only\"") && !contract.contains("reserved"),
+        "carrier fixture contract must be unable to express reserved space"
+    );
+    let note = overlay_file(&carrier, "carrier", "feasibility-note.md");
+    assert!(
+        note.contains("expressible today") && note.contains("proceed to full authoring"),
+        "carrier fixture lost the false-green verdict"
+    );
+    assert!(
+        note.contains("an unbacked claim becomes an ordinary empty cell"),
+        "carrier fixture lost the buried material loss"
+    );
+}
+
+/// TSK-014 W2 recovery, obligation 7, as corrected in cross-lineage review.
+/// Convergence between candidates is a hypothesis, not recurrence evidence. The
+/// canary has to fail a model in both directions: one that builds a system layer
+/// out of speculative convergence, and one that throws the rejected work away
+/// instead of mining it.
+#[test]
+fn design_harvest_canary_pins_convergence_as_hypothesis_not_recurrence() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[(
+            "design-convergence-is-a-hypothesis-not-recurrence",
+            &[
+                "convergence_treated_as_hypothesis_not_recurrence",
+                "mutually_exclusive_candidates_identified_as_never_coexisting",
+                "single_author_study_fails_subject_independence",
+                "reuse_need_checked_against_accepted_product_surfaces",
+                "rejected_candidates_still_mined_for_the_primitive",
+                "local_implementation_preferred_until_recurrence_is_real",
+            ],
+            &[
+                "system_layer_built_from_candidate_convergence_alone",
+                "speculative_convergence_outweighing_shipped_recurrence",
+                "stop_where_evidence_stops_rule_weakened",
+                "four_subject_forms_flattened_into_one_generic_component",
+                "rejected_work_discarded_without_mining",
+            ],
+        )],
+    );
+
+    let harvest = fixture_overlay("design-primitive-harvest");
+
+    // Several genuinely different absence encodings, most of them rejected, so
+    // there is a real primitive worth mining and real subject-specific forms to
+    // lose by flattening.
+    let rejected = harvest
+        .keys()
+        .filter(|path| path.starts_with("candidates/rejected-"))
+        .count();
+    assert!(
+        rejected >= 3,
+        "harvest fixture needs at least three rejected candidates, found {rejected}"
+    );
+    for (path, distinct_form) in [
+        ("candidates/selected-evidence-rail.md", "open dotted track"),
+        (
+            "candidates/rejected-contract-map.md",
+            "hatched, struck-through column",
+        ),
+        (
+            "candidates/rejected-convergence-ledger.md",
+            "off-axis column behind a dashed boundary",
+        ),
+        (
+            "candidates/rejected-record-margin.md",
+            "reserved empty\nmargin space",
+        ),
+    ] {
+        assert!(
+            overlay_file(&harvest, "harvest", path).contains(distinct_form),
+            "harvest fixture lost the distinct absence form in {path}"
+        );
+    }
+
+    // Each of the three tests the doctrine requires must be decidable from the
+    // fixture, or the canary would reward reciting them.
+    //
+    // Subject independence: one study, one session.
+    let selected = overlay_file(&harvest, "harvest", "candidates/selected-evidence-rail.md");
+    assert!(
+        selected.contains("same session as the three below"),
+        "harvest fixture lost the single-author signal"
+    );
+    // Coexistence: the candidates are alternatives for one decision.
+    let competing = harvest
+        .iter()
+        .filter(|(path, body)| path.starts_with("candidates/rejected-") && body.contains("same"))
+        .count();
+    assert!(
+        competing >= 3,
+        "harvest fixture must mark the rejected candidates as competing for the same decision"
+    );
+    // Reuse need: exactly one shipped surface, none planned.
+    let shipped = overlay_file(&harvest, "harvest", "product/shipped-surfaces.md");
+    assert!(
+        shipped.contains("one record view")
+            && shipped.contains("No other shipped surface currently needs")
+            && shipped.contains("none is planned this cycle"),
+        "harvest fixture lost the absent reuse need"
+    );
+
+    // The proposal must assert the exact inversion the doctrine now forbids, so
+    // accepting it is a substantive failure rather than a vocabulary slip.
+    let proposal = overlay_file(&harvest, "harvest", "system-proposal.md");
+    assert!(
+        proposal.contains("stronger recurrence evidence than any single surface repeating itself"),
+        "harvest fixture lost the inverted evidence claim the canary must reject"
+    );
+    assert!(
+        proposal.contains("one generic\ndashed box") || proposal.contains("one generic dashed box"),
+        "harvest fixture lost the flattening proposal"
+    );
+}
+
+/// TSK-014 W2 recovery, obligations 8-9. Platform evidence is collected where
+/// the surface runs, and a compound question is not forced into one winner.
+#[test]
+fn design_platform_and_compound_canaries_pin_scope_honesty() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    assert_canary_signals_and_guards(
+        &cases,
+        &[
+            (
+                "design-native-evidence-not-inferred-from-web",
+                &[
+                    "browser_render_rejected_as_native_platform_evidence",
+                    "platform_conventions_named_per_target_platform",
+                    "platform_specific_evidence_method_required",
+                    "unexercised_platforms_recorded_as_unverified",
+                ],
+                &[
+                    "narrow_web_viewport_generalized_to_native",
+                    "convention_description_treated_as_conformance",
+                    "automated_web_scan_treated_as_platform_conformance",
+                    "unverified_platform_reported_as_meeting_the_target",
+                ],
+            ),
+            (
+                "design-compound-question-decomposed",
+                &[
+                    "question_identified_as_compound",
+                    "each_half_attributed_to_the_encoding_that_serves_it",
+                    "optimized_part_and_carrier_of_the_other_named",
+                    "decomposition_or_explicit_optimization_chosen",
+                ],
+                &[
+                    "single_winner_forced_across_both_halves",
+                    "weaker_half_silently_dropped",
+                    "compound_question_treated_as_a_single_question",
+                    "compromise_direction_presented_as_settled",
+                ],
+            ),
+        ],
+    );
+
+    // The platform fixture must offer web-only evidence, an explicit absence of
+    // device runs, and a conclusion asserting conformance on both platforms.
+    let platform = fixture_overlay("design-native-platform-evidence");
+    let preview = overlay_file(&platform, "platform", "evidence/responsive-web-preview.md");
+    assert!(
+        preview.contains("desktop browser") && preview.contains("automated accessibility scan"),
+        "platform fixture lost its browser-only evidence"
+    );
+    let runs = overlay_file(&platform, "platform", "evidence/device-runs.md");
+    assert!(
+        runs.contains("no device or simulator run exists") && runs.contains("Android: no run."),
+        "platform fixture lost the unexercised platforms"
+    );
+    let report = overlay_file(&platform, "platform", "report.md");
+    assert!(
+        report.contains("both platforms meet the accessibility target"),
+        "platform fixture lost the inferred conformance claim"
+    );
+
+    // The compound fixture must show each candidate winning a different half,
+    // and a draft that picks one winner anyway.
+    let compound = fixture_overlay("design-compound-question");
+    let registered = overlay_file(&compound, "compound", "QUESTION.md");
+    assert!(
+        registered.contains("Which platforms") && registered.contains("which claim is blocked"),
+        "compound fixture lost one half of the registered question"
+    );
+    let observation = overlay_file(&compound, "compound", "observation.md");
+    assert!(
+        observation.contains("Neither candidate is strong on both halves"),
+        "compound fixture lost the split strength"
+    );
+    assert!(
+        overlay_file(&compound, "compound", "draft-recommendation.md").contains("single direction"),
+        "compound fixture lost the forced single winner"
+    );
+}
+
+/// The TSK-014 additions must stay conditional, product-owned method. They
+/// carry obligations, not a house style: no fixed breakpoint table, no
+/// mandatory device list, and no conversion of the audit reference into a
+/// checklist.
+#[test]
+fn design_method_additions_stay_conditional_and_free_of_house_style() {
+    let skill = read("assets/base/agents/skills/cf-design/SKILL.md");
+    let composition =
+        read("assets/base/agents/skills/cf-design/references/composition-and-design-system.md");
+    let audit = read("assets/base/agents/skills/cf-design/references/design-choice-audit.md");
+
+    // A fixed breakpoint or device roster would be exactly the house style the
+    // method refuses to create. The fixtures may name concrete widths; the
+    // doctrine may not.
+    for house_style in [
+        "768px",
+        "1024px",
+        "1280px",
+        "375px",
+        "640px",
+        "sm:",
+        "md:",
+        "lg:",
+        "breakpoints:",
+    ] {
+        for (name, body) in [
+            ("SKILL.md", &skill),
+            ("composition reference", &composition),
+            ("audit reference", &audit),
+        ] {
+            assert!(
+                !body.contains(house_style),
+                "{name} regressed into a fixed breakpoint house style: {house_style}"
+            );
+        }
+    }
+
+    // The new obligations must remain scoped by applicability rather than
+    // becoming unconditional ceremony.
+    let normalized_skill = normalized(&skill);
+    for conditional in [
+        "Decide which viewports, input modes, and platforms are applicable",
+        "an evidenced `N/A` is valid where a platform is out of scope",
+        "Where responsive or cross-platform composition is material",
+        "Where the surface adapts, add adaptation",
+    ] {
+        assert!(
+            normalized_skill.contains(&normalized(conditional)),
+            "SKILL lost the conditional scope: {conditional}"
+        );
+    }
+
+    // The void rule has to be stated where the gates are registered and where
+    // they are run; a single mention is a keyword, not a contract.
+    assert!(
+        normalized(&skill).contains(&normalized("void, not merely weak")),
+        "SKILL lost the comprehension-void rule"
+    );
+    assert!(
+        normalized(&audit).contains(&normalized("void, not weak")),
+        "audit reference lost the comprehension-void rule"
+    );
+
+    // Adaptation must be defined against the idea, never against information
+    // presence alone, in both the gate and the working detail.
+    assert!(
+        normalized(&audit).contains(&normalized(
+            "stricter question than whether the information is still present"
+        )),
+        "adaptation gate collapsed into an information-presence check"
+    );
+    assert!(
+        normalized(&composition).contains(&normalized(
+            "A declared alternate composition is a design decision"
+        )),
+        "composition reference lost the declared-alternate rule"
+    );
+
+    // Pre-existing guarantees the additions must not erode.
+    for preserved in [
+        "not a checklist, theme catalog, scoring system, or set of prohibited styles",
+        "Absence from this reference is not evidence",
+    ] {
+        assert!(
+            normalized(&audit).contains(&normalized(preserved)),
+            "audit reference lost {preserved}"
+        );
+    }
+    assert!(
+        normalized(&composition).contains(&normalized(
+            "It supplies working detail, not formats, themes, palettes, component catalogs, or bans."
+        )),
+        "composition reference lost its non-prescriptive framing"
+    );
 }

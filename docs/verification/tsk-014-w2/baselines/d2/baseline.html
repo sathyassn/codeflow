@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D2 baseline — SPC-004 authority and evidence as ordinary Markdown</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 50rem; margin: 0 auto; padding: 2rem 1rem;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid GrayText; padding: .35rem .5rem; text-align: left; font-size: .9rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; word-break: break-all; }
+  blockquote { margin: 1rem 0; padding-left: .9rem; border-left: 3px solid GrayText; font-size: .95rem; }
+  @media (max-width: 640px) { table, thead, tbody, tr, th, td { display: block; } thead { display: none; }
+    tr { margin-bottom: 1rem; } td { border: 0; border-bottom: 1px solid GrayText; }
+    td::before { content: attr(data-label) ": "; font-weight: 700; } }
+</style>
+</head>
+<body>
+<h1>SPC-004 — authority and evidence</h1>
+
+<h2>The record</h2>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Field">id</td><td data-label="Value"><code>SPC-004</code></td></tr>
+    <tr><td data-label="Field">title</td><td data-label="Value">interactive presentation utility contract</td></tr>
+    <tr><td data-label="Field">status</td><td data-label="Value"><code>approved</code></td></tr>
+    <tr><td data-label="Field">created</td><td data-label="Value">2026-07-31</td></tr>
+  </tbody>
+</table>
+<p>Not <code>implemented</code>: its consuming work <code>TSK-011</code> is
+<code>blocked</code> on <code>TSK-006</code> and <code>TSK-014</code>.</p>
+
+<h2>Decisions</h2>
+<table>
+  <thead><tr><th>ADR</th><th>Title</th><th>Date</th><th>Status</th><th>superseded_by</th></tr></thead>
+  <tbody>
+    <tr><td data-label="ADR">ADR-0049</td><td data-label="Title">bounded cf-present runtime and renderer boundary</td><td data-label="Date">2026-08-01</td><td data-label="Status">accepted</td><td data-label="superseded_by"><code>null</code></td></tr>
+    <tr><td data-label="ADR">ADR-0050</td><td data-label="Title">versioned cf-present document and session contract</td><td data-label="Date">2026-08-01</td><td data-label="Status">accepted</td><td data-label="superseded_by"><code>null</code></td></tr>
+    <tr><td data-label="ADR">ADR-0052</td><td data-label="Title">separate cf-present ephemeral runtime from durable state</td><td data-label="Date">2026-08-01</td><td data-label="Status">accepted</td><td data-label="superseded_by"><code>null</code></td></tr>
+  </tbody>
+</table>
+<p>ADR-0052 is the one that governs the record now, partially:</p>
+<blockquote>ADR-0049 and ADR-0050 remain historical decisions; this ADR supersedes only
+their same-tree runtime assumption and post-create Windows DACL mechanism where
+those details conflict.</blockquote>
+<p>and</p>
+<blockquote>This decision changes no product outcome, task owner, graph, or integration
+target.</blockquote>
+
+<h2>The central claim</h2>
+<p>SPC-004 § Behavior 3:</p>
+<blockquote>The selected default must be modern, elegant, aesthetically coherent, pleasing,
+functional, responsive, and suited to focused explanation/review rather than
+resembling a generic model artifact or dashboard template.</blockquote>
+<p>Evidence: <b>none current.</b> The operator's real <code>cf-present</code> trial
+invalidated the prior design acceptance (<code>TSK-014</code> closeout), and the
+replacement rendered board's gates G1–G8 are not run
+(<code>observer-state.md</code>).</p>
+
+<h2>What evidence does exist</h2>
+<table>
+  <thead><tr><th>Claim area</th><th>Evidence</th><th>Bound</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Claim area">nine strict test targets</td><td data-label="Evidence"><code>codeflow test --mode full --strict</code>, macOS arm64, at <code>82671551</code></td><td data-label="Bound">macOS arm64 only</td></tr>
+    <tr><td data-label="Claim area">native Linux support</td><td data-label="Evidence">headless Ubuntu 24.04 arm64 guest at revision <code>74feaf04</code></td><td data-label="Bound">older than the exact candidate; retained as bounded diagnostic, not promoted</td></tr>
+    <tr><td data-label="Claim area">Windows profile safety</td><td data-label="Evidence">deterministic confinement guard</td><td data-label="Bound">start-time confinement only, not account/profile/VM teardown</td></tr>
+    <tr><td data-label="Claim area">native Windows / WSL2 run</td><td data-label="Evidence">none</td><td data-label="Bound">Parallels licence expired</td></tr>
+    <tr><td data-label="Claim area">cross-lineage review</td><td data-label="Evidence">two GPT-5.6 Sol/high reviews, no material findings</td><td data-label="Bound">at <code>82671551</code></td></tr>
+    <tr><td data-label="Claim area">Claude judgment verdict</td><td data-label="Evidence">absent</td><td data-label="Bound">accepted turn ended <code>oauth_org_not_allowed</code></td></tr>
+  </tbody>
+</table>
+</body>
+</html>

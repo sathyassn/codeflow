@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en" data-prototype="evidence-notebook">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CodeFlow evidence notebook prototype</title>
+  <script src="../shared/theme-init.js"></script>
+  <link rel="stylesheet" href="../shared/base.css">
+  <link rel="stylesheet" href="./style.css?v=2">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="masthead">
+    <div class="masthead-top">
+      <button type="button" class="nav-toggle icon-button" data-navigation-toggle aria-label="Open navigation" aria-expanded="false">Index</button>
+      <a class="wordmark" href="#opening"><span>CodeFlow</span><small>Field guide / 2.1.0</small></a>
+      <p class="edition">Repository guide<br>August 2026 edition</p>
+      <div class="mast-actions"><button type="button" data-open-search>Search the guide <kbd>⌘K</kbd></button><button type="button" class="icon-button theme-toggle" data-theme-toggle aria-label="Use dark mode"><span aria-hidden="true">A</span></button></div>
+    </div>
+    <nav class="chapter-nav" data-site-navigation aria-label="Guide chapters">
+      <a href="#opening">01 / Orientation</a><a href="#journey">02 / Work journey</a><a href="#anatomy">03 / Repository anatomy</a><a href="#proof">04 / Verification</a><a href="#reference">05 / Reference</a>
+    </nav>
+  </header>
+
+  <main id="content">
+    <article class="opening" id="opening" data-search-item data-search-title="Orientation" data-search-context="Concept · docs/product.md">
+      <header>
+        <div class="folio">01</div>
+        <div><p class="kicker">Orientation</p><h1>A repository can remember why it changed.</h1><p class="deck">CodeFlow gives agentic development a durable record and a small set of hard boundaries—without turning the repository into an orchestration platform.</p></div>
+      </header>
+      <div class="opening-grid">
+        <div class="thesis">
+          <p>Agents keep their native tools and judgment. The repository carries the product intent, accepted work, architecture decisions, policy, and evidence needed to review the result.</p>
+          <blockquote>Flexible execution in the middle. Explicit inputs and verifiable outputs at the edges.</blockquote>
+          <a class="source-link" href="/docs/product.md">Product purpose and scope</a>
+        </div>
+        <figure class="boundary-figure">
+          <figcaption>Responsibility boundary</figcaption>
+          <svg viewBox="0 0 640 420" role="img" aria-label="Inputs and outputs are durable while agent execution remains adaptable">
+            <path class="thread" d="M95 210H545"/>
+            <g transform="translate(25 135)"><circle cx="95" cy="75" r="72"/><text x="95" y="65">Intent</text><text class="small" x="95" y="90">durable input</text></g>
+            <g class="middle" transform="translate(230 60)"><rect width="180" height="300" rx="90"/><text x="90" y="137">Native agent</text><text x="90" y="164">execution</text><text class="small" x="90" y="198">adaptable middle</text></g>
+            <g transform="translate(455 135)"><circle cx="70" cy="75" r="72"/><text x="70" y="65">Evidence</text><text class="small" x="70" y="90">verified output</text></g>
+          </svg>
+        </figure>
+      </div>
+    </article>
+
+    <article class="journey" id="journey" data-search-item data-search-title="Work journey" data-search-context="Workflow · AGENTS.md">
+      <header class="article-head"><div class="folio">02</div><div><p class="kicker">Work journey</p><h2>Follow one change from question to merge.</h2></div><a class="source-link" href="/AGENTS.md">Agent operating contract</a></header>
+      <div class="journey-layout">
+        <ol class="journey-track">
+          <li><span>Discuss</span><strong>Clarify the outcome</strong><p>Ask only when intent, authority, risk, or an irreversible tradeoff is genuinely unresolved.</p></li>
+          <li><span>Plan</span><strong>Materialize durable work</strong><p>An epic owns a coherent outcome; a spec pins behavior when needed; tasks carry acceptance and dependencies.</p></li>
+          <li><span>Build</span><strong>Work in an isolated branch</strong><p>The producer implements the smallest coherent solution and first-verifies the changed unit.</p></li>
+          <li><span>Review</span><strong>Challenge across lineages</strong><p>The other model family reviews the unit; the qualified Claude judgment primary settles integrated quality.</p></li>
+          <li><span>Land</span><strong>Merge through evidence</strong><p>Deterministic gates and human review form the authoritative perimeter.</p></li>
+        </ol>
+        <aside class="journey-aside">
+          <p class="aside-title">The workgraph prevents hidden order</p>
+          <pre><code>TSK-005
+  ├─ TSK-006 → TSK-011 → TSK-007 ─┐
+  └─ TSK-008 → TSK-009 ────────────┤
+                                    ▼
+                                  TSK-010</code></pre>
+          <p>Independent branches may move together. Dependent work starts from the updated integration branch after its predecessor lands.</p>
+          <a href="/project-management/epics/EPC-005.md">Read EPC-005</a>
+        </aside>
+      </div>
+    </article>
+
+    <article class="anatomy" id="anatomy" data-search-item data-search-title="Repository anatomy" data-search-context="Architecture · docs/architecture.md">
+      <header class="article-head"><div class="folio">03</div><div><p class="kicker">Repository anatomy</p><h2>Read from purpose to code, not code to purpose.</h2></div><a class="source-link" href="/docs/architecture.md">Architecture source</a></header>
+      <div class="anatomy-map">
+        <div class="tree">
+          <div class="tree-root"><span>codeflow/</span><small>repository</small></div>
+          <div class="tree-line"></div>
+          <div class="tree-branch"><a href="/docs/product.md"><strong>docs/product.md</strong><span>Why does it exist?</span></a><a href="/docs/capabilities.md"><strong>docs/capabilities.md</strong><span>What does it do?</span></a><a href="/docs/architecture.md"><strong>docs/architecture.md</strong><span>How is it shaped?</span></a><a href="/project-management/"><strong>project-management/</strong><span>What changes next?</span></a><a href="/crates/"><strong>crates/</strong><span>How is it implemented?</span></a></div>
+        </div>
+        <div class="module-notes">
+          <p class="note-number">Module note 3.1</p>
+          <h3>Two crates, one deterministic core</h3>
+          <p><code>codeflow-core</code> owns policy, records, scaffold behavior, guards, and delegation state. <code>codeflow-cli</code> exposes those operations without duplicating their rules.</p>
+          <div class="module-flow"><span>CLI command</span><i></i><span>core operation</span><i></i><span>evidence or change</span></div>
+          <details><summary>Inspect a concrete path</summary><p><code>codeflow delegate wait</code> enters the CLI command surface, invokes the delegate state machine, and reads a write-once terminal record. Ambiguous correlation poisons the run instead of guessing.</p><div class="source-notes"><a href="/docs/decisions/ADR-0036-transport-neutral-delegate-lifecycle.md">ADR-0036</a><a href="/crates/codeflow-core/src/delegate.rs">delegate.rs</a></div></details>
+        </div>
+      </div>
+    </article>
+
+    <article class="proof" id="proof" data-search-item data-search-title="Layered verification" data-search-context="Verification · ADR-0042">
+      <header class="article-head"><div class="folio">04</div><div><p class="kicker">Verification</p><h2>Repeatable checks and contextual judgment answer different questions.</h2></div><a class="source-link" href="/docs/decisions/ADR-0042-layered-code-verification.md">ADR-0042</a></header>
+      <div class="verification-balance">
+        <section class="algorithmic">
+          <p class="column-label">Algorithmic verification</p><h3>Known rules, run the same way</h3>
+          <ul><li><span>Syntax and style</span><b>formatter · linter</b></li><li><span>Dependency risk</span><b>SCA · audit</b></li><li><span>Data and control flow</span><b>static analysis</b></li><li><span>Secrets</span><b>fail-closed scan</b></li></ul>
+        </section>
+        <div class="plus" aria-hidden="true">+</div>
+        <section class="agentic">
+          <p class="column-label">Agentic verification</p><h3>Meaning, context, and anomaly</h3>
+          <ul><li><span>Intent</span><b>requirement fit</b></li><li><span>Business logic</span><b>deep semantics</b></li><li><span>Performance and state</span><b>system behavior</b></li><li><span>Emergent anomalies</span><b>independent review</b></li></ul>
+        </section>
+      </div>
+      <p class="proof-note">A deterministic failure blocks regardless of model agreement. A green test suite does not by itself approve architecture, code quality, security, or user experience.</p>
+    </article>
+
+    <article class="reference" id="reference" data-search-item data-search-title="Command reference" data-search-context="Reference · AGENTS.md">
+      <header class="article-head"><div class="folio">05</div><div><p class="kicker">Reference</p><h2>Commands by intent</h2></div></header>
+      <table class="reference-table">
+        <caption>CodeFlow commands by intent</caption>
+        <thead><tr class="table-row table-head"><th scope="col">Intent</th><th scope="col">Command</th><th scope="col">Outcome</th></tr></thead>
+        <tbody>
+          <tr class="table-row"><td>Orient</td><td><code>codeflow orient</code></td><td>Repository and session digest</td></tr>
+          <tr class="table-row"><td>Plan</td><td><code>codeflow task new</code></td><td>Stable work record</td></tr>
+          <tr class="table-row"><td>Start</td><td><code>codeflow work start TSK-NNN</code></td><td>Anchored implementation proof</td></tr>
+          <tr class="table-row"><td>Verify</td><td><code>codeflow validate --docs</code></td><td>Workgraph and link validation</td></tr>
+          <tr class="table-row"><td>Recall</td><td><code>codeflow recall "query"</code></td><td>Evidence-backed search</td></tr>
+        </tbody>
+      </table>
+      <footer class="reference-footer"><p>Every page in this prototype points to repository truth. Explanatory copy is a view, never a new authority.</p><span>Prototype evidence · TSK-008</span></footer>
+    </article>
+  </main>
+
+  <dialog class="search-dialog" data-search-dialog aria-label="Search the evidence notebook">
+    <form class="search-head" role="search" data-search-form>
+      <label class="visually-hidden" for="notebook-search">Search chapters and source trails</label>
+      <input id="notebook-search" type="search" placeholder="Search chapters and source trails" aria-controls="notebook-results" autocomplete="off">
+      <button type="submit" class="icon-button search-submit">Go</button>
+      <button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button>
+    </form>
+    <p class="search-status visually-hidden" data-search-status aria-live="polite"></p>
+    <section id="notebook-results" class="search-results" data-search-results aria-label="Search results"></section>
+  </dialog>
+  <script type="module" src="../shared/prototype.js"></script>
+</body>
+</html>

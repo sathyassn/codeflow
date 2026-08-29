@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPC-004 — how far each decision reaches</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #15181d;      --ink-2: #464e59;   --ink-3: #58606c;
+    --page: #fbfbfc;     --panel: #ffffff;   --rule: #dcdfe5;
+    --spine: #cfd5dd;    --spine-lit: #1d3a52;
+    --gov: #1d3a52;      --mech: #7a3b12;    --proc: #5a3f86;
+    --none: #aab1bb;
+    --ok: #1f4d3d;       --bnd: #6a5116;     --gap: #7b1f4b;
+    --shadow: 0 1px 2px rgba(21, 24, 29, .05), 0 12px 30px -20px rgba(21, 24, 29, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef0f4;     --ink-2: #b0b8c4;  --ink-3: #8a939f;
+      --page: #0d1014;    --panel: #15181e;  --rule: #282e37;
+      --spine: #333b45;   --spine-lit: #a7c9e2;
+      --gov: #a7c9e2;     --mech: #f0ac6e;   --proc: #c1a6e6;
+      --none: #5c646f;
+      --ok: #7fd3ae;      --bnd: #e5c37c;    --gap: #f0a6c1;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 30px -20px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 44px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 32px; line-height: 1.16; letter-spacing: -.018em; margin: 0 0 6px; font-weight: 640; }
+  .sub { margin: 0 0 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         font-size: 13px; color: var(--ink-3); }
+  .lede { margin: 0 0 34px; max-width: 64ch; color: var(--ink-2); font-size: 17px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 20px 24px 18px; box-shadow: var(--shadow); }
+  svg { display: block; width: 100%; height: auto; }
+  .sec-label { font-size: 12px; fill: var(--ink-2); }
+  .sec-label.claim { font-weight: 660; fill: var(--ink); }
+  .sec-tick { stroke: var(--spine); stroke-width: 1; }
+  .record-bar { fill: var(--spine); }
+  .record-bar.lit { fill: var(--spine-lit); }
+  .dec-head { font-size: 11.5px; font-weight: 680;
+              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .dec-sub { font-size: 10px; fill: var(--ink-3); }
+  .reach-gov { stroke: var(--gov); stroke-width: 8; stroke-linecap: butt; }
+  .reach-mech { stroke: var(--mech); stroke-width: 8; stroke-dasharray: 3 4; stroke-linecap: butt; }
+  .reach-proc { stroke: var(--proc); stroke-width: 8; stroke-dasharray: 1 5; stroke-linecap: round; }
+  .reach-skip { stroke: var(--none); stroke-width: 1.25; stroke-dasharray: 2 5; }
+  .reach-cap { stroke-width: 2; }
+  .cap-gov { stroke: var(--gov); } .cap-mech { stroke: var(--mech); } .cap-proc { stroke: var(--proc); }
+  .ev { stroke-width: 2.5; fill: none; }
+  .ev.ok { stroke: var(--ok); } .ev.bnd { stroke: var(--bnd); stroke-dasharray: 3 2.5; }
+  .ev.gap { stroke: var(--gap); }
+  .ev-fill { fill: var(--ok); }
+  .untouched { font-size: 10px; fill: var(--ink-3); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 11px 24px; margin: 22px 2px 0; font-size: 13px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 34px; height: 16px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  blockquote { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  .src { margin: 24px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .band-wide, .band-narrow { display: none; }
+  .band-wide { display: block; }
+  @media (max-width: 1080px) { body { padding: 34px 26px 56px; } h1 { font-size: 27px; } }
+  @media (max-width: 680px) {
+    body { padding: 24px 14px 48px; }
+    h1 { font-size: 22px; }
+    figure { padding: 14px 10px 12px; border-radius: 11px; }
+    .band-wide { display: none; } .band-narrow { display: block; }
+    .legend { gap: 9px 16px; font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Record · specification</p>
+  <h1>How far each decision reaches</h1>
+  <p class="sub">project-management/specs/SPC-004.md · status approved</p>
+  <p class="lede">Four accepted decisions are attached to this record. None of them covers it. Each one
+    is drawn against <b>the record's own sections</b>, at exactly the places it lands — so a decision
+    that reaches one mechanism inside one behaviour is a mark that size, and the sections nothing is
+    recorded against stay visible as themselves.</p>
+
+  <figure>
+    <div class="band-wide" id="wide"></div>
+    <div class="band-narrow" id="narrow"></div>
+    <div class="legend" id="legend"></div>
+  </figure>
+
+  <details>
+    <summary>Every link, in the records' own words</summary>
+    <table id="facts">
+      <thead><tr><th>Section</th><th>Decision</th><th>Reach</th><th>What it says</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/record-authority.js</code>. Every frontmatter value is checked
+    against the real record files and every quotation verbatim against its source.</p>
+</div>
+
+<script src="../../../shared/record-authority.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const A = window.recordAuthority;
+  const claimById = new Map(A.claims.map((c) => [c.id, c]));
+  const decisions = A.records.filter((r) => r.kind === "decision" && A.reachOf(r.id).length)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const relClass = { governs: "gov", "supersedes-mechanism": "mech", process: "proc" };
+  const relWord = { governs: "governs it", "supersedes-mechanism": "replaces one named mechanism", process: "governs the process" };
+  const evClass = { executed: "ok", bounded: "bnd", absent: "gap" };
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svg = (w, h, title, desc) => {
+    const root = n("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+    const tid = `t${++svg.seq}`, did = `d${svg.seq}`;
+    root.setAttribute("aria-labelledby", `${tid} ${did}`);
+    root.append(n("title", { id: tid }, title), n("desc", { id: did }, desc));
+    return root;
+  };
+  svg.seq = 0;
+  const TITLE = "Four decisions measured against the sections of SPC-004";
+  const DESC = "The record's sections run down the page in their real order. Each decision has its own "
+    + "column, and within that column a bar is drawn only beside the sections it actually lands on: "
+    + "solid where it governs, broken where it replaces one named mechanism inside a section, and "
+    + "sparse where it governs the process rather than the content. Where a decision's marks are not "
+    + "adjacent, the space between them is drawn as a thin skipped run, so a decision that reaches the "
+    + "record in pieces looks like pieces. Beside each section that carries a claim is a mark for that "
+    + "claim's evidence: a filled ring where a run exists, a broken ring where evidence exists but was "
+    + "not promoted, and an open ring where there is none.";
+
+  function evidenceMark(g, claim, x, y) {
+    const state = claim.evidence.state;
+    g.append(n("circle", { class: `ev ${evClass[state]}`, cx: x, cy: y, r: 6.5 }));
+    if (state === "executed") g.append(n("circle", { class: "ev-fill", cx: x, cy: y, r: 3 }));
+  }
+
+  function wide() {
+    const W = 1120, rowH = 34, labelW = 300, H0 = 96;
+    const colW = (W - labelW - 68) / decisions.length;
+    const H = H0 + A.sections.length * rowH + 26;
+    const s = svg(W, H, TITLE, DESC);
+    const rowY = (i) => H0 + i * rowH + rowH / 2;
+    const colX = (i) => labelW + 34 + i * colW;
+
+    // The record itself, as one continuous extent the decisions are measured on.
+    const spine = n("g");
+    s.append(spine);
+    spine.append(n("rect", { class: "record-bar", x: labelW + 8, y: H0 + 6, width: 7,
+      height: A.sections.length * rowH - 12, rx: 3.5 }));
+    spine.append(n("text", { class: "dec-sub", x: 2, y: H0 - 44 }, "the record, section by section"));
+
+    A.sections.forEach((section, i) => {
+      const y = rowY(i);
+      const claimId = Object.entries(A.sectionOfClaim).find(([, sec]) => sec === section.id)?.[0];
+      spine.append(n("text", { class: `sec-label${claimId ? " claim" : ""}`, x: 2, y: y + 4 },
+        claimId ? `${section.label} — ${claimId}` : section.label));
+      spine.append(n("line", { class: "sec-tick", x1: 2, y1: y + 15, x2: labelW - 6, y2: y + 15 }));
+      if (claimId) evidenceMark(spine, claimById.get(claimId), labelW - 22, y);
+    });
+
+    decisions.forEach((decision, d) => {
+      const g = n("g");
+      s.append(g);
+      const x = colX(d);
+      // The head names the decision and nothing else. How much of the record it
+      // reaches is the drawing's job, and a count here would do that job in a
+      // sentence instead.
+      g.append(n("text", { class: "dec-head", x, y: H0 - 44, "text-anchor": "middle",
+        fill: `var(--${relClass[A.reachOf(decision.id)[0].relation]})` }, decision.id));
+      g.append(n("text", { class: "dec-sub", x, y: H0 - 30, "text-anchor": "middle" },
+        decision.frontmatter.status));
+
+      const hits = A.reachOf(decision.id);
+      const first = hits[0].row, last = hits[hits.length - 1].row;
+      if (last > first) {
+        g.append(n("line", { class: "reach-skip", x1: x, y1: rowY(first), x2: x, y2: rowY(last) }));
+      }
+      for (const hit of hits) {
+        const y = rowY(hit.row);
+        g.append(n("line", { class: `reach-${relClass[hit.relation]}`,
+          x1: x, y1: y - rowH / 2 + 5, x2: x, y2: y + rowH / 2 - 5 }));
+        g.append(n("line", { class: `reach-cap cap-${relClass[hit.relation]}`,
+          x1: x - 9, y1: y - rowH / 2 + 5, x2: x + 9, y2: y - rowH / 2 + 5 }));
+        g.append(n("line", { class: `reach-cap cap-${relClass[hit.relation]}`,
+          x1: x - 9, y1: y + rowH / 2 - 5, x2: x + 9, y2: y + rowH / 2 - 5 }));
+      }
+    });
+
+    s.append(n("text", { class: "untouched", x: 2, y: H - 8 },
+      "a section with no mark beside it carries no recorded decision link on this page"));
+    return s;
+  }
+
+  // -------------------------------------------------------------- narrow
+  // The spans rotate. Each decision keeps its measured extent as width against
+  // the same full-record scale, so one that reaches two sections of sixteen is
+  // still visibly a fragment and never collapses into a link.
+  function narrow() {
+    const W = 358, rowH = 62, H0 = 46, scaleX = 8, scaleW = W - 16;
+    const H = H0 + decisions.length * rowH + 96;
+    const s = svg(W, H, TITLE, DESC);
+    const step = scaleW / A.sections.length;
+
+    s.append(n("text", { class: "dec-sub", x: scaleX, y: 16 }, "the whole record, left to right"));
+    s.append(n("rect", { class: "record-bar", x: scaleX, y: 24, width: scaleW, height: 7, rx: 3.5 }));
+    A.sections.forEach((section, i) => {
+      s.append(n("line", { class: "sec-tick", x1: scaleX + i * step, y1: 22, x2: scaleX + i * step, y2: 34 }));
+    });
+
+    decisions.forEach((decision, d) => {
+      const g = n("g");
+      s.append(g);
+      const y = H0 + d * rowH + 22;
+      const hits = A.reachOf(decision.id);
+      g.append(n("text", { class: "dec-head", x: scaleX, y: y - 14,
+        fill: `var(--${relClass[hits[0].relation]})` }, decision.id));
+      g.append(n("text", { class: "dec-sub", x: scaleX + 66, y: y - 14 }, decision.frontmatter.status));
+      g.append(n("line", { class: "reach-skip", x1: scaleX, y1: y, x2: scaleX + scaleW, y2: y }));
+      for (const hit of hits) {
+        const x = scaleX + hit.row * step;
+        g.append(n("line", { class: `reach-${relClass[hit.relation]}`, x1: x + 1, y1: y, x2: x + step - 1, y2: y }));
+        g.append(n("line", { class: `reach-cap cap-${relClass[hit.relation]}`, x1: x + 1, y1: y - 8, x2: x + 1, y2: y + 8 }));
+        g.append(n("line", { class: `reach-cap cap-${relClass[hit.relation]}`, x1: x + step - 1, y1: y - 8, x2: x + step - 1, y2: y + 8 }));
+        g.append(n("text", { class: "dec-sub", x: x + step / 2, y: y + 20, "text-anchor": "middle",
+          style: "font-size:9px" }, hit.claim));
+      }
+    });
+
+    const base = H0 + decisions.length * rowH + 12;
+    s.append(n("text", { class: "dec-sub", x: scaleX, y: base }, "each claim's evidence"));
+    A.claims.forEach((claim, i) => {
+      const x = scaleX + 10 + i * 68, y = base + 26;
+      evidenceMark(s, claim, x, y);
+      s.append(n("text", { class: "dec-sub", x: x + 12, y: y + 4, style: "font-size:10px" }, claim.id));
+    });
+    return s;
+  }
+
+  document.getElementById("wide").append(wide());
+  document.getElementById("narrow").append(narrow());
+
+  const legendMarks = [
+    ["governs that section", '<line x1="17" y1="1" x2="17" y2="15" class="reach-gov"/>'],
+    ["replaces one named mechanism in it", '<line x1="17" y1="1" x2="17" y2="15" class="reach-mech"/>'],
+    ["governs the process, not the content", '<line x1="17" y1="1" x2="17" y2="15" class="reach-proc"/>'],
+    ["sections it passes over", '<line x1="17" y1="0" x2="17" y2="16" class="reach-skip"/>'],
+    ["evidence exists", '<circle cx="17" cy="8" r="6" class="ev ok"/><circle cx="17" cy="8" r="2.6" class="ev-fill"/>'],
+    ["exists, not promoted", '<circle cx="17" cy="8" r="6" class="ev bnd"/>'],
+    ["none", '<circle cx="17" cy="8" r="6" class="ev gap"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 34 16" aria-hidden="true">${marks}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const claim of A.claims) {
+    for (const link of claim.authority) {
+      const tr = document.createElement("tr");
+      const section = A.sections.find((s2) => s2.id === A.sectionOfClaim[claim.id]);
+      for (const value of [`${section.label} — ${claim.id}`, link.record, relWord[link.relation]]) {
+        const td = document.createElement("td");
+        td.innerHTML = "<code></code>";
+        td.querySelector("code").textContent = value;
+        tr.append(td);
+      }
+      const said = document.createElement("td");
+      const bq = document.createElement("blockquote");
+      bq.textContent = `“${(link.scope ?? link.quote).text}”`;
+      said.append(bq);
+      tr.append(said);
+      body.append(tr);
+    }
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(A.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

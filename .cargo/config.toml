@@ -1,7 +1,7 @@
-# Optional host-agnostic cross-build helpers. Install the pinned tools listed in
+# Optional host-agnostic cross-target helpers. Install the pinned tools listed in
 # docs/releasing.md first; native per-OS tests remain the release authority.
 [alias]
-cross-check-windows = "xwin check --workspace --all-targets --target x86_64-pc-windows-msvc"
+cross-check-windows = "xwin clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings"
 cross-build-windows = "xwin build --release -p codeflow-cli --target x86_64-pc-windows-msvc"
 cross-check-linux = "zigbuild --workspace --all-targets --target x86_64-unknown-linux-gnu.2.17"
 cross-build-linux = "zigbuild --release -p codeflow-cli --target x86_64-unknown-linux-gnu.2.17"

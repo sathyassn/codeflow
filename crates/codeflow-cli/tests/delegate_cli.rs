@@ -1,4 +1,5 @@
 //! End-to-end coverage for the schema-v2 delegate lifecycle.
+#![cfg(unix)]
 
 use std::io::Write;
 use std::path::Path;

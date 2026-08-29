@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P1-b — EPC-005 blocking incidence</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #16181d; --dim: #5a6272; --line: #ccd0d8; --page: #fcfcfb; --rule: #e4e7ec;
+    --hot: #8a3a12; --met: #2f6b4d; --muted: #656d7b; --room: #3d5f8f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e9ebf0; --dim: #a3abb9; --line: #3b414d; --page: #131519; --rule: #23272f;
+            --hot: #f0b073; --met: #7ed3a9; --muted: #9aa2b0; --room: #8fb4e8; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 76rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  .lede { margin: 0 0 1.3rem; color: var(--dim); max-width: 48rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .cue { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+    font-size: .74rem; color: var(--ink); border: 1px solid var(--line); border-bottom: 0;
+    padding: .4rem .6rem; background: var(--page); }
+  .cue .shape { color: var(--dim); }
+  .cue .more { font-weight: 650; }
+  .cue[data-overflowing="false"] .more { color: var(--muted); font-weight: 400; }
+
+  .scroller { overflow-x: auto; border: 1px solid var(--line); scroll-snap-type: x proximity; }
+  .scroller:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: .82rem; }
+  th, td { border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    padding: .4rem .5rem; text-align: center; white-space: nowrap; scroll-snap-align: start; }
+  thead th { font-weight: 600; font-size: .72rem; color: var(--dim); vertical-align: bottom; }
+  tbody th { text-align: left; font-weight: 600; }
+  tbody th .st { display: block; font-weight: 400; font-size: .68rem; color: var(--muted); }
+  .stick1 { position: sticky; left: 0; z-index: 3; background: var(--page); text-align: left;
+    border-right: 1px solid var(--line); }
+  .stick2 { position: sticky; left: 7.2rem; z-index: 3; background: var(--page); }
+  .stick3 { position: sticky; left: 12.4rem; z-index: 3; background: var(--page);
+    border-right: 2px solid var(--line); }
+  .self { color: var(--muted); }
+  .none { color: var(--muted); }
+  .waits { color: var(--hot); font-weight: 650; }
+  .met { color: var(--met); }
+  .count { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .count[data-zero="true"] { color: var(--met); }
+  .count[data-zero="false"] { color: var(--hot); }
+  .room { font-size: .74rem; }
+  .room[data-chain="true"] { color: var(--ink); font-weight: 650; }
+  .room[data-chain="false"] { color: var(--room); }
+  tbody tr[data-open="false"] th, tbody tr[data-open="false"] td { color: var(--muted); }
+  tbody tr[data-chain="true"] th.stick1 { box-shadow: inset 4px 0 0 var(--ink); padding-left: .8rem; }
+  tfoot th, tfoot td { font-size: .72rem; color: var(--dim); border-top: 1px solid var(--line); }
+  tfoot td b { color: var(--hot); font-size: .82rem; }
+  caption { text-align: left; padding: .5rem .6rem; font-size: .73rem; color: var(--dim);
+    border-bottom: 1px solid var(--line); }
+
+  .reading { margin-top: 1.4rem; display: grid; gap: .45rem; font-size: .8rem; max-width: 52rem; }
+  .reading div { display: grid; grid-template-columns: 10.5rem 1fr; gap: .6rem; }
+  .reading span:first-child { color: var(--dim); text-transform: uppercase; letter-spacing: .07em;
+    font-size: .68rem; padding-top: .12rem; }
+  .src { margin-top: 1.2rem; font-size: .7rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+  @media (prefers-reduced-motion: no-preference) { .scroller { scroll-behavior: smooth; } }
+  @media (max-width: 760px) {
+    /* Three fixed columns do not fit a 390px viewport, and pinning cannot
+       reorder them — the third would still render off-screen at rest. The
+       outstanding count is dropped instead: the row header already says
+       startable, and the count is still readable from the waits cells. That
+       leaves task and room visible at rest, which is what the question needs. */
+    .stick2 { display: none; }
+    .stick3 { left: 6.2rem; }
+    .reading div { grid-template-columns: 1fr; gap: .1rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>EPC-005 — who is blocked by whom, and what that leaves free</h1>
+  <p class="lede">One cell per real <code>depends_on</code> edge. <strong>Read a row</strong> for what a task still
+    needs and how much room it has; <strong>read a column</strong> for how much of the epic one task is holding.
+    Rows on the longest chain to <code>TSK-010</code> carry a solid left rule.</p>
+
+  <div class="cue" id="cue" data-overflowing="false">
+    <span class="shape" id="shape"></span>
+    <span class="more" id="more"></span>
+  </div>
+  <div class="scroller" id="scroller" tabindex="0" role="region"
+       aria-label="Blocking incidence matrix" aria-describedby="cue">
+    <table id="matrix">
+      <caption>Rows: all ten EPC-005 tasks. Columns: every task that appears in another task's <code>depends_on</code>.</caption>
+    </table>
+  </div>
+
+  <div class="reading">
+    <div><span>waits</span><span>the dependency exists and is <em>not</em> finished — this is what still holds the row back.</span></div>
+    <div><span>met</span><span>the dependency exists and is already <code>complete</code>, so it no longer blocks.</span></div>
+    <div><span>outstanding 0</span><span>nothing unfinished remains in that row: the task is startable today.</span></div>
+    <div><span>room</span><span>waves the task could start later without moving the finish. <em>sets the finish</em> means none — the row is on the longest chain.</span></div>
+  </div>
+  <p class="src">Source: <code>project-management/tasks/TSK-005.md</code> … <code>TSK-014.md</code> frontmatter. Every mark, count, chain membership and room value is computed in this page from <code>depends_on</code> and <code>status</code>.</p>
+</main>
+
+<script type="application/json" id="plan-data">
+{
+  "source": "project-management/tasks/TSK-005.md..TSK-014.md frontmatter",
+  "sink": "TSK-010",
+  "tasks": [
+    {"id":"TSK-005","title":"strengthen editorial and product design contracts","status":"complete","deps":[],"specs":["SPC-003"],"target":"main"},
+    {"id":"TSK-006","title":"research and prototype the presentation experience","status":"complete","deps":["TSK-005"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-007","title":"verify and qualify the presentation utility","status":"blocked","deps":["TSK-011"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-008","title":"research and prototype documentation portals","status":"complete","deps":["TSK-005"],"specs":["SPC-005"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-009","title":"build and qualify the documentation portal utility","status":"blocked","deps":["TSK-008","TSK-014"],"specs":["SPC-005"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-010","title":"integrate and release the CodeFlow system","status":"todo","deps":["TSK-007","TSK-009","TSK-013","TSK-014"],"specs":[],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-011","title":"build the interactive presentation utility","status":"blocked","deps":["TSK-006","TSK-014"],"specs":["SPC-004"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-012","title":"refine design exploration, sourcing, and revision contracts","status":"cancelled","deps":["TSK-005"],"specs":["SPC-006"],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-013","title":"prepare the v3 release candidate","status":"in_progress","deps":[],"specs":[],"target":"integration/EPC-005-presentation-system"},
+    {"id":"TSK-014","title":"recover the design method and utility directions","status":"in_progress","deps":["TSK-005","TSK-006","TSK-008"],"specs":["SPC-004","SPC-005","SPC-006"],"target":"integration/EPC-005-presentation-system"}
+  ]
+}
+</script>
+<script src="../../../shared/plan-model.js"></script>
+<script>
+(() => {
+  const model = window.planModel(JSON.parse(document.getElementById("plan-data").textContent));
+  const { data, byId, done, slack, chain, startable } = model;
+  const blockerIds = data.tasks.map(t => t.id).filter(id => data.tasks.some(t => t.deps.includes(id)));
+
+  const table = document.getElementById("matrix");
+  const thead = document.createElement("thead");
+  thead.innerHTML = `<tr>
+    <th scope="col" class="stick1">task</th>
+    <th scope="col" class="stick2">outstanding</th>
+    <th scope="col" class="stick3">room</th>
+    ${blockerIds.map(id => `<th scope="col">${id.replace("TSK-", "")}</th>`).join("")}</tr>`;
+
+  const tbody = document.createElement("tbody");
+  data.tasks.forEach(t => {
+    const outstanding = t.deps.filter(d => !done(byId.get(d)));
+    const onChain = chain.includes(t.id);
+    const tr = document.createElement("tr");
+    tr.dataset.open = String(!done(t));
+    tr.dataset.chain = String(onChain);
+    const cells = blockerIds.map(id => {
+      if (id === t.id) return `<td class="self" aria-label="same task">·</td>`;
+      if (!t.deps.includes(id)) return `<td class="none" aria-label="no dependency">–</td>`;
+      return done(byId.get(id))
+        ? `<td class="met" aria-label="${t.id} depended on ${id}, already met">met</td>`
+        : `<td class="waits" aria-label="${t.id} is waiting on ${id}">waits</td>`;
+    }).join("");
+    const count = done(t)
+      ? `<td class="stick2"><span class="count">—</span></td>`
+      : `<td class="stick2"><span class="count" data-zero="${outstanding.length === 0}">${outstanding.length}</span></td>`;
+    const roomCell = done(t)
+      ? `<td class="stick3"><span class="room" data-chain="false">—</span></td>`
+      : `<td class="stick3"><span class="room" data-chain="${onChain}">${onChain
+          ? "sets the finish"
+          : `${slack(t.id)} wave${slack(t.id) === 1 ? "" : "s"}`}</span></td>`;
+    tr.innerHTML = `<th scope="row" class="stick1">${t.id}<span class="st">${t.status.replace("_", " ")}` +
+      `${startable.includes(t.id) ? " · startable" : ""}${onChain ? " · longest chain" : ""}</span></th>${count}${roomCell}${cells}`;
+    tbody.append(tr);
+  });
+
+  const tfoot = document.createElement("tfoot");
+  tfoot.innerHTML = `<tr>
+    <th scope="row" class="stick1">still holding up</th><td class="stick2"></td><td class="stick3"></td>
+    ${blockerIds.map(id => {
+      const n = data.tasks.filter(t => !done(t) && t.deps.includes(id) && !done(byId.get(id))).length;
+      return `<td>${n ? `<b>${n}</b>` : "—"}</td>`;
+    }).join("")}</tr>
+    <tr><td colspan="${blockerIds.length + 3}" style="text-align:left">Column total counts unfinished tasks still waiting on that task. The longest chain is ${chain.join(" → ")}.</td></tr>`;
+
+  table.append(thead, tbody, tfoot);
+
+  // Disclose the second dimension at rest: how many columns exist, how many are
+  // currently visible, and that the rest are reachable by scrolling.
+  const scroller = document.getElementById("scroller");
+  const cue = document.getElementById("cue");
+  const shape = document.getElementById("shape");
+  const more = document.getElementById("more");
+  const total = blockerIds.length;
+  const updateCue = () => {
+    const overflowing = scroller.scrollWidth - scroller.clientWidth > 2;
+    cue.dataset.overflowing = String(overflowing);
+    const allHeaders = [...table.querySelectorAll("thead th")];
+    // Only count columns that are actually pinned AND rendered: the outstanding
+    // column is dropped at narrow widths and must not be claimed as fixed.
+    const sticky = allHeaders.filter(h =>
+      getComputedStyle(h).position === "sticky" && h.getBoundingClientRect().width > 0);
+    const stickyWidth = sticky.reduce((sum, h) => sum + h.getBoundingClientRect().width, 0);
+    const headers = allHeaders.slice(3);
+    const bounds = scroller.getBoundingClientRect();
+    const visible = headers.filter(h => {
+      const r = h.getBoundingClientRect();
+      return r.left >= bounds.left + stickyWidth - 1 && r.right <= bounds.right + 1;
+    });
+    const first = visible.length ? headers.indexOf(visible[0]) + 1 : 0;
+    const last = visible.length ? headers.indexOf(visible[visible.length - 1]) + 1 : 0;
+    shape.textContent = `10 rows × ${total} blocking columns · ${sticky.length} identity column${sticky.length === 1 ? "" : "s"} stay fixed`;
+    more.textContent = !overflowing
+      ? `all ${total} columns visible`
+      : visible.length
+        ? `showing columns ${first}–${last} of ${total} — scroll sideways for the rest →`
+        : `no blocking column fits yet — scroll sideways to read the ${total} of them →`;
+  };
+  scroller.addEventListener("scroll", updateCue, { passive: true });
+  addEventListener("resize", updateCue);
+  updateCue();
+
+  document.documentElement.dataset.answer = JSON.stringify(model.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

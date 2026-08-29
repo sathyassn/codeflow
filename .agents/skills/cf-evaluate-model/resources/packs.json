@@ -2,6 +2,54 @@
   "schema_version": 1,
   "packs": [
     {
+      "id": "design-direction",
+      "description": "Focused product, UX, visual-direction, fidelity, accessibility, and rendered-output diagnostics.",
+      "includes": [],
+      "cases": [
+        "design-intent-proportionality",
+        "design-language-follows-product-authority",
+        "design-conformance-keeps-localization-honest",
+        "design-refinement-stays-bounded",
+        "design-sourcing-preserves-authority-and-privacy",
+        "design-revision-retains-reviewed-version",
+        "explicit-direction-precedence",
+        "evidence-grounded-design-choice",
+        "design-fidelity-review",
+        "a11y-conformance-target",
+        "design-direction-rendered",
+        "design-idea-survives-adaptation",
+        "design-comprehension-channels-stay-separate",
+        "design-comparison-qualified-before-authoring",
+        "design-carrier-feasibility-precedes-authoring",
+        "design-convergence-is-a-hypothesis-not-recurrence",
+        "design-native-evidence-not-inferred-from-web",
+        "design-compound-question-decomposed"
+      ]
+    },
+    {
+      "id": "documentation-portal",
+      "description": "Focused diagnostics for proportional adoption, source authority, snapshot provenance, contextual previews, utility isolation, and adopted-portal lifecycle gates.",
+      "includes": [],
+      "cases": [
+        "docs-portal-declines-tiny-repository",
+        "docs-portal-adopts-layered-source-authority",
+        "docs-portal-dirty-snapshot-fails-closed",
+        "docs-portal-boundary-and-ship-routing",
+        "docs-portal-broken-current-source-is-a-bounded-stub",
+        "docs-portal-single-project-information-architecture",
+        "docs-portal-monorepo-global-to-area-drilldown",
+        "docs-portal-refuses-unjustified-split"
+      ]
+    },
+    {
+      "id": "longitudinal-craftsmanship",
+      "description": "Focused diagnostic for structural erosion visible only across a bounded history slice.",
+      "includes": [],
+      "cases": [
+        "longitudinal-craftsmanship-erosion"
+      ]
+    },
+    {
       "id": "orchestration-core",
       "description": "Fast diagnostics for independent planning, assignment, provenance, and graceful degradation.",
       "includes": [],
@@ -20,6 +68,35 @@
         "observed-binding-mismatch-blocks-promotion",
         "new-harness-name-is-not-qualification",
         "project-selection-rejects-seat-collapse"
+      ]
+    },
+    {
+      "id": "presentation-review",
+      "description": "Focused diagnostics for proportional cf-present routing, declarative authoring, utility/product separation, feedback authority, and cleanup.",
+      "includes": [],
+      "cases": [
+        "simple-answer-does-not-open-presentation",
+        "complex-review-uses-declarative-presentation",
+        "presentation-utility-does-not-own-product",
+        "presentation-feedback-resume-preserves-authority",
+        "presentation-orphan-cleanup-preserves-identity-boundary"
+      ]
+    },
+    {
+      "id": "project-organization",
+      "description": "Focused diagnostics for durable work authority, planning clarity, graph integrity, stable anchors, external-method coexistence, and local-cache boundaries.",
+      "includes": [],
+      "cases": [
+        "external-method-keeps-work-authority",
+        "local-database-is-not-team-work-authority",
+        "planning-clarifies-only-operator-owned-choice",
+        "planning-lifecycle-routes-happy-and-exception-paths",
+        "workgraph-rejects-orphan-and-draft-spec",
+        "stable-planning-anchor-is-read-only",
+        "multi-task-epic-defaults-to-one-integration-branch",
+        "single-task-does-not-invent-integration-branch",
+        "graph-mutation-creates-new-version",
+        "in-node-detail-does-not-replan"
       ]
     },
     {
@@ -42,6 +119,9 @@
         "design-intent-proportionality",
         "design-language-follows-product-authority",
         "design-conformance-keeps-localization-honest",
+        "design-refinement-stays-bounded",
+        "design-sourcing-preserves-authority-and-privacy",
+        "design-revision-retains-reviewed-version",
         "explicit-direction-precedence",
         "evidence-grounded-design-choice",
         "design-fidelity-review",
@@ -49,6 +129,19 @@
         "changed-journey-needs-whole-flow-proof",
         "parallel-ui-resources-isolate-and-clean"
       ]
+    },
+    {
+      "id": "release-smoke",
+      "description": "Composable pre-release diagnostic pack; never substitutes for the full promotion suite.",
+      "includes": [
+        "orchestration-core",
+        "quality-core",
+        "safety-governance",
+        "project-organization",
+        "presentation-review",
+        "documentation-portal"
+      ],
+      "cases": []
     },
     {
       "id": "safety-governance",
@@ -62,55 +155,6 @@
         "material-ambiguity-blocks",
         "review-orders-material-over-cosmetic",
         "worktree-closeout-cleans-only-proven-landed"
-      ]
-    },
-    {
-      "id": "release-smoke",
-      "description": "Composable pre-release diagnostic pack; never substitutes for the full promotion suite.",
-      "includes": [
-        "orchestration-core",
-        "quality-core",
-        "safety-governance",
-        "project-organization"
-      ],
-      "cases": []
-    },
-    {
-      "id": "longitudinal-craftsmanship",
-      "description": "Focused diagnostic for structural erosion visible only across a bounded history slice.",
-      "includes": [],
-      "cases": [
-        "longitudinal-craftsmanship-erosion"
-      ]
-    },
-    {
-      "id": "design-direction",
-      "description": "Focused product, UX, visual-direction, fidelity, accessibility, and rendered-output diagnostics.",
-      "includes": [],
-      "cases": [
-        "design-intent-proportionality",
-        "design-language-follows-product-authority",
-        "design-conformance-keeps-localization-honest",
-        "explicit-direction-precedence",
-        "evidence-grounded-design-choice",
-        "design-fidelity-review",
-        "a11y-conformance-target",
-        "design-direction-rendered"
-      ]
-    },
-    {
-      "id": "project-organization",
-      "description": "Focused diagnostics for durable work authority, planning clarity, graph integrity, stable anchors, external-method coexistence, and local-cache boundaries.",
-      "includes": [],
-      "cases": [
-        "external-method-keeps-work-authority",
-        "local-database-is-not-team-work-authority",
-        "planning-clarifies-only-operator-owned-choice",
-        "planning-lifecycle-routes-happy-and-exception-paths",
-        "workgraph-rejects-orphan-and-draft-spec",
-        "stable-planning-anchor-is-read-only",
-        "graph-mutation-creates-new-version",
-        "in-node-detail-does-not-replan"
       ]
     }
   ]

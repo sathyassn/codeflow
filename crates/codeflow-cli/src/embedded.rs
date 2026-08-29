@@ -8,6 +8,7 @@ use codeflow_core::scaffold::AssetSource;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../../assets/"]
+#[exclude = "docs-portal/starter/node_modules/**"]
 struct Raw;
 
 /// [`AssetSource`] over the embedded `assets/` tree.
@@ -66,5 +67,10 @@ mod tests {
         for name in ["../minimal.json", "/minimal.json", "x\\minimal.json"] {
             assert!(read_test_template(name).is_none(), "accepted {name}");
         }
+    }
+
+    #[test]
+    fn embedded_asset_inventory_excludes_portal_dependency_trees() {
+        assert!(Raw::iter().all(|path| !path.starts_with("docs-portal/starter/node_modules/")));
     }
 }

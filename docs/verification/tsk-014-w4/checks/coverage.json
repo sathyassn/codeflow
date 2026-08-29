@@ -1,0 +1,590 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "lang": "en",
+    "title": "Direction A — curated semantic primitives",
+    "h1": "Curated semantic primitives",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "lang": "en",
+    "title": "Direction B — bounded declarative scene grammar",
+    "h1": "Bounded declarative scene grammar",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "lang": "en",
+    "title": "Direction C — project-neutral recipe library",
+    "h1": "Project-neutral recipe library",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-d-authored-svg-light-desktop",
+    "lang": "en",
+    "title": "Direction D — authored SVG under a runtime service contract",
+    "h1": "Authored SVG under a runtime service contract",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-d-authored-svg-light-tablet",
+    "lang": "en",
+    "title": "Direction D — authored SVG under a runtime service contract",
+    "h1": "Authored SVG under a runtime service contract",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-d-authored-svg-light-mobile",
+    "lang": "en",
+    "title": "Direction D — authored SVG under a runtime service contract",
+    "h1": "Authored SVG under a runtime service contract",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-d-authored-svg-dark-desktop",
+    "lang": "en",
+    "title": "Direction D — authored SVG under a runtime service contract",
+    "h1": "Authored SVG under a runtime service contract",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-d-authored-svg-dark-tablet",
+    "lang": "en",
+    "title": "Direction D — authored SVG under a runtime service contract",
+    "h1": "Authored SVG under a runtime service contract",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-d-authored-svg-dark-mobile",
+    "lang": "en",
+    "title": "Direction D — authored SVG under a runtime service contract",
+    "h1": "Authored SVG under a runtime service contract",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-e-raster-light-desktop",
+    "lang": "en",
+    "title": "Direction E — pre-rendered raster through the existing media block",
+    "h1": "Pre-rendered raster through the existing media block",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-e-raster-light-tablet",
+    "lang": "en",
+    "title": "Direction E — pre-rendered raster through the existing media block",
+    "h1": "Pre-rendered raster through the existing media block",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-e-raster-light-mobile",
+    "lang": "en",
+    "title": "Direction E — pre-rendered raster through the existing media block",
+    "h1": "Pre-rendered raster through the existing media block",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-e-raster-dark-desktop",
+    "lang": "en",
+    "title": "Direction E — pre-rendered raster through the existing media block",
+    "h1": "Pre-rendered raster through the existing media block",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-e-raster-dark-tablet",
+    "lang": "en",
+    "title": "Direction E — pre-rendered raster through the existing media block",
+    "h1": "Pre-rendered raster through the existing media block",
+    "mode": "light dark"
+  },
+  {
+    "render": "dir-e-raster-dark-mobile",
+    "lang": "en",
+    "title": "Direction E — pre-rendered raster through the existing media block",
+    "h1": "Pre-rendered raster through the existing media block",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "lang": "en",
+    "title": "Portal family — monorepo area drill-down",
+    "h1": "Monorepo — enter an area by what it owns",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "lang": "en",
+    "title": "Portal family — Orient, as a model",
+    "h1": "Orient — a model, not a link list",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "mode": "light dark"
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "lang": "en",
+    "title": "Portal family — Record, as a trust surface",
+    "h1": "Record — a trust surface, not a rendered file",
+    "mode": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "mode": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "mode": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "mode": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "mode": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "mode": "light dark"
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "lang": "en",
+    "title": "EPC-005 — waves, the unbroken run, and room",
+    "h1": "The work that is not finished yet",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "lang": "en",
+    "title": "TSK-007 — how far each claim travelled",
+    "h1": "How far each claim travelled",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "lang": "en",
+    "title": "The qualification review, round by round",
+    "h1": "The qualification review, round by round",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-b-source-region-history-light-desktop",
+    "lang": "en",
+    "title": "The qualification harness, region by region",
+    "h1": "The harness, region by region",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-b-source-region-history-light-tablet",
+    "lang": "en",
+    "title": "The qualification harness, region by region",
+    "h1": "The harness, region by region",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-b-source-region-history-light-mobile",
+    "lang": "en",
+    "title": "The qualification harness, region by region",
+    "h1": "The harness, region by region",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-b-source-region-history-dark-desktop",
+    "lang": "en",
+    "title": "The qualification harness, region by region",
+    "h1": "The harness, region by region",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-b-source-region-history-dark-tablet",
+    "lang": "en",
+    "title": "The qualification harness, region by region",
+    "h1": "The harness, region by region",
+    "mode": "light dark"
+  },
+  {
+    "render": "p3-b-source-region-history-dark-mobile",
+    "lang": "en",
+    "title": "The qualification harness, region by region",
+    "h1": "The harness, region by region",
+    "mode": "light dark"
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "mode": "light dark"
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "mode": "light dark"
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "mode": "light dark"
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "mode": "light dark"
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "mode": "light dark"
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "lang": "en",
+    "title": "How this repository is organised — plain baseline",
+    "h1": "How this repository is organised",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "mode": "light dark"
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "lang": "en",
+    "title": "TSK-007 qualification evidence — plain baseline",
+    "h1": "TSK-007 — qualification evidence at candidate 82671551",
+    "mode": "light dark"
+  }
+]

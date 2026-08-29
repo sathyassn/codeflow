@@ -33,7 +33,7 @@ install), use `gh`:
 # platform also includes x86_64-pc-windows-msvc (.zip containing codeflow.exe)
 # aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
 A=codeflow-cli-aarch64-apple-darwin
-gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
+gh release download v3.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
 tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
 install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 ```
@@ -202,6 +202,67 @@ New policy keys arrive this way too. When a codeflow upgrade adds a
 `update` inserts it with its shipped default and reports it, and never touches
 the values you already set — so tightening ships without a manual migration.
 
+## Optional repository guide portal
+
+Standard and full tiers include the concise `cf-docs-portal` workflow, but no
+Node workspace or lockfile. Adopt the utility only when layered navigation,
+search, source links, and machine-readable documentation twins justify it:
+
+```sh
+codeflow portal setup --path docs-portal
+cd docs-portal
+npm run deps:install
+npm run check
+npm run build
+cd ..
+codeflow validate --portal docs-portal
+```
+
+The managed dependency installer checks the lockfile's lifecycle-script
+inventory, keeps those scripts disabled, and passes only a small non-secret
+environment to npm. Do not substitute plain `npm ci`; a required future
+lifecycle exception belongs in the reviewed managed installer with an
+executable canary. The setup itself is offline and repository-relative. It
+records one adopted root;
+repeated setup and ordinary `codeflow update` reconcile the managed starter
+without replacing `portal.config.json`. Configure source roots there rather
+than copying authoritative prose into the portal. Generated content and search
+output remain disposable, and local generation never publishes a site.
+
+The portal applies the same utility presentation craft as `cf-present`
+(tokens, altitude, stage grammar) over durable source-linked docs for this
+repository or any consuming project. It has no session Comment lifecycle. The
+design-exploration board that settled the craft is a reference, not a page to
+clone. Read `cf-docs-portal` for content, dependency, browser, accessibility,
+evidence, and cleanup obligations.
+
+## Optional interactive review documents
+
+Standard and full tiers also include `cf-present`. It is a bounded review
+utility for complex explanations, alternatives, plans, diffs, and evidence—not
+a product UI or durable documentation store. Author **this session's** subject
+into a schema-valid temporary JSON document from the skill's block catalog.
+The runtime owns chrome, themes, and Comment. Do not clone the
+design-exploration board or invent a second visual language. The CLI enforces
+semantic and byte limits and opens a task-owned isolated browser profile:
+
+```sh
+codeflow present open /path/to/review-document.json
+codeflow present list
+codeflow present feedback <session-id>
+codeflow present close <session-id>
+codeflow present clear --dry-run
+```
+
+Use `update` for immutable revisions, `resolve` for delivered feedback, and
+`export` only when a portable read-only artifact is required. Keep inputs,
+feedback, exports, and session state untracked unless the user deliberately
+promotes an outcome to its real task, spec, ADR, capability, or project doc.
+Close sessions when review ends and dry-run retention cleanup before removal.
+The utility never attaches to the operator's browser or replaces ordinary chat
+for a short answer. Read `cf-present` for the exact routing, authoring,
+feedback, evidence, and cleanup contract.
+
 ## Network, tools, and autonomy
 
 These are enabled in runtime settings as well as described in the skills
@@ -318,10 +379,12 @@ not introduce a competing `project.md` or `projects.md`.
 
 ### A body of work — the integration branch
 
-The loop above lands one branch per PR onto `main`. When the work is an epic —
-several tasks, some serial, some parallel — landing each on `main` floods the
-human with reviews and makes agents wait on one another. Instead, cut a shared
-**integration branch** and land the tasks there:
+The loop above lands one standalone task per PR onto `main`. When the work is a
+multi-task epic — several tasks, some serial, some parallel — its default
+landing shape is one shared **integration branch**. Do not casually turn the
+epic into a series of task-to-`main` PRs: a different shape needs a recorded
+Plan vN rationale and approval from both primary model seats before allocation.
+The normal path is:
 
 - `integration/<epic>` is branched off `main` and is **non-protected**, so
   agents merge tasks into it — by `codeflow integrate <task> --into
@@ -541,7 +604,7 @@ The one-line version: **codeflow *enforces* the same rules on every harness (git
 hooks + CI); it *guides* Claude and Codex.** Any tool that touches the repo is
 disciplined; the richer in-session help is where the integrations are.
 
-**Verified against:** codex-cli 0.144.3 and Claude Code 2.1.211 on 2026-07-16
+**Verified against:** codex-cli 0.144.3 and Claude Code 2.1.220 on 2026-08-02
 (with earlier hook-specific evidence retained by ADR-0008, ADR-0013, and
 ADR-0014). These surfaces (hook payload contracts, config schemas) move fast on
 both sides; the release checklist
@@ -605,12 +668,13 @@ interactive-only (consult/delegate/duo never shell out to `codex exec`), so a
 headless Codex run happens only when a user starts one — and the git-hook
 plane + CI still bind it.
 
-A Codex-primary session can host the full duo, not only a consult. Codex
-coordinates and implements in its current App/interactive CLI session while
-Claude, reached through a task-scoped interactive tmux session, leads design and
-performs the final independent review. From a Claude Code host, the same fixed
-roles run through the official Codex plugin. Both seats independently research
-and plan before approving the same versioned contract (ADR-0023).
+A Codex-primary session can host the full duo, not only a consult. The host
+owns orchestration and routes production by the qualified capability binding,
+risk, evidence needs, and available capacity; no vendor receives implementation
+work merely because of its name. From a Claude Code host, the official Codex
+plugin provides the independent Codex lane. Both seats independently research
+and plan before approving the same versioned contract; material design and
+implementation receive cross-lineage review (ADR-0023, ADR-0046).
 
 Google's Antigravity `agy` is **not** bound automatically (its hook dialect
 differs and its macOS reliability is unresolved); the cf-delegate skill carries

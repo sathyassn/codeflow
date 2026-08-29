@@ -1,0 +1,12 @@
+{
+  "rubric": "rubric.md",
+  "sha256": "4b132070e6e4aa200165b37e4fb914abf00bb5f7a4ef79631ac91531778ce6b9",
+  "locked_on": "2026-08-04",
+  "ordering_evidence": {
+    "method": "file modification time, observed live during the pass-1 authoring session",
+    "observed": "rubric.md existed and was unmodified before the first render was written; tools/verify.mjs asserted mtime(rubric.md) <= mtime(earliest render) and passed on 2026-08-03",
+    "limitation": "modification time does not survive a fresh Git checkout, so it cannot be re-observed later. This lock replaces it: the rubric bytes are now pinned by digest, and every future render must be produced against exactly these bytes.",
+    "honest_scope": "This records that the ordering was observed once, by the author, in the session that created both files. It is not independent corroboration."
+  },
+  "rule": "tools/verify.mjs recomputes the digest of rubric.md on every run and fails if it differs. Changing a gate means adding a new dated rubric and a new lock, never editing these bytes in place."
+}

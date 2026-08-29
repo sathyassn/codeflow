@@ -1,0 +1,2456 @@
+[
+  {
+    "render": "dir-a-primitives-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-a-primitives-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "What each claim covers, lane by lane",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-b-scene-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled, and what it covers",
+        "drawn": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "bounded",
+          "executed",
+          "na",
+          "notclaimed",
+          "notrun",
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "A dependency graph the grammar cannot lay out",
+        "drawn": [
+          "blocked"
+        ],
+        "keyed": [
+          "blocked"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-c-recipes-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "keyed": [
+          "cap",
+          "room",
+          "run"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each claim travelled",
+        "drawn": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      },
+      {
+        "id": "How far each content-model direction on this board travelled",
+        "drawn": [
+          "reached"
+        ],
+        "keyed": [
+          "reached",
+          "reserved",
+          "stopped"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-d-authored-svg-light-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "The same six tasks, authored a second time",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-d-authored-svg-light-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "The same six tasks, authored a second time",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-d-authored-svg-light-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "The same six tasks, authored a second time",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-d-authored-svg-dark-desktop",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "The same six tasks, authored a second time",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-d-authored-svg-dark-tablet",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "The same six tasks, authored a second time",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-d-authored-svg-dark-mobile",
+    "figures": [
+      {
+        "id": "The unfinished EPC-005 tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "The same six tasks, authored a second time",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "dir-e-raster-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "dir-e-raster-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "dir-e-raster-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "dir-e-raster-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "dir-e-raster-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "dir-e-raster-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "portal-area-drilldown-light-desktop",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-light-tablet",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-light-mobile",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-dark-desktop",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-dark-tablet",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-area-drilldown-dark-mobile",
+    "figures": [
+      {
+        "id": "Which area owns which shared contract, and which contract has no owner — declared fixture, not this repository",
+        "drawn": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "keyed": [
+          "consumes",
+          "migrating",
+          "owns"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-light-desktop",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, and how each kind may change",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-light-tablet",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, and how each kind may change",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-light-mobile",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, and how each kind may change",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-dark-desktop",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, and how each kind may change",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-dark-tablet",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, and how each kind may change",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-orient-model-dark-mobile",
+    "figures": [
+      {
+        "id": "Where this repository keeps each kind of knowledge, and how each kind may change",
+        "drawn": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "keyed": [
+          "conditional",
+          "refuses",
+          "yours"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-light-desktop",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-light-tablet",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-light-mobile",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-dark-desktop",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-dark-tablet",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed",
+          "governs",
+          "process",
+          "supersedes-mechanism"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "portal-record-trust-dark-mobile",
+    "figures": [
+      {
+        "id": "SPC-004 — which decision governs this record, how far it reaches, and what stands behind each claim",
+        "drawn": [
+          "absent",
+          "bounded",
+          "executed"
+        ],
+        "keyed": [
+          "absent",
+          "bounded",
+          "executed"
+        ],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-desktop",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-tablet",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-light-mobile",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-desktop",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-tablet",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p1-a-critical-path-and-room-dark-mobile",
+    "figures": [
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "EPC-005 remaining tasks on a wave axis",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-desktop",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-tablet",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-light-mobile",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-desktop",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-tablet",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p2-a-stopped-provenance-dark-mobile",
+    "figures": [
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Each TSK-007 claim on its own four-stage evidence rail",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-desktop",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-tablet",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-light-mobile",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-desktop",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-tablet",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-a-convergence-with-source-depth-dark-mobile",
+    "figures": [
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "Seven review findings against eight ordered rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-b-source-region-history-light-desktop",
+    "figures": [
+      {
+        "id": "crates/codeflow-present/web/package.json: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/package.json @@ -27,7 +27,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs: R3, R2, R5, R7, R4, R6, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -14,7 +15,7 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -26,7 +36,7 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -107,6 +122,9 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -129,11 +129,7 @@: R5 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -228,8 +240,13 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -238,60 +259,110 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -251,6 +272,10 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -495,7 +496,10 @@: R4 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -748,6 +757,14 @@: R6 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -772,7 +800,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs: R7, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -33,7 +33,35 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -55,6 +62,12 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-b-source-region-history-light-tablet",
+    "figures": [
+      {
+        "id": "crates/codeflow-present/web/package.json: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/package.json @@ -27,7 +27,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs: R3, R2, R5, R7, R4, R6, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -14,7 +15,7 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -26,7 +36,7 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -107,6 +122,9 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -129,11 +129,7 @@: R5 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -228,8 +240,13 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -238,60 +259,110 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -251,6 +272,10 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -495,7 +496,10 @@: R4 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -748,6 +757,14 @@: R6 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -772,7 +800,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs: R7, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -33,7 +33,35 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -55,6 +62,12 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-b-source-region-history-light-mobile",
+    "figures": [
+      {
+        "id": "crates/codeflow-present/web/package.json: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/package.json @@ -27,7 +27,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs: R3, R2, R5, R7, R4, R6, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -14,7 +15,7 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -26,7 +36,7 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -107,6 +122,9 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -129,11 +129,7 @@: R5 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -228,8 +240,13 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -238,60 +259,110 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -251,6 +272,10 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -495,7 +496,10 @@: R4 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -748,6 +757,14 @@: R6 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -772,7 +800,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs: R7, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -33,7 +33,35 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -55,6 +62,12 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-b-source-region-history-dark-desktop",
+    "figures": [
+      {
+        "id": "crates/codeflow-present/web/package.json: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/package.json @@ -27,7 +27,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs: R3, R2, R5, R7, R4, R6, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -14,7 +15,7 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -26,7 +36,7 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -107,6 +122,9 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -129,11 +129,7 @@: R5 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -228,8 +240,13 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -238,60 +259,110 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -251,6 +272,10 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -495,7 +496,10 @@: R4 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -748,6 +757,14 @@: R6 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -772,7 +800,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs: R7, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -33,7 +33,35 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -55,6 +62,12 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-b-source-region-history-dark-tablet",
+    "figures": [
+      {
+        "id": "crates/codeflow-present/web/package.json: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/package.json @@ -27,7 +27,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs: R3, R2, R5, R7, R4, R6, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -14,7 +15,7 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -26,7 +36,7 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -107,6 +122,9 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -129,11 +129,7 @@: R5 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -228,8 +240,13 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -238,60 +259,110 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -251,6 +272,10 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -495,7 +496,10 @@: R4 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -748,6 +757,14 @@: R6 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -772,7 +800,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs: R7, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -33,7 +33,35 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -55,6 +62,12 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "p3-b-source-region-history-dark-mobile",
+    "figures": [
+      {
+        "id": "crates/codeflow-present/web/package.json: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/package.json @@ -27,7 +27,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs: R3, R2, R5, R7, R4, R6, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -14,7 +15,7 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -26,7 +36,7 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -107,6 +122,9 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -129,11 +129,7 @@: R5 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -228,8 +240,13 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -238,60 +259,110 @@: R2 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -251,6 +272,10 @@: R3 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -495,7 +496,10 @@: R4 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -748,6 +757,14 @@: R6 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-check.mjs @@ -772,7 +800,7 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs: R7, R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -33,7 +33,35 @@: R7 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      },
+      {
+        "id": "crates/codeflow-present/web/scripts/real-browser-cleanup-check.mjs @@ -55,6 +62,12 @@: R8 of 8 rounds",
+        "drawn": [],
+        "keyed": [],
+        "describedMissing": []
+      }
+    ]
+  },
+  {
+    "render": "d1-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "d1-baseline-dark-mobile",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-light-desktop",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-light-tablet",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-light-mobile",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-dark-desktop",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-dark-tablet",
+    "figures": []
+  },
+  {
+    "render": "p2-baseline-dark-mobile",
+    "figures": []
+  }
+]

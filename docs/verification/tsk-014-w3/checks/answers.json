@@ -1,0 +1,1973 @@
+{
+  "note": "the answer each candidate published into the non-visible machine channel; verify.mjs recomputes the expected answer from the repository",
+  "answers": [
+    {
+      "render": "p1-a-critical-path-and-room-light-desktop",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-tablet",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-a-critical-path-and-room-light-mobile",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-desktop",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-tablet",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-a-critical-path-and-room-dark-mobile",
+      "page": "cases/p1/a-critical-path-and-room/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-desktop",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-tablet",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-light-mobile",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-desktop",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-tablet",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p1-b-paths-to-the-sink-dark-mobile",
+      "page": "cases/p1/b-paths-to-the-sink/index.html",
+      "answer": {
+        "movesFinish": [
+          "TSK-007",
+          "TSK-010",
+          "TSK-011",
+          "TSK-014"
+        ],
+        "room": {
+          "TSK-009": 1,
+          "TSK-013": 2
+        },
+        "chain": [
+          "TSK-014",
+          "TSK-011",
+          "TSK-007",
+          "TSK-010"
+        ],
+        "startable": [
+          "TSK-013",
+          "TSK-014"
+        ]
+      }
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-desktop",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-tablet",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-a-stopped-provenance-light-mobile",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-desktop",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-tablet",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-a-stopped-provenance-dark-mobile",
+      "page": "cases/p2/a-stopped-provenance/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-desktop",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-tablet",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-b-absence-by-cause-light-mobile",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-desktop",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-tablet",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p2-b-absence-by-cause-dark-mobile",
+      "page": "cases/p2/b-absence-by-cause/index.html",
+      "answer": {
+        "executedLanes": [
+          "macOS arm64",
+          "independent review"
+        ],
+        "causesByLane": {
+          "macOS arm64": [
+            "scope-of-the-check"
+          ],
+          "Linux arm64": [
+            "run-failed",
+            "scope-of-the-check",
+            "wrong-revision"
+          ],
+          "native Windows": [
+            "no-environment",
+            "scope-of-the-check"
+          ],
+          "WSL2": [
+            "no-environment"
+          ],
+          "independent review": [
+            "authorization"
+          ]
+        },
+        "absences": 18,
+        "share": {
+          "no-environment": 11,
+          "wrong-revision": 2,
+          "run-failed": 1,
+          "scope-of-the-check": 3,
+          "authorization": 1
+        }
+      }
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-desktop",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-tablet",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-light-mobile",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-desktop",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-tablet",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-a-convergence-with-source-depth-dark-mobile",
+      "page": "cases/p3/a-convergence-with-source-depth/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-b-source-region-history-light-desktop",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-b-source-region-history-light-tablet",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-b-source-region-history-light-mobile",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-b-source-region-history-dark-desktop",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-b-source-region-history-dark-tablet",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "p3-b-source-region-history-dark-mobile",
+      "page": "cases/p3/b-source-region-history/index.html",
+      "answer": {
+        "multiRound": [
+          "F1",
+          "F5",
+          "F6"
+        ],
+        "external": [
+          "F6"
+        ],
+        "selfCaused": [
+          "F1",
+          "F5"
+        ]
+      }
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-desktop",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-tablet",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-light-mobile",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-desktop",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-tablet",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-a-layers-by-change-rate-dark-mobile",
+      "page": "cases/d1/a-layers-by-change-rate/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-b-the-spine-light-desktop",
+      "page": "cases/d1/b-the-spine/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-b-the-spine-light-tablet",
+      "page": "cases/d1/b-the-spine/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-b-the-spine-light-mobile",
+      "page": "cases/d1/b-the-spine/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-b-the-spine-dark-desktop",
+      "page": "cases/d1/b-the-spine/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-b-the-spine-dark-tablet",
+      "page": "cases/d1/b-the-spine/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-b-the-spine-dark-mobile",
+      "page": "cases/d1/b-the-spine/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-c-write-authority-map-light-desktop",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-c-write-authority-map-light-tablet",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-c-write-authority-map-light-mobile",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-desktop",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-tablet",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d1-c-write-authority-map-dark-mobile",
+      "page": "cases/d1/c-write-authority-map/index.html",
+      "answer": {
+        "order": [
+          "WHY",
+          "RULES",
+          "WHAT",
+          "HOW",
+          "WORK",
+          "TRACE"
+        ],
+        "yours": [
+          "docs/product.md",
+          "AGENTS.md"
+        ],
+        "conditional": [
+          "docs/capabilities.md",
+          "docs/architecture.md"
+        ],
+        "refuses": [
+          ".claude/skills",
+          ".agents/skills",
+          "docs/decisions",
+          "project-management",
+          "the local ledger",
+          "codeflow status"
+        ],
+        "split": [
+          "AGENTS.md"
+        ],
+        "notInTree": [
+          "the local ledger",
+          "codeflow status"
+        ],
+        "rulesLayer": "RULES"
+      }
+    },
+    {
+      "render": "d2-a-decision-reach-light-desktop",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-a-decision-reach-light-tablet",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-a-decision-reach-light-mobile",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-a-decision-reach-dark-desktop",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-a-decision-reach-dark-tablet",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-a-decision-reach-dark-mobile",
+      "page": "cases/d2/a-decision-reach/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-b-evidence-margin-light-desktop",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-b-evidence-margin-light-tablet",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-b-evidence-margin-light-mobile",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-desktop",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-tablet",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    },
+    {
+      "render": "d2-b-evidence-margin-dark-mobile",
+      "page": "cases/d2/b-evidence-margin/index.html",
+      "answer": {
+        "governing": "ADR-0052",
+        "reach": "partial",
+        "stillInForce": [
+          "ADR-0049",
+          "ADR-0050"
+        ],
+        "centralClaim": "CLM-5",
+        "centralEvidence": "absent",
+        "unbacked": [
+          "CLM-5"
+        ],
+        "bounded": [
+          "CLM-3",
+          "CLM-4"
+        ],
+        "backed": [
+          "CLM-1",
+          "CLM-2"
+        ]
+      }
+    }
+  ]
+}

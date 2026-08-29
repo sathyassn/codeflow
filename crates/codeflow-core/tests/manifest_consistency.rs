@@ -31,6 +31,50 @@ fn repo_root() -> PathBuf {
         .expect("repo root resolves")
 }
 
+#[test]
+fn repository_runtime_state_never_enters_the_tracked_tree() {
+    let root = repo_root();
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "-z"])
+        .output()
+        .expect("git is available for repository hygiene verification");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut forbidden: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .filter(|path| {
+            path.starts_with(".state/")
+                || path.starts_with(".claude/memory/")
+                || path.ends_with(".profraw")
+        })
+        .collect();
+    forbidden.sort();
+    assert!(
+        forbidden.is_empty(),
+        "repository-local runtime state is tracked:\n  {}",
+        forbidden.join("\n  ")
+    );
+
+    let ignore = std::fs::read_to_string(root.join(".gitignore"))
+        .expect("repository .gitignore is readable");
+    let lines: BTreeSet<&str> = ignore.lines().map(str::trim).collect();
+    for required in ["/.state/", "/.claude/memory/", "*.profraw"] {
+        assert!(
+            lines.contains(required),
+            "repository .gitignore must retain root-scoped runtime guard {required}"
+        );
+    }
+}
+
 /// Every regular file under `dir`, recursively, as absolute paths.
 fn walk_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -221,6 +265,157 @@ fn every_manifest_src_resolves_to_a_shipped_asset() {
     );
 }
 
+#[test]
+fn portal_bundle_is_single_complete_and_bounded() {
+    let root = repo_root();
+    let assets = root.join("assets");
+    let bundle = assets.join("docs-portal/starter");
+    let manifest_path = assets.join("docs-portal/manifest.json");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&manifest_path).expect("portal manifest is readable"),
+    )
+    .expect("portal manifest is JSON");
+    assert_eq!(manifest["schema_version"], 1);
+    let files = manifest["files"].as_array().expect("portal files array");
+    let declared: BTreeSet<String> = files
+        .iter()
+        .map(|entry| {
+            entry["path"]
+                .as_str()
+                .expect("portal path string")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(declared.len(), files.len(), "portal paths must be unique");
+    let bundle_files: Vec<PathBuf> = walk_files(&bundle)
+        .into_iter()
+        .filter(|path| {
+            !path
+                .strip_prefix(&bundle)
+                .expect("portal file is under bundle")
+                .components()
+                .any(|component| component.as_os_str() == "node_modules")
+        })
+        .collect();
+    let authored: BTreeSet<String> = bundle_files.iter().map(|path| rel(&bundle, path)).collect();
+    assert_eq!(
+        authored, declared,
+        "portal manifest must cover the starter exactly"
+    );
+    let unpacked: u64 = bundle_files
+        .iter()
+        .map(|path| std::fs::metadata(path).expect("portal file metadata").len())
+        .sum();
+    assert!(
+        unpacked <= 2 * 1024 * 1024,
+        "portal starter is {unpacked} bytes"
+    );
+    let package_lock: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(bundle.join("package-lock.json")).expect("portal lockfile is readable"),
+    )
+    .expect("portal lockfile is JSON");
+    assert_eq!(
+        package_lock["packages"]["node_modules/astro"]["bin"]["astro"], "bin/astro.mjs",
+        "the pinned Astro executable changed; update the workflow deliberately"
+    );
+    let workflow = std::fs::read_to_string(bundle.join("scripts/workflow.mjs"))
+        .expect("portal workflow is readable");
+    assert!(
+        workflow.contains("path.join(\"node_modules\", \"astro\", \"bin\", \"astro.mjs\")"),
+        "the portal workflow must execute the pinned Astro package entrypoint"
+    );
+    assert!(
+        workflow.contains("env: hardenedChildEnvironment()"),
+        "portal workflow children must receive the shared allowlisted environment"
+    );
+    let browser = std::fs::read_to_string(bundle.join("scripts/browser-verify.mjs"))
+        .expect("portal browser verifier is readable");
+    assert!(
+        browser.contains("env: hardenedChildEnvironment(process.env, { BROWSER: \"none\" })")
+            && browser.contains("env: hardenedChildEnvironment(),"),
+        "portal preview and browser children must receive the shared allowlisted environment"
+    );
+    assert!(
+        !browser.contains("env: { ...process.env"),
+        "portal browser verification must not forward the ambient environment"
+    );
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(bundle.join("package.json")).expect("portal package is readable"),
+    )
+    .expect("portal package is JSON");
+    assert_eq!(
+        package["scripts"]["deps:install"], "node scripts/install-dependencies.mjs",
+        "the portal must expose its hardened locked-install entrypoint"
+    );
+    let installer = std::fs::read_to_string(bundle.join("scripts/install-dependencies.mjs"))
+        .expect("portal dependency installer is readable");
+    assert!(
+        installer.contains("spawn(process.execPath, [npmCli, \"ci\", \"--ignore-scripts\", \"--no-audit\", \"--no-fund\"]")
+            && installer.contains("env: hardenedChildEnvironment()"),
+        "the portal dependency installer must use npm without a shell and disable lifecycle scripts under the allowlisted environment"
+    );
+    for forbidden in [
+        root.join("assets/base/agents/skills/cf-docs-portal/package-lock.json"),
+        root.join(".agents/skills/cf-docs-portal/package-lock.json"),
+        root.join(".claude/skills/cf-docs-portal/package-lock.json"),
+    ] {
+        assert!(
+            !forbidden.exists(),
+            "lockfile escaped the opt-in bundle: {}",
+            forbidden.display()
+        );
+    }
+}
+
+/// The repository guide is the first consumer of the shipped starter. Keep
+/// project-owned configuration independent, but require every reusable starter
+/// file to exist and remain byte-identical so a dogfood-only fix cannot pass
+/// while consumers receive stale runtime or tests.
+#[test]
+fn portal_dogfood_runtime_matches_the_shipped_starter() {
+    let root = repo_root();
+    let starter = root.join("assets/docs-portal/starter");
+    let dogfood = root.join("docs-portal");
+    let mut problems = Vec::new();
+    for source in walk_files(&starter) {
+        let relative = rel(&starter, &source);
+        if relative == "portal.config.json" {
+            continue;
+        }
+        let deployed = dogfood.join(&relative);
+        if !deployed.is_file() {
+            problems.push(format!("missing dogfood file {relative}"));
+            continue;
+        }
+        if std::fs::read(&source).expect("read starter portal file")
+            != std::fs::read(&deployed).expect("read dogfood portal file")
+        {
+            problems.push(format!("byte drift at {relative}"));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "docs-portal diverged from the shipped reusable starter:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn portal_skill_names_collision_safe_conflict_sidecars() {
+    let skill = std::fs::read_to_string(
+        repo_root().join("assets/base/agents/skills/cf-docs-portal/SKILL.md"),
+    )
+    .expect("canonical portal skill is readable");
+    assert!(
+        skill.contains("<path>.codeflow-<hash>.new"),
+        "portal skill must name the collision-safe conflict-sidecar contract"
+    );
+    assert!(
+        !skill.contains("reported `.new` conflict"),
+        "portal skill must not regress to the ambiguous legacy sidecar name"
+    );
+}
+
 /// MIRROR-SHIPPING: every skill the manifest ships must ship to BOTH harness
 /// mirrors — a `.claude/skills/…` dest and an `.agents/skills/…` dest per
 /// src. A skill added with only one dest reaches consumers half-mirrored.
@@ -380,4 +575,224 @@ fn editorial_source_live_and_baseline_copies_are_byte_identical() {
 #[test]
 fn design_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-design");
+}
+
+/// Interactive presentation authoring is also a managed cross-harness skill.
+/// Its examples and conditional reference are part of the contract, so pin the
+/// complete directory rather than only SKILL.md.
+#[test]
+fn present_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-present");
+}
+
+/// Documentation-portal references include lifecycle and installer safety
+/// duties, so pin the complete managed directory like the other rich skills.
+#[test]
+fn docs_portal_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-docs-portal");
+}
+
+/// Presentation JSON contracts are public consumer inputs and exported state.
+/// Pin the authored copies to the deployed and three-way-merge baseline files,
+/// and reject an accidentally open or malformed root contract.
+#[test]
+fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
+    let root = repo_root();
+    let source = root.join("assets/base/present/schemas");
+    let live = root.join(".codeflow/schemas/present");
+    let baseline = root.join(".codeflow/.baseline/.codeflow/schemas/present");
+    let expected: BTreeSet<String> = walk_files(&source)
+        .iter()
+        .map(|path| rel(&source, path))
+        .collect();
+    assert!(!expected.is_empty(), "presentation schema source is empty");
+
+    let mut problems = Vec::new();
+    for copy in [&live, &baseline] {
+        let actual: BTreeSet<String> = walk_files(copy)
+            .iter()
+            .map(|path| rel(copy, path))
+            .collect();
+        for file in expected.symmetric_difference(&actual) {
+            problems.push(format!("{}: file-set drift at {file}", copy.display()));
+        }
+        for file in expected.intersection(&actual) {
+            let authored = std::fs::read(source.join(file)).expect("read authored schema");
+            let deployed = std::fs::read(copy.join(file)).expect("read deployed schema");
+            if authored != deployed {
+                problems.push(format!("{}: byte drift at {file}", copy.display()));
+            }
+        }
+    }
+
+    for file in &expected {
+        let bytes = std::fs::read(source.join(file)).expect("read presentation schema");
+        let schema: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("presentation schema is valid JSON");
+        assert_eq!(
+            schema.get("$schema").and_then(serde_json::Value::as_str),
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "{file}: wrong or missing JSON Schema dialect"
+        );
+        assert!(
+            schema
+                .get("$id")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
+            "{file}: public schema needs a stable $id"
+        );
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&serde_json::Value::Bool(false)),
+            "{file}: public root contract must reject unknown fields"
+        );
+    }
+
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "presentation schema source/live/baseline copies drifted:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// The portal's utility token layer must stay value-identical to the settled
+/// present skins (ADR-0053 shared craft): portal `signal` mirrors the present
+/// `instrument` skin and portal `folio` mirrors `ink`, in both modes, plus the
+/// instrument/plex typeface stacks and the shared mono stack. Present's
+/// `styles.css` is canonical; a divergence here is design-system drift.
+#[test]
+fn portal_utility_tokens_match_present_skins() {
+    fn block_after(css: &str, marker: &str) -> std::collections::BTreeMap<String, String> {
+        let start = css
+            .find(marker)
+            .unwrap_or_else(|| panic!("selector marker not found: {marker}"));
+        let open = css[start..].find('{').expect("selector block opens") + start + 1;
+        let close = css[open..].find('}').expect("selector block closes") + open;
+        css[open..close]
+            .lines()
+            .filter_map(|line| {
+                let line = line.split("/*").next().unwrap_or("").trim();
+                let (name, value) = line.strip_prefix("--cf-")?.split_once(':')?;
+                Some((
+                    name.trim().to_string(),
+                    value.trim().trim_end_matches(';').trim().to_lowercase(),
+                ))
+            })
+            .collect()
+    }
+    const ROLES: [&str; 16] = [
+        "canvas",
+        "surface",
+        "surface-raised",
+        "surface-subtle",
+        "text",
+        "text-muted",
+        "border",
+        "border-strong",
+        "accent",
+        "accent-strong",
+        "accent-soft",
+        "focus",
+        "positive",
+        "warning",
+        "danger",
+        "diagram-line",
+    ];
+    let root = repo_root();
+    let present = std::fs::read_to_string(root.join("crates/codeflow-present/web/src/styles.css"))
+        .expect("present styles are readable");
+    let portal = std::fs::read_to_string(
+        root.join("assets/docs-portal/starter/src/styles/utility-tokens.css"),
+    )
+    .expect("portal utility tokens are readable");
+    let pairs = [
+        (
+            "portal instrument light vs present instrument light",
+            ":root {",
+            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"light\"]",
+        ),
+        (
+            "portal instrument dark vs present instrument dark",
+            ":root[data-theme=\"dark\"] {",
+            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"dark\"]",
+        ),
+        (
+            "portal editorial light vs present editorial light",
+            ":root[data-cfp-skin=\"editorial\"] {",
+            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"light\"]",
+        ),
+        (
+            "portal editorial dark vs present editorial dark",
+            ":root[data-theme=\"dark\"][data-cfp-skin=\"editorial\"] {",
+            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"dark\"]",
+        ),
+        (
+            "portal ink light vs present ink light",
+            ":root[data-cfp-skin=\"ink\"] {",
+            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"light\"]",
+        ),
+        (
+            "portal ink dark vs present ink dark",
+            ":root[data-theme=\"dark\"][data-cfp-skin=\"ink\"] {",
+            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"dark\"]",
+        ),
+    ];
+    let mut drift = Vec::new();
+    for (label, portal_marker, present_marker) in pairs {
+        let ours = block_after(&portal, portal_marker);
+        let theirs = block_after(&present, present_marker);
+        for role in ROLES {
+            match (ours.get(role), theirs.get(role)) {
+                (Some(a), Some(b)) if a == b => {}
+                (a, b) => drift.push(format!(
+                    "{label}: --cf-{role}: portal {a:?} != present {b:?}"
+                )),
+            }
+        }
+    }
+
+    let typefaces = [
+        (
+            "portal instrument sans vs present instrument typeface",
+            ":root[data-cfp-typeface=\"instrument\"]",
+            "[data-cf-typeface=\"instrument\"]",
+            "font-sans",
+        ),
+        (
+            "portal editorial sans vs present editorial typeface",
+            ":root[data-cfp-typeface=\"editorial\"]",
+            "[data-cf-typeface=\"editorial\"]",
+            "font-sans",
+        ),
+        (
+            "portal plex sans vs present plex typeface",
+            ":root[data-cfp-typeface=\"plex\"]",
+            "[data-cf-typeface=\"plex\"]",
+            "font-sans",
+        ),
+    ];
+    for (label, portal_marker, present_marker, role) in typefaces {
+        let ours = block_after(&portal, portal_marker);
+        let theirs = block_after(&present, present_marker);
+        match (ours.get(role), theirs.get(role)) {
+            (Some(a), Some(b)) if a == b => {}
+            (a, b) => drift.push(format!(
+                "{label}: --cf-{role}: portal {a:?} != present {b:?}"
+            )),
+        }
+    }
+    let portal_mono = block_after(&portal, ":root {");
+    let present_mono = block_after(&present, ":root {");
+    match (portal_mono.get("font-mono"), present_mono.get("font-mono")) {
+        (Some(a), Some(b)) if a == b => {}
+        (a, b) => drift.push(format!("shared mono stack: portal {a:?} != present {b:?}")),
+    }
+
+    assert!(
+        drift.is_empty(),
+        "portal utility tokens drifted from the canonical present skins \
+         (crates/codeflow-present/web/src/styles.css):\n  {}",
+        drift.join("\n  ")
+    );
 }

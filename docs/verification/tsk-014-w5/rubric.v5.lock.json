@@ -1,0 +1,34 @@
+{
+  "file": "rubric.v5.md",
+  "sha256": "9a71e7f4ed26b079ff1a248f805626fdb38a7077c5c205c0b8894a38d1317b51",
+  "bytes": 13500,
+  "mtime_iso": "2026-08-04T16:00:17.342Z",
+  "pinned_at_state": "no W5 artefact had been authored. Every file under the watched directories was byte-identical to its counterpart on a previous board — a starting point, not authorship.",
+  "seed_files_byte_identical_to": {
+    "tsk-014-w4": 35,
+    "tsk-014-w3": 9
+  },
+  "seed_files_carried_under_a_new_name": [
+    {
+      "now": "rejected/d-authored-svg/w4-light-narrow.png",
+      "was": "tsk-014-w4/renders/dir-d-authored-svg-light-mobile.png"
+    },
+    {
+      "now": "rejected/d-authored-svg/w4-light-wide.png",
+      "was": "tsk-014-w4/renders/dir-d-authored-svg-light-desktop.png"
+    },
+    {
+      "now": "rejected/e-raster/w4-dark-narrow.png",
+      "was": "tsk-014-w4/renders/dir-e-raster-dark-mobile.png"
+    },
+    {
+      "now": "rejected/e-raster/w4-light-wide.png",
+      "was": "tsk-014-w4/renders/dir-e-raster-light-desktop.png"
+    }
+  ],
+  "authored_since_seed": [],
+  "what_this_proves": "the bytes, and the seed state. The digests survive a checkout, a copy and a commit; the mtime does not, and is recorded because it is the only ordering witness that will not.",
+  "what_this_does_not_prove": "that the author intended this before drawing. Only that these bytes preceded every authored artefact. A later change to the pinned file is a lock failure, not a silent edit.",
+  "governs": "the W5 board",
+  "supersedes_nothing": "rubric.md, rubric.v2.md, rubric.v3.md and rubric.v4.md stay byte-identical under their own locks in ../tsk-014-w2/, ../tsk-014-w3/ and ../tsk-014-w4/"
+}

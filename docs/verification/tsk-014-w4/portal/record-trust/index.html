@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal family — Record, as a trust surface</title>
+<link rel="stylesheet" href="../../shared/shell.css">
+</head>
+<body>
+<div class="sh-page">
+
+<p class="sh-eyebrow">TSK-014 W4 · documentation portal · page family 3 of 6</p>
+<h1>Record — a trust surface, not a rendered file</h1>
+<p class="sh-lede">A record page has to let a reader trust or distrust the record in front of
+them: <strong>which accepted decision still governs it</strong>, <strong>how much of it that
+decision actually reaches</strong>, and <strong>which of its claims has nothing behind
+it</strong>.</p>
+
+<h2>What the shipped portal does today</h2>
+<p>The built portal renders SPC-004 as its Markdown, a source-and-commit provenance line, and a
+"Record context" section listing referenced records and inverse links. Every link is correct.
+Neither question above is answerable from the page: partial reach collapses to a link, and a
+claim with no evidence looks exactly like a claim whose evidence is somewhere else.</p>
+
+<h2>The family</h2>
+<p>Claims in reading order. Each governing decision is a span down the left covering exactly the
+claims it reaches, thick where it governs and thin where it replaces only that claim's
+mechanism. Each claim keeps an evidence position at its own eye level, and a claim whose evidence
+does not exist keeps that position — drawn, at full height, and visibly unfilled.</p>
+
+<div class="sh-figure" id="fig-record"></div>
+<p class="sh-caption">Emitted by <code>portal:record-trust</code> from
+<code>shared/record-authority.js</code>, whose every frontmatter value, heading, numbered
+behaviour and quotation is checked against the real record. Resize: the evidence margin becomes
+a reserved band beneath each claim and keeps its full height when empty.</p>
+
+<details class="sh-detail"><summary>The same claims, their authority and their evidence, as a table</summary>
+<table><thead><tr><th>Claim</th><th>Where</th><th>Authority</th><th>Evidence</th></tr></thead>
+<tbody id="claim-rows"></tbody></table></details>
+
+<h2>What this family costs</h2>
+<div class="sh-note" id="gap"></div>
+
+<hr class="sh-rule">
+<p class="sh-src">Subject: <code>shared/record-authority.js</code> over
+<code>project-management/specs/SPC-004.md</code>, <code>docs/decisions/ADR-004*.md</code> and
+<code>docs/verification/tsk-007-presentation/README.md</code>. Mechanism:
+<code>portal/record-trust/record.js</code>, in the position a portal generator emitter would
+occupy. Chrome: <code>shared/shell.css</code>. Nothing here touches <code>docs-portal/</code>.</p>
+
+</div>
+
+<script src="../../shared/record-authority.js"></script>
+<script src="./record.js"></script>
+<script>
+(() => {
+  const m = window.recordAuthority;
+  window.w4record.mount(document.getElementById('fig-record'), m, { wide: 1100, narrow: 720 });
+
+  document.getElementById('claim-rows').innerHTML = m.claims.map((c) => `
+    <tr><td>${c.id}</td><td>${c.where}</td>
+    <td>${c.authority.map((a) => `${a.record} (${a.relation})`).join('<br>')}</td>
+    <td>${c.evidence.state}${c.evidence.bound ? ` — ${c.evidence.bound}` : ''}</td></tr>`).join('');
+
+  const absent = m.claims.filter((c) => c.evidence.state === 'absent').length;
+  const bounded = m.claims.filter((c) => c.evidence.state === 'bounded').length;
+  document.getElementById('gap').innerHTML =
+    '<strong>The source-model gap, stated precisely.</strong><br>'
+    + `Three facts this family draws are not carried by the content graph today. `
+    + `First, a supersession's <em>scope</em> — which claims a decision replaces rather than governs — lives in ADR prose, in the sentence that names the mechanisms it replaces. `
+    + `Second, a <em>claim-level</em> evidence link: the record carries no structured pointer from a claim to the artefact backing it. `
+    + `Third, the difference between <em>deliberate absence</em> and <em>unrecorded</em>: of ${m.claims.length} claims here, ${absent} have no evidence at all and ${bounded} have evidence that is explicitly not promoted, and only a source that can say which is which can reserve a position rather than leave a blank. `
+    + 'All three are frontmatter or link-graph additions to records the project already writes. None needs a new content pipeline, and none of them can be inferred from the Markdown as it stands.';
+})();
+</script>
+</body>
+</html>

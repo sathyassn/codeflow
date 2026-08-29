@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P3 baseline — cf-present qualification convergence as ordinary Markdown</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    max-width: 50rem; margin: 0 auto; padding: 2rem 1rem;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid GrayText; padding: .35rem .5rem; text-align: left; font-size: .9rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  @media (max-width: 640px) { table, thead, tbody, tr, th, td { display: block; } thead { display: none; }
+    tr { margin-bottom: 1rem; } td { border: 0; border-bottom: 1px solid GrayText; }
+    td::before { content: attr(data-label) ": "; font-weight: 700; } }
+</style>
+</head>
+<body>
+<h1>cf-present qualification — review convergence</h1>
+
+<h2>Rounds</h2>
+<table>
+  <thead><tr><th>Round</th><th>Commit</th><th>Subject</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Round">R1</td><td data-label="Commit"><code>86582dc0</code></td><td data-label="Subject">qualify owned runtime boundaries</td></tr>
+    <tr><td data-label="Round">R2</td><td data-label="Commit"><code>74feaf04</code></td><td data-label="Subject">harden qualification cleanup</td></tr>
+    <tr><td data-label="Round">R3</td><td data-label="Commit"><code>82671551</code></td><td data-label="Subject">close qualification review gaps</td></tr>
+    <tr><td data-label="Round">R4</td><td data-label="Commit"><code>14107e48</code></td><td data-label="Subject">tolerate cold browser startup</td></tr>
+    <tr><td data-label="Round">R5</td><td data-label="Commit"><code>c5ede869</code></td><td data-label="Subject">follow bootstrap readiness semantics</td></tr>
+    <tr><td data-label="Round">R6</td><td data-label="Commit"><code>30133fd7</code></td><td data-label="Subject">bound cold renderer startup</td></tr>
+    <tr><td data-label="Round">R7</td><td data-label="Commit"><code>e194b1fd</code></td><td data-label="Subject">harden browser close recovery</td></tr>
+    <tr><td data-label="Round">R8</td><td data-label="Commit"><code>a47b62c3</code></td><td data-label="Subject">align browser qualification driver</td></tr>
+  </tbody>
+</table>
+
+<h2>Findings</h2>
+<table>
+  <thead><tr><th>Finding</th><th>Raised</th><th>Closed</th><th>Re-opened by</th></tr></thead>
+  <tbody>
+    <tr><td data-label="Finding">F1 child environment inherited host values</td><td data-label="Raised">R2</td><td data-label="Closed">R3</td><td data-label="Re-opened by">R2's own allow-list — <code>SystemRoot</code> casing missing</td></tr>
+    <tr><td data-label="Finding">F2 cleanup swallowed the primary error</td><td data-label="Raised">R2</td><td data-label="Closed">R2</td><td data-label="Re-opened by">—</td></tr>
+    <tr><td data-label="Finding">F3 injected-failure cleanup unproved</td><td data-label="Raised">R2</td><td data-label="Closed">R2</td><td data-label="Re-opened by">— (extended R7, R8)</td></tr>
+    <tr><td data-label="Finding">F4 Windows profile confinement unscoped</td><td data-label="Raised">R3</td><td data-label="Closed">R3</td><td data-label="Re-opened by">—</td></tr>
+    <tr><td data-label="Finding">F5 cold-runner startup exceeded bounded waits</td><td data-label="Raised">R4</td><td data-label="Closed">R6</td><td data-label="Re-opened by">R4's timeout, then R5's refactor</td></tr>
+    <tr><td data-label="Finding">F6 browser-context close timed out</td><td data-label="Raised">R7</td><td data-label="Closed">R8</td><td data-label="Re-opened by">Chrome 150 on Playwright 1.55</td></tr>
+    <tr><td data-label="Finding">F7 POSIX process inventory failed closed</td><td data-label="Raised">R8</td><td data-label="Closed">R8</td><td data-label="Re-opened by">—</td></tr>
+  </tbody>
+</table>
+
+<h2>What each round changed</h2>
+<ul>
+  <li><b>R2</b> — <code>allowedEnvironment</code> allow-list plus <code>assertChildEnvironmentDoesNotInheritUnrelatedHostValues</code>; <code>primaryError</code> and an <code>attempt</code> accumulator; a <code>tracingStarted</code> latch; <code>--inject-cleanup-failure</code> and <code>real-browser-cleanup-check.mjs</code>.</li>
+  <li><b>R3</b> — <code>SystemRoot</code> added to the allow-list; <code>USERPROFILE</code>, <code>LOCALAPPDATA</code>, <code>APPDATA</code>, <code>TMP</code>, <code>TEMP</code> redirected to task roots; <code>qualifyWindowsEnvironment</code> and <code>windows-qualification-scope.mjs</code>.</li>
+  <li><b>R4</b> — <code>NAVIGATION_TIMEOUT_MS = 45_000</code>, replacing <code>setDefaultNavigationTimeout(20_000)</code>.</li>
+  <li><b>R5</b> — <code>openAuthenticatedPresentation</code>: commit the bootstrap navigation, then wait for the destination URL at <code>domcontentloaded</code>.</li>
+  <li><b>R6</b> — <code>BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000</code> and <code>timeoutWithinQualification</code>, capping every wait by the remaining 180-second journey deadline.</li>
+  <li><b>R7</b> — <code>closeBrowserContext</code>, <code>BoundedTimeoutError</code>, <code>terminateOwnedProcessIdentities</code> (TERM &rarr; 2.5 s &rarr; KILL, fingerprint re-verified before signalling), <code>browser_close_fallbacks</code>; a normal run rejects any fallback, the injected run requires exactly one.</li>
+  <li><b>R8</b> — <code>playwright-core</code> 1.55.0 &rarr; 1.62.1; <code>toolchain.browser_version</code> and <code>toolchain.playwright_core_version</code> recorded and asserted; <code>PROCESS_INVENTORY_TIMEOUT_MS = 10_000</code> for both platforms.</li>
+</ul>
+
+<h2>Residuals</h2>
+<ul>
+  <li>The Windows guard proves start-time confinement only, not account, profile or VM teardown.</li>
+  <li>The close fallback is intermittent: three consecutive zero-fallback journeys reduce rather than eliminate the recurrence risk. The permanent zero-fallback gate remains the detector.</li>
+</ul>
+</body>
+</html>

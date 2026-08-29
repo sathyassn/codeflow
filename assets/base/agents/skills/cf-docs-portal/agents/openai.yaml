@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeFlow Docs Portal"
+  short_description: "Build and verify a source-linked repository guide"
+  default_prompt: "Use $cf-docs-portal to adopt, build, or verify the repository's layered documentation portal."

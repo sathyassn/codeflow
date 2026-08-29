@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-prototype="guided-path">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CodeFlow guided path prototype</title>
+  <script src="../shared/theme-init.js"></script>
+  <link rel="stylesheet" href="../shared/base.css">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="topbar">
+    <button type="button" class="nav-toggle icon-button" data-navigation-toggle aria-label="Open navigation" aria-expanded="false">Menu</button>
+    <a class="wordmark" href="#purpose" aria-label="CodeFlow documentation home"><span>CF</span> CodeFlow</a>
+    <div class="top-actions">
+      <span class="version">Scaffold 2.1.0</span>
+      <button type="button" class="search-button" data-open-search>Search <kbd>⌘K</kbd></button>
+      <button type="button" class="icon-button theme-toggle" data-theme-toggle aria-label="Use dark mode"><span aria-hidden="true"></span></button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="journey-nav" data-site-navigation aria-label="Documentation">
+      <p class="eyebrow">Reader path</p>
+      <ol>
+        <li><a href="#purpose"><span>01</span> Understand the promise</a></li>
+        <li><a href="#model"><span>02</span> See the operating model</a></li>
+        <li><a href="#architecture"><span>03</span> Inspect the architecture</a></li>
+        <li><a href="#implementation"><span>04</span> Follow it into code</a></li>
+      </ol>
+      <div class="nav-note">
+        <p>Need to act instead?</p>
+        <a href="#commands">Go to common commands</a>
+      </div>
+    </nav>
+
+    <main id="content">
+      <section class="hero" id="purpose" data-search-item data-search-title="What CodeFlow is" data-search-context="Concept · docs/product.md">
+        <p class="eyebrow">Repository discipline for agentic development</p>
+        <h1>Keep the reasoning flexible.<br>Make the boundaries durable.</h1>
+        <p class="lede">CodeFlow is one Rust binary and a versioned repository scaffold. It leaves development to capable agents while making planning, git safety, verification, and the record of why a change exists inspectable.</p>
+        <div class="hero-actions">
+          <a class="primary-action" href="#model">Follow the model</a>
+          <a class="source-link" href="/docs/product.md">docs/product.md</a>
+        </div>
+        <figure class="promise-map" aria-labelledby="promise-caption">
+          <svg viewBox="0 0 960 260" role="img" aria-label="CodeFlow places a durable discipline layer between human intent and agent execution">
+            <defs>
+              <linearGradient id="path" x1="0" x2="1">
+                <stop offset="0" stop-color="var(--coral)"/>
+                <stop offset="1" stop-color="var(--indigo)"/>
+              </linearGradient>
+            </defs>
+            <path class="flowline" d="M170 130 H790"/>
+            <g transform="translate(60 72)"><rect width="220" height="116" rx="58"/><text x="110" y="52">Human intent</text><text class="sub" x="110" y="79">purpose · constraints</text></g>
+            <g class="accent" transform="translate(370 42)"><rect width="220" height="176" rx="32"/><text x="110" y="70">CodeFlow</text><text class="sub" x="110" y="102">scaffold · guardrails</text><text class="sub" x="110" y="128">workgraph · evidence</text></g>
+            <g transform="translate(680 72)"><rect width="220" height="116" rx="58"/><text x="110" y="52">Agent work</text><text class="sub" x="110" y="79">reason · build · verify</text></g>
+          </svg>
+          <figcaption id="promise-caption">The harness supplies judgment and tools; CodeFlow preserves the shared operating boundary.</figcaption>
+        </figure>
+      </section>
+
+      <section class="model" id="model" data-search-item data-search-title="Six-layer operating model" data-search-context="Concept · AGENTS.md">
+        <div class="section-heading">
+          <div><p class="eyebrow">The operating model</p><h2>Six layers. One traceable path.</h2></div>
+          <a class="source-link" href="/AGENTS.md">AGENTS.md</a>
+        </div>
+        <p class="section-intro">Each layer answers a different question. The links between them—not another dashboard—show why a change exists and whether it shipped.</p>
+        <ol class="spine" aria-label="CodeFlow traceability layers">
+          <li><span class="layer">Why</span><strong>Purpose and boundaries</strong><code>docs/product.md</code></li>
+          <li><span class="layer">Rules</span><strong>How work is done</strong><code>AGENTS.md · skills</code></li>
+          <li><span class="layer">What</span><strong>System capability</strong><code>CAP-###</code></li>
+          <li><span class="layer">How</span><strong>Architecture and decisions</strong><code>ADR-####</code></li>
+          <li><span class="layer">Work</span><strong>Agreed change</strong><code>EPC · SPC · TSK</code></li>
+          <li><span class="layer">Trace</span><strong>What happened</strong><code>ledger · recall</code></li>
+        </ol>
+        <p class="model-readout"><span>Follow the evidence</span> capability → epic/task → ADR/spec → PR → ledger</p>
+      </section>
+
+      <section class="architecture" id="architecture" data-search-item data-search-title="System architecture" data-search-context="Architecture · docs/architecture.md">
+        <div class="section-heading">
+          <div><p class="eyebrow">Architecture</p><h2>The binary owns determinism. The harness owns judgment.</h2></div>
+          <a class="source-link" href="/docs/architecture.md">docs/architecture.md</a>
+        </div>
+        <div class="architecture-flow">
+          <div class="arch-node">
+            <small>Input</small><strong>Repository evidence</strong><span>docs · policy · git state</span>
+          </div>
+          <div class="arch-connector"><span>inspect</span></div>
+          <div class="arch-node featured">
+            <small>Rust workspace</small><strong>codeflow-core</strong><span>policy · scaffold · record store</span>
+          </div>
+          <div class="arch-connector"><span>expose</span></div>
+          <div class="arch-node">
+            <small>Interface</small><strong>codeflow-cli</strong><span>commands · hooks · doctor</span>
+          </div>
+        </div>
+        <details class="why-detail">
+          <summary>Why this boundary matters</summary>
+          <p>The executable checks facts that can be made repeatable. Skills guide contextual work that cannot be reduced to a safe universal algorithm. Managed assets keep both surfaces version-locked.</p>
+        </details>
+      </section>
+
+      <section class="implementation" id="implementation" data-search-item data-search-title="Delegate lifecycle implementation" data-search-context="Technical · crates/codeflow-core">
+        <div class="section-heading">
+          <div><p class="eyebrow">Technical drill-down</p><h2>From a capability to its implementation.</h2></div>
+          <a class="source-link" href="/docs/capabilities.md#cap-010--duo-model-orchestration">CAP-010</a>
+        </div>
+        <div class="drilldown">
+          <div class="drilldown-copy">
+            <p class="path">CAP-010 <span>/</span> duo orchestration <span>/</span> delegate lifecycle</p>
+            <h3>Transport-neutral evidence, native interactive sessions</h3>
+            <p>The state machine records launch, provenance, return, failure, and recheck without pretending the binary is a model router.</p>
+            <ul>
+              <li>Write-once JSON records live outside the worktree.</li>
+              <li>Ambiguous prompt or terminal correlation fails closed.</li>
+              <li>The host launches the selected native harness.</li>
+            </ul>
+          </div>
+          <pre><code><span>$</span> codeflow delegate init
+<span>$</span> codeflow delegate arm
+<span>$</span> codeflow delegate wait
+
+state/
+├── settings.json
+├── ready.json
+└── turns/&lt;turn-id&gt;/
+    ├── request.json
+    ├── accepted.json
+    └── result.json</code></pre>
+        </div>
+        <div class="source-strip" role="group" aria-label="Implementation sources">
+          <span>Source trail</span>
+          <a href="/docs/decisions/ADR-0036-transport-neutral-delegate-lifecycle.md">ADR-0036</a>
+          <a href="/crates/codeflow-core/src/delegate.rs">delegate.rs</a>
+          <a href="/crates/codeflow-cli/src/main.rs">CLI entry</a>
+        </div>
+      </section>
+
+      <section class="commands" id="commands" data-search-item data-search-title="Common commands" data-search-context="Reference · AGENTS.md">
+        <p class="eyebrow">Reference</p>
+        <h2>Common moves</h2>
+        <dl>
+          <div><dt><code>codeflow orient</code></dt><dd>Understand the current repository and session boundary.</dd></div>
+          <div><dt><code>codeflow work start TSK-NNN</code></dt><dd>Prove a task is anchored before product edits begin.</dd></div>
+          <div><dt><code>codeflow validate --docs</code></dt><dd>Validate the durable workgraph and documentation links.</dd></div>
+          <div><dt><code>codeflow recall "query"</code></dt><dd>Search the record without reading the entire codebase.</dd></div>
+        </dl>
+      </section>
+    </main>
+
+    <aside class="page-context" aria-label="On this path">
+      <p class="eyebrow">On this path</p>
+      <a href="#purpose">Promise</a><a href="#model">Operating model</a><a href="#architecture">Architecture</a><a href="#implementation">Technical drill-down</a>
+      <div class="context-source"><span>Current evidence</span><strong>4 source documents</strong><small>Prototype base e96db64b</small></div>
+    </aside>
+  </div>
+
+  <dialog class="search-dialog" data-search-dialog aria-label="Search CodeFlow documentation">
+    <form class="search-head" role="search" data-search-form>
+      <label class="visually-hidden" for="guided-search">Search concepts, commands, or code</label>
+      <input id="guided-search" type="search" placeholder="Search concepts, commands, or code" aria-controls="guided-results" autocomplete="off">
+      <button type="submit" class="icon-button search-submit">Go</button>
+      <button type="button" class="icon-button" data-close-search aria-label="Close search">Close</button>
+    </form>
+    <p class="search-status visually-hidden" data-search-status aria-live="polite"></p>
+    <section id="guided-results" class="search-results" data-search-results aria-label="Search results"></section>
+  </dialog>
+  <script type="module" src="../shared/prototype.js"></script>
+</body>
+</html>

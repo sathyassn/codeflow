@@ -1,0 +1,37 @@
+{
+  "note": "Divergences between what registry.json declared and what was drawn, recorded here rather than by editing the declaration. registry.json stays byte-frozen under registry.lock.json, so its priority remains provable; this file is where every later change goes. W3 put its amendments inside the registry, which meant the registry could not be digest-pinned at all — this separation is the fix.",
+  "rule": "Never edit a declaration to match a drawing. Once edited it describes rather than constrains, and the check that was supposed to catch the drift certifies it.",
+  "entries": [
+    {
+      "id": "carried-page-breakpoints",
+      "artefacts": ["cases/p1/a-critical-path-and-room", "cases/p2/a-stopped-provenance"],
+      "field": "wide_breakpoint, narrow_breakpoint",
+      "declared": "1100 and 720",
+      "drawn": "1080 and 640 — the real media queries in the pages carried forward from W3",
+      "what_moved_first": "neither; the pages predate this registration and were not moved",
+      "why_it_matters": "A3 asserts the page declares a media query at each of its own two declared breakpoints. It does not, for these two, and the declaration is left alone rather than corrected to match. What A3 can still establish for them is the part that carries the meaning: the intermediate render at 900px falls strictly between the two breakpoints the pages really carry, so the intermediate frame does show a composition neither of the other two frames shows. The exact numbers are wrong in the registration and right in the drawing.",
+      "recorded_by": "the author, on discovering it while verifying rather than while declaring"
+    },
+    {
+      "id": "label-rotation-in-the-grammar",
+      "artefacts": ["directions/b-scene"],
+      "field": "scene grammar mark vocabulary",
+      "declared": "a closed set of marks: segment, tick, path, label, region, rule, cell, marker",
+      "drawn": "the same closed set; `label` gained a bounded `rotate` property during authoring",
+      "what_moved_first": "the drawing — rotated column heads were needed before the property existed",
+      "why_it_matters": "The mark set itself did not change and remains closed, so A2's and G4's subject is unaffected. But a grammar's property surface is part of its permanent contract, and this one grew after registration. It is recorded so a reader weighing direction B's extension cost knows the vocabulary was not fixed before the demonstration.",
+      "recorded_by": "the author"
+    },
+    {
+      "id": "containment-probe-corrected-twice",
+      "artefacts": ["tools/render.mjs", "tools/w3-recheck.mjs"],
+      "field": "A7 measurement method",
+      "declared": "per render, every SVG node whose bounding box extends past its own viewBox",
+      "drawn": "measured in CSS pixels from client rects on both the node and its SVG root",
+      "what_moved_first": "the measurement, twice, and both moves are recorded because both changed what the gate reports",
+      "why_it_matters": "The first implementation compared getBBox() — the node's own user space — directly against viewBox.baseVal, which reports an overshoot for every translated group that is not on the page. The second mapped through getCTM(), which maps to the nearest VIEWPORT rather than to viewBox units, so it under-reported wherever a viewBox was scaled. The third measures client rects on both sides, in the units a reader actually loses. Only the third agrees with what the renders show. checks/w3-recheck.json carries what each formulation said about the same fourteen W3 bands.",
+      "consequence_for_this_board": "Every A7 result on this board comes from the third formulation. An earlier reading of this session's own evidence — that two of W3's fourteen bands were probe artefacts — came from the second, and is withdrawn: under the corrected probe all ten machine-visible W3 bands are confirmed and none is an artefact.",
+      "recorded_by": "the author"
+    }
+  ]
+}

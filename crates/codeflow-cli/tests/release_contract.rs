@@ -64,3 +64,38 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         );
     }
 }
+
+#[test]
+fn strict_repository_gate_installs_its_declared_coverage_tool() {
+    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/codeflow-ci.yml"))
+        .expect("repository CI workflow must be readable");
+    let gates = workflow
+        .split("\n  rust:")
+        .next()
+        .expect("codeflow gates job must precede the Rust job");
+    let install = gates
+        .find("uses: taiki-e/install-action@cargo-llvm-cov")
+        .expect("strict gate must install cargo-llvm-cov on a clean runner");
+    let strict = gates
+        .find("run: codeflow test --mode full --strict")
+        .expect("strict aggregate gate must remain enabled");
+
+    assert!(
+        install < strict,
+        "cargo-llvm-cov must be available before the strict aggregate gate"
+    );
+}
+
+#[test]
+fn windows_cross_check_lints_target_specific_code() {
+    let config = fs::read_to_string(workspace_root().join(".cargo/config.toml"))
+        .expect("Cargo configuration must be readable");
+
+    assert!(
+        config.contains(
+            "cross-check-windows = \"xwin clippy --workspace --all-targets --target \
+             x86_64-pc-windows-msvc -- -D warnings\""
+        ),
+        "the host-agnostic Windows check must lint target-specific code, not only compile it"
+    );
+}

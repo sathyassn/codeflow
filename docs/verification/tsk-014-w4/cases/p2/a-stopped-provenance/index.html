@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSK-007 — how far each claim travelled</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #12161b;     --ink-2: #48515e;   --ink-3: #5b6471;
+    --page: #f7f8fa;    --panel: #ffffff;   --rule: #dbdfe6;
+    --grid: #e7eaef;
+    --rail: #1b3a4b;    --rail-open: #93a0ad;
+    --stop: #8a3324;
+    --cell-on: #1b3a4b; --cell-off: #aab3bf;
+    --shadow: 0 1px 2px rgba(18, 22, 27, .06), 0 10px 28px -18px rgba(18, 22, 27, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eff2f6;    --ink-2: #b4bcc8;  --ink-3: #8d97a4;
+      --page: #0e1116;   --panel: #161a20;  --rule: #2a3039;
+      --grid: #232932;
+      --rail: #a9d0e4;   --rail-open: #6b7787;
+      --stop: #f0a08e;
+      --cell-on: #a9d0e4; --cell-off: #59616d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 40px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -.015em; margin: 0 0 12px; font-weight: 640; }
+  .lede { margin: 0 0 30px; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  .lede code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14.5px; color: var(--ink); }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 22px 26px 18px; box-shadow: var(--shadow); }
+  svg { display: block; width: 100%; height: auto; }
+  .stage-label { font-size: 11.5px; fill: var(--ink-3); letter-spacing: .04em; }
+  .stage-line { stroke: var(--grid); stroke-width: 1; }
+  .claim { font-size: 14px; font-weight: 600; fill: var(--ink); }
+  .rail-done { stroke: var(--rail); stroke-width: 7; stroke-linecap: round; fill: none; }
+  .rail-open { stroke: var(--rail-open); stroke-width: 2; stroke-dasharray: 2 7; stroke-linecap: round; fill: none; }
+  .node-on { fill: var(--rail); }
+  .node-off { fill: none; stroke: var(--rail-open); stroke-width: 2; }
+  .stop-bar { stroke: var(--stop); stroke-width: 4.5; stroke-linecap: butt; }
+  .stop-why { font-size: 12px; fill: var(--stop); font-weight: 560; }
+  .never { font-size: 12px; fill: var(--ink-3); }
+  .cover-cell { stroke: var(--cell-off); stroke-width: 1.25; fill: none; }
+  .cover-cell.on { fill: var(--cell-on); stroke: var(--cell-on); }
+  .cover-cell.bounded { stroke-dasharray: 3 2; }
+  .cover-mark { stroke: var(--cell-off); stroke-width: 1.25; }
+  .cover-head { font-size: 11px; fill: var(--ink-3); letter-spacing: .03em; }
+  .cover-title { font-size: 11px; fill: var(--ink-3); letter-spacing: .07em; text-transform: uppercase; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 22px 2px 0; font-size: 13.5px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 48px; height: 16px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  blockquote { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--ink-2); font-size: 13px; }
+  .src { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .band-wide, .band-mid, .band-narrow { display: none; }
+  .band-wide { display: block; }
+  @media (max-width: 1080px) {
+    body { padding: 32px 28px 56px; }
+    h1 { font-size: 26px; }
+    .band-wide { display: none; } .band-mid { display: block; }
+  }
+  @media (max-width: 640px) {
+    body { padding: 24px 16px 48px; }
+    h1 { font-size: 22px; }
+    figure { padding: 16px 12px 14px; border-radius: 11px; }
+    .band-mid { display: none; } .band-narrow { display: block; }
+    .legend { gap: 10px 16px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">TSK-007 · qualification evidence</p>
+  <h1>How far each claim travelled</h1>
+  <p class="lede">Eight claims were made about candidate <code>82671551</code>. Each one runs along its own
+    rail through <b>the four stages evidence has to pass</b> — something produced it, it left an
+    artifact, something accepted it, and it was accepted <em>at this candidate</em>. Beside each rail
+    head is what that claim has on each of the five lanes the qualification could cover.</p>
+
+  <figure>
+    <div class="band-wide" id="wide"></div>
+    <div class="band-mid" id="mid"></div>
+    <div class="band-narrow" id="narrow"></div>
+    <div class="legend" id="legend"></div>
+  </figure>
+
+  <details>
+    <summary>Every claim, with the record's own words</summary>
+    <table id="facts">
+      <thead><tr><th>Claim</th><th>Reached</th><th>What the record says</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/tsk007-facts.js</code>; every quotation is checked verbatim
+    against <code>docs/verification/tsk-007-presentation/README.md</code>.</p>
+</div>
+
+<script src="../../../shared/tsk007-facts.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const F = window.tsk007Facts;
+  const STAGES = F.stages;
+  const causeById = new Map(F.causes.map((c) => [c.id, c]));
+  const laneShort = { "macOS arm64": "macOS", "Linux arm64": "Linux", "native Windows": "Win", "WSL2": "WSL2", "independent review": "review" };
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const svg = (w, h, title, desc) => {
+    const root = n("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+    const tid = `t${++svg.seq}`, did = `d${svg.seq}`;
+    root.setAttribute("aria-labelledby", `${tid} ${did}`);
+    root.append(n("title", { id: tid }, title), n("desc", { id: did }, desc));
+    const defs = n("defs");
+    // The stroke sits at the tile's centre, not its edge: a line on x=0 is half
+    // outside the tile and renders as a sliver, which is how the hatch came out
+    // looking like an empty cell.
+    const pattern = n("pattern", { id: `p2a-hatch-${svg.seq}`, width: 4.5, height: 4.5,
+      patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
+    pattern.append(n("line", { class: "cover-mark", x1: 2.25, y1: 0, x2: 2.25, y2: 4.5 }));
+    defs.append(pattern);
+    root.append(defs);
+    root.dataset.hatch = `url(#p2a-hatch-${svg.seq})`;
+    return root;
+  };
+  svg.seq = 0;
+  const TITLE = "Each TSK-007 claim on its own four-stage evidence rail";
+  const DESC = "Every claim runs left to right along a rail with four stage positions. The rail is "
+    + "drawn heavy for the stages the evidence actually reached and continues as a thin dotted "
+    + "remainder to the stages it did not, so the part not travelled stays on the page. An upright "
+    + "bar marks where a rail stops, with the kind of thing that stopped it named beside it. At each "
+    + "rail head, five small cells give that claim's standing on each lane: filled means an executed "
+    + "run, a dashed outline means evidence that exists but was not promoted, a hatched cell means no "
+    + "run at all, a cell struck by a single stroke means the lane does not apply, and a cell crossed "
+    + "by two strokes means the claim does not reach that lane at all.";
+
+  function coverage(group, claim, x, y, size, gap, withHeads, hatch) {
+    F.lanes.forEach((lane, i) => {
+      const cell = claim.cells[i];
+      const cx = x + i * (size + gap);
+      const classes = ["cover-cell"];
+      if (cell.state === "executed") classes.push("on");
+      if (cell.state === "bounded") classes.push("bounded");
+      const rect = n("rect", { class: classes.join(" "), x: cx, y, width: size, height: size, rx: 2 });
+      // Inline, not an attribute: the stylesheet's `fill: none` would win over a
+      // presentation attribute and the hatch would silently not appear.
+      if (cell.state === "notrun") rect.style.fill = hatch;
+      group.append(rect);
+      if (cell.state === "na") {
+        group.append(n("line", { class: "cover-mark", x1: cx + 2, y1: y + size - 2, x2: cx + size - 2, y2: y + 2 }));
+      }
+      if (cell.state === "notclaimed") {
+        group.append(n("line", { class: "cover-mark", x1: cx + 3, y1: y + 3, x2: cx + size - 3, y2: y + size - 3 }));
+        group.append(n("line", { class: "cover-mark", x1: cx + size - 3, y1: y + 3, x2: cx + 3, y2: y + size - 3 }));
+      }
+      if (withHeads) {
+        // Full lane names have room to rotate at the widest band only; at the
+        // intermediate one they would run through the stage labels, so the
+        // heads shorten rather than the composition losing its lane strip.
+        const head = n("text", { class: "cover-head", x: cx + size / 2, y: y - 8,
+          transform: `rotate(-52 ${cx + size / 2} ${y - 8})` },
+        withHeads === "short" ? laneShort[lane] : lane);
+        group.append(head);
+      }
+    });
+  }
+
+  function build(W, opts) {
+    const { railX, railW, rowH, coverX, cellSize, cellGap, H0, claimX, heads } = opts;
+    const H = H0 + F.claims.length * rowH + 18;
+    const s = svg(W, H, TITLE, DESC);
+    const hatch = s.dataset.hatch;
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+    const stageX = (i) => railX + (i * railW) / (STAGES.length - 1);
+    const rowY = (r) => H0 + r * rowH;
+
+    const scale = g();
+    STAGES.forEach((label, i) => {
+      scale.append(n("line", { class: "stage-line", x1: stageX(i), y1: H0 - 34, x2: stageX(i), y2: H - 20 }));
+      scale.append(n("text", { class: "stage-label", x: stageX(i), y: H0 - 42, "text-anchor": "middle" }, label));
+    });
+
+    F.claims.forEach((claim, r) => {
+      const y = rowY(r);
+      const reach = F.reachOf(claim);
+      const row = g();
+      row.append(n("text", { class: "claim", x: claimX, y: y + 5 }, claim.claim));
+      coverage(row, claim, coverX, y - cellSize / 2 - 3, cellSize, cellGap, r === 0 ? heads : false, hatch);
+
+      if (reach > 0) {
+        row.append(n("line", { class: "rail-done", x1: stageX(0), y1: y, x2: stageX(reach - 1), y2: y }));
+      }
+      if (reach < STAGES.length) {
+        const from = reach > 0 ? stageX(reach - 1) : stageX(0);
+        row.append(n("line", { class: "rail-open", x1: from, y1: y, x2: stageX(STAGES.length - 1), y2: y }));
+        row.append(n("line", { class: "stop-bar", x1: from, y1: y - 13, x2: from, y2: y + 13 }));
+        const cause = causeById.get(F.stops[claim.id]);
+        // A label near the right edge is anchored to it, so an honest cause name
+        // is never clipped to make room for itself.
+        if (cause) {
+          const late = from > railX + railW * 0.55;
+          row.append(n("text", { class: "stop-why", x: late ? from - 12 : from + 12, y: y + 24,
+            "text-anchor": late ? "end" : "start" }, cause.label));
+        }
+        if (reach === 0) row.append(n("text", { class: "never", x: stageX(0) + 12, y: y - 14 }, "no chain begins"));
+      }
+      STAGES.forEach((_, i) => {
+        row.append(n("circle", { class: i < reach ? "node-on" : "node-off", cx: stageX(i), cy: y, r: i < reach ? 5.5 : 4.5 }));
+      });
+    });
+    return s;
+  }
+
+  const wide = () => build(1180, { claimX: 4, coverX: 322, cellSize: 16, cellGap: 5,
+    railX: 462, railW: 640, rowH: 76, H0: 132, heads: "full" });
+  const mid = () => build(880, { claimX: 4, coverX: 268, cellSize: 14, cellGap: 4,
+    railX: 396, railW: 400, rowH: 80, H0: 118, heads: "short" });
+
+  // -------------------------------------------------------------- narrow
+  // The rail turns. Stages become vertical positions inside each claim's own
+  // block, so how far the evidence travelled is still an extent and the part
+  // not travelled is still drawn; the lane cells become the block's head row.
+  function narrow() {
+    /* W4 REPLACEMENT of the narrow band, declared in registry.json before it was
+       drawn. In the W3 band each stop was a rule running from the figure's left
+       edge across roughly 40% of empty width to the rail, which reads as a
+       section divider rather than as a stop ON a rail; and each cause caption sat
+       left-aligned at the far edge, directly abutting the NEXT claim's title with
+       no separation, so the cause attached visually to the wrong claim.
+       Attribution is exactly what P2's registered question asks for.
+
+       Each claim is now a bounded lane with its own edge. The rail runs down
+       INSIDE that lane, inset from both edges, so a stop can never span the
+       figure's width. The stop is a short cross-tick on the rail. The cause sits
+       inside the same lane, indented to the rail, above the lane's own foot. */
+    const W = 358, blockH = 182, H0 = 34, railX = 42, railH = 96, cellSize = 15, cellGap = 4;
+    const LANE_L = 8, LANE_R = W - 8;
+    const H = H0 + F.claims.length * blockH;
+    const s = svg(W, H, TITLE, DESC);
+    const hatch = s.dataset.hatch;
+    const g = () => { const gg = n("g"); s.append(gg); return gg; };
+
+    F.claims.forEach((claim, r) => {
+      const top = H0 + r * blockH;
+      const reach = F.reachOf(claim);
+      const stageY = (i) => top + 44 + (i * railH) / (STAGES.length - 1);
+      const row = g();
+      /* the lane's own edges: a left rule the rail sits inside of, and a foot */
+      row.append(n("line", { class: "stage-line", x1: LANE_L, y1: top - 12, x2: LANE_L, y2: top + blockH - 6 }));
+      row.append(n("line", { class: "stage-line", x1: LANE_L, y1: top - 12, x2: LANE_R, y2: top - 12 }));
+      row.append(n("text", { class: "claim", x: LANE_L + 8, y: top + 4, style: "font-size:13px" }, claim.claim));
+      coverage(row, claim, LANE_L + 8, top + 14, cellSize, cellGap, false, hatch);
+      STAGES.forEach((label, i) => {
+        /* a short tick on the rail, not a rule across the lane */
+        row.append(n("line", { class: "stage-line", x1: railX - 5, y1: stageY(i), x2: railX + 5, y2: stageY(i) }));
+        row.append(n("text", { class: "stage-label", x: railX + 14, y: stageY(i) + 4, style: "font-size:11px" }, label));
+      });
+      if (reach > 0) {
+        row.append(n("line", { class: "rail-done", x1: railX, y1: stageY(0), x2: railX, y2: stageY(reach - 1) }));
+      }
+      if (reach < STAGES.length) {
+        const from = reach > 0 ? stageY(reach - 1) : stageY(0);
+        row.append(n("line", { class: "rail-open", x1: railX, y1: from, x2: railX, y2: stageY(STAGES.length - 1) }));
+        row.append(n("line", { class: "stop-bar", x1: railX - 9, y1: from, x2: railX + 9, y2: from }));
+        /* The cause stays inside this claim's lane, indented to the rail and above
+           the lane's foot, so it can never attach to the next claim's title. */
+        const cause = causeById.get(F.stops[claim.id]);
+        if (cause) {
+          row.append(n("text", { class: "stop-why", x: railX + 14, y: top + blockH - 16, style: "font-size:11.5px" },
+            `stops — ${cause.label}`));
+        }
+      }
+      STAGES.forEach((_, i) => {
+        row.append(n("circle", { class: i < reach ? "node-on" : "node-off", cx: railX, cy: stageY(i), r: i < reach ? 5 : 4 }));
+      });
+    });
+    return s;
+  }
+
+  document.getElementById("wide").append(wide());
+  document.getElementById("mid").append(mid());
+  document.getElementById("narrow").append(narrow());
+
+  const legendMarks = [
+    ["the stages the evidence reached", '<line x1="2" y1="8" x2="30" y2="8" class="rail-done"/><circle cx="8" cy="8" r="4" class="node-on"/><circle cx="26" cy="8" r="4" class="node-on"/>'],
+    ["the stages it did not", '<line x1="2" y1="8" x2="46" y2="8" class="rail-open"/><circle cx="40" cy="8" r="4" class="node-off"/>'],
+    ["where it stops", '<line x1="8" y1="1" x2="8" y2="15" class="stop-bar"/>'],
+    ["an executed run on that lane", '<rect x="4" y="2" width="12" height="12" rx="2" class="cover-cell on"/>'],
+    ["exists, not promoted here", '<rect x="4" y="2" width="12" height="12" rx="2" class="cover-cell bounded"/>'],
+    ["no run at all",
+      '<defs><pattern id="lg-hatch" width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cover-mark" x1="2.25" y1="0" x2="2.25" y2="4.5"/></pattern></defs>'
+      + '<rect x="4" y="2" width="12" height="12" rx="2" class="cover-cell" style="fill:url(#lg-hatch)"/>'],
+    ["the lane does not apply", '<rect x="4" y="2" width="12" height="12" rx="2" class="cover-cell"/><line x1="6" y1="12" x2="14" y2="4" class="cover-mark"/>'],
+    /* W4 repair. The page drew FIVE cell states and keyed four: `notclaimed`, a
+       cross on the Chromium claim's second lane, appeared in neither the legend
+       nor the accessible description nor the registry. An information-bearing
+       mark with no key is unreadable by construction, and every render of this
+       candidate carried it. */
+    ["the claim does not reach this lane",
+      '<rect x="4" y="2" width="12" height="12" rx="2" class="cover-cell"/>'
+      + '<line x1="7" y1="5" x2="13" y2="11" class="cover-mark"/><line x1="13" y1="5" x2="7" y2="11" class="cover-mark"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 48 16" aria-hidden="true">${marks}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const claim of F.claims) {
+    const tr = document.createElement("tr");
+    const reach = F.reachOf(claim);
+    const cells = [claim.claim, reach === 0 ? "nothing" : STAGES[reach - 1]];
+    for (const value of cells) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.append(td);
+    }
+    const said = document.createElement("td");
+    const quotes = [...new Set([
+      ...claim.cells.flatMap((c) => (c.quote ? [c.quote] : [])),
+      ...(claim.provenance?.quotes ?? []),
+    ])].slice(0, 2);
+    for (const quote of quotes) {
+      const bq = document.createElement("blockquote");
+      bq.textContent = `“${quote}”`;
+      said.append(bq);
+    }
+    tr.append(said);
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(F.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

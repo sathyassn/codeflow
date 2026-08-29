@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The qualification harness, region by region</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #11151a;      --ink-2: #454e5a;   --ink-3: #58616e;
+    --page: #f6f7f9;     --panel: #ffffff;   --rule: #d9dde4;
+    --gutter: #eef1f5;
+    --mark: #24303d;     --mark-soft: #9aa4b1;
+    --again: #8a4a10;    --outside: #7b1f4b;
+    --code-add: #0f5132; --code-del: #842029;  --code-ctx: #5f6874;
+    --shadow: 0 1px 2px rgba(17, 21, 26, .06), 0 10px 28px -18px rgba(17, 21, 26, .34);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef1f5;     --ink-2: #b1b9c5;  --ink-3: #8a94a1;
+      --page: #0d1015;    --panel: #151920;  --rule: #282f38;
+      --gutter: #1b212a;
+      --mark: #cfd9e6;    --mark-soft: #69737f;
+      --again: #f0b070;   --outside: #f2a3c4;
+      --code-add: #7ee2ad; --code-del: #ff9d9d; --code-ctx: #97a1ad;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body {
+    margin: 0; padding: 40px 44px 64px; color: var(--ink); background: var(--page);
+    font: 400 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -.015em; margin: 0 0 12px; font-weight: 640; }
+  .lede { margin: 0 0 30px; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  .lede code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14.5px; color: var(--ink); }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px;
+           padding: 8px 0 4px; box-shadow: var(--shadow); overflow: hidden; }
+  .file-head {
+    display: flex; align-items: baseline; gap: 12px; padding: 14px 22px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; color: var(--ink);
+    border-bottom: 1px solid var(--rule);
+  }
+  .file-head span { font-family: inherit; }
+  .file-head .path { font-weight: 640; }
+  .file-head .n { color: var(--ink-3); font-size: 11.5px; letter-spacing: .04em; }
+  .file-head .file-rail { margin-left: auto; flex: none; }
+  .file-head .file-rail svg { display: block; width: 200px; height: auto; }
+
+  .region { display: grid; grid-template-columns: 186px 1fr; border-bottom: 1px solid var(--rule); }
+  .region:last-child { border-bottom: 0; }
+  .rail { background: var(--gutter); padding: 14px 10px 14px 20px; }
+  .rail svg { display: block; width: 100%; height: auto; }
+  .rail .hunk { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                font-size: 10.5px; color: var(--ink-3); margin: 8px 0 0; }
+  .body { padding: 14px 22px 16px; min-width: 0; }
+  .why { font-size: 13.5px; color: var(--ink-2); margin: 0 0 10px; }
+  .why b { color: var(--ink); font-weight: 620; }
+  pre { margin: 0; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px; line-height: 1.65; }
+  pre span { display: block; white-space: pre; }
+  pre:focus-visible { outline: 2px solid var(--mark); outline-offset: 3px; border-radius: 3px; }
+  .add { color: var(--code-add); } .del { color: var(--code-del); } .ctx { color: var(--code-ctx); }
+
+  .tick-again { stroke: var(--again); }
+  .tick-outside { stroke: var(--outside); }
+  .tick-once { stroke: var(--mark-soft); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 22px 2px 0; font-size: 13.5px; color: var(--ink-2); }
+  .legend div { display: flex; align-items: center; gap: 9px; }
+  .legend svg { width: 46px; height: 18px; flex: none; }
+
+  details { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 14px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); font-weight: 550; }
+  table { border-collapse: collapse; margin-top: 14px; font-size: 13.5px; width: 100%; }
+  th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .src { margin: 26px 0 0; font-size: 12.5px; color: var(--ink-3); }
+  .src code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  @media (max-width: 1080px) {
+    body { padding: 32px 26px 56px; }
+    h1 { font-size: 26px; }
+    /* The margin rail becomes a strip directly above the region's first line. */
+    .region { grid-template-columns: 1fr; }
+    .rail { display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+            border-bottom: 1px solid var(--rule); }
+    .rail svg { width: 190px; flex: none; }
+    .rail .hunk { margin: 0; }
+  }
+  @media (max-width: 660px) {
+    body { padding: 24px 14px 48px; }
+    h1 { font-size: 22px; }
+    figure { border-radius: 11px; }
+    .rail { flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 14px; }
+    .body { padding: 12px 14px 14px; }
+    pre { font-size: 11px; }
+    .legend { gap: 10px 16px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">TSK-014 · qualification harness review</p>
+  <h1>The harness, region by region</h1>
+  <p class="lede">Eight rounds of exact review landed in a handful of places in the code. This is those
+    places, <b>in the order they appear in their files</b>. Each one carries a rail of the rounds that
+    rewrote it, so a region that was settled at the first attempt and one that was written three times
+    do not look alike.</p>
+
+  <figure id="regions"></figure>
+  <div class="legend" id="legend"></div>
+
+  <details>
+    <summary>Every round, with its commit</summary>
+    <table id="facts">
+      <thead><tr><th>Round</th><th>Commit</th><th>Subject</th><th>Date</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+
+  <p class="src">Rendered from <code>shared/p3-convergence.js</code>. Every round is matched against
+    <code>git log</code>, every line below against <code>git show</code> character for character.</p>
+</div>
+
+<script src="../../../shared/p3-convergence.js"></script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const P = window.p3Convergence;
+  const roundIndex = new Map(P.rounds.map((r, i) => [r.id, i]));
+  const startLine = (header) => Number((header.match(/\+(\d+)/) ?? [0, 0])[1]);
+
+  // The primary unit is a region of source, not a finding. Cells that touch the
+  // same file and the same hunk are one region, and regions are ordered by
+  // where they sit in their file.
+  const regions = new Map();
+  for (const finding of P.findings) {
+    for (const cell of finding.cells) {
+      if (!cell.hunk) continue;
+      const key = `${cell.hunk.path}::${cell.hunk.header}`;
+      if (!regions.has(key)) {
+        regions.set(key, { path: cell.hunk.path, header: cell.hunk.header,
+          at: startLine(cell.hunk.header), lines: cell.hunk.lines, touches: [] });
+      }
+      regions.get(key).touches.push({ round: cell.round, finding, cell });
+    }
+  }
+  const byFile = new Map();
+  for (const region of [...regions.values()].sort((a, b) => a.path.localeCompare(b.path) || a.at - b.at)) {
+    if (!byFile.has(region.path)) byFile.set(region.path, []);
+    byFile.get(region.path).push(region);
+  }
+  // A region rewritten more than once is one whose finding came back to it.
+  const rewrittenAgain = (region) => region.touches.some((t) => t.cell.states.includes("reopened"))
+    || region.touches.length > 1
+    || region.touches.some((t) => t.finding.cells.filter((c) => c.hunk && c.hunk.path === region.path).length > 1);
+  const fromOutside = (region) => region.touches.some((t) => t.cell.cause === "outside-harness");
+
+  const n = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  // The rail: every round in order, with the ones that rewrote this region
+  // standing proud of the ones that did not. Length is the whole review; the
+  // marks are where this region was touched.
+  function rail(touches, label, big) {
+    const W = 180, H = big ? 40 : 46, x0 = 6, step = (W - 12) / (P.rounds.length - 1);
+    const s = document.createElementNS(NS, "svg");
+    s.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    s.setAttribute("role", "img");
+    const tid = `r${++rail.seq}`;
+    s.setAttribute("aria-labelledby", tid);
+    const hit = new Set(touches.map((t) => t.round));
+    s.append(n("title", { id: tid }, `${label}: ${[...hit].join(", ")} of ${P.rounds.length} rounds`));
+    const baseY = big ? 24 : 26;
+    s.append(n("line", { x1: x0, y1: baseY, x2: W - 6, y2: baseY, stroke: "var(--rule)", "stroke-width": 1 }));
+    P.rounds.forEach((round, i) => {
+      const x = x0 + i * step;
+      const touch = touches.find((t) => t.round === round.id);
+      if (!touch) {
+        s.append(n("line", { class: "tick-once", x1: x, y1: baseY - 3.5, x2: x, y2: baseY + 3.5, "stroke-width": 1 }));
+        return;
+      }
+      const outside = touch.cell.cause === "outside-harness";
+      const again = touch.cell.states.includes("reopened");
+      s.append(n("line", { class: outside ? "tick-outside" : (again ? "tick-again" : "tick-once"),
+        x1: x, y1: baseY - 16, x2: x, y2: baseY + 4, "stroke-width": outside ? 6 : (again ? 5 : 3),
+        "stroke-linecap": "round" }));
+      s.append(n("text", { x, y: baseY + 16, "text-anchor": "middle", "font-size": 9.5,
+        fill: "var(--ink-2)", "font-family": "ui-monospace, monospace" }, round.id));
+    });
+    return s;
+  }
+  rail.seq = 0;
+
+  const figure = document.getElementById("regions");
+  for (const [path, list] of byFile) {
+    const head = document.createElement("div");
+    head.className = "file-head";
+    const p = document.createElement("span");
+    p.className = "path";
+    p.textContent = path;
+    const c = document.createElement("span");
+    c.className = "n";
+    c.textContent = `${list.length} ${list.length === 1 ? "region" : "regions"} the review touched`;
+    head.append(p, c);
+    // The file's own rail: every round that landed anywhere in this file. The
+    // regions below were each written once or twice; the accumulation this
+    // review actually produced is at the file, and it is drawn where it is.
+    const fileRail = document.createElement("span");
+    fileRail.className = "file-rail";
+    fileRail.append(rail(list.flatMap((region) => region.touches), path, true));
+    head.append(fileRail);
+    figure.append(head);
+
+    for (const region of list) {
+      const row = document.createElement("div");
+      row.className = "region";
+
+      const railCell = document.createElement("div");
+      railCell.className = "rail";
+      railCell.append(rail(region.touches, `${region.path} ${region.header}`, false));
+      const hunk = document.createElement("p");
+      hunk.className = "hunk";
+      hunk.textContent = region.header;
+      railCell.append(hunk);
+
+      const body = document.createElement("div");
+      body.className = "body";
+      const why = document.createElement("p");
+      why.className = "why";
+      const last = region.touches[region.touches.length - 1];
+      const strong = document.createElement("b");
+      strong.textContent = `${last.finding.id} · ${last.finding.title}`;
+      why.append(strong, document.createTextNode(` — ${last.cell.what}`));
+      body.append(why);
+
+      const pre = document.createElement("pre");
+      // The quoted lines scroll sideways in a narrow context, so the scroll
+      // container has to be reachable from the keyboard and has to say what it
+      // is; otherwise the narrow composition loses the code to anyone not
+      // using a pointer.
+      pre.tabIndex = 0;
+      pre.setAttribute("role", "region");
+      pre.setAttribute("aria-label", `${region.path} ${region.header}`);
+      for (const line of region.lines) {
+        const span = document.createElement("span");
+        span.className = line.startsWith("+") ? "add" : (line.startsWith("-") ? "del" : "ctx");
+        span.textContent = line;
+        pre.append(span);
+      }
+      body.append(pre);
+
+      row.append(railCell, body);
+      figure.append(row);
+      row.dataset.again = String(rewrittenAgain(region));
+      row.dataset.outside = String(fromOutside(region));
+    }
+  }
+
+  const legendMarks = [
+    ["a round that did not touch this region", '<line x1="23" y1="6" x2="23" y2="12" class="tick-once" stroke-width="1"/>'],
+    ["the round that wrote it", '<line x1="23" y1="3" x2="23" y2="15" class="tick-once" stroke-width="2.5" stroke-linecap="round"/>'],
+    ["a round that had to write it again", '<line x1="23" y1="2" x2="23" y2="16" class="tick-again" stroke-width="4" stroke-linecap="round"/>'],
+    ["and one whose cause was not in the harness", '<line x1="23" y1="2" x2="23" y2="16" class="tick-outside" stroke-width="5" stroke-linecap="round"/>'],
+  ];
+  const legend = document.getElementById("legend");
+  for (const [label, marks] of legendMarks) {
+    const div = document.createElement("div");
+    div.innerHTML = `<svg viewBox="0 0 46 18" aria-hidden="true">${marks}</svg><span></span>`;
+    div.querySelector("span").textContent = label;
+    legend.append(div);
+  }
+
+  const body = document.querySelector("#facts tbody");
+  for (const round of P.rounds) {
+    const tr = document.createElement("tr");
+    for (const value of [round.id, round.sha, round.subject, round.date]) {
+      const td = document.createElement("td");
+      td.innerHTML = "<code></code>";
+      td.querySelector("code").textContent = value;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+
+  // The derived answer goes to the machine channel only. Nothing above renders it.
+  document.documentElement.dataset.answer = JSON.stringify(P.answer);
+  document.documentElement.dataset.ready = "true";
+})();
+</script>
+</body>
+</html>

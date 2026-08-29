@@ -25,9 +25,11 @@ PATH="$PWD/target/release:$PATH" codeflow test --mode full --strict
 ```
 
 The gate requires `cargo-llvm-cov` (`cargo install cargo-llvm-cov --locked`).
-CodeFlow itself supports macOS and Linux; Windows is unsupported because its git
-hooks and executable-bit handling use Unix paths. Run a narrower command while
-iterating, but report the full gate in the PR.
+The release matrix targets native macOS, Linux, and Windows binaries; WSL2 uses
+the Linux artifact. Git for Windows supplies the shell environment used by the
+hook shims on native Windows. Cross-target compilation is useful early evidence,
+but the release checklist still requires native platform and installer canaries.
+Run a narrower command while iterating, but report the full gate in the PR.
 
 The operating contract for this repo is [AGENTS.md](AGENTS.md); the working
 method (planning weight, when an ADR is warranted, the capability registry) is

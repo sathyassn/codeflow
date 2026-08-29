@@ -1,0 +1,77 @@
+:root[data-cf-mode="system"][data-cf-theme="editorial"] {
+  --cf-canvas: #f6f3ee;
+  --cf-surface: #fffdf9;
+  --cf-surface-raised: #f3efe8;
+  --cf-surface-subtle: #ebe5dc;
+  --cf-text: #211f1c;
+  --cf-text-muted: #686159;
+  --cf-border: #d2c9bd;
+  --cf-border-strong: #756c62;
+  --cf-accent: #8a2f52;
+  --cf-accent-strong: #6d1f3c;
+  --cf-accent-soft: #f2dfe7;
+  --cf-focus: #116a75;
+  --cf-positive: #176b49;
+  --cf-warning: #914b00;
+  --cf-danger: #9b1c1c;
+  --cf-diagram-line: #514a44;
+}
+
+:root[data-cf-mode="system"][data-cf-theme="technical"] {
+  --cf-canvas: #eef2f4;
+  --cf-surface: #fafcfd;
+  --cf-surface-raised: #f0f5f7;
+  --cf-surface-subtle: #e2eaee;
+  --cf-text: #172126;
+  --cf-text-muted: #53656e;
+  --cf-border: #becdd4;
+  --cf-border-strong: #5b717c;
+  --cf-accent: #096b78;
+  --cf-accent-strong: #075762;
+  --cf-accent-soft: #d8eef0;
+  --cf-focus: #7b3fb0;
+  --cf-positive: #16653d;
+  --cf-warning: #8a4b00;
+  --cf-danger: #982327;
+  --cf-diagram-line: #3f5964;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-cf-mode="system"][data-cf-theme="editorial"] {
+    --cf-canvas: #171513;
+    --cf-surface: #201d1a;
+    --cf-surface-raised: #292520;
+    --cf-surface-subtle: #322c27;
+    --cf-text: #f5f0e8;
+    --cf-text-muted: #bcb2a6;
+    --cf-border: #534b43;
+    --cf-border-strong: #a99f94;
+    --cf-accent: #e79ab7;
+    --cf-accent-strong: #ffc0d4;
+    --cf-accent-soft: #4e2737;
+    --cf-focus: #68d4df;
+    --cf-positive: #74d4a7;
+    --cf-warning: #f1b66b;
+    --cf-danger: #ff9d99;
+    --cf-diagram-line: #bcb2a6;
+  }
+
+  :root[data-cf-mode="system"][data-cf-theme="technical"] {
+    --cf-canvas: #10181c;
+    --cf-surface: #172226;
+    --cf-surface-raised: #1e2c31;
+    --cf-surface-subtle: #26373d;
+    --cf-text: #eef5f7;
+    --cf-text-muted: #a9bbc2;
+    --cf-border: #40545c;
+    --cf-border-strong: #9eb3bb;
+    --cf-accent: #64d4df;
+    --cf-accent-strong: #91edf3;
+    --cf-accent-soft: #173e43;
+    --cf-focus: #c495ed;
+    --cf-positive: #72d49e;
+    --cf-warning: #ecb465;
+    --cf-danger: #ff9ba0;
+    --cf-diagram-line: #a9bbc2;
+  }
+}

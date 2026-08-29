@@ -39,11 +39,19 @@ Relationships, not encoded numbers, form the graph:
 
 Use `codeflow epic new`, `codeflow spec new --for EPC-NNN|TSK-NNN`, and
 `codeflow task new --epic EPC-NNN` (or `--standalone-reason "..."`), with
-`--into <branch>` when the task targets a body-of-work integration branch.
-Create that stable branch before allocating the task; the CLI refuses a missing
-target, task branch, tag, object ID, or revision expression. Allocation creates
-files exclusively. Parallel planners therefore serialize allocation or use one
-allocator; a collision is renumbered before merge, never overwritten.
+`--into integration/<epic-id>-<slug>` for every task in a multi-task epic.
+For a supplied task set or batch, first partition by coherent durable outcome
+and direct dependencies; the request boundary is not automatically an epic or
+integration boundary. A batch may therefore produce multiple epics, standalone
+tasks, or both, each with its own appropriate landing route.
+Create that one shared branch from the intended protected target before
+allocating the tasks. The integration branch is the default for a multi-task
+body; a different landing shape requires an explicit Plan vN rationale and
+approval from both primary seats before allocation. Use it only for the epic's
+coherent outcome, never to batch unrelated standalone tasks. The CLI refuses a
+missing target, task branch, tag, object ID, or revision expression. Allocation
+creates files exclusively. Parallel planners therefore serialize allocation or
+use one allocator; a collision is renumbered before merge, never overwritten.
 
 CodeFlow reads historical dual-identity and `TSK-NNN-NNN` records, including
 the old nested epic/task layout. New records use the flat shape and one ID.
@@ -79,7 +87,7 @@ cf-model-orchestrator: independent Claude + Codex discovery
 settle and dual-approve Plan vN
         |
         v
-cf-plan materializes only the durable artifacts warranted
+cf-plan partitions any supplied batch, then materializes warranted records
         |
         +-- one bounded durable outcome ----------> TSK-NNN
         +-- multi-session/PR/capability outcome --> EPC-NNN + TSK-NNN...

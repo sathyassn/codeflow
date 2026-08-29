@@ -8,7 +8,9 @@
      entries; it does not verify that the test tags resolve, and it does not
      block an epic from closing.
      Statuses: planned → building → shipped → deprecated (never delete).
-     At ~15 entries, graduate to docs/capabilities/CAP-*.md. -->
+     Keep this registry while it remains easy to scan; graduate to
+     docs/capabilities/CAP-*.md when navigation or merge costs materially
+     outweigh a single overview. -->
 
 ## CAP-001 — scaffold-init
 
@@ -18,7 +20,7 @@ name: scaffold-init
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
-epics: [EPC-001]
+epics: [EPC-001, EPC-005]
 adrs: [ADR-0019, ADR-0025, ADR-0026]
 ```
 
@@ -62,7 +64,7 @@ name: scaffold-update
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::update", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
-epics: [EPC-001]
+epics: [EPC-001, EPC-005]
 adrs: [ADR-0011, ADR-0019]
 ```
 
@@ -241,7 +243,7 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001, EPC-002]
+epics: [EPC-001, EPC-002, EPC-003]
 adrs: [ADR-0002, ADR-0007, ADR-0025]
 ```
 
@@ -307,8 +309,8 @@ name: duo-model-orchestration
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
-epics: [EPC-002, EPC-004]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046]
+epics: [EPC-002, EPC-003, EPC-004, EPC-005]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -335,15 +337,20 @@ and materially open novel work compares two or three viable directions first.
 Language/voice and appearance modes are resolved only where applicable from
 project evidence: localized quality needs localized evidence, mode claims need
 rendered preference and persistence evidence, and CodeFlow utility defaults do
-not become product design authority.
+not become product design authority. After selection, further variants require
+one named unresolved material choice and stop when it is settled. Material
+references and assets retain proportionate authority, rights/privacy,
+transformation, and product-use provenance, while material feedback names the
+exact reviewed version in Plan vN+1 rather than a parallel design database.
 The Claude judgment role leads intent, Codex challenges feasibility and
 fidelity, and both approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
 behavior rather than taste. The design-direction eval pack covers this
 selection, operator precedence, evidence-grounded design-choice review,
-distinct evidenced product voices, localization honesty, utility/product
-isolation, appearance-mode behavior, accessibility, and rendered fidelity
-(ADR-0043).
+bounded refinement, sourcing/privacy, reviewed-version retention, distinct
+evidenced product voices, localization honesty, utility/product isolation,
+appearance-mode behavior, accessibility, and rendered fidelity
+(ADR-0043, ADR-0051).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
 CLI reaches Claude through an interactive task-scoped tmux session. Another
@@ -421,7 +428,7 @@ name: security-redteam-review
 area: engine
 status: shipped
 verified_by: ["cargo test hooks::policy", "codeflow-core tests/manifest_consistency.rs"]
-epics: []
+epics: [EPC-003]
 adrs: [ADR-0016]
 ```
 
@@ -451,7 +458,7 @@ name: scaffold-customize
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-004]
+epics: [EPC-003, EPC-004, EPC-005]
 adrs: [ADR-0025, ADR-0044]
 ```
 
@@ -494,7 +501,7 @@ name: model-binding-evaluation
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004]
+epics: [EPC-003, EPC-004, EPC-005]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044]
 ```
 
@@ -537,6 +544,15 @@ contextual and collapsible. Its cases require distinct project-evidenced
 voices, legible titles/actions/states, honest localization claims, applicable
 system/user mode and persistence evidence, and isolation between CodeFlow
 utility defaults and consuming-product design authority.
+
+The hard `CF-DES-006` and `CF-DES-007` contracts keep later exploration and
+asset use bounded and reviewable. Their cases require a named unresolved choice
+before in-direction variants, an explicit stop condition, exact reviewed-
+version provenance for material Plan vN+1 feedback, separation of inspiration
+from user evidence, rights/consent and transformation evidence, refusal of
+unauthorized private-data uploads, and verification in the actual product
+context. Provider catalogs and parallel design databases remain outside the
+portable doctrine (ADR-0051).
 
 The hard `CF-QA-002` contract separates browser headlessness from interactive
 peer-model transport and requires claim-matched behavior, visual, runtime,
@@ -652,3 +668,140 @@ AskUserQuestion, and permission-response routing on the available macOS arm64
 host. The reusable sibling-hook rejection procedure, full fake-TUI stress
 matrix, and broader native-platform evidence remain PR2/release gates and are
 not claimed complete.
+
+## CAP-016 — interactive-presentation-review
+
+```yaml
+id: CAP-016
+name: interactive-presentation-review
+area: engine
+status: building
+verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
+epics: [EPC-005]
+adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
+```
+
+`codeflow present` turns a closed versioned JSON+Markdown document into one
+bounded local review surface. The standard/full scaffold supplies the
+cross-harness `cf-present` authoring skill, canonical document/token/history
+schemas, representative assets, and proportional routing: simple answers stay
+in chat; a complex explanation, comparison, plan, decision, evidence set, diff,
+or review uses the utility only when coherent visual inspection or anchored
+feedback materially helps. Agents author **this session's** subject into the
+catalog; the runtime owns chrome, themes, and the Comment system. The
+design-exploration board is craft reference, not a document to clone. Durable
+docs belong to `cf-docs-portal`.
+
+The runtime validates the declarative block tree, embeds its deterministic
+renderer, stores immutable revisions and append-only feedback in owner-private
+project-keyed durable state, keeps browser-owned profile/cache and bounded
+runtime controls in a separate derived root, and exposes open/update/list/show/history/feedback/resolve/
+export/close/clear through the CLI. A one-time tokenless file bootstrap opens a
+CodeFlow-owned isolated browser profile against an authenticated loopback-only
+service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
+sandboxing, strict primitive-token import, crash recovery, bounded retention,
+and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
+repair are self-bounded and operate through one opened handle. Mermaid input is
+capped per diagram and per document; browser enhancement is serialized, yields
+between diagrams, and fails remaining items to escaped source when the eager
+fallback exhausts its cumulative budget. Browser and auxiliary system-tool
+children share one allowlist-only environment. Windows ACL mutation is confined
+to creation for every private file, including append and lease files; existing
+state uses native read-only owner/protected-DACL/trustee/inheritance
+verification. Unix ignores a relative XDG state override and rejects a relative
+home rather than placing state in the worktree. Static export remains self-contained and excludes
+review/authentication/runtime state.
+
+Native-path repository identity, per-block and whole-document collection
+cardinality, a project→session→runtime-control lock order, pre-publication
+capacity admission for every durable growth route, and an over-quota-safe
+control path keep quota boundaries deterministic under concurrent creation,
+revision, feedback, and runtime registration. The browser loads a bounded recent
+feedback snapshot, uniquely re-anchors exact selectors across revisions, leaves
+missing/ambiguous selectors visibly orphaned, and exposes the current lifecycle
+version. Resolve accepts only a current delivered event and appends
+addressed/dismissed state. Exact accepted receipt and identical terminal retries
+are zero-growth operations; conflicting reuse and unrelated stale versions fail
+closed. Retention recomputes bounded durable size after every eviction, selected
+cleanup loads only its named session, and bulk cleanup reports isolated partial
+failures without deleting ambiguous state. A selected session that cannot be
+removed reports its exact retained outcome instead of succeeding silently.
+Verified Unix process groups receive bounded graceful shutdown and then an
+identity recheck before forced termination. Unverifiable orphan process
+groups/trees retain recovery state rather than killing an unproven process or
+deleting its profile. Launches are serialized under a session lease and publish
+one exact record per attempt; close, show, and retry consume it. Reused PIDs are
+never signalled: bounded exact-marker discovery and native profile-resource
+proof either complete cleanup or retain an actionable error. Windows checks
+exclusive handles across the actual profile tree rather than assuming a
+POSIX-style lock file. After a retained group/tree exits or an operator verifies
+and terminates it, retrying close completes cleanup. Review input controls expose
+the Rust-owned note, text, selection, and payload bounds before submission.
+
+The capability remains `building` until TSK-007 records the full native
+macOS/Linux/WSL2/Windows and qualified-browser matrix, adversarial service and
+state evidence, design/accessibility/responsive comparisons, deterministic
+asset/release checks, and fresh native interactive model trials. That matrix
+includes Windows Unicode known-folder/profile paths, creation-time ACL
+hardening plus read-only weakened-ACL rejection, trusted system tools, exact
+process-tree identity and file URLs; Linux/WSL2
+bounded `/proc` identity and group signaling; and a dense multi-diagram browser
+corpus with long-task evidence. Cross-builds alone do not claim native runtime
+support.
+
+## CAP-015 — opt-in-documentation-portal
+
+```yaml
+id: CAP-015
+name: opt-in-documentation-portal
+area: scaffold
+status: building
+verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/"]
+epics: [EPC-005]
+adrs: [ADR-0048]
+```
+
+`codeflow portal setup --path <repository-relative-directory>` explicitly
+adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
+starter is absent from ordinary initialization, materializes offline once at
+the selected root, preserves user-owned configuration, and participates in
+ordinary never-clobber updates through opaque content-addressed pristine
+baselines. The source-authority adapter generates disposable pages, Markdown
+twins, `llms.txt`, search output, and a versioned evidence manifest from one
+clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
+literal bounded Git pathspec batches, committed-blob authority,
+configured-tree source coverage, semantic source-root-relative routes,
+reserved generated-public namespaces, locale-independent ordering, workflow
+lease, and recoverable publication transaction fail closed before mixed or
+active content can be claimed. Index flags cannot hide changed runtime,
+configuration, source, token, or media bytes. The locked installer verifies the
+exact lifecycle-script inventory and disables dependency scripts. Install,
+build, preview, browser, and Git subprocesses receive only a small non-secret
+environment allowlist; inherited provider, cloud, package-registry credential,
+and loader variables never cross the boundary, while Git also rejects inherited
+configuration. A broken current Markdown blob yields only a
+bounded, visible, non-searchable current-source error page; Git history and
+previous generated data are never republished.
+`codeflow validate --portal <directory>` executes no project code and writes
+nothing; it independently checks bounded path, hash, complete configured-source
+coverage, exact source-derived identity/relationship, error-page, provenance, version, raster-dimension,
+output-coverage, twin, and
+`llms.txt` claims.
+
+The repository-owned full gate runs the complete locked JavaScript authority
+suite, a real Starlight build, and the Rust verifier locally and on Ubuntu; the
+Windows lane runs the same JavaScript authority/path suite. Shared fixtures pin
+configuration, strict-frontmatter, 40/64-character Git object ID, exact
+case-sensitive route, and URL-boundary behavior across the producer and
+verifier. These dogfood gates do not leak a Node requirement into the generic
+consumer CI scaffold: adopted consumer portals opt into their project test
+configuration.
+
+The mirrored `cf-docs-portal` skill owns proportional adoption, layered
+information design, safe source interpretation, exact dependency operations,
+browser/accessibility evidence, and cleanup. It applies the same utility
+presentation craft as `cf-present` (tokens, altitude, stage grammar) to
+durable source-linked docs for CodeFlow or any consuming project, without a
+session Comment lifecycle. The repository dogfoods the starter under
+`docs-portal/`; a generated local site is evidence and never an implicit
+publish action.

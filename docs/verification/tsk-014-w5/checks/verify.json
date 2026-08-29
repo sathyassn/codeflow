@@ -1,0 +1,253 @@
+{
+  "gates": [
+    {
+      "id": "LOCK",
+      "what": "rubric.v5.md matches rubric.v5.lock.json",
+      "verdict": "pass",
+      "detail": "sha256 9a71e7f4ed26b079…"
+    },
+    {
+      "id": "LOCK",
+      "what": "registry.json matches registry.lock.json",
+      "verdict": "pass",
+      "detail": "sha256 7607cf86fb34ed97…"
+    },
+    {
+      "id": "PRIOR",
+      "what": "tsk-014-w2/rubric.md unchanged",
+      "verdict": "pass",
+      "detail": "byte-identical"
+    },
+    {
+      "id": "PRIOR",
+      "what": "tsk-014-w3/amendments.lock.json",
+      "verdict": "not run",
+      "detail": "carries no single pinned file with a digest (locks, locked_on, why, scope, evidence, required) — unverifiable here, not a pass"
+    },
+    {
+      "id": "PRIOR",
+      "what": "tsk-014-w3/rubric.v2.md unchanged",
+      "verdict": "pass",
+      "detail": "byte-identical"
+    },
+    {
+      "id": "PRIOR",
+      "what": "tsk-014-w3/rubric.v3.md unchanged",
+      "verdict": "pass",
+      "detail": "byte-identical"
+    },
+    {
+      "id": "PRIOR",
+      "what": "tsk-014-w4/registry.json unchanged",
+      "verdict": "pass",
+      "detail": "byte-identical"
+    },
+    {
+      "id": "PRIOR",
+      "what": "tsk-014-w4/rubric.v4.md unchanged",
+      "verdict": "pass",
+      "detail": "byte-identical"
+    },
+    {
+      "id": "A21",
+      "what": "every disposition separates intent from outcome",
+      "verdict": "pass",
+      "detail": "40 entries, each with a target_disposition and an outcome in pending/achieved/partial/failed/withdrawn"
+    },
+    {
+      "id": "A21",
+      "what": "no outcome is claimed that this session may not claim",
+      "verdict": "pass",
+      "detail": "every registered outcome is still pending — correct: no artefact outcome may be recorded by its own author"
+    },
+    {
+      "id": "A22",
+      "what": "every finding cites a completed observer turn",
+      "verdict": "pass",
+      "detail": "15 findings, all citing turn-1 or turn-2"
+    },
+    {
+      "id": "A22",
+      "what": "the uncompleted turn-3 is cited nowhere",
+      "verdict": "pass",
+      "detail": "appears only in evidence_provenance.not_evidence"
+    },
+    {
+      "id": "A22",
+      "what": "the reading boundary is declared",
+      "verdict": "pass",
+      "detail": "the registration states what this session read and what it could not"
+    },
+    {
+      "id": "A17",
+      "what": "every scorable surface has a plain control",
+      "verdict": "pass",
+      "detail": "6 scorable surfaces, each with chat, Markdown and plain-HTML controls"
+    },
+    {
+      "id": "A16",
+      "what": "every artefact is rendered at every width in every mode",
+      "verdict": "pass",
+      "detail": "15 artefacts x 6 contexts = 90 renders, no gap"
+    },
+    {
+      "id": "A16",
+      "what": "observation coverage is NOT claimed",
+      "verdict": "pass",
+      "detail": "rendering coverage is complete; the W4 corners the observer never inspected remain unobserved, and so does every W5 corner, until a fresh answer-blind observer reads this board"
+    },
+    {
+      "id": "A19",
+      "what": "narrow height within 3.2x its wide height",
+      "verdict": "pass",
+      "detail": "worst ratio 2.24x. See amendments A-04: this gate is weak and did not catch the artefact it was written for."
+    },
+    {
+      "id": "A15",
+      "what": "every drawn state mark at or above the 9px mark floor",
+      "verdict": "pass",
+      "detail": "2054 state marks measured across 90 renders; smallest information-bearing dimension 9.3px against a 9px floor"
+    },
+    {
+      "id": "A15",
+      "what": "every declared channel is bound to measured evidence and present in all six contexts",
+      "verdict": "pass",
+      "detail": "4 bound distinctions x 6 contexts. Evidence selected only by the bound rendered distinction; every registered channel_a/channel_b tied to one measured channel and to an exact per-state token map; every divergence covered by a matching authorises entry; every pair of states separated by at least two of the NAMED channels"
+    },
+    {
+      "id": "A15",
+      "what": "no channel token depends on colour (proved in light and dark)",
+      "verdict": "pass",
+      "detail": "4 distinctions: every state's bound tokens identical between the light and dark render of the same viewport, so no token carries hue"
+    },
+    {
+      "id": "A15",
+      "what": "withdrawn artefacts are reconciled, not skipped",
+      "verdict": "pass",
+      "detail": "cases/p3b (A-03) — declared in the pinned registry, absent from the board, authorised by a named amendment rather than silently dropped"
+    },
+    {
+      "id": "A18",
+      "what": "the spine order comes from the operating contract itself",
+      "verdict": "pass",
+      "detail": "AGENTS.md states \"capability → epic/task → ADR/spec → PR → ledger\""
+    },
+    {
+      "id": "A18",
+      "what": "the drawn spine equals the declared spine, in every context",
+      "verdict": "pass",
+      "detail": "6 renders, each drawing capability → epic-task → adr-spec → pr → ledger — the order W4 got wrong"
+    },
+    {
+      "id": "A18",
+      "what": "no two spine nodes share one drawn position",
+      "verdict": "pass",
+      "detail": "5 distinct nodes in every render"
+    },
+    {
+      "id": "A18",
+      "what": "every authority kind the contract declares is drawn and named",
+      "verdict": "pass",
+      "detail": "all 7 kinds drawn in every render — W4 collapsed them to 3"
+    },
+    {
+      "id": "A20",
+      "what": "the second binding of a reused recipe varies",
+      "verdict": "pass",
+      "detail": "the direction binding spans reached 2–4 across 5 instances"
+    },
+    {
+      "id": "A1",
+      "what": "no registered forbidden phrase or pattern in any candidate render",
+      "verdict": "pass",
+      "detail": "3 cases checked against every candidate render"
+    },
+    {
+      "id": "A-05",
+      "what": "no text overprints inside a figure",
+      "verdict": "pass",
+      "detail": "90 renders, no pair of text runs overlapping by more than 1.5px of depth"
+    },
+    {
+      "id": "A13",
+      "what": "no figure text below the legibility floor",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "A7",
+      "what": "every render carries what its page contains",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "A12",
+      "what": "every drawn state is keyed",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "A5",
+      "what": "no motion at runtime",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "ACC",
+      "what": "zero axe violations (partial evidence, never proof)",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "NET",
+      "what": "no request off the study origin",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "LOG",
+      "what": "no console or page error",
+      "verdict": "pass",
+      "detail": "clean"
+    },
+    {
+      "id": "A10",
+      "what": "one shell, byte-identical across every render",
+      "verdict": "pass",
+      "detail": "sha256 9cb87591462517ed… on all 90 renders"
+    }
+  ],
+  "human_gates_not_decided_here": [
+    "G1 governing idea",
+    "G2 task question",
+    "G3 plain-baseline differential",
+    "G4 form match",
+    "G5 primary-form inventory",
+    "G6 interchangeability",
+    "G7 no-box",
+    "G8 idea survival",
+    "G9 expressive reach",
+    "G10 extension cost",
+    "G11 channel legibility in context",
+    "G12 the answer is correct"
+  ],
+  "amendments": [
+    "A-01",
+    "A-02",
+    "A-03",
+    "A-04",
+    "A-05",
+    "A-06",
+    "A-07",
+    "A-08",
+    "A-09",
+    "A-10",
+    "A-11"
+  ],
+  "summary": {
+    "pass": 35,
+    "fail": 0,
+    "not_run": 1
+  },
+  "what_a_clean_run_means": "the board is internally consistent, accessible to the automated checks, reproducible and admissible. It does not mean any composition communicates. On W4 a clean run passed a figure that stated a repository fact incorrectly; A18 exists because of that."
+}

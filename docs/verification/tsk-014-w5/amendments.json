@@ -1,0 +1,400 @@
+{
+  "what_this_file_is": "registry.json and rubric.v5.md are digest-pinned and byte-frozen. Every divergence between what was pre-registered and what was built lands here, with its reason, rather than being edited into the pinned file. A8 requires it; A21 requires that a divergence in a disposition also carries an outcome.",
+  "read_before": [
+    "A2",
+    "A3",
+    "A4",
+    "A8",
+    "A9",
+    "A15",
+    "A19",
+    "A20",
+    "A21"
+  ],
+  "amendments": [
+    {
+      "id": "A-01",
+      "against": "registry.channels[0] — cases/p2 lane evidence state",
+      "pre_registered": "Four drawn states executed / bounded / notrun / outofscope, with the fifth distinction — 'a lane that does not apply' against 'a lane the claim does not reach' — moved out of the figure.",
+      "built": "Four drawn states executed / short / notrun / outofscope. The merge is between `bounded` and `notclaimed`, which both become `short`. `na` stays its own drawn state.",
+      "why": "The pre-registered merge was wrong on the facts. `notclaimed` is the Linux desktop-Chromium cell: that run HAPPENED and exited SIGTRAP, and the record states it is not claimed as passed. Drawing it as 'the lane does not apply' would have filed a failed run under not-applicable — a false statement about the subject, which is the exact defect class F01 and A18 exist to prevent. `bounded` and `notclaimed` genuinely share a meaning: something exists and it does not count at this candidate. What separates them is why, and why is what the registered question asks for, so it is carried per lane in the figure's foot at full size rather than inside a 15px cell.",
+      "channels_as_built": "three — interior (solid ink / hatched / empty), edge (plain / dashed / dotted), overlay (none / horizontal strike). Every pair of the four states differs on at least two of the three, and none of the three is hue.",
+      "outcome": "achieved for the drawing; checks/marks.json records the state set and the smallest mark dimension per render. Whether the four are decodable in context is G11 and is not settled here.",
+      "authorises": [
+        {
+          "artefact": "cases/p2",
+          "kind": "state_map",
+          "from": "bounded",
+          "to": "short"
+        },
+        {
+          "artefact": "cases/p2",
+          "kind": "channel_added",
+          "channel": "overlay",
+          "why": "the built vocabulary carries three channels, not the two the registry names"
+        }
+      ]
+    },
+    {
+      "id": "A-02",
+      "against": "registry.channels[0].channel_b — 'a single slash' for the out-of-scope state",
+      "pre_registered": "a single slash",
+      "built": "a horizontal strike",
+      "why": "A 45-degree slash competes directly with the 45-degree hatch that carries `notrun`, at the size these cells actually render. Two marks that share an axis and differ only in line count are exactly the confusability that produced the W4 decoding failures. A horizontal strike puts the mark on a different axis from the hatch, so the two separate on orientation as well as on density.",
+      "outcome": "achieved in the drawing; decodability remains G11.",
+      "authorises": [
+        {
+          "artefact": "cases/p2",
+          "kind": "channel_mark",
+          "channel": "overlay",
+          "from": "a single slash",
+          "to": "a horizontal strike"
+        }
+      ]
+    },
+    {
+      "id": "A-03",
+      "against": "registry.blind_findings F06 and registry.cases p3 — cases/p3b retained on probation",
+      "pre_registered": "b-source-region-history repaired and demoted, retained for one further answer-blind trial, withdrawn if that trial reproduces a wrong answer.",
+      "built": "Withdrawn now, before the trial. Its W4 renders are kept under rejected/p3b-source-region-history/ as a rejection record. cases/p3 carries one candidate.",
+      "why": "Four things were already true of it on the W4 evidence, none of which needed another trial to establish: it produced a wrong answer; its distinguishing channel was a stroke-width difference of one pixel between `again` and `outside`, which is hue-only in practice and under the declared mark floor; its narrow band does not recompose; and registry.cases already declared the P3 sibling comparison unscorable, so the candidate contributes no differential even when it works. Repairing it would have spent the largest share of the remaining effort on the candidate least able to win, against an explicit instruction to reduce rather than polish all candidates equally.",
+      "what_this_is_not": "This is not the probation rule firing. The probation rule was about the OUTCOME of a future trial and is now moot. This is an author's pre-observation scope decision, taken on evidence already in hand and disclosed before any observer sees the board — not a reaction to a result that had not happened yet.",
+      "what_is_lost": "Source-region history as a subject form is no longer demonstrated anywhere on this board. A later study that wants it must build it, and should not read this withdrawal as a finding that the subject cannot be drawn — only that this drawing of it failed.",
+      "outcome": "withdrawn"
+    },
+    {
+      "id": "A-04",
+      "against": "rubric.v5.md A19 and registry.thresholds.narrow_elongation_max",
+      "pre_registered": "A narrow render is no taller than 3.2x its wide render, or the registry says why the subject needs more.",
+      "measured": "The gate does not catch the defect it was written for. cases/p3b — the artefact whose 6279px narrow band is the reason A19 exists — measured 6279px narrow against 3352px wide: a ratio of 1.87, comfortably inside the 3.2 ceiling. It passes A19 while being the worst offender on the board.",
+      "why_the_gate_misses_it": "A ratio compares a composition with itself. An artefact that is already enormous at the wide band, and that answers a narrower viewport by wrapping the same composition further, keeps its ratio low precisely because both ends are bad. Elongation is the symptom; the disease is that the narrow band is not a different composition, and no ratio can see that.",
+      "not_repaired_in_this_turn": "A19 is left as pinned and this amendment records that it is weak. Writing a stronger gate — an absolute height ceiling, or a structural comparison proving the narrow band draws a different set of marks rather than the same set reflowed — is a rubric v6 change, and inventing it after seeing which artefact it would have failed is the post-hoc gate-writing this board is supposed to avoid. It is recorded as a known gap for the next rubric version.",
+      "outcome": "recorded, not fixed"
+    },
+    {
+      "id": "A-05",
+      "against": "rubric.v5.md A7 / the W4 frame check",
+      "added": "A text-collision gate, in tools/render.mjs, measuring the true overlap of every pair of text runs inside every figure.",
+      "why": "Every blocking Part D defect the observer returned was an overprint that passed every W4 gate, because nothing overflowed — two things were simply drawn in the same place. A containment check cannot see that.",
+      "how_it_is_measured": "Each text run is reduced to its oriented box: getBBox() in the node's own user space, four corners through getScreenCTM(), then a convex clip for the true intersection. An axis-aligned test was tried first and reported 174 hits, most of them rotated lane headers whose bounding boxes overlap while their ink never touches — a false-positive field that would have hidden the real ones. The verdict is taken on the intersection's DEPTH, not its area: two stacked lines kissing by a fifth of a pixel across 200px produce a large area and no visible defect, while a short label printed squarely on a glyph strip produces less area and ruins the figure.",
+      "what_it_found": "On the first clean run, real overprints in cases/p2 at the intermediate band (13px deep, between adjacent lane-foot columns) and at narrow (2px, between the lane-order header and the first claim block) — both introduced by this author's own repair, and both fixed before any observer saw them. This is the gate doing the job the W4 board had no gate for.",
+      "what_it_cannot_do": "It compares text with text. A label printed on a mark, a mark printed on a mark, and a label that is merely too close to be read as belonging to its own row are all still G11 and human.",
+      "outcome": "achieved; checks/collisions.json carries the per-render result"
+    },
+    {
+      "id": "A-06",
+      "against": "portal/orient-model — the control note carried forward from W4",
+      "pre_registered": "The W4 page stated: \"The shipped build was served from docs-portal/dist and captured headless at the same three viewports and both modes as this page. The capture is reproduced in board.html.\"",
+      "measured": "No such capture exists. There is no shipped-portal PNG anywhere under docs/verification, and W4's board.html contains no reference to a capture at all. The sentence asserted evidence that has never existed on any board.",
+      "built": "The note now states what is actually checkable: the description is read from docs-portal/dist/orient/index.html, which is in this checkout and whose content was confirmed firsthand — one line of description, three links, a Next card — and no headless capture is reproduced on this board. The false claim is removed rather than carried forward.",
+      "how_it_was_found": "Chasing a dangling board.html reference while checking W5's own cross-references. It was not on the observer's list, and no gate on either board would have caught it: A6 binds a candidate to its subject source, not a page's prose claim about a control.",
+      "why_it_matters": "An unverifiable claim about evidence is the defect class this whole study exists to remove, and this one sat in the control note of the same family that carried the factual spine error. Inheriting page copy is how a false claim survives a rewrite.",
+      "outcome": "achieved"
+    },
+    {
+      "id": "A-07",
+      "against": "rubric.v5.md A15, and the first W5 verifier's implementation of it",
+      "the_gap": "A15 requires that `checks/channels.json` record each declared channel as present in the RENDERED markup. No such file was ever written. The verifier decided A15 from two things instead: the measured size of state marks, and a read of registry.channels asserting that the strings `channel_a` and `channel_b` were non-empty and `hue_only` was false. The second of those is a declaration checking itself — it could not fail while the strings existed, and it established nothing about what was drawn. A15 passed on an empty set. Found by independent verification, not by this author.",
+      "built": "tools/render.mjs now measures four channels off the render for every element that names a material state — interior (paint kind: empty, solid, or a pattern classified by its own children and the angle it is laid at), edge (computed stroke-dasharray normalised to a ratio), geometry (the shape vocabulary the whole mark is built from), and overlay (the additional marks inside the same element, classified by their geometry). tools/verify.mjs decides A15 from checks/channels.json.",
+      "what_the_gate_requires": [
+        "presence — every declared state is drawn in every one of the six contexts, and every channel yields a known token; unmeasurable, missing or unknown fails closed",
+        "discrimination — a channel with the same token for every state carries nothing and does not count",
+        "redundancy — every PAIR of states differs on at least two channels, so no pair rests on a single one",
+        "non-hue — proved rather than asserted: a state's tokens must be identical between the light and dark render of the same viewport. Light and dark change every colour on the page, so a token that survives both is not carrying hue",
+        "withdrawn artefacts are reconciled against a named amendment, never silently skipped"
+      ],
+      "no_colour_is_ever_read": "Every token is derived from paint KIND, dash ratio, shape vocabulary and overlay geometry. Any colour maps to `solid`. No data-* attribute is treated as evidence of an encoding; `data-state` supplies only the label under test.",
+      "negative_control": "The gate was proved capable of failing before it was trusted. Reverting portal/orient-model's `conditional` band to the encoding W5 shipped before this repair made A15 fail in all six contexts with `\"yours\" vs \"conditional\" separated by nothing`. The original encoding was restored and the gate returned to green.",
+      "what_it_still_cannot_do": "It decides that two states are encoded DISTINCTLY, not that a reader can decode them at the size they render. Distinctness is machine-decidable; legibility is G11 and belongs to an observer who authored nothing here.",
+      "outcome": "achieved; checks/channels.json carries the per-render, per-state tokens"
+    },
+    {
+      "id": "A-08",
+      "against": "registry.channels — the as-built encodings for all four material distinctions",
+      "why_this_exists": "A15's new rendered evidence made three of the four declared encodings measurably false or unaddressable. Each is corrected in the drawing, not in the gate.",
+      "portal/orient-model": {
+        "pre_registered": "channel_a: bar edge — solid, dashed, hatched fill. channel_b: a named authority kind printed in the bar's shoulder.",
+        "measured_before_repair": "interior {solid, solid, hatch} and edge {solid, dashed, solid}. `yours` and `conditional` were IDENTICAL on every non-hue channel — same paint kind, same dash, same form, no overlay — so that pair was carried by colour alone. `yours` and `refuses` shared an edge and differed only in interior. The declared channel_b, a kind printed in the bar's shoulder, is not what the figure draws: the kinds are chips beneath each layer.",
+        "built": "Three interiors and three edges, all distinct: yours solid/solid, conditional upright-rules/dashed, refuses diagonal-hatch/dotted. Either channel alone separates all three. The authority kinds remain chips and are not counted as a channel for this distinction."
+      },
+      "cases/p3a": {
+        "pre_registered": "channel_a: geometry — an arc below the row against a straight entry from a reserved column.",
+        "measured_before_repair": "The re-open links carried no data-state at all: the distinction was unaddressable by any probe on the board. Once grouped, both states drew a curved arc — the straight entry was drawn outside the element naming the state, so the declared geometry channel was not present on the thing it describes. Separately, the wide and intermediate bands had never received the terminal repair at all: both states still drew the same filled arrowhead, and after `.arrow.outside` was removed they were separated by the arc's dash and its colour and nothing else.",
+        "built": "The whole link — arc, straight entry where there is one, and terminal — lives inside one element naming its state. Return: curved + arrowhead + dashed. External: curved + straight entry + open square + solid."
+      },
+      "portal/area-drilldown": {
+        "pre_registered": "channel_a: mark form. channel_b: column head — closed against broken.",
+        "measured_before_repair": "`consumes` and `migrating` were an open ring and a dashed open ring: same interior, same form, separated by the dash alone. `consumes` and `unowned` were separated by form alone. The declared channel_b is a property of a column, and the narrow band has no columns.",
+        "built": "`migrating` gains a chevron leaving the ring — which is what a migration is — and `unowned` gains a strike through its broken bracket. Every pair is now separated by at least two of interior, edge, geometry and overlay at both bands."
+      },
+      "cases/p2": {
+        "pre_registered": "already amended by A-01 and A-02",
+        "measured_before_repair": "The overlay strike that separates `outofscope` from the other empty-interior state was a SIBLING of the element naming the state, so the third channel existed on screen and could not be pointed at.",
+        "built": "Every mark carrying a state lives inside one element that names it."
+      },
+      "outcome": "achieved for the drawings; whether the distinct encodings are decodable in context is G11",
+      "authorises": [
+        {
+          "artefact": "portal/orient-model",
+          "kind": "channel_measured",
+          "channel": "channel_a",
+          "to": "edge",
+          "why": "the registered prose conflates edge and fill; as built they are two separate channels and the edge is one of them"
+        },
+        {
+          "artefact": "portal/orient-model",
+          "kind": "channel_measured",
+          "channel": "channel_b",
+          "to": "interior",
+          "why": "the registered channel_b — a kind printed in the bar's shoulder — is not what the figure draws; the kinds are chips, and the second channel is the interior"
+        },
+        {
+          "artefact": "portal/area-drilldown",
+          "kind": "channel_measured",
+          "channel": "channel_a",
+          "to": "interior",
+          "why": "the registered mark-form prose spans interior, edge and geometry; interior is the part channel_a is bound to"
+        },
+        {
+          "artefact": "portal/area-drilldown",
+          "kind": "channel_measured",
+          "channel": "channel_b",
+          "to": "geometry",
+          "why": "the registered channel_b is a property of a column, and the narrow band has no columns; the broken-ness is carried by the mark's own shape"
+        },
+        {
+          "artefact": "portal/area-drilldown",
+          "kind": "channel_added",
+          "channel": "edge"
+        },
+        {
+          "artefact": "portal/area-drilldown",
+          "kind": "channel_added",
+          "channel": "overlay"
+        }
+      ]
+    },
+    {
+      "id": "A-09",
+      "against": "the mark-floor half of A15",
+      "the_gap": "The floor measured elements carrying data-state directly. Once a state names a GROUP, the group's own box was measured and the marks inside it were not — so wrapping a mark to make its channels addressable would have silently softened the floor.",
+      "built": "The probe follows data-state onto a group and measures every drawn mark inside it. The threshold is unchanged at 9px.",
+      "what_it_surfaced": "Four sub-floor marks that no previous run had ever measured, all fixed in the drawing rather than by moving the gate: b-scene's `notclaimed` cross (8px at desktop, 6.6px at mobile — a fixed 2px inset inside a cell that scales, now a proportional inset, with the evidence cells enlarged); the new `migrating` chevron (8px, now 10px); and p3a's two terminals, which passed at desktop and fell to 7.6px once the figure scaled down (now 11-12 user units).",
+      "outcome": "achieved; 2054 state marks measured across 90 renders, smallest information-bearing dimension 9.3px against a 9px floor"
+    },
+    {
+      "id": "A-10",
+      "kind": "channel-binding",
+      "what_this_is": "The structured, machine-checkable bridge from the pinned registry's channel prose to the channels actually measured off the render. registry.json is pinned and carries no distinction id and no measured-channel name, so the mapping has to live here — explicitly, exhaustively, and quoting the pinned prose verbatim so a binding cannot drift from what it claims to bind.",
+      "how_it_is_enforced": "tools/verify.mjs requires: exactly one binding per material registry entry and no orphan bindings; every rendered distinction on the board to be bound; `registered` to equal the pinned registry string character for character; every divergence to be covered by a matching `authorises` entry in the named amendment; and the measured token for every state to equal `expected` exactly, in all six contexts.",
+      "bindings": [
+        {
+          "artefact": "cases/p2",
+          "page": "p2-a-stopped-provenance",
+          "rendered_distinction": "lane-evidence",
+          "state_map": {
+            "executed": "executed",
+            "bounded": "short",
+            "notrun": "notrun",
+            "outofscope": "outofscope"
+          },
+          "state_map_amended_by": "A-01",
+          "channels": [
+            {
+              "registry_field": "channel_a",
+              "measured": "interior",
+              "amended_by": null,
+              "expected": {
+                "executed": "solid",
+                "short": "empty",
+                "notrun": "pattern:lines@45",
+                "outofscope": "empty"
+              },
+              "registered": "fill level — solid, hatched, empty"
+            },
+            {
+              "registry_field": "channel_b",
+              "measured": "edge",
+              "amended_by": null,
+              "note": "the 'dashed perimeter' clause of the registered channel_b",
+              "expected": {
+                "executed": "solid",
+                "short": "dash:1.5-1",
+                "notrun": "dash:1-2",
+                "outofscope": "solid"
+              },
+              "registered": "an overlaid stroke — none, a dashed perimeter, a single slash"
+            },
+            {
+              "registry_field": null,
+              "measured": "overlay",
+              "amended_by": "A-01",
+              "note": "the third channel A-01 declared; its mark is amended by A-02 from a slash to a horizontal strike",
+              "expected": {
+                "executed": "none",
+                "short": "none",
+                "notrun": "none",
+                "outofscope": "strike:horizontal"
+              }
+            }
+          ]
+        },
+        {
+          "artefact": "cases/p3a",
+          "page": "p3-a-convergence-with-source-depth",
+          "rendered_distinction": "reopen-origin",
+          "state_map": {
+            "return": "return",
+            "external": "external"
+          },
+          "state_map_amended_by": null,
+          "channels": [
+            {
+              "registry_field": "channel_a",
+              "measured": "entry",
+              "amended_by": null,
+              "note": "'a straight entry from a reserved column' — present for external, absent for a return",
+              "expected": {
+                "return": "absent",
+                "external": "path:straight"
+              },
+              "registered": "geometry — an arc below the row against a straight entry from a reserved column"
+            },
+            {
+              "registry_field": "channel_b",
+              "measured": "terminal",
+              "amended_by": null,
+              "note": "'an arrowhead against an open square', measured on the mark that names itself the terminal",
+              "expected": {
+                "return": "path:straight",
+                "external": "rect"
+              },
+              "registered": "terminal shape — an arrowhead against an open square"
+            }
+          ]
+        },
+        {
+          "artefact": "portal/area-drilldown",
+          "page": "portal-area-drilldown",
+          "rendered_distinction": "contract-ownership",
+          "state_map": {
+            "owns": "owns",
+            "consumes": "consumes",
+            "migrating": "migrating",
+            "unowned": "unowned"
+          },
+          "state_map_amended_by": null,
+          "channels": [
+            {
+              "registry_field": "channel_a",
+              "measured": "interior",
+              "amended_by": "A-08",
+              "expected": {
+                "owns": "solid",
+                "consumes": "empty",
+                "migrating": "empty",
+                "unowned": "empty"
+              },
+              "registered": "mark form — filled disc, open ring, dashed ring, and for unowned an absent disc in a broken column"
+            },
+            {
+              "registry_field": "channel_b",
+              "measured": "geometry",
+              "amended_by": "A-08",
+              "expected": {
+                "owns": "circle",
+                "consumes": "circle",
+                "migrating": "circle+straight",
+                "unowned": "line+straight"
+              },
+              "registered": "column head — closed against broken"
+            },
+            {
+              "registry_field": null,
+              "measured": "edge",
+              "amended_by": "A-08",
+              "expected": {
+                "owns": "no-edge",
+                "consumes": "solid",
+                "migrating": "dash:1-1",
+                "unowned": "solid"
+              }
+            },
+            {
+              "registry_field": null,
+              "measured": "overlay",
+              "amended_by": "A-08",
+              "expected": {
+                "owns": "none",
+                "consumes": "none",
+                "migrating": "path:straight",
+                "unowned": "path:straight+strike:horizontal"
+              }
+            }
+          ]
+        },
+        {
+          "artefact": "portal/orient-model",
+          "page": "portal-orient-model",
+          "rendered_distinction": "write-authority",
+          "state_map": {
+            "yours": "yours",
+            "conditional": "conditional",
+            "refuses": "refuses"
+          },
+          "state_map_amended_by": null,
+          "channels": [
+            {
+              "registry_field": "channel_a",
+              "measured": "edge",
+              "amended_by": "A-08",
+              "expected": {
+                "yours": "solid",
+                "conditional": "dash:2.5-1",
+                "refuses": "dash:1-1.5"
+              },
+              "registered": "bar edge — solid, dashed, hatched fill"
+            },
+            {
+              "registry_field": "channel_b",
+              "measured": "interior",
+              "amended_by": "A-08",
+              "expected": {
+                "yours": "solid",
+                "conditional": "pattern:lines@0",
+                "refuses": "pattern:lines@45"
+              },
+              "registered": "a named authority kind printed in the bar's shoulder"
+            }
+          ]
+        }
+      ],
+      "outcome": "achieved; every binding is checked against the render in all six contexts",
+      "quoting_rule": "Every `registered` string is copied verbatim from the pinned registry.json. tools/verify.mjs compares them character for character and fails if a binding misquotes, or omits, the channel it claims to bind."
+    },
+    {
+      "id": "A-11",
+      "against": "the first implementation of the rendered A15 gate (A-07)",
+      "the_defects": [
+        "The rendered-state selection ended in `|| true`, so the distinction predicate was constant. It also compared against `decl.distinction_id`, a field registry.json does not have — the registry carries `distinction` as prose, not an id. Evidence was therefore selected by state NAME alone and never confined to the distinction it was supposed to belong to. Masked only because each affected page currently draws one material distinction with non-colliding state names; the guarantee the gate reported was false, and any future page with two distinctions or a shared state name would have silently cross-contaminated it.",
+        "The gate proved 'at least two of interior, edge, geometry, overlay differ'. The rubric and the registry require the two DECLARED channels to be present. Any incidental difference could satisfy the gate, including one on a channel the registry never named — so a figure could lose both declared channels and still pass on a form or size difference nobody had registered."
+      ],
+      "found_by": "independent review, not by this author and not by any gate on this board — the second time that has been true of A15",
+      "built": "Evidence is now selected by an explicit (artefact -> page + rendered_distinction) binding in A-10 and by nothing else. Every declared channel is tied to one named measured channel and to an exact per-state token map, quoted against the pinned registry prose character for character. Divergences require a matching `authorises` entry in the named amendment; an amendment id alone no longer authorises anything.",
+      "fails_closed_on": [
+        "an artefact or rendered distinction with no binding, or a binding with no artefact",
+        "a rendered distinction present on the board and bound to nothing",
+        "a state vocabulary that does not match the binding exactly, in either direction",
+        "evidence carrying a state that belongs to another distinction",
+        "a measured channel name outside the probe's vocabulary",
+        "a `registered` string that does not match the pinned registry verbatim",
+        "a divergence whose named amendment carries no matching `authorises` entry",
+        "any measured token that differs from `expected`",
+        "a declared channel that does not vary across the states",
+        "any pair of states separated by fewer than two of the NAMED channels"
+      ],
+      "negative_controls": "Three, each run end to end and then reverted: a hue collapse (A-07), a wrong distinction binding, and a wrong channel binding. All three fail the gate; results recorded in README.",
+      "outcome": "achieved"
+    }
+  ]
+}

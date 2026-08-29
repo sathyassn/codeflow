@@ -25,8 +25,20 @@ pub struct CapabilityEntry {
     pub verified_by: Vec<String>,
     /// `EPC-###` ids that built or changed it.
     pub epics: Vec<String>,
+    /// Singular epic relationship, accepted for parity with record frontmatter.
+    pub epic_id: Vec<String>,
+    /// Specification ids related to this capability.
+    pub specs: Vec<String>,
+    /// Records that must land before this capability.
+    pub depends_on: Vec<String>,
+    /// Other capability ids explicitly related to this record.
+    pub capabilities: Vec<String>,
     /// ADR ids that shaped it.
     pub adrs: Vec<String>,
+    /// General related record ids.
+    pub related: Vec<String>,
+    /// Record ids that supersede this capability.
+    pub superseded_by: Vec<String>,
     /// 1-based line number of the entry's yaml block opening fence.
     pub line: usize,
 }
@@ -47,8 +59,39 @@ struct RawCapability {
     area: String,
     status: String,
     verified_by: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
     epics: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
+    epic_id: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
+    specs: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
+    depends_on: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
+    capabilities: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
     adrs: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
+    related: Vec<String>,
+    #[serde(deserialize_with = "deserialize_string_list")]
+    superseded_by: Vec<String>,
+}
+
+fn deserialize_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+        Some(OneOrMany::One(value)) => vec![value],
+        Some(OneOrMany::Many(values)) => values,
+        None => Vec::new(),
+    })
 }
 
 /// Blank out every character inside an HTML comment (`<!-- ... -->`),
@@ -90,14 +133,18 @@ pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<Capabilit
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        if trimmed != "```yaml" && trimmed != "```yml" {
-            i += 1;
-            continue;
-        }
+        let closing = match trimmed {
+            "```yaml" | "```yml" => "```",
+            "~~~yaml" | "~~~yml" => "~~~",
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
         let fence_line = i + 1; // 1-based
         let block_start = i + 1;
         let mut j = block_start;
-        while j < lines.len() && lines[j].trim() != "```" {
+        while j < lines.len() && lines[j].trim() != closing {
             j += 1;
         }
         let block = lines[block_start..j].join("\n");
@@ -116,7 +163,13 @@ pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<Capabilit
                 status: raw.status,
                 verified_by: raw.verified_by,
                 epics: raw.epics,
+                epic_id: raw.epic_id,
+                specs: raw.specs,
+                depends_on: raw.depends_on,
+                capabilities: raw.capabilities,
                 adrs: raw.adrs,
+                related: raw.related,
+                superseded_by: raw.superseded_by,
                 line: fence_line,
             }),
             Ok(_) => {} // yaml mentioning CAP- without a CAP id — not an entry
@@ -177,6 +230,15 @@ Generated status views.
         assert_eq!(entries[0].adrs, vec!["ADR-0001"]);
         assert_eq!(entries[1].id, "CAP-002");
         assert!(entries[1].verified_by.is_empty());
+    }
+
+    #[test]
+    fn parses_tilde_fenced_entries_without_treating_other_fences_as_records() {
+        let content = "~~~yaml\nid: CAP-101\nname: tilde\narea: test\nstatus: planned\n~~~\n\n~~~text\nid: CAP-999\n~~~\n";
+        let (entries, issues) = parse_capabilities(content);
+        assert!(issues.is_empty());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "CAP-101");
     }
 
     #[test]

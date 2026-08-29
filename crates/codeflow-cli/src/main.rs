@@ -58,6 +58,8 @@ enum Command {
     Orient,
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
+    /// Adopt or reconcile the opt-in documentation portal (utility craft over durable docs).
+    Portal(cmd::portal::PortalArgs),
     /// Validate record frontmatter; --docs adds the doc-graph integrity lint.
     Validate(cmd::validate::ValidateArgs),
     /// Verify a commit range + branch name against policy — the portable,
@@ -86,6 +88,8 @@ enum Command {
     Task(cmd::new::TaskArgs),
     /// Durable-work lifecycle checks.
     Work(cmd::work::WorkArgs),
+    /// Review this session on the utility presentation surface (catalog JSON, Comment).
+    Present(cmd::present::PresentArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -143,7 +147,12 @@ fn main() -> anyhow::Result<()> {
             };
             let report = scaffold::update(&assets, &cwd, &options)?;
             print!("{report}");
-            if report.has_conflicts() {
+            let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;
+            if let Some(portal_report) = &portal_report {
+                print!("{portal_report}");
+            }
+            if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts())
+            {
                 std::process::exit(2);
             }
         }
@@ -152,6 +161,7 @@ fn main() -> anyhow::Result<()> {
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
         Command::Orient => std::process::exit(cmd::orient::run()),
         Command::Test(args) => std::process::exit(cmd::test::run(&args)),
+        Command::Portal(args) => std::process::exit(cmd::portal::run(&args, &assets)),
         Command::Validate(args) => std::process::exit(cmd::validate::run(&args)),
         Command::Ci(args) => std::process::exit(cmd::ci::run(&args)),
         Command::Status(args) => std::process::exit(cmd::status::run(&args)),
@@ -164,6 +174,7 @@ fn main() -> anyhow::Result<()> {
         Command::Spec(args) => std::process::exit(cmd::new::run_spec(&args)),
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
+        Command::Present(args) => std::process::exit(cmd::present::run(&args)),
     }
     Ok(())
 }

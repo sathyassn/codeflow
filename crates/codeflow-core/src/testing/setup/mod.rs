@@ -335,10 +335,11 @@ fn config_path(project_dir: &Path) -> std::path::PathBuf {
 /// back to that subtree as the "project root", corrupting the generic testing
 /// engine's config lookup and polluting the worktree with duplicate state.
 ///
-/// Resolution rule: if any ancestor of `project_dir` already contains a
-/// project-root marker (`.codeflow/` or `.claude/`), prefer the nearest such
-/// ancestor as the effective project root. Fresh projects (no marker on any
-/// ancestor) retain the caller's `project_dir` as-is — this is the documented
+/// Resolution rule: if any ancestor of `project_dir` already contains an
+/// unambiguous project-root marker, prefer the nearest such ancestor as the
+/// effective project root. A bare `.codeflow/` or `.claude/` directory is not
+/// enough: the user's home may contain both as application state. Fresh
+/// projects retain the caller's `project_dir` as-is — this is the documented
 /// `codeflow init` creation path.
 ///
 /// Ancestor check is bounded by filesystem root, so the walk always terminates.
@@ -362,7 +363,10 @@ fn canonicalize_project_dir(project_dir: &Path) -> std::path::PathBuf {
 }
 
 fn is_project_root(dir: &Path) -> bool {
-    dir.join(".codeflow").is_dir() || dir.join(".claude").is_dir()
+    dir.join(".git").exists()
+        || crate::registry::is_initialized(dir)
+        || dir.join(".codeflow/test-config.json").is_file()
+        || (dir.join(".claude").is_dir() && dir.join("CLAUDE.md").is_file())
 }
 
 fn template_path(template_dir: &Path, name: &str) -> Result<std::path::PathBuf, SetupError> {
@@ -491,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_project_dir_uses_ancestor_with_claude_marker() {
+    fn canonicalize_project_dir_uses_ancestor_with_claude_contract() {
         // Simulates the bug where a caller inside a sub-directory of the
         // project (e.g., cargo-invoked tools with cwd=`crates/codeflow-cli/`)
         // would write a stale `.codeflow/` subtree at the nested path.
@@ -500,6 +504,7 @@ mod tests {
         let nested = root.join("crates").join("codeflow-cli");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# Project instructions\n").unwrap();
 
         let canonical = canonicalize_project_dir(&nested);
         assert_eq!(
@@ -518,28 +523,29 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_project_dir_uses_ancestor_with_codeflow_marker() {
-        // `.codeflow/` is an equally valid project-root marker in v2: every
-        // initialised tier above minimal has it, and it is where the config
-        // itself lives.
+    fn canonicalize_project_dir_uses_initialized_codeflow_ancestor() {
+        // Every initialized tier has a policy file. A bare `.codeflow/` is
+        // user-level state and must not qualify on its own.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let nested = root.join("crates").join("codeflow-core");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();
 
         let canonical = canonicalize_project_dir(&nested);
         assert_eq!(canonical, root.to_path_buf());
     }
 
     #[test]
-    fn canonicalize_project_dir_preserves_caller_when_claude_is_on_self() {
-        // If `project_dir` is itself the canonical root (has .claude/), we
-        // must NOT walk up any further — otherwise `codeflow init` on an
-        // existing project would incorrectly rebase onto a grandparent.
+    fn canonicalize_project_dir_preserves_caller_with_claude_contract() {
+        // If `project_dir` is itself the canonical root, we must NOT walk up
+        // any further — otherwise setup on an existing project could rebase
+        // onto a grandparent.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# Project instructions\n").unwrap();
 
         let canonical = canonicalize_project_dir(root);
         assert_eq!(canonical, root.to_path_buf());
@@ -547,11 +553,28 @@ mod tests {
 
     #[test]
     fn canonicalize_project_dir_fresh_project_has_no_ancestor() {
-        // Fresh project during `codeflow init`: no `.claude/` anywhere.
+        // Fresh project during `codeflow init`: no project marker anywhere.
         // The caller's directory is used as-is so init can bootstrap.
         let dir = tempfile::tempdir().unwrap();
         let canonical = canonicalize_project_dir(dir.path());
         assert_eq!(canonical, dir.path().to_path_buf());
+    }
+
+    #[test]
+    fn canonicalize_project_dir_ignores_user_level_state_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/config.toml"),
+            "[recall]\nlimit = 20\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/settings.json"), "{}\n").unwrap();
+        let project = dir.path().join("AppData/Local/Temp/project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        assert_eq!(canonicalize_project_dir(&project), project);
     }
 
     #[test]
@@ -564,6 +587,7 @@ mod tests {
         let nested = root.join("crates").join("codeflow-cli");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "# Project instructions\n").unwrap();
 
         let result = run_auto(&nested).unwrap();
         // No stack markers in the fixture → zero detection, but still written.
@@ -891,7 +915,11 @@ mod tests {
         assert!(matches!(result, SetupResult::Aborted));
     }
 
-    /// Helper: byte-equal round-trip test for a single template.
+    /// Helper: authored-content round-trip test for a single template.
+    ///
+    /// Git may materialize JSON fixtures with CRLF on Windows, while the JSON
+    /// writer deliberately emits LF. Normalize only that platform newline
+    /// convention; every other byte remains part of the contract.
     fn assert_template_roundtrip(template_name: &str) {
         let template_path = assets_template_dir().join(template_name);
 
@@ -911,10 +939,16 @@ mod tests {
 
         let written_bytes = std::fs::read(&out_path).unwrap();
 
+        let normalize_crlf = |bytes: &[u8]| {
+            std::str::from_utf8(bytes)
+                .expect("JSON templates and writer output must remain UTF-8")
+                .replace("\r\n", "\n")
+        };
+
         assert_eq!(
-            original_bytes,
-            written_bytes,
-            "byte-equal round-trip failed for {template_name}.\n\
+            normalize_crlf(&original_bytes),
+            normalize_crlf(&written_bytes),
+            "authored-content round-trip failed for {template_name}.\n\
              Original ({} bytes):\n{}\n\nWritten ({} bytes):\n{}",
             original_bytes.len(),
             String::from_utf8_lossy(&original_bytes),
