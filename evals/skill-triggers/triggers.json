@@ -8,7 +8,7 @@
       "should_trigger": [
         "Host the Codex consult in a Herdr tab",
         "Do not hijack the existing Herdr pane",
-        "Resume the Claude Herdr tab from the last review",
+        "Resuming the Herdr tab without hijacking the caller pane",
         "Start a dual-lineage review in Herdr"
       ],
       "should_not_trigger": [
@@ -22,7 +22,7 @@
       "should_trigger": [
         "Turn this brief into an epic and tasks",
         "Write the spec after the duo settled the plan",
-        "Allocate tasks from the approved plan"
+        "Allocating an epic, spec, or ADR after discovery"
       ],
       "should_not_trigger": [
         "Implement TSK-014",
@@ -55,8 +55,8 @@
       "id": "cf-delegate",
       "scent": ["delegate", "handoff"],
       "should_trigger": [
-        "Delegate implementation edits to Codex",
-        "Delegate this specialty task to the other vendor"
+        "Run a specialty edit handoff in parallel",
+        "Delegate this specialty task as an edit handoff"
       ],
       "should_not_trigger": [
         "Explain this function in the native coding harness"

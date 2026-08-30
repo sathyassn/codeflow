@@ -31,7 +31,7 @@ You are clarifying and materializing planned work, not building it.
    count) and include evidence, viable options, consequences, and a
    recommendation; do not ask them to perform repository discovery for you.
    After both seats have settled Plan vN, **synthesize that settled ground** —
-   do not open a second interview on seams, landing shape, or reversible
+   do not open a second interview on boundaries, landing shape, or reversible
    implementation choices already approved. Still ask every *live*
    operator-owned question not already answered by the brief or Plan vN
    whose answer would change the outcome; when more

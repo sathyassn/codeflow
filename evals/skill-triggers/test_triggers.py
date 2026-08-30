@@ -30,6 +30,30 @@ def tokens(prompt: str) -> set[str]:
     return {part for part in re.findall(r"[a-z0-9]+", prompt.lower()) if len(part) > 3}
 
 
+def trigger_scent(description: str) -> str:
+    """Positive trigger text; 'do not use' is a collision guard, not scent."""
+    return re.split(r"do not use", description, maxsplit=1, flags=re.I)[0]
+
+
+def all_skill_descriptions() -> dict[str, str]:
+    found: dict[str, str] = {}
+    for base in (
+        ROOT / "assets/base/agents/skills",
+        ROOT / "assets/base/claude/skills",
+    ):
+        if not base.is_dir():
+            continue
+        for skill_md in sorted(base.glob("*/SKILL.md")):
+            skill_id = skill_md.parent.name
+            if skill_id in found:
+                continue
+            text = skill_md.read_text(encoding="utf-8")
+            match = re.search(r"(?m)^description:\s*(.+)$", text)
+            if match:
+                found[skill_id] = match.group(1).strip().strip('"').lower()
+    return found
+
+
 class TriggerTests(unittest.TestCase):
     def test_should_trigger_shares_scent_words(self) -> None:
         data = json.loads(TRIGGERS.read_text(encoding="utf-8"))
@@ -69,6 +93,31 @@ class TriggerTests(unittest.TestCase):
                     shared,
                     f"{skill['id']} negative {prompt!r} must share non-scent description words "
                     f"so it is a hard negative, not a disjoint string",
+                )
+
+    def test_should_trigger_wins_description_overlap(self) -> None:
+        catalog = all_skill_descriptions()
+        data = json.loads(TRIGGERS.read_text(encoding="utf-8"))
+        for skill in data["skills"]:
+            self.assertIn(skill["id"], catalog)
+            for prompt in skill["should_trigger"]:
+                prompt_tokens = tokens(prompt)
+                scores = {
+                    skill_id: len(prompt_tokens & tokens(trigger_scent(description)))
+                    for skill_id, description in catalog.items()
+                }
+                target = scores[skill["id"]]
+                rivals = {
+                    skill_id: score
+                    for skill_id, score in scores.items()
+                    if skill_id != skill["id"]
+                }
+                best_rival = max(rivals.values()) if rivals else 0
+                self.assertGreater(
+                    target,
+                    best_rival,
+                    f"{prompt!r} should select {skill['id']} "
+                    f"(score {target}) over {sorted(rivals.items(), key=lambda item: -item[1])[:5]}",
                 )
 
     def test_non_herdr_descriptions_do_not_name_the_tty_host(self) -> None:

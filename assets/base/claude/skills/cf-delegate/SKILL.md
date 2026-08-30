@@ -1,6 +1,6 @@
 ---
 name: cf-delegate
-description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023).
+description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for a specialty pass or genuinely parallel edit handoff (CodeFlow ADR-0023). Do not use for a read-only second opinion (cf-consult).
 ---
 
 # cf-delegate — cross-vendor consult and delegate

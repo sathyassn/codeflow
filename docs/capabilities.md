@@ -287,7 +287,9 @@ the interactive `claude` CLI through the schema-v2 lifecycle. When
 `HERDR_ENV=1`, `cf-herdr` hosts that TTY in a named tab (cwd-matched resume,
 no hijack of other panes); tmux is the degraded host. Herdr `idle`/`done` is
 not turn completion — Stop and StopFailure hook completion and schema-v2
-waits remain the signal rather than pane stability. The
+waits remain the signal rather than pane stability. The 2026-08-30 canary
+exercised named-tab consult hosting; schema-v2 armed `send-text` on Herdr
+remains pending. The
 `codeflow hook delegate-turn` adapter validates a unique run and private path,
 writes immutable `0600` terminal evidence, and signals only its scoped waiter;
 exact retries recover signalling without rewriting. The transport-neutral

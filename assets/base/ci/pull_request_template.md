@@ -68,11 +68,11 @@
 - Whole-flow evidence:
 
 <!-- For every materially changed user or operator journey, show the affected
-     boundaries exercised together. Name controlled doubles and any seam not
+     boundaries exercised together. Name controlled doubles and any boundary not
      exercised. If no journey changed, replace the table with one reasoned
      `N/A — ...` line. -->
 
-| Changed journey | Boundaries exercised | Exact run and observed result | Controlled or unverified seams |
+| Changed journey | Boundaries exercised | Exact run and observed result | Controlled or unverified boundaries |
 |---|---|---|---|
 |  |  |  |  |
 

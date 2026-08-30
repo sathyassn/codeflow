@@ -56,7 +56,7 @@ fn task_graph_prefers_a_narrow_complete_path() {
         "assets/base/agents/skills/cf-model-orchestrator/resources/task-graph.md",
         &[
             "narrow complete path",
-            "expand",
+            "expand the new form beside the old",
             "Not yet specified",
             "Out of scope",
         ],

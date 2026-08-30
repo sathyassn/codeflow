@@ -44,6 +44,8 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
             "label that path **degraded**",
             "Herdr wins",
             "intended worktree",
+            "Default launch is ADR-conformant",
+            "--permission-mode auto",
             "bypassPermissions",
             "herdr pane send-text",
             "name namespace",
@@ -54,7 +56,7 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
 fn yaml_description(relative: &str) -> String {
     let text = read(relative);
     let front = text
-        .splitn(3, "---")
+        .split("---")
         .nth(1)
         .unwrap_or_else(|| panic!("{relative} missing YAML frontmatter"));
     for line in front.lines() {
