@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Herdr-primary consult and delegate TTY overlay.** Inside Herdr, dual-lineage
+  seats open in named tabs (`cf/<repo>/<work>/<kind>/<nn>`) without hijacking
+  the caller pane. Resume requires the agent's cwd to match the intended
+  worktree. Schema-v2 lifecycle still owns Claude turn completion; tmux remains
+  the degraded host. Description-trigger checks live under `evals/skill-triggers/`
+  and run in the test gate.
+
+### Changed
+
+- **Plan, develop, and consult craft.** After both seats settle Plan vN, planning
+  synthesizes that ground and still asks live operator-owned questions. Develop
+  tests through named interfaces first. Consult findings label `axis: standards`
+  or `axis: spec` (both when both apply). An operator-unattended TTY overlay
+  skips routine approval clicks without amending harness-boundary ADRs or
+  granting consults write access.
+
 ## [3.0.0] - 2026-08-02
 
 > **Breaking migrations.** Before installing v3:

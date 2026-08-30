@@ -273,9 +273,9 @@ id: CAP-009
 name: cross-vendor-delegation
 area: scaffold
 status: shipped
-verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "docs/verification/host-neutral-duo-canary-2026-07-15.md"]
+verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md"]
 epics: [EPC-002]
-adrs: [ADR-0005, ADR-0018, ADR-0023]
+adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
@@ -283,8 +283,11 @@ process boundary, each under its own subscription auth, with CodeFlow's gates
 judging the output author-agnostically (ADR-0005). Transport is
 interactive-only per ADR-0023, one lane per direction: from Claude Code the
 official `codex-plugin-cc` plugin (wrapping the codex app-server); from codex
-the interactive `claude` CLI driven via task-scoped tmux, with Stop and
-StopFailure hook completion rather than pane stability. The
+the interactive `claude` CLI through the schema-v2 lifecycle. When
+`HERDR_ENV=1`, `cf-herdr` hosts that TTY in a named tab (cwd-matched resume,
+no hijack of other panes); tmux is the degraded host. Herdr `idle`/`done` is
+not turn completion — Stop and StopFailure hook completion and schema-v2
+waits remain the signal rather than pane stability. The
 `codeflow hook delegate-turn` adapter validates a unique run and private path,
 writes immutable `0600` terminal evidence, and signals only its scoped waiter;
 exact retries recover signalling without rewriting. The transport-neutral
@@ -293,7 +296,7 @@ successor under verification; the legacy `--result` mode described here
 remains byte-compatible until a later major release. Headless task execution
 (`codex exec`, `claude -p`) is prohibited; the earlier headless tier and the
 Antigravity `agy` delegate tier (headless-only) are retired. It ships as the
-`cf-delegate` and `cf-consult` skills (mirrored to `.agents/skills`), and an
+`cf-delegate`, `cf-consult`, and `cf-herdr` skills (mirrored to `.agents/skills`), and an
 optional single-vendor `consult` pipeline stage — plus one deterministic
 `delegates` doctor check for both lanes; delegates edit only inside a worktree
 on a feature branch, so
