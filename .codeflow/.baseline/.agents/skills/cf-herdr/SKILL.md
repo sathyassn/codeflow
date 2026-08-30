@@ -8,7 +8,7 @@ description: Host CodeFlow consults and delegates in Herdr tabs without hijackin
 Herdr is the **visible terminal host** when this agent runs inside it. Official
 Herdr CLI syntax is the authority (`herdr --help`; group help without a
 mutating subcommand). This skill is the CodeFlow overlay: **tabs**, **naming**,
-**anti-hijack**, **resume**, and **cleanup**.
+**anti-hijack**, **resume**, **unattended launch**, and **cleanup**.
 
 `cf-consult` and `cf-delegate` own *what* a consult or handoff is. This skill
 owns *where the TTY lives*. Schema-v2 `codeflow delegate` still judges Claude
@@ -41,9 +41,11 @@ herdr agent list
 herdr pane current --current
 ```
 
-Protected: the caller pane (`$HERDR_PANE_ID`); any pane whose live agent name
-does not start with `cf-`; any tab whose label is not in this run's created
-set. `--no-focus` on create/split so the operator stays on their pane.
+Protected: the caller pane (`$HERDR_PANE_ID`); every tab and pane this run did
+not create, **including** other `cf-` agents, except a same-cwd follow-up this
+work owns. The `cf-` prefix is a name namespace, not permission to touch.
+Never send keys to an agent whose pane `cwd` is not the intended worktree.
+`--no-focus` on create/split so the operator stays on their pane.
 
 ## Naming
 
@@ -66,6 +68,10 @@ cf-<repo>-<work>-<k><nn>
 | kind / k | `claude`/`cl`, `codex`/`cx`, `grok`/`gk` |
 | nn | next free `01`–`99` among **live** agents with the same `cf-<repo>-<work>-<k>` prefix |
 
+Repo slug truncation collides across worktrees of the same project. The
+**intended worktree `cwd`** is the disambiguator, not the label. Put full cwd,
+repo basename, and work identity in the optional cache.
+
 Examples: `cf-codeflow-skills-rev-cl01`, parallel Claude `…-cl02`, Codex on
 the same work `…-cx01`.
 
@@ -74,9 +80,14 @@ Never steal a name that does not start with `cf-`.
 
 ## Create or resume
 
-**Resume** when a tab labeled `cf/<repo>/<work>/<kind>/<nn>` still exists and
-its agent is idle or done: prompt that agent. Do not mint `…-cl02` for a
-follow-up of the same work unless the first agent is gone or poisoned.
+**Resume** only when all of these hold: the tab label matches
+`cf/<repo>/<work>/<kind>/<nn>` for this work; the agent's pane `cwd` equals
+the intended worktree (`$PWD`); this run created the tab or is a follow-up of
+the same work in that cwd; and the prior turn was harvested (lifecycle
+terminal or native thread result). Idle or done after harvest means the seat
+can take the *next* prompt — it is not proof the prior turn completed. Do not
+prompt an idle `cf-…` agent in a different cwd. Do not mint `…-cl02` for a
+same-work follow-up unless the first agent is gone or poisoned.
 
 **Create** a named tab otherwise, on the **existing repo workspace** (create a
 workspace only when none exists for this cwd):
@@ -86,9 +97,27 @@ created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" \
   --label "cf/<repo>/<work>/<kind>/<nn>" --cwd "$PWD" --no-focus)
 pane_id=$(printf '%s' "$created" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
-herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex> \
-  --pane "$pane_id" -- --model <selector> --effort <effort>
+herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
+  --pane "$pane_id" -- --model <selector> --effort <effort> <unattended>
 ```
+
+Unattended profile: skip routine approval clicks when the operator asked not
+to babysit. This is a **TTY overlay**, not an amendment of ADR-0023/0025/0026
+and not a change to project `defaultMode`. Herdr is not an external sandbox.
+Never `--dangerously-bypass-hook-trust`. Never `--dangerously-skip-permissions`
+unless the operator named it. Consults still verify an empty worktree diff.
+
+- Claude consult or edit TTY: `--permission-mode bypassPermissions` (or `auto`
+  if bypass is refused). Bypass is not a write grant.
+- Codex consult: `--ask-for-approval never --sandbox workspace-write` (`read-only`
+  if tests will not run). Edit handoff: `workspace-write`. `danger-full-access`
+  only when the operator named it.
+- Grok: `--always-approve`.
+
+Put destructive-action rules in the prompt: consults edit nothing; no
+force-push or rebase of a shared branch; no merge of protected main; no
+`herdr server stop`; no keys to the caller pane; no closing tabs this run did
+not create.
 
 Pass native args after `--`. Wait until the agent is ready for input. Split a
 pane only when the **same** tab needs a log or server sibling — not as the
@@ -101,6 +130,26 @@ lifecycle; when `HERDR_ENV=1`, **start that Claude process in the Herdr pane**
 instead of a detached tmux session, then deliver the armed prompt into that
 pane. Lifecycle records remain the completion signal.
 
+## Deliver an armed prompt
+
+After `codeflow delegate arm`, send the same canonical UTF-8/LF file bytes:
+
+```bash
+herdr pane send-text "$pane_id" "$(cat "$P")"
+sleep 0.3  # bounded TUI input-settle; this is not completion detection
+herdr pane send-keys "$pane_id" Enter
+codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
+  --until accepted --turn-id "$TURN" --timeout-seconds 120
+codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
+  --until terminal --turn-id "$TURN" --timeout-seconds 3600
+```
+
+Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane. `herdr agent
+prompt` is for a consult that is not lifecycle-armed; it does not replace the
+armed-file digest. If `"$P"` exceeds 256 KiB, use degraded tmux paste-buffer
+(`send-text` is argv and can `E2BIG`). Prove the Herdr path with the same
+lifecycle canary as tmux.
+
 ## Cache (optional, not a record to maintain)
 
 Live Herdr names are the index. Optional cache:
@@ -108,10 +157,12 @@ Live Herdr names are the index. Optional cache:
 `${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json`
 
 Owner-only. Never commit. Never put it in `docs/` or `project-management/`.
-Write a row on create (tab id, pane id, agent name, native session/thread if
-observed). Delete the row when the tab closes. On every use, drop rows whose
-tab or pane is gone from `herdr pane list` / `tab list`. Missing file: list
-Herdr. If cache and Herdr disagree, **Herdr wins**.
+Write a row on create (tab id, pane id, agent name, **cwd**, full repo
+basename, work identity, native session/thread if observed). Delete the row
+when the tab closes. On every use, drop rows whose tab or pane is gone from
+`herdr pane list` / `tab list`. Missing file: list Herdr. If cache and Herdr
+disagree, **Herdr wins**. Resume still requires live cwd match even when the
+cache looks right.
 
 ## Cleanup
 

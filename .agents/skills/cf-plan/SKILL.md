@@ -33,7 +33,8 @@ You are clarifying and materializing planned work, not building it.
    After both seats have settled Plan vN, **synthesize that settled ground** —
    do not open a second interview on seams, landing shape, or reversible
    implementation choices already approved. Still ask every *live*
-   operator-owned question whose answer would change the outcome; when more
+   operator-owned question not already answered by the brief or Plan vN
+   whose answer would change the outcome; when more
    than one is unblocked, ask them in one round. A later material graph, scope,
    interface, ownership, acceptance, or safety change is Plan vN+1, not a
    re-grill.

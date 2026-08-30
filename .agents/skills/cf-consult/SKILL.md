@@ -23,56 +23,63 @@ independent.
    to the host lineage.
 2. Pick the TTY host, then the lane. When `HERDR_ENV=1`, load `cf-herdr` and
    host the other seat in a new or resumed named tab; do not hijack the caller
-   pane. Herdr `idle`/`done` is not consult completion. Outside Herdr, use the
-   lanes below (tmux for Claude is the degraded TTY).
+   pane. Start it with the unattended profile in `cf-herdr`; do not require
+   tmux. Herdr `idle`/`done` is not consult completion. Outside Herdr,
+   use the lanes below (tmux for Claude is the degraded TTY).
    Pick the lane by your seat:
    - **From Claude Code → codex**, through the official `codex-plugin-cc`
      plugin: `/codex:review` is the diff/design read (read-only;
      `/codex:adversarial-review` for the security lens). Preflight: the
      `/codex:*` commands exist and `codex login status` exits 0.
-   - **From codex → claude**, by driving the interactive `claude` CLI in a
-     dedicated, worktree-scoped tmux session through CodeFlow's schema-v2
-     delegate lifecycle: `delegate init` → wait-ready → `arm` → canonical
-     UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal,
-     with bounded cleanup
-     (CodeFlow ADR-0036; the `cf-delegate` skill carries the full contract).
+   - **From codex → claude**, through CodeFlow's schema-v2 delegate lifecycle
+     (`delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF
+     exact-byte delivery → wait-accepted → wait-terminal, with bounded cleanup;
+     CodeFlow ADR-0036; `cf-delegate` carries the full contract). When
+     `HERDR_ENV=1`, start Claude in the named Herdr tab and deliver with
+     `herdr pane send-text` then Enter. Outside Herdr, the degraded host is a
+     dedicated worktree-scoped tmux session. Then:
      Run the sibling Stop-hook preflight from `cf-delegate` before delivery.
      Consume `last_assistant_message` from the terminal result record and
      branch on the stable exit states — never on pane appearance. Use
-     `capture-pane` only for the dedicated task pane for bounded diagnosis or
-     an explicit dialog—never as a stability heuristic and never against
-     unrelated sessions. Launch the
+     `capture-pane` only for the dedicated tmux task pane (on Herdr, `herdr
+     pane read` of the owned pane only) for bounded diagnosis or an explicit
+     dialog—never as a stability heuristic and never against unrelated
+     sessions. Launch the
      consult with the Claude primary selector and default or escalation effort
-     from `../cf-model-orchestrator/resources/current-ensemble.json`, using
+     from `../cf-model-orchestrator/resources/current-ensemble.json`. On the
+     degraded tmux path, use
      `claude --model <selector> --effort <effort> --permission-mode auto
-     --settings <state-dir>/settings.json`;
+     --settings <state-dir>/settings.json`. On the Herdr path, native flags
+     come from `cf-herdr`, plus `--settings` for the lifecycle hooks;
      when `.codeflow/model-selection.json` is nonempty, first require
      `codeflow doctor --check model-bindings` to pass and use only its effective
      qualified override for this harness;
      the generated settings file carries only the lifecycle hooks and is
      immutable — make `autoMode.classifyAllShell` effective at user scope.
      Keep "read and
-     reason only; edit nothing" in the prompt, require the effective project
-     settings to enable the OS sandbox with `sandbox.failIfUnavailable: true`
-     and permits an auto-classified unsandboxed retry only for a trusted
-     installed tool that requires host state; the consult must not run
-     arbitrary commands outside the sandbox. Verify the worktree diff. This gives the
-     reviewer its native tools, MCPs, and public-network research without
-     using bypass mode on an ordinary host. Preflight: `claude` and `tmux` are
-     present, `claude mcp list` succeeds, and a scoped interactive canary
-     returns an authenticated response. The selected Claude judgment primary
+     reason only; edit nothing" in the prompt. On the degraded tmux path,
+     require the effective project settings to enable the OS sandbox with
+     `sandbox.failIfUnavailable: true` and permit an auto-classified
+     unsandboxed retry only for a trusted installed tool that requires host
+     state. When `HERDR_ENV=1`, the unattended profile in `cf-herdr` is the
+     launch mode; it is not a write grant. Verify the worktree diff. Preflight:
+     `claude` is present; `herdr` when `HERDR_ENV=1`, else `tmux`; `claude mcp
+     list` succeeds; a scoped interactive canary returns an authenticated
+     response. The selected Claude judgment primary
      owns any qualified internal worker delegation and the resulting judgment;
      the caller never invokes a worker as the Claude reasoning seat. See
      <https://code.claude.com/docs/en/permission-modes>.
 3. The named vendor's CLI missing, the plugin surface absent, or auth failing
    → tell the user the remedy (`codex login`; install the plugin from a Claude
-   Code session; install `claude`/`tmux`) and **stop, loudly** — never
+   Code session; install `claude`/`herdr`, or `tmux` on the degraded path)
+   and **stop, loudly** — never
    automate auth, and never quietly substitute your own vendor for the
    missing one.
 4. Synthesize: compare the second opinion against your own analysis point by
    point, citing where you **agree** and **disagree** and why — with your own
    evidence (file:line, command output). Label each finding `axis: standards`
-   or `axis: spec` when both apply, so one cannot mask the other. Disposition
+   or `axis: spec`; when both apply, label both so one cannot mask the other.
+   Disposition
    stays `fix now`, `track once`, or `drop` (same vocabulary as the quality
    contract and `cf-reviewer`). Note which seat raised each item. Branch on
    the verdict line, then re-derive the findings. Meet the `cf-delegate` five-obligation evidence

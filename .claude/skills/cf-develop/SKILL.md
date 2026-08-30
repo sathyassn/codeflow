@@ -22,7 +22,8 @@ Drive the planned work to done.
    protected-branch checkout.
 4. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
-      with tests at the plan's named public interfaces, not internals; preserve
+      with tests through the plan's named interfaces first, and internal unit
+      tests where they carry the risk; preserve
       justified reuse, modular boundaries, and explicit
       failure handling while adding no speculative behavior, abstraction, or
       dependency. Use small

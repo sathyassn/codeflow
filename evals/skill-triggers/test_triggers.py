@@ -35,18 +35,55 @@ class TriggerTests(unittest.TestCase):
         data = json.loads(TRIGGERS.read_text(encoding="utf-8"))
         for skill in data["skills"]:
             description = skill_description(skill["id"])
+            scent = {word.lower() for word in skill["scent"]}
+            self.assertTrue(
+                scent & tokens(description),
+                f"{skill['id']} description must contain its scent words {sorted(scent)}",
+            )
             for prompt in skill["should_trigger"]:
-                overlap = tokens(prompt) & tokens(description)
+                overlap = tokens(prompt) & tokens(description) & scent
                 self.assertTrue(
                     overlap,
-                    f"{skill['id']} description should share trigger words with {prompt!r}",
+                    f"{skill['id']} description should share scent {sorted(scent)} with {prompt!r}",
                 )
 
-    def test_cf_herdr_and_cf_plan_name_use_when(self) -> None:
-        for skill_id in ("cf-herdr", "cf-plan", "cf-consult"):
+    def test_should_not_trigger_avoids_scent_words(self) -> None:
+        data = json.loads(TRIGGERS.read_text(encoding="utf-8"))
+        for skill in data["skills"]:
+            scent = {word.lower() for word in skill["scent"]}
+            self.assertTrue(
+                skill["should_not_trigger"],
+                f"{skill['id']} needs should_not_trigger prompts",
+            )
+            description = skill_description(skill["id"])
+            desc_tokens = tokens(description)
+            for prompt in skill["should_not_trigger"]:
+                prompt_tokens = tokens(prompt)
+                overlap = prompt_tokens & scent
+                self.assertFalse(
+                    overlap,
+                    f"{skill['id']} should not trigger on {prompt!r}; shared scent {sorted(overlap)}",
+                )
+                shared = (prompt_tokens & desc_tokens) - scent
+                self.assertTrue(
+                    shared,
+                    f"{skill['id']} negative {prompt!r} must share non-scent description words "
+                    f"so it is a hard negative, not a disjoint string",
+                )
+
+    def test_changed_skills_name_use_when(self) -> None:
+        for skill_id in (
+            "cf-herdr",
+            "cf-plan",
+            "cf-consult",
+            "cf-customize",
+            "cf-delegate",
+        ):
             description = skill_description(skill_id)
             self.assertTrue(
-                "use when" in description or "when herdr_env" in description,
+                "use when" in description
+                or "use for" in description
+                or "when herdr_env" in description,
                 f"{skill_id} description must carry a when-clause",
             )
 

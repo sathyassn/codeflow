@@ -44,19 +44,27 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
             "schema-v2",
             "label that path **degraded**",
             "Herdr wins",
+            "intended worktree",
+            "bypassPermissions",
+            "herdr pane send-text",
+            "name namespace",
         ],
     );
 }
 
 #[test]
 fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
-    assert_contains(CONSULT, &["cf-herdr", "HERDR_ENV=1", "axis: standards"]);
+    assert_contains(
+        CONSULT,
+        &["cf-herdr", "HERDR_ENV=1", "axis: standards", "herdr pane send-text"],
+    );
     assert_contains(
         DELEGATE,
         &[
             "cf-herdr",
             "tmux is the degraded TTY host",
             "idle`/`done` is not turn completion",
+            "herdr pane send-text",
         ],
     );
 }

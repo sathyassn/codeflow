@@ -77,10 +77,13 @@ lane, and degrade legibly when it is not.
   `/reload-plugins` → `/codex:setup`) and codex is authenticated
   (`codex login status` — exit 0 + "Logged in using ChatGPT"; the same signal
   `codeflow doctor` reports as the `delegates` check).
-- **From codex:** `claude` on PATH, `tmux` present, `claude mcp list`
-  succeeds, and a short interactive TTY canary gets an authenticated response.
-  Do not infer authentication from a status subcommand when it conflicts with
-  a working interactive session.
+- **From codex:** `claude` on PATH, `claude mcp list` succeeds, and a short
+  interactive TTY canary gets an authenticated response. When `HERDR_ENV=1`,
+  require `herdr` and load `cf-herdr`; `tmux` is not required. Outside Herdr,
+  require `tmux`. `codeflow doctor` may still flag missing tmux; that is the
+  degraded-path preflight, not a Herdr blocker. Do not infer authentication
+  from a status subcommand when it conflicts with a working interactive
+  session.
 
 If the other vendor's CLI is missing, do the work yourself and **say so** —
 loudly, never as a silent substitution of your own vendor. If it is present
@@ -152,6 +155,12 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --t
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
+When `HERDR_ENV=1`, start Claude in the named Herdr tab with the unattended
+profile from `cf-herdr` (include `--settings` and the selected model/effort).
+Deliver the armed file with `herdr pane send-text` then Enter as that skill
+names; do not `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
+completion signal.
+
 - **Turn detection is the lifecycle, not the pane.** `init` creates an
   owner-only state directory outside every Git worktree and generates the
   task settings that wire `SessionStart`, `UserPromptSubmit`, `Stop`, and
@@ -196,18 +205,18 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
   `../cf-model-orchestrator/resources/current-ensemble.json`. The primary owns
   the native session, internal worker routing, interpretation, and judgment.
   Launch with the selected
-  effort, `--permission-mode auto`, and the generated task settings; make
+  effort and the generated task settings; make
   `autoMode.classifyAllShell` effective at user scope (Claude ignores it at
   project scope, and repeated `--settings` flags are not a supported merge
-  contract; the generated task file carries only the lifecycle hooks). Require
-  the effective project settings to keep the OS sandbox
-  enabled, set `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
+  contract; the generated task file carries only the lifecycle hooks). On the
+  degraded tmux path, use `--permission-mode auto` and keep the OS sandbox
+  enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
-  installed tool that requires host state. Arbitrary unsandboxed commands
-  remain out of bounds. This preserves native tools, MCP servers, and broad
-  public-network research while keeping secret stores, private-network
-  access, destructive operations, and privilege changes behind explicit
-  controls. Never use bypass mode on an ordinary host. See
+  installed tool that requires host state. When `HERDR_ENV=1`, use the
+  unattended profile in `cf-herdr`; that is not a write grant and not
+  hook-trust bypass. Never `--dangerously-skip-permissions` unless the
+  operator named it, and never `--dangerously-bypass-hook-trust`. Consults
+  still edit nothing. See
   <https://code.claude.com/docs/en/permission-modes> and
   <https://code.claude.com/docs/en/sandboxing>.
 - **Read-only consults:** keep "read and reason only; edit nothing" in the
