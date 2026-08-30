@@ -8,9 +8,8 @@ fn root() -> PathBuf {
 }
 
 fn read(relative: &str) -> String {
-    std::fs::read_to_string(root().join(relative)).unwrap_or_else(|error| {
-        panic!("read {relative}: {error}")
-    })
+    std::fs::read_to_string(root().join(relative))
+        .unwrap_or_else(|error| panic!("read {relative}: {error}"))
 }
 
 fn normalized(value: &str) -> String {
@@ -56,7 +55,12 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
 fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
     assert_contains(
         CONSULT,
-        &["cf-herdr", "HERDR_ENV=1", "axis: standards", "herdr pane send-text"],
+        &[
+            "cf-herdr",
+            "HERDR_ENV=1",
+            "axis: standards",
+            "herdr pane send-text",
+        ],
     );
     assert_contains(
         DELEGATE,
