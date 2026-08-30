@@ -11,6 +11,13 @@ problem only when it weakens this artifact in its actual context.
   framing.
 - The text invents personal experience, emotion, intimacy, personality, or
   colloquial language the author or project never established.
+- Chatbot openers or closers ("great question", "I hope this helps", "let me
+  know if") substitute for the answer.
+- Stock puffery ("pivotal", "evolving landscape", "testament to") inflates
+  routine work.
+- Vague attribution ("experts believe", "industry reports suggest") names no
+  source.
+- Contrast crutches ("not just X, but Y") add a frame without a fact.
 
 ## Meaning and structure
 

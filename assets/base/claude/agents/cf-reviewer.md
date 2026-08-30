@@ -98,7 +98,11 @@ itself a blocker finding — return changes_requested.
 
 ## Verdict format
 
-Return exactly this structure:
+Return exactly this structure. Label each finding `axis: standards` (repo
+conventions and judgment smells) or `axis: spec` (accepted criteria: missing,
+extra, or wrong) so one axis cannot mask the other. Do not spawn two reviewer
+passes. Disposition of secondary items remains `fix now`, `track once`, or
+`drop`.
 
 ```text
 verdict: approved | changes_requested
@@ -116,6 +120,7 @@ gates:
 
 findings:
   - severity: blocker | major | minor
+    axis: standards | spec
     location: <file:line>
     description: <what is wrong, which criterion or rule it breaks, the consequence, and the priority rationale>
 ```

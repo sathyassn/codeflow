@@ -123,9 +123,19 @@ recording it does not satisfy the trace contract.
 Node granularity prevents both evasion and ceremony. A node is a unit that
 needs its own outcome and acceptance evidence plus at least one of: a distinct
 producer/reviewer assignment, branch/worktree, decision branch, or integration
-slot. Work below that threshold is an in-node step. If a supposed step later
+slot. The default shape is a **narrow complete path** that is demoable or
+verifiable on its own (schema through the exercised surface plus tests), not a
+horizontal layer-slice. Wide mechanical refactors are the exception: expand
+the new form beside the old, migrate callers in blast-radius batches, then
+contract the old form — do not force them into a fake vertical slice. Work
+below that threshold is an in-node step. If a supposed step later
 needs a different owner, branch, decision branch, or landing slot, it was a new
 node: amend the plan before proceeding.
+
+A large epic may record **Not yet specified** (in-scope fog that cannot yet be
+phrased as a node) versus **Out of scope** (ruled beyond this destination).
+Ticket when the question is already sharp, even if blocked. That is planning
+notes on the epic, not a second work tracker.
 
 At every node transition, the host verifies predecessor evidence, branch-guard
 evidence where applicable, continued conformance to the approved node, and

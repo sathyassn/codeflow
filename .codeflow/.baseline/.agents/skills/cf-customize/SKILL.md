@@ -1,6 +1,6 @@
 ---
 name: cf-customize
-description: Tailor a CodeFlow scaffold to its consuming project. Verify both interactive duo lanes, their effective autonomy/network/secret boundaries, and the research, source-control, test, security, browser/UI, design, and project-specific MCP tools the work needs. Then derive and confirm the consuming project's product, architecture, operating-contract, policy, workflow, parallelism, and model-routing specifics from evidence already in the repo. Use after init or when an update brings defaults to decide. Analyze before editing; never invent project facts or auto-install tools.
+description: Tailor a CodeFlow scaffold to its consuming project. Verify both interactive duo lanes, their effective autonomy/network/secret boundaries, and the research, source-control, test, security, browser/UI, design, and project-specific MCP tools the work needs. Then derive and confirm the consuming project's product, architecture, operating-contract, policy, workflow, parallelism, and model-routing specifics from evidence already in the repo. Use when customizing after init, after `codeflow update` brings new defaults, or when the operator asks to tailor the scaffold. Analyze before editing; never invent project facts or auto-install tools. Do not use for ordinary feature work.
 ---
 
 # cf-customize — tailor a scaffolded project to itself

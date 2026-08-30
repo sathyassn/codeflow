@@ -175,6 +175,24 @@ system may own portfolio state while CodeFlow owns repository execution
 boundaries; record that split once. Do not require two status updates to call
 one item complete.
 
+Linear, Jira, or another board may receive a **one-way projection** through the
+project's issue-tracker MCP or CLI. CodeFlow `status` remains the only
+completeness signal for repo work. Missing or failed remote updates never block
+`work start`, review, or ship. Never poll the remote to decide whether a
+CodeFlow task is done. Intake may start on the board; once it becomes repo
+work, allocate CodeFlow records and keep the remote as a link plus optional
+comment.
+
+| Event in CodeFlow | Allowed remote action | Not allowed |
+|---|---|---|
+| Plan lands (`epic`/`task new`) | Create or attach the remote item; store its ID/URL in `external_refs` | Copy remote workflow state into `status:` |
+| Task starts, blocks, completes, or cancels | Comment, or a projection field if the team wants a board view | Treat Linear/Jira `Done` as CodeFlow complete |
+| Human merge / ship | Comment with the PR URL; optional remote close only if that item was intake | Dual-write two sources of truth |
+
+On disagreement, the declared authority wins; repair the link, not a second
+status mirror. `cf-customize` records which MCP/CLI to use and which events to
+project.
+
 Spec Kit, BMAD, or another planning method may supply a constitution, brief,
 specification, plan, or task tree. Identify its authority, check intent/scope/
 acceptance/interfaces/dependencies/risks for consistency, run the independent
@@ -231,6 +249,21 @@ public interface, authority, or safety boundary?
 Closeout never retroactively legitimizes a material deviation. It names the
 approved plan delivered, the relevant bounded deviations, what was and was not
 verified, and each follow-up's single real home. Omit empty ceremony.
+
+## Spikes and standalone prototypes
+
+`spike/` and `experiment/` are branch prefixes, not a reason to land throwaway
+code on a protected target. `work_type: spike | experiment` records intent.
+
+| Situation | Home | Lands on protected? |
+|---|---|---|
+| Changing an existing tree | `spike/<task-or-question>` branch; edit the real packages | No. Merge the decision later on `task/TSK-…`. Keep the spike branch as the primary source if needed. |
+| Standalone throwaway (no production path yet) | `spikes/<task-or-question>/` **on that spike/experiment branch** | No. `spikes/` on a PR into `main` or `integration/` is a review defect unless Plan vN archives a named subset as evidence. |
+| Retained comparison evidence | `docs/verification/<task>/` | Yes, as evidence, not as a product runtime. |
+
+Do not add a mandatory `spikes/` directory on `main`. Do not host prototypes in
+`cf-present` or `cf-docs-portal`. A static frame answers a composition question;
+a prototype is for an interaction or logic question that paper cannot settle.
 
 ## Failure and recovery paths
 

@@ -36,21 +36,23 @@ description: Land finished work — docs and capability updates, then a PR throu
 5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
    the PR narrative. It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.
-6. Push and open the PR. Every commit conforms to the standard — `type(scope):
-   description` (≤ 50-char description, ≤ 72-char subject line), a body of only
-   `-` bullets (at most 3, each a single line ≤ 72 chars) with an optional
-   trailing `BREAKING CHANGE:` footer, one logical change each; reword or squash
-   any that drifted before pushing. PR body: follow the PR template — summary,
-   changes, testing, linked epic and capability IDs — matching presentation to
-   the data's shape: tables for tabular data (coverage, test→pins, exit-code
-   matrices), fenced blocks for pasted output, short one-line bullets for the
-   rest, never paragraph-walls; the summary in plain language a zero-context
-   reader understands. `## Testing` is non-negotiable for
-   a code change and carries evidence, not claims: paste the real test-summary
-   output (fenced block), the coverage number (CI's coverage job computes it),
-   the new tests added and what each pins, manual/e2e commands with the
-   observed result, and what was NOT tested. A docs-only PR replaces that with
-   one line saying so plus the doc checks run. No AI attribution, no emoji.
+6. Open the PR. Commits stay conventional (`type(scope): description`,
+   ≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
+   ≤ 72 chars, optional `BREAKING CHANGE:` footer); one logical change each.
+   **Title** names the whole-branch outcome, not only the last commit.
+   **Body** follows the template (summary, changes, testing, linked IDs).
+   Tables for tabular data, fenced blocks for pasted output, one-line bullets
+   otherwise; Summary is plain language a zero-context reader understands.
+   Write Summary and Changes from `git log --oneline <base>..<head>` and
+   `git diff --stat <base>...<head>` on source-of-truth paths — every logical
+   change on the branch, not the last conversation, last review, or last
+   commit. For a code change, **Testing is evidence you already ran**: paste
+   `codeflow test --mode essential --strict` (use `full` when the change
+   touches a full-only target); run the coverage command CI uses and paste
+   the TOTAL numbers — do not defer to CI; name new tests, manual/e2e, and
+   what was NOT tested. Docs-only: one line plus the doc checks. Lint with
+   `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
+   <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
 7. Land via a PR **merged by a human** on green CI, or `codeflow integrate
    <branch> --into <target>` when there is no remote. An agent never merges into
    a protected branch — no `gh pr merge` into a protected base, no by-hand
