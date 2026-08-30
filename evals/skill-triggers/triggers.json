@@ -61,6 +61,36 @@
       "should_not_trigger": [
         "Explain this function in the native coding harness"
       ]
+    },
+    {
+      "id": "cf-develop",
+      "scent": ["implement", "acceptance"],
+      "should_trigger": [
+        "Implement the feature that already has acceptance criteria"
+      ],
+      "should_not_trigger": [
+        "Write a brief for an epic, not a feature change"
+      ]
+    },
+    {
+      "id": "cf-ship",
+      "scent": ["land", "merge"],
+      "should_trigger": [
+        "Land finished work through the gates after review"
+      ],
+      "should_not_trigger": [
+        "Start implementing unfinished reviewed docs"
+      ]
+    },
+    {
+      "id": "cf-reviewer",
+      "scent": ["evaluator", "acceptance"],
+      "should_trigger": [
+        "Independent evaluator for completed work against acceptance criteria"
+      ],
+      "should_not_trigger": [
+        "Write production code rather than a verdict"
+      ]
     }
   ]
 }

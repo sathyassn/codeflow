@@ -111,6 +111,19 @@
       }
     },
     {
+      "name": "herdr-delivery",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B evals/herdr-delivery/test_delivery.py"
+        },
+        "full": {
+          "command": "python3 -B evals/herdr-delivery/test_delivery.py"
+        }
+      }
+    },
+    {
       "name": "docs-validation",
       "enabled": true,
       "runner": "custom",

@@ -15,6 +15,7 @@ def skill_description(skill_id: str) -> str:
     candidates = [
         ROOT / "assets/base/agents/skills" / skill_id / "SKILL.md",
         ROOT / "assets/base/claude/skills" / skill_id / "SKILL.md",
+        ROOT / "assets/base/claude/agents" / f"{skill_id}.md",
     ]
     path = next((item for item in candidates if item.is_file()), None)
     if path is None:
@@ -48,6 +49,16 @@ def all_skill_descriptions() -> dict[str, str]:
             if skill_id in found:
                 continue
             text = skill_md.read_text(encoding="utf-8")
+            match = re.search(r"(?m)^description:\s*(.+)$", text)
+            if match:
+                found[skill_id] = match.group(1).strip().strip('"').lower()
+    agents = ROOT / "assets/base/claude/agents"
+    if agents.is_dir():
+        for agent_md in sorted(agents.glob("*.md")):
+            skill_id = agent_md.stem
+            if skill_id in found:
+                continue
+            text = agent_md.read_text(encoding="utf-8")
             match = re.search(r"(?m)^description:\s*(.+)$", text)
             if match:
                 found[skill_id] = match.group(1).strip().strip('"').lower()
@@ -136,11 +147,15 @@ class TriggerTests(unittest.TestCase):
             "cf-consult",
             "cf-customize",
             "cf-delegate",
+            "cf-develop",
+            "cf-ship",
+            "cf-reviewer",
         ):
             description = skill_description(skill_id)
             self.assertTrue(
                 "use when" in description
                 or "use for" in description
+                or "use after" in description
                 or "when herdr_env" in description,
                 f"{skill_id} description must carry a when-clause",
             )

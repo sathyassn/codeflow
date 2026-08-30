@@ -121,10 +121,30 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
 }
 
 #[test]
+fn reviewer_labels_axis_and_disposition() {
+    assert_contains(
+        "assets/base/claude/agents/cf-reviewer.md",
+        &["axis: standards", "axis: spec", "fix now", "track once"],
+    );
+}
+
+#[test]
+fn method_loads_skill_authoring_when_editing_skills() {
+    assert_contains(
+        "assets/base/claude/skills/cf-method/SKILL.md",
+        &["references/skill-authoring.md", "description-trigger"],
+    );
+}
+
+#[test]
 fn trigger_suite_is_wired_into_the_test_gate() {
     let config = read(".codeflow/test-config.json");
     assert!(
         config.contains("evals/skill-triggers/test_triggers.py"),
         "skill-triggers must run in codeflow test"
+    );
+    assert!(
+        config.contains("evals/herdr-delivery/test_delivery.py"),
+        "herdr-delivery must run in codeflow test"
     );
 }
