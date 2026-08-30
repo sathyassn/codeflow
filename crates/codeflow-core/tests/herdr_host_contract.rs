@@ -51,6 +51,31 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
     );
 }
 
+fn yaml_description(relative: &str) -> String {
+    let text = read(relative);
+    let front = text
+        .splitn(3, "---")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{relative} missing YAML frontmatter"));
+    for line in front.lines() {
+        if let Some(rest) = line.strip_prefix("description:") {
+            return rest.trim().to_ascii_lowercase();
+        }
+    }
+    panic!("{relative} missing description:");
+}
+
+#[test]
+fn consult_and_delegate_descriptions_do_not_scent_on_herdr() {
+    for relative in [CONSULT, DELEGATE] {
+        let description = yaml_description(relative);
+        assert!(
+            !description.contains("herdr"),
+            "{relative} YAML description is a load trigger, not a TTY-host dump"
+        );
+    }
+}
+
 #[test]
 fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
     assert_contains(

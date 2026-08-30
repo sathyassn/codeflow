@@ -8,6 +8,12 @@ to use it, using words a real request would contain. Add **do not use** when
 two skills could collide. Keep "use when" in the description; a body "When to
 Use" section does not substitute for the scent.
 
+The description is a load trigger, not a procedure dump. Do not name a TTY
+host, an environment variable (`HERDR_ENV`), a launch flag, or a sibling
+overlay skill there. That routing lives in the body: consult and delegate
+load `cf-herdr` after they have already matched. Only `cf-herdr`'s own
+description should scent on Herdr.
+
 Claude's limit is 1024 characters and no XML. Prefer a slightly pushy trigger
 over a vague one: models under-trigger more often than they over-trigger.
 

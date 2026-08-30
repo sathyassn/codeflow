@@ -71,6 +71,15 @@ class TriggerTests(unittest.TestCase):
                     f"so it is a hard negative, not a disjoint string",
                 )
 
+    def test_non_herdr_descriptions_do_not_name_the_tty_host(self) -> None:
+        for skill_id in ("cf-consult", "cf-delegate", "cf-plan", "cf-customize"):
+            description = skill_description(skill_id)
+            self.assertNotIn(
+                "herdr",
+                description,
+                f"{skill_id} description is a load trigger, not a TTY-host dump",
+            )
+
     def test_changed_skills_name_use_when(self) -> None:
         for skill_id in (
             "cf-herdr",

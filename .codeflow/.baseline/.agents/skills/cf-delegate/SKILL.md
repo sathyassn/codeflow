@@ -1,6 +1,6 @@
 ---
 name: cf-delegate
-description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023). When HERDR_ENV=1, host the TTY with cf-herdr; tmux is the degraded fallback. Do not hijack existing Herdr panes or treat Herdr idle as turn completion.
+description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023).
 ---
 
 # cf-delegate — cross-vendor consult and delegate
@@ -155,8 +155,8 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --t
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
-When `HERDR_ENV=1`, start Claude in the named Herdr tab with the unattended
-profile from `cf-herdr` (include `--settings` and the selected model/effort).
+When `HERDR_ENV=1`, start Claude in the named Herdr tab per `cf-herdr`
+(include `--settings` and the selected model/effort; Auto by default).
 Deliver the armed file with `herdr pane send-text` then Enter as that skill
 names; do not `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
 completion signal.
@@ -212,11 +212,11 @@ completion signal.
   degraded tmux path, use `--permission-mode auto` and keep the OS sandbox
   enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
-  installed tool that requires host state. When `HERDR_ENV=1`, use the
-  unattended profile in `cf-herdr`; that is not a write grant and not
-  hook-trust bypass. Never `--dangerously-skip-permissions` unless the
-  operator named it, and never `--dangerously-bypass-hook-trust`. Consults
-  still edit nothing. See
+  installed tool that requires host state. When `HERDR_ENV=1`, native flags
+  come from `cf-herdr` (Auto by default; unattended overlay only if the
+  operator asked). That is not a write grant and not hook-trust bypass. Never
+  `--dangerously-skip-permissions` unless the operator named it, and never
+  `--dangerously-bypass-hook-trust`. Consults still edit nothing. See
   <https://code.claude.com/docs/en/permission-modes> and
   <https://code.claude.com/docs/en/sandboxing>.
 - **Read-only consults:** keep "read and reason only; edit nothing" in the

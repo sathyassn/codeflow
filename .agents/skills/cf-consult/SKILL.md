@@ -1,6 +1,6 @@
 ---
 name: cf-consult
-description: Get an independent second opinion from another vendor's CLI (read-only), then synthesize it against your own analysis. Use when you want an outside pass on a file, diff, design, or question, including dual-lineage review. When HERDR_ENV=1, host the other seat with cf-herdr. Do not use for edit handoffs (cf-delegate) or same-vendor self-review.
+description: Get an independent second opinion from another vendor's CLI (read-only), then synthesize it against your own analysis. Use when you want an outside pass on a file, diff, design, or question, including dual-lineage review. Do not use for edit handoffs (cf-delegate) or same-vendor self-review.
 ---
 
 # cf-consult — an independent second opinion
@@ -23,8 +23,9 @@ independent.
    to the host lineage.
 2. Pick the TTY host, then the lane. When `HERDR_ENV=1`, load `cf-herdr` and
    host the other seat in a new or resumed named tab; do not hijack the caller
-   pane. Start it with the unattended profile in `cf-herdr`; do not require
-   tmux. Herdr `idle`/`done` is not consult completion. Outside Herdr,
+   pane. Default launch is Auto / on-request; use the unattended overlay only
+   when the operator asked not to babysit. Do not require tmux. Herdr
+   `idle`/`done` is not consult completion. Outside Herdr,
    use the lanes below (tmux for Claude is the degraded TTY).
    Pick the lane by your seat:
    - **From Claude Code → codex**, through the official `codex-plugin-cc`
@@ -61,8 +62,9 @@ independent.
      require the effective project settings to enable the OS sandbox with
      `sandbox.failIfUnavailable: true` and permit an auto-classified
      unsandboxed retry only for a trusted installed tool that requires host
-     state. When `HERDR_ENV=1`, the unattended profile in `cf-herdr` is the
-     launch mode; it is not a write grant. Verify the worktree diff. Preflight:
+     state. When `HERDR_ENV=1`, native flags come from `cf-herdr` (Auto by
+     default; unattended overlay only if the operator asked). That is not a
+     write grant. Verify the worktree diff. Preflight:
      `claude` is present; `herdr` when `HERDR_ENV=1`, else `tmux`; `claude mcp
      list` succeeds; a scoped interactive canary returns an authenticated
      response. The selected Claude judgment primary

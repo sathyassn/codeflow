@@ -19,7 +19,10 @@
 ## Summary
 
 <!-- 2–4 bullets, plain words: what this does and why now. The test: someone
-     who has never seen this repo understands every bullet. -->
+     who has never seen this repo understands every bullet. Derive from
+     `git log --oneline <base>..<head>` and `git diff --stat <base>...<head>`.
+     Cover every logical change on the branch. Do not write from the last
+     conversation turn, last review round, or latest commit subject. -->
 
 -
 
@@ -44,7 +47,7 @@
 (paste the real test summary output here)
 ```
 
-- Coverage (from the CI coverage job — paste numbers, don't link):
+- Coverage (run the project's coverage command — the same one CI uses — and paste numbers, don't link or defer):
 
 | Metric | This PR | Floor / main |
 |---|---|---|
