@@ -164,7 +164,9 @@ Do not confuse missing evidence with missing operator intent. Classify an
 impediment before escalating it:
 
 - a discoverable fact or technical failure is reproduced, isolated, and tested
-  with a bounded probe tied to a new hypothesis;
+  with a bounded probe tied to a new hypothesis. For a defect that resists a
+  first glance, that probe is one command already run that fails on the
+  **exact reported symptom** before hypothesising;
 - a local reversible implementation choice inside the accepted outcome uses
   repository evidence and the safest durable route, with the choice disclosed;
 - an external dependency or enforced gate is recorded with the exact evidence

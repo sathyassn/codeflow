@@ -110,7 +110,8 @@ Load `references/project-organization.md` when choosing an item home, planning a
 monorepo or cross-area body, coexisting with another planning method/tracker, or
 recording implementation discoveries at closeout. It contains the flexible
 decision model and template contract; do not load it for an obvious bounded
-task.
+task. When authoring or editing a skill, load
+`references/skill-authoring.md` for description-trigger rules.
 
 ## Managing a body of work
 

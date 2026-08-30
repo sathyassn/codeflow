@@ -1,6 +1,6 @@
 ---
 name: cf-delegate
-description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023).
+description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers read-only opinions, full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for an independent second opinion, specialty pass, or genuinely parallel work (CodeFlow ADR-0023). When HERDR_ENV=1, host the TTY with cf-herdr; tmux is the degraded fallback. Do not hijack existing Herdr panes or treat Herdr idle as turn completion.
 ---
 
 # cf-delegate — cross-vendor consult and delegate
@@ -49,10 +49,12 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
   in-band approvals.
 - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
   schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036; pattern below). The
-  lifecycle owns startup, acceptance, and terminal correlation; tmux is only
-  the host-side delivery mechanic. The account and interactive response must
-  be verified with a scoped TTY canary; verify the full lifecycle round trip
-  on install and whenever the Claude CLI or hook configuration changes.
+  lifecycle owns startup, acceptance, and terminal correlation. When
+  `HERDR_ENV=1`, load `cf-herdr` and run that Claude process in a named Herdr
+  tab; tmux is the degraded TTY host when Herdr is unavailable. Herdr
+  `idle`/`done` is not turn completion. The account and interactive response
+  must be verified with a scoped TTY canary; verify the full lifecycle round
+  trip on install and whenever the Claude CLI or hook configuration changes.
 
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /

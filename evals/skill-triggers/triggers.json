@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "notes": "Organic prompts for description-trigger checks. Grade by whether the named skill description should match, not by agent self-report.",
+  "skills": [
+    {
+      "id": "cf-herdr",
+      "should_trigger": [
+        "Host the Codex consult in a Herdr tab",
+        "Do not hijack the existing Herdr pane",
+        "Resume the Claude tab from the last review",
+        "Start a dual-lineage review in Herdr"
+      ],
+      "should_not_trigger": [
+        "Implement the failing unit test",
+        "Open a cf-present review document",
+        "Merge the pull request"
+      ]
+    },
+    {
+      "id": "cf-plan",
+      "should_trigger": [
+        "Turn this brief into an epic and tasks",
+        "Write the spec after the duo settled the plan",
+        "Allocate tasks for the approved graph"
+      ],
+      "should_not_trigger": [
+        "Implement TSK-014",
+        "Land the PR on main"
+      ]
+    },
+    {
+      "id": "cf-consult",
+      "should_trigger": [
+        "Get a Codex second opinion on this diff",
+        "Adversarial review from another model family"
+      ],
+      "should_not_trigger": [
+        "Hand off implementation edits to Codex"
+      ]
+    }
+  ]
+}

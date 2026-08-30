@@ -1,6 +1,6 @@
 ---
 name: cf-plan
-description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. It asks only consequential operator-owned questions and normally runs inside cf-model-orchestrator after independent Claude+Codex discovery and settlement; direct non-trivial use routes there first.
+description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Direct non-trivial use routes through cf-model-orchestrator first.
 ---
 
 # cf-plan — plan work, do not build it
@@ -27,9 +27,16 @@ You are clarifying and materializing planned work, not building it.
    from evidence when it preserves the accepted outcome. Ask the operator only
    when plausible answers would change the outcome, public behavior, authority,
    material security boundary, irreversible action, or another decision they
-   own. Ask the smallest consequential question and include evidence, viable
-   options, consequences, and a recommendation; do not ask them to perform
-   repository discovery for you.
+   own. Ask the smallest consequential question (smallest is *scope*, not
+   count) and include evidence, viable options, consequences, and a
+   recommendation; do not ask them to perform repository discovery for you.
+   After both seats have settled Plan vN, **synthesize that settled ground** —
+   do not open a second interview on seams, landing shape, or reversible
+   implementation choices already approved. Still ask every *live*
+   operator-owned question whose answer would change the outcome; when more
+   than one is unblocked, ask them in one round. A later material graph, scope,
+   interface, ownership, acceptance, or safety change is Plan vN+1, not a
+   re-grill.
 4. Check the request against `product.md` non-goals; surface conflicts instead
    of planning around them.
 5. In an orchestrated run, materialize the exact versioned plan both seats

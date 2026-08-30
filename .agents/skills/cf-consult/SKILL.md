@@ -1,6 +1,6 @@
 ---
 name: cf-consult
-description: Get an independent second opinion from another vendor's CLI (read-only), then synthesize it against your own analysis. Use when you want an outside pass on a file, diff, design, or question.
+description: Get an independent second opinion from another vendor's CLI (read-only), then synthesize it against your own analysis. Use when you want an outside pass on a file, diff, design, or question, including dual-lineage review. When HERDR_ENV=1, host the other seat with cf-herdr. Do not use for edit handoffs (cf-delegate) or same-vendor self-review.
 ---
 
 # cf-consult — an independent second opinion
@@ -21,7 +21,11 @@ independent.
    the delegated prompt with `ROLE: peer`, bound it to this consult, and
    explicitly prohibit starting the top-level orchestrator or delegating back
    to the host lineage.
-2. Pick the lane by your seat:
+2. Pick the TTY host, then the lane. When `HERDR_ENV=1`, load `cf-herdr` and
+   host the other seat in a new or resumed named tab; do not hijack the caller
+   pane. Herdr `idle`/`done` is not consult completion. Outside Herdr, use the
+   lanes below (tmux for Claude is the degraded TTY).
+   Pick the lane by your seat:
    - **From Claude Code → codex**, through the official `codex-plugin-cc`
      plugin: `/codex:review` is the diff/design read (read-only;
      `/codex:adversarial-review` for the security lens). Preflight: the
@@ -67,8 +71,11 @@ independent.
    missing one.
 4. Synthesize: compare the second opinion against your own analysis point by
    point, citing where you **agree** and **disagree** and why — with your own
-   evidence (file:line, command output). Branch on the verdict line, then
-   re-derive the findings. Meet the `cf-delegate` five-obligation evidence
+   evidence (file:line, command output). Label each finding `axis: standards`
+   or `axis: spec` when both apply, so one cannot mask the other. Disposition
+   stays `fix now`, `track once`, or `drop` (same vocabulary as the quality
+   contract and `cf-reviewer`). Note which seat raised each item. Branch on
+   the verdict line, then re-derive the findings. Meet the `cf-delegate` five-obligation evidence
    contract (launch/provenance/return/failure/recheck): a Codex reply counts
    only with its native thread ID, and a Claude reply only with its lifecycle
    records. Never paste the delegate's reply as your finding; an unverified

@@ -22,7 +22,8 @@ Drive the planned work to done.
    protected-branch checkout.
 4. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
-      with tests; preserve justified reuse, modular boundaries, and explicit
+      with tests at the plan's named public interfaces, not internals; preserve
+      justified reuse, modular boundaries, and explicit
       failure handling while adding no speculative behavior, abstraction, or
       dependency. Use small
       conventional commits. When a remote
@@ -45,7 +46,11 @@ Drive the planned work to done.
       new hypothesis or changed evidence. At the bound, diagnose the persistent
       constraint: take a safe approved-outcome-preserving route when one remains,
       or surface the genuine external dependency or operator-owned decision with
-      attempts, options, consequences, and a recommendation.
+      attempts, options, consequences, and a recommendation. For a defect that
+      resists a first glance, require one already-run command that fails on the
+      exact reported symptom before hypothesising (quality-contract blocker
+      navigation). Prefer a cheap local failing test when one exists; otherwise
+      name the closest executable check.
    d. **Verify**: `codeflow test` and `codeflow validate --docs` green. Apply
       the orchestrator's verification-selection resource: run any property,
       mutation, or architecture fitness check earned by the plan's trigger

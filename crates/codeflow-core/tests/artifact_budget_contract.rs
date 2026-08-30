@@ -59,6 +59,7 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-docs-portal/SKILL.md", 9 * KIB),
     ("agents/skills/cf-editorial-review/SKILL.md", 6 * KIB),
     ("agents/skills/cf-evaluate-model/SKILL.md", 9 * KIB),
+    ("agents/skills/cf-herdr/SKILL.md", 8 * KIB),
     ("agents/skills/cf-model-orchestrator/SKILL.md", 27 * KIB),
     ("agents/skills/cf-plan/SKILL.md", 8 * KIB),
     ("agents/skills/cf-present/SKILL.md", 8 * KIB),
