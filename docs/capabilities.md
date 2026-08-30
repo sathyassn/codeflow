@@ -273,7 +273,7 @@ id: CAP-009
 name: cross-vendor-delegation
 area: scaffold
 status: shipped
-verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md"]
+verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002]
 adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036]
 ```

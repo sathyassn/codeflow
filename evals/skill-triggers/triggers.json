@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Organic prompts for description-trigger checks. Grade by whether the named skill description should match, not by agent self-report. Scent words are unique enough that a negative prompt must not contain them.",
+  "notes": "Organic prompts for description-trigger checks. Grade by whether the named skill description should match, not by agent self-report. Negatives must share non-scent description words and omit the skill's scent.",
   "skills": [
     {
       "id": "cf-herdr",
@@ -13,7 +13,7 @@
       ],
       "should_not_trigger": [
         "Start a dual-lineage review in tmux",
-        "Resume the Claude tab from the last review"
+        "Resume the Codex plugin review thread"
       ]
     },
     {

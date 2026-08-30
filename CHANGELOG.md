@@ -21,8 +21,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   synthesizes that ground and still asks live operator-owned questions. Develop
   tests through named interfaces first. Consult findings label `axis: standards`
   or `axis: spec` (both when both apply). An operator-unattended TTY overlay
-  skips routine approval clicks without amending harness-boundary ADRs or
-  granting consults write access.
+  may skip routine approval clicks when the operator asks not to babysit,
+  without amending harness-boundary ADRs or granting consults write access.
 
 ## [3.0.0] - 2026-08-02
 

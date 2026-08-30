@@ -101,18 +101,16 @@ herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
   --pane "$pane_id" -- --model <selector> --effort <effort> <unattended>
 ```
 
-Unattended profile: skip routine approval clicks when the operator asked not
-to babysit. This is a **TTY overlay**, not an amendment of ADR-0023/0025/0026
-and not a change to project `defaultMode`. Herdr is not an external sandbox.
-Never `--dangerously-bypass-hook-trust`. Never `--dangerously-skip-permissions`
-unless the operator named it. Consults still verify an empty worktree diff.
+Default launch is ADR-conformant: Claude `--permission-mode auto`; Codex
+`--ask-for-approval on-request --sandbox workspace-write` (`--approve-for-me`
+when the operator wants unattended *and* ADR-shaped auto-review).
 
-- Claude consult or edit TTY: `--permission-mode bypassPermissions` (or `auto`
-  if bypass is refused). Bypass is not a write grant.
-- Codex consult: `--ask-for-approval never --sandbox workspace-write` (`read-only`
-  if tests will not run). Edit handoff: `workspace-write`. `danger-full-access`
-  only when the operator named it.
-- Grok: `--always-approve`.
+When the operator has asked not to babysit routine approvals, overlay only
+for that seat: Claude `--permission-mode bypassPermissions`; Codex
+`--ask-for-approval never --sandbox workspace-write`; Grok `--always-approve`.
+Herdr is not an external sandbox. Overlay is not an ADR amendment, not
+hook-trust bypass, not a write grant. Never `--dangerously-skip-permissions`
+unless the operator named it. Consults still verify an empty worktree diff.
 
 Put destructive-action rules in the prompt: consults edit nothing; no
 force-push or rebase of a shared branch; no merge of protected main; no
