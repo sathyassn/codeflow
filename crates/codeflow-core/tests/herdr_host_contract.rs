@@ -46,6 +46,7 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
             "intended worktree",
             "Default launch is ADR-conformant",
             "--permission-mode auto",
+            "--reasoning-effort <effort>",
             "bypassPermissions",
             "herdr pane send-text",
             "name namespace",

@@ -71,7 +71,7 @@ fn capability_supported_harnesses_satisfy_one_universal_contract() {
     }
     assert_eq!(
         ids,
-        BTreeSet::from(["claude-code", "codex-app", "codex-cli"])
+        BTreeSet::from(["claude-code", "codex-app", "codex-cli", "grok-cli"])
     );
 }
 

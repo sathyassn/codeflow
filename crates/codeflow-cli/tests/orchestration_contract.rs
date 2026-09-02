@@ -28,7 +28,7 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
         "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
     ))
     .expect("harness catalog JSON");
-    assert_eq!(ensemble["schema_version"], 2);
+    assert_eq!(ensemble["schema_version"], 3);
     let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
         .as_array()
         .expect("harnesses")
@@ -47,8 +47,21 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
             )
         })
         .collect();
+    let standing: BTreeSet<&str> = ensemble["standing_roles"]
+        .as_array()
+        .expect("standing_roles")
+        .iter()
+        .map(|role| role.as_str().expect("standing role"))
+        .collect();
+    assert_eq!(
+        standing,
+        BTreeSet::from(["claude-judgment-primary", "codex-engineering-primary"])
+    );
     let bindings = ensemble["bindings"].as_array().expect("bindings");
-    assert_eq!(bindings.len(), 2, "the current duo must have two primaries");
+    assert!(
+        bindings.len() >= 2,
+        "the current ensemble must include the standing pair"
+    );
     let mut seats = BTreeSet::new();
     let mut lineages = BTreeSet::new();
     let mut roles = BTreeSet::new();
@@ -83,11 +96,11 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
             );
         }
     }
-    assert_eq!(lineages, BTreeSet::from(["claude", "codex"]));
-    assert_eq!(
-        roles,
-        BTreeSet::from(["claude-judgment-primary", "codex-engineering-primary"])
-    );
+    assert!(lineages.contains("claude") && lineages.contains("codex"));
+    assert!(lineages.contains("grok"), "catalog family grok is missing");
+    assert!(roles.contains("claude-judgment-primary"));
+    assert!(roles.contains("codex-engineering-primary"));
+    assert!(roles.contains("grok-engineering-primary"));
     assert!(!ensemble["xhigh_triggers"]
         .as_array()
         .expect("xhigh triggers")
@@ -110,7 +123,10 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Detect capabilities, not model identity.",
         "Claude Code",
         "Codex App or interactive Codex CLI",
+        "Grok Build (interactive `grok` CLI)",
         "Other harness, including Hermes",
+        "Claude produces design",
+        "never a silent third vote",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -147,11 +163,18 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "\"role\": \"codex-engineering-primary\"",
         "\"model_class\": \"latest-strongest-sol-coding\"",
         "\"model_class\": \"qualified-terra-worker\"",
+        "\"seat\": \"grok-primary\"",
+        "\"role\": \"grok-engineering-primary\"",
+        "\"model_class\": \"latest-grok-coding\"",
+        "\"grok-cli\": \"grok-4.6\"",
         "\"default_effort\": \"high\"",
         "\"escalation_effort\": \"xhigh\"",
         "Primary seats retain independent planning and approval duties.",
+        "The standing pair is the usual quality floor; extra catalog families never vote silently.",
         "Internal workers never replace a primary or named cross-lineage reviewer.",
         "Claude-side internal routing belongs to the Claude primary.",
+        "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
+        "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
     ] {
         assert!(
@@ -171,6 +194,8 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "The first line of every cross-harness task declares",
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
+        "never a silent third vote",
+        "A Grok Build host coordinates the standing pair through Herdr",
     ] {
         assert!(
             routing.contains(required),
@@ -373,6 +398,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "\"escalation_effort\": \"xhigh\"",
         "\"claude-code\": \"fable\"",
         "\"codex-cli\": \"gpt-5.6-sol\"",
+        "\"grok-cli\": \"grok-4.6\"",
     ] {
         assert!(
             ensemble.contains(required),

@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Grok Build as a first-class host and catalog family (ADR-0054).** Interactive
+  `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
+  remains `claude-judgment-primary` and `codex-engineering-primary`;
+  `grok-engineering-primary` is a catalog seat on `grok-4.6` at high. Extra-family
+  review is named in `routing-policy.json` and is never a silent third vote.
+  Claude produces design in its native session regardless of host. `grok-cli`
+  is catalog-supported with a `grok-cli-version` doctor probe. Grok-hosted
+  Claude/Codex lanes use Herdr and are not claimed complete without canaries.
+  Headless `grok -p` is not a work-session lane.
+
 - **Herdr-primary consult and delegate TTY overlay.** Inside Herdr, dual-lineage
   seats open in named tabs (`cf/<repo>/<work>/<kind>/<nn>`) without hijacking
   the caller pane. Resume requires the agent's cwd to match the intended

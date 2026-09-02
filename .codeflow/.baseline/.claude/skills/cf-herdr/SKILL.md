@@ -98,12 +98,22 @@ created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" \
 pane_id=$(printf '%s' "$created" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
 herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
-  --pane "$pane_id" -- --model <selector> --effort <effort> <unattended>
+  --pane "$pane_id" -- <native-args>
 ```
 
+Native args after `--` are kind-specific. Take selector and effort from the
+current ensemble record (escalation effort when a documented trigger applies):
+
+- Claude: `--model <selector> --effort <effort> --permission-mode auto`
+- Codex: `--model <selector> --ask-for-approval on-request --sandbox workspace-write`
+  (`--approve-for-me` when the operator wants unattended *and* ADR-shaped
+  auto-review). Do not pass `--effort` on Codex CLIs that reject it; record
+  requested effort from the ensemble.
+- Grok: `--model <selector> --reasoning-effort <effort> --permission-mode auto`
+
 Default launch is ADR-conformant: Claude `--permission-mode auto`; Codex
-`--ask-for-approval on-request --sandbox workspace-write` (`--approve-for-me`
-when the operator wants unattended *and* ADR-shaped auto-review).
+`--ask-for-approval on-request --sandbox workspace-write`; Grok
+`--reasoning-effort <effort> --permission-mode auto`.
 
 When the operator has asked not to babysit routine approvals, overlay only
 for that seat: Claude `--permission-mode bypassPermissions`; Codex

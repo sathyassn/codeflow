@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "policy_id": "claude-codex-duo",
+  "default_review": "standing-pair",
+  "design_production": "claude-native-session",
+  "host_does_not_own_duty": true,
+  "extra_family_review": {
+    "never_silent_vote": true,
+    "requires_named_assignment": true,
+    "triggers": [
+      "operator instruction",
+      "capability-sensitive or long-horizon work",
+      "unresolved standing-pair disagreement after two rounds",
+      "security-sensitive change"
+    ],
+    "rule": "Named extra-family review is an assigned Plan vN duty. Its output is evidence the host records. It does not replace either standing primary, does not settle Plan vN, and is never a silent third vote."
+  }
+}

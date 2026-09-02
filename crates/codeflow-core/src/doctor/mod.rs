@@ -704,6 +704,7 @@ fn probe_version<'a>(probe_id: &str, observed: &'a str) -> Option<&'a str> {
     match probe_id {
         "claude-cli-version" => tokens.next(),
         "codex-cli-version" if tokens.next() == Some("codex-cli") => tokens.next(),
+        "grok-cli-version" if tokens.next() == Some("grok") => tokens.next(),
         _ => None,
     }
 }
@@ -1836,6 +1837,10 @@ mod tests {
         assert_eq!(
             probe_version("codex-cli-version", "codex-cli 0.144.3"),
             Some("0.144.3")
+        );
+        assert_eq!(
+            probe_version("grok-cli-version", "grok 1.0.13 (5e9a58528b76) [stable]"),
+            Some("1.0.13")
         );
         assert_ne!(
             probe_version("claude-cli-version", "3.0.0 (compat 2.1.220)"),

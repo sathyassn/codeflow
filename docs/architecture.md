@@ -18,7 +18,7 @@ init · update      git hooks · guards     codeflow test     ledger · records
 seed the rules     · ci — one policy      · validate        · recall
                    source
 
-         the harness (Claude Code, Codex, …) does the developing
+         the harness (Claude Code, Codex, Grok Build, …) does the developing
 ```
 
 The consuming repo is its own first consumer, so `assets/` is as much the
@@ -325,9 +325,13 @@ Codex or Claude sessions with their configured tools; no engine model router,
 headless peer runner, CI model call, or general-purpose cleanup command is added.
 
 Fast-changing binding facts are isolated from durable orchestration doctrine
-(ADR-0039, ADR-0041). Stable role duties stay in the orchestrator and quality
-resources. `current-ensemble.json` owns the managed concrete selectors, effort
-policy, permitted worker classes, and escalation triggers. A consuming project
+(ADR-0039, ADR-0041, ADR-0054). Stable role duties stay in the orchestrator and
+quality resources. `current-ensemble.json` owns the managed concrete selectors,
+effort policy, permitted worker classes, escalation triggers, and the standing
+pair versus catalog split. `routing-policy.json` names when an extra family
+reviews: never as a silent third vote. Interactive Grok Build is a first-class
+host; Claude still produces design in its native session. Hermes remains an
+outer coordinator that normally delegates the whole repository task. A consuming project
 may atomically map a stable role to an approved local binding ID in
 `.codeflow/model-selection.json`; it cannot supply selectors, commands, or
 worker routes. An absent/empty file keeps the managed ensemble. Doctor resolves

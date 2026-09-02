@@ -91,6 +91,33 @@
         "effective_permission_boundary": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
         "git_backstop": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"]
       }
+    },
+    {
+      "id": "grok-cli",
+      "provider": "xai",
+      "lineage": "grok",
+      "status": "capability-supported",
+      "capabilities": [
+        "native_interactive_session",
+        "native_runtime_provenance",
+        "configured_tool_access",
+        "scoped_workspace",
+        "bounded_failure",
+        "recheckable_result",
+        "effective_permission_boundary",
+        "git_backstop"
+      ],
+      "version_probe": "grok-cli-version",
+      "evidence": {
+        "native_interactive_session": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "native_runtime_provenance": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "configured_tool_access": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "scoped_workspace": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "bounded_failure": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "recheckable_result": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "effective_permission_boundary": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"],
+        "git_backstop": [".agents/skills/cf-evaluate-model/resources/harness-evidence.md"]
+      }
     }
   ]
 }

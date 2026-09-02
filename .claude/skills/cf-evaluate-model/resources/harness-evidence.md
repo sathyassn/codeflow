@@ -15,16 +15,27 @@ The source qualification combined:
   results, exact prompt binding, native task/thread/session provenance, and
   effective Claude/Codex boundaries;
 - ADR-0008's harness-independent git backstop, ADR-0026's permission-boundary
-  corrections, and ADR-0027's native-interactive evaluator contract; and
+  corrections, and ADR-0027's native-interactive evaluator contract;
+- Grok Build 1.0.13 CLI and user-guide evidence recorded 2026-09-01:
+  `grok --version` → `grok 1.0.13`; interactive TUI; session UUID under
+  `~/.grok/sessions/`; `--cwd`/`--worktree`; MCP/skills; `--permission-mode
+  auto`; `--always-approve` overlay; `grok --help` documents `--sandbox
+  <PROFILE>` and the user guide names `workspace` / `read-only` / `strict`;
+  `grok sessions` / `grok export` / `--resume`. This is harness-capability
+  evidence, not a native-interactive Grok-hosted duo canary; and
 - deterministic scaffold, settings, hook, lifecycle, and evaluator tests.
 
-| Capability | Claude Code | Codex CLI | Codex App |
-|---|---|---|---|
-| Native interactive session and provenance | Native TTY session, prompt/session binding, and lifecycle canaries | Native CLI plus app-server task/thread evidence | Native app task/thread surface required by the evaluator contract |
-| Configured tools and scoped workspace | Tool/MCP preflight plus task-scoped worktree and lifecycle state | Tool/MCP preflight plus task-scoped worktree | App tool inventory plus task-scoped worktree |
-| Bounded failure and recheckable result | Acceptance/terminal binding, timeout, interruption, and poisoned-run cases | Native task/thread status and result recheck | Native task/thread recheck; absence remains unknown |
-| Effective permission boundary | Fail-closed sandbox, secret filtering, and classified trusted-tool retry canaries | Guarded workspace profile, public-network boundary, and escalation review tests | Same guarded project profile; effective settings must be rechecked natively |
-| Git backstop | Repository hooks, CI, and remote protection | Repository hooks, CI, and remote protection | Repository hooks, CI, and remote protection |
+Catalog status for `grok-cli` is harness capability, not a completed
+Grok-hosted duo canary. Headless `grok -p` / `--single` is not a work-session
+lane.
+
+| Capability | Claude Code | Codex CLI | Codex App | Grok Build CLI |
+|---|---|---|---|---|
+| Native interactive session and provenance | Native TTY session, prompt/session binding, and lifecycle canaries | Native CLI plus app-server task/thread evidence | Native app task/thread surface required by the evaluator contract | Native `grok` TUI; session UUID; `--resume` / `--continue`; `grok sessions` |
+| Configured tools and scoped workspace | Tool/MCP preflight plus task-scoped worktree and lifecycle state | Tool/MCP preflight plus task-scoped worktree | App tool inventory plus task-scoped worktree | MCP/skills/tools plus `--cwd` and `--worktree` |
+| Bounded failure and recheckable result | Acceptance/terminal binding, timeout, interruption, and poisoned-run cases | Native task/thread status and result recheck | Native task/thread recheck; absence remains unknown | Session directory, `grok export`, resume/fork; Grok-hosted peer lifecycle remains to prove |
+| Effective permission boundary | Fail-closed sandbox, secret filtering, and classified trusted-tool retry canaries | Guarded workspace profile, public-network boundary, and escalation review tests | Same guarded project profile; effective settings must be rechecked natively | `--permission-mode auto` default analog; `--always-approve` overlay; `--sandbox <PROFILE>` (user-guide: workspace / read-only / strict) |
+| Git backstop | Repository hooks, CI, and remote protection | Repository hooks, CI, and remote protection | Repository hooks, CI, and remote protection | Repository hooks, CI, and remote protection |
 
 Qualification is intentionally layered. This file supports only the
 source-controlled *harness capability* entry. Catalog status therefore means

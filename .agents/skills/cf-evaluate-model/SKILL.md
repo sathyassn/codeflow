@@ -22,9 +22,12 @@ limits of catalog support in consuming scaffolds.
 ## Non-negotiable boundaries
 
 - Run subject trials only in fresh native interactive Codex App/CLI or Claude
-  Code sessions with the tools and MCPs being qualified. Never use `codex exec`,
-  `claude -p` / `--print`, a raw model API, desktop GUI scripting, or transcript
-  scraping as a substitute.
+  Code sessions with the tools and MCPs being qualified. Grok Build (`grok`
+  TUI) is the subject harness when qualifying `grok-cli`; a catalog entry is
+  not a completed Grok full-suite qualification. Never use `codex exec`,
+  `claude -p` / `--print`, `grok -p` / `--single`, a raw model API, desktop GUI
+  scripting, or transcript scraping as a substitute. Promotion of
+  `grok-engineering-primary` still requires that native-interactive full result.
 - Materialize only disposable fixtures. Never point a trial or cleanup command
   at a real repository, production service, private remote, or live secret.
 - Mock credentials, destructive effects, external writes, and private services.

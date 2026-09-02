@@ -20,6 +20,10 @@ const CURRENT_ENSEMBLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
 ));
+const ROUTING_POLICY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json"
+));
 const PROJECT_SELECTION_PATH: &str = ".codeflow/model-selection.json";
 
 /// Trusted, source-controlled metadata for a capability-supported native harness.
@@ -55,9 +59,30 @@ struct HarnessCatalog {
 struct EnsembleCatalog {
     schema_version: u64,
     policy_id: String,
+    standing_roles: Vec<String>,
     bindings: Vec<EnsembleBinding>,
     xhigh_triggers: Vec<String>,
     rules: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoutingPolicy {
+    schema_version: u64,
+    policy_id: String,
+    default_review: String,
+    design_production: String,
+    host_does_not_own_duty: bool,
+    extra_family_review: ExtraFamilyReview,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtraFamilyReview {
+    never_silent_vote: bool,
+    requires_named_assignment: bool,
+    triggers: Vec<String>,
+    rule: String,
 }
 
 /// One stable primary role and its fully managed shipped default.
@@ -283,15 +308,38 @@ pub fn harness_catalog() -> Result<BTreeMap<String, HarnessMetadata>, String> {
 pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
     let ensemble: EnsembleCatalog =
         serde_json::from_str(CURRENT_ENSEMBLE).map_err(|error| error.to_string())?;
-    if ensemble.schema_version != 2 {
+    if ensemble.schema_version != 3 {
         return Err(format!(
             "unsupported current ensemble schema {}",
             ensemble.schema_version
         ));
     }
     validate_nonempty(&ensemble.policy_id, "ensemble.policy_id")?;
-    if ensemble.bindings.len() != 2 {
-        return Err("the current duo must define exactly two primary roles".into());
+    validate_routing_policy(&ensemble.policy_id)?;
+    if ensemble.standing_roles.len() != 2 {
+        return Err("the standing pair must define exactly two primary roles".into());
+    }
+    if ensemble.bindings.len() < 2 {
+        return Err("current ensemble must include the standing pair".into());
+    }
+    let mut standing = BTreeSet::new();
+    for role in &ensemble.standing_roles {
+        validate_safe_atom(role, "ensemble standing role")?;
+        if !standing.insert(role.clone()) {
+            return Err(format!("duplicate standing role {role}"));
+        }
+    }
+    if ensemble.policy_id == "claude-codex-duo"
+        && standing
+            != BTreeSet::from([
+                "claude-judgment-primary".to_string(),
+                "codex-engineering-primary".to_string(),
+            ])
+    {
+        return Err(
+            "claude-codex-duo standing pair must remain claude-judgment-primary and codex-engineering-primary"
+                .into(),
+        );
     }
     if ensemble.xhigh_triggers.is_empty() || ensemble.rules.is_empty() {
         return Err("current ensemble effort triggers and rules must not be empty".into());
@@ -352,7 +400,44 @@ pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
             return Err(format!("duplicate ensemble role {role}"));
         }
     }
+    for role in &standing {
+        if !roles.contains_key(role) {
+            return Err(format!("standing role {role} is missing from bindings"));
+        }
+    }
     Ok(roles)
+}
+
+fn validate_routing_policy(policy_id: &str) -> Result<(), String> {
+    let policy: RoutingPolicy =
+        serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
+    if policy.schema_version != 1 {
+        return Err(format!(
+            "unsupported routing policy schema {}",
+            policy.schema_version
+        ));
+    }
+    validate_nonempty(&policy.policy_id, "routing policy_id")?;
+    if policy.policy_id != policy_id {
+        return Err("routing policy_id must match the current ensemble".into());
+    }
+    if policy.default_review != "standing-pair" {
+        return Err("routing policy default_review must be standing-pair".into());
+    }
+    if policy.design_production != "claude-native-session" {
+        return Err("routing policy must keep Claude native-session design production".into());
+    }
+    if !policy.host_does_not_own_duty {
+        return Err("routing policy must keep host-does-not-own-duty".into());
+    }
+    if !policy.extra_family_review.never_silent_vote
+        || !policy.extra_family_review.requires_named_assignment
+        || policy.extra_family_review.triggers.is_empty()
+        || policy.extra_family_review.rule.is_empty()
+    {
+        return Err("extra-family review must be named, triggered, and never a silent vote".into());
+    }
+    Ok(())
 }
 
 /// Resolve a project's reference-only overrides against approved bindings.
@@ -486,6 +571,10 @@ pub fn trusted_version_probe(id: &str) -> Option<TrustedVersionProbe> {
         }),
         "codex-cli-version" => Some(TrustedVersionProbe {
             command: "codex",
+            args: &["--version"],
+        }),
+        "grok-cli-version" => Some(TrustedVersionProbe {
+            command: "grok",
             args: &["--version"],
         }),
         _ => None,
@@ -723,6 +812,7 @@ fn validate_roles(roles: &[String]) -> Result<(), String> {
         "evidence-worker",
         "claude-judgment-primary",
         "codex-engineering-primary",
+        "grok-engineering-primary",
     ];
     if roles
         .iter()
@@ -946,10 +1036,11 @@ mod tests {
     #[test]
     fn embedded_harnesses_satisfy_capability_contract() {
         let harnesses = harness_catalog().unwrap();
-        assert_eq!(harnesses.len(), 3);
+        assert_eq!(harnesses.len(), 4);
         assert!(harnesses.contains_key("claude-code"));
         assert!(harnesses.contains_key("codex-cli"));
         assert!(harnesses.contains_key("codex-app"));
+        assert!(harnesses.contains_key("grok-cli"));
         assert_eq!(
             trusted_version_probe("claude-cli-version")
                 .expect("Claude probe")
@@ -962,13 +1053,16 @@ mod tests {
     #[test]
     fn embedded_ensemble_has_two_independent_stable_roles() {
         let ensemble = current_ensemble().unwrap();
-        assert_eq!(ensemble.len(), 2);
+        assert!(ensemble.len() >= 2);
         assert_eq!(ensemble["claude-judgment-primary"].seat, "claude-primary");
         assert_eq!(ensemble["codex-engineering-primary"].seat, "codex-primary");
+        assert_eq!(ensemble["grok-engineering-primary"].seat, "grok-primary");
+        assert_eq!(ensemble["grok-engineering-primary"].lineage, "grok");
         assert_ne!(
             ensemble["claude-judgment-primary"].lineage,
             ensemble["codex-engineering-primary"].lineage
         );
+        assert!(trusted_version_probe("grok-cli-version").is_some());
     }
 
     fn write_selection(root: &Path, body: &serde_json::Value) {

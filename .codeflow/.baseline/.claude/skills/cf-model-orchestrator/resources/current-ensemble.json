@@ -1,6 +1,10 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "policy_id": "claude-codex-duo",
+  "standing_roles": [
+    "claude-judgment-primary",
+    "codex-engineering-primary"
+  ],
   "bindings": [
     {
       "role": "claude-judgment-primary",
@@ -15,6 +19,7 @@
       "escalation_effort": "xhigh",
       "responsibilities": [
         "independent planning",
+        "design production in the native Claude session",
         "design leadership",
         "plan approval",
         "integrated design and code judgment",
@@ -64,6 +69,37 @@
           "use": "simple bounded work through observed native routing"
         }
       ]
+    },
+    {
+      "role": "grok-engineering-primary",
+      "seat": "grok-primary",
+      "provider": "xai",
+      "lineage": "grok",
+      "model_class": "latest-grok-coding",
+      "native_selectors": {
+        "grok-cli": "grok-4.6"
+      },
+      "default_effort": "high",
+      "escalation_effort": "xhigh",
+      "responsibilities": [
+        "host coordination when Grok Build is the active harness",
+        "independent planning when seated",
+        "production when assigned",
+        "first verification when producing",
+        "named extra-family review when policy or the operator requires it"
+      ],
+      "internal_routes": [
+        {
+          "model_class": "latest-grok-coding",
+          "effort": "high",
+          "use": "CodeFlow instruction: invoke grok-4.6 at high for planning, production, and named extra-family review; vendor-internal routers are not this policy"
+        },
+        {
+          "model_class": "latest-grok-coding",
+          "effort": "xhigh",
+          "use": "CodeFlow instruction: escalate only the affected Grok-primary task on a documented xhigh trigger; do not infer a vendor router"
+        }
+      ]
     }
   ],
   "xhigh_triggers": [
@@ -75,8 +111,11 @@
   ],
   "rules": [
     "Primary seats retain independent planning and approval duties.",
+    "The standing pair is the usual quality floor; extra catalog families never vote silently.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
     "Claude-side internal routing belongs to the Claude primary.",
+    "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
+    "Claude produces design in its native interactive session regardless of host.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",
     "A changed concrete binding requires native-interactive qualification before promotion."
   ]

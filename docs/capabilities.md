@@ -358,10 +358,11 @@ appearance-mode behavior, accessibility, and rendered fidelity
 (ADR-0043, ADR-0051).
 
 Claude Code reaches Codex through the official plugin. Codex App/interactive
-CLI reaches Claude through an interactive task-scoped tmux session. Another
-harness, including Hermes, normally delegates the repository task to one native
-CodeFlow host; direct coordination requires both native lanes and the full
-contract. Explicit host/peer/worker roles prevent recursive orchestration. The
+CLI reaches Claude through an interactive task-scoped tmux session. Grok Build
+hosts through Herdr for both peer lanes and does not claim those lanes complete
+without canaries. Another harness, including Hermes, normally delegates the
+repository task to one native CodeFlow host; direct coordination requires both
+native lanes and the full contract. Explicit host/peer/worker roles prevent recursive orchestration. The
 shared quality and routing resources require reproducible
 evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
 coverage floor where measurable (90% normal target), security review, and
@@ -507,7 +508,7 @@ area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-003, EPC-004, EPC-005]
-adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044]
+adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,

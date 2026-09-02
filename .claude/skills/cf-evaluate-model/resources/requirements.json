@@ -416,7 +416,8 @@
         {
           "path": ".agents/skills/cf-evaluate-model/resources/protocol.md",
           "markers": [
-            "Adding a harness requires evidence for every capability plus the full model suite",
+            "Adding a harness requires evidence for every capability",
+            "promoting a concrete binding still requires the full model suite",
             "Promotion additionally requires `system.observed`",
             "requested and observed model/effort match",
             "runtime routing config, or permission to auto-promote"

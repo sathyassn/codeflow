@@ -10,10 +10,12 @@ the creator, audience, context, subject, and systems in force. Design is a
 reasoned product decision, not decoration or a catalog of fashionable patterns.
 
 This supports `cf-model-orchestrator`, which owns Plan vN and settlement. The
-role qualified as `claude-judgment-primary` leads design
-judgment; the Codex primary challenges feasibility, proportionality, failure
-modes, fidelity, and testability. Model names and effort live in the ensemble
-binding, not here.
+role qualified as `claude-judgment-primary` **produces** design
+in its own native interactive session; the Codex primary challenges
+feasibility, proportionality, failure modes, fidelity, and testability. A Grok
+or Codex host may pass options and review; it never drafts the direction for
+Claude to rubber-stamp. Extra catalog families do not author design. Model
+names and effort live in the ensemble binding, not here.
 
 ## 1. Select the process weight
 
@@ -242,9 +244,10 @@ reviewed version, the feedback authority, and the accepted and rejected
 rationale; the sourcing-and-revision reference owns that record. Bounded
 conformance feedback stays in the normal task record.
 
-The Claude judgment primary proposes design intent and direction. Codex
-challenges the choice. Both approve the exact Plan vN before
-implementation.
+The Claude judgment primary produces design intent and direction in its
+native session. Codex challenges the choice. Both standing primaries approve
+the exact Plan vN before implementation. Extra-family review, when named, is
+evidence — never a silent third vote.
 
 ## 8. Critique before build
 
