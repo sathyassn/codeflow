@@ -112,12 +112,6 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
-    let ensemble = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
-    ));
 
     for required in [
         "Detect capabilities, not model identity.",
@@ -153,6 +147,19 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
             "orchestrator lost required behavior marker: {required}"
         );
     }
+}
+
+#[test]
+fn current_ensemble_and_routing_pin_grok_catalog() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let ensemble = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ));
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
 
     for required in [
         "\"seat\": \"claude-primary\"",

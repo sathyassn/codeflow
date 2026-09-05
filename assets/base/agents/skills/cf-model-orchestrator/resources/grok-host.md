@@ -6,11 +6,14 @@ On-demand detail for a Grok Build (`grok` CLI) host. Durable duties stay in
 ## In-session guards
 
 CodeFlow binds the same `codeflow hook git-guard` / `exec-guard` /
-`session-orient` binaries Grok as Codex, via `.grok/hooks/codeflow.json`.
-Grok also scans `.claude/settings.json` when compat is on. Project hooks
-load only after `/hooks-trust` or `--trust`. Git hooks and CI remain the
-enforcement floor. This is not a Grok schema-v2 Stop-hook lifecycle;
-Claude turn completion still uses schema-v2 when Grok hosts Claude.
+`session-orient` binaries to Grok as to Codex, via `.grok/hooks/codeflow.json`.
+The guard parser accepts Grok's camelCase stdin (`toolName`, `toolInput`,
+`run_terminal_command`) as well as Claude/Codex snake_case. Grok also scans
+`.claude/settings.json` when compat is on. Project hooks load only after
+`/hooks-trust` or `--trust`; `grok inspect` is the local proof of discovery
+and trust. Git hooks and CI remain the enforcement floor. This is not a Grok
+schema-v2 Stop-hook lifecycle; Claude turn completion still uses schema-v2
+when Grok hosts Claude.
 
 ## Launch
 
