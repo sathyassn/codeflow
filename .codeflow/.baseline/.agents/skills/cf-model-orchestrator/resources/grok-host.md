@@ -36,8 +36,9 @@ the flag; the Grok Build user guide names `workspace` / `read-only` /
 A Grok host reaches Claude through Herdr (`claude` + schema-v2). It reaches
 Codex through the official `codex` CLI, which talks to the local app-server
 daemon — start `codex app-server daemon start` when the socket is missing,
-then Herdr `codex` (tmux degraded). Do not install third-party Grok Codex
-plugins. The Claude-Code `codex-plugin-cc` is not a Grok-host lane.
+then Herdr `codex` (tmux degraded). If the daemon cannot start, keep the
+interactive CLI in Herdr. Do not install third-party Grok Codex plugins. The
+Claude-Code `codex-plugin-cc` is not a Grok-host lane.
 
 Do not claim the Grok-hosted duo complete until both canaries exist.
 

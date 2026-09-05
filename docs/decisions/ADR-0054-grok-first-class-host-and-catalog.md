@@ -100,8 +100,10 @@ lanes are not claimed complete until their native canaries exist.
 
 ADR-0055: Grok reaches Codex through the official `codex` CLI and local
 app-server daemon (Herdr, tmux degraded), not a third-party Grok plugin. The
-Claude-Code `codex-plugin-cc` remains Claude-host-only. Default effort is
-medium. Production Grok launch is `--always-approve`.
+Claude-Code `codex-plugin-cc` remains Claude-host-only; a missing plugin
+degrades to solo and does not open a Claude→Codex Herdr CLI lane. Decision 2's
+"at high" is superseded: default effort is medium. Production Grok launch is
+`--always-approve`.
 
 ## Rejected
 

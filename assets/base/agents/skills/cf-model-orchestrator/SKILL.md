@@ -138,19 +138,19 @@ Detect capabilities, not model identity.
 
 | Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|
-| Claude Code | Official `codex-plugin-cc` / Codex app-server; CLI via Herdr if app-server is down | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Claude Code | Official `codex-plugin-cc` / Codex app-server only | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. Claude produces design natively. Catalog Grok may produce or take named extra-family review |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
 Herdr/tmux cwd is the project being worked. Same topic reuses the tab; a new
 topic gets a new tab; close it when that work is done. Claude Code reaches
-Codex via plugin/app-server; Grok reaches Codex via official `codex` CLI and
-the app-server daemon (no third-party Grok Codex plugins). Codex reaches Claude
-via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
-harnesses normally delegate the whole repository task to one native host.
-Otherwise report the missing lane and use the solo fallback. Host is not duty;
-Claude produces design.
+Codex via plugin/app-server only (missing plugin degrades; no Herdr CLI third
+lane). Grok reaches Codex via official `codex` CLI and the app-server daemon
+(Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
+Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
+harnesses delegate to one native host unless both lanes are proven. Missing
+lane: solo fallback. Host is not duty; Claude produces design.
 
 ## Preflight
 

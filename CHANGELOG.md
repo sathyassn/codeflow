@@ -11,7 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Grok Build as a first-class host and catalog family (ADR-0054).** Interactive
   `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
   remains `claude-judgment-primary` and `codex-engineering-primary`;
-  `grok-engineering-primary` is a catalog seat on `grok-4.6` at high. Extra-family
+  `grok-engineering-primary` is a catalog seat on `grok-4.6` at medium (ADR-0055). Extra-family
   review is named in `routing-policy.json` and is never a silent third vote.
   Claude produces design in its native session regardless of host. `grok-cli`
   is catalog-supported with a `grok-cli-version` doctor probe. Grok-hosted
@@ -31,8 +31,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   All families default to medium and escalate to high/xhigh on complexity or
   difficulty (new or existing architecture, technical, planning, or design work
   — novelty is not a trigger). Codex primary is `gpt-6-astra` via the official
-  app-server, with interactive CLI as fallback; no third-party Grok Codex
-  plugins. Production host permissions are Claude `bypassPermissions` or
+  app-server, with interactive CLI as the Grok-host/Codex-host fallback (the
+  Claude Code lane stays plugin-only); no third-party Grok Codex plugins.
+  Production host permissions are Claude `bypassPermissions` or
   `auto`, Codex full-access/always-approve, Grok `--always-approve`. Consult
   and no-edit review stay non-bypass. Linked checkouts live under
   `.worktrees/<slug>` (gitignored). `core.hooksPath` stays project-relative.

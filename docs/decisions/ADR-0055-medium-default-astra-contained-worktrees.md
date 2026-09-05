@@ -43,9 +43,12 @@ new tab; a finished session's tab is closed.
    Codex `--sandbox danger-full-access --ask-for-approval never` (or always-approve
    equivalent); Grok `--always-approve`. Consults and no-edit review stay
    non-bypass. Git-guard, exec-guard, git hooks, and CI remain the floor.
-4. **Codex transport.** Prefer official app-server. If it is missing and `codex`
-   CLI is present, start interactive CLI via Herdr (tmux degraded). Never
-   `codex exec`. Do not install third-party Grok Codex plugins.
+4. **Codex transport.** Prefer official app-server. From a Grok host, or when
+   Codex itself is the host CLI, if the daemon is missing and `codex` CLI is
+   present, start interactive CLI via Herdr (tmux degraded). The Claude Code →
+   Codex lane remains the official plugin only (ADR-0018, ADR-0023); a missing
+   plugin degrades to solo. Never `codex exec`. Do not install third-party
+   Grok Codex plugins.
 5. **Worktrees.** From the protected root, create
    `git worktree add .worktrees/<slug> -b <branch>`. Ignore `.worktrees/` in
    the managed gitignore. Relative `core.hooksPath=.codeflow/git-hooks` so each

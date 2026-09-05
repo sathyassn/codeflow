@@ -53,10 +53,10 @@ Then verify and **offer** remediation — never install silently.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
   - **Claude-host lane** — `codex login status`, `codex mcp list`, the enabled
     `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
-    plugin/app-server is the primary Claude → Codex transport; if it is down,
-    official `codex` CLI via Herdr. Never use headless `codex exec`, a
-    hand-rolled app-server driver, tmux-driving Codex, or a third-party Grok
-    Codex plugin.
+    plugin/app-server is the only Claude → Codex transport (ADR-0023). If it
+    is down, degrade to solo — do not start Codex via Herdr from Claude Code.
+    Never use headless `codex exec`, a hand-rolled app-server driver,
+    tmux-driving Codex, or a third-party Grok Codex plugin.
   - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
     environment-variable denies), `herdr` when `HERDR_ENV=1` else `tmux`, and
     `claude mcp list`, followed by authenticated interactive TTY canaries for
@@ -84,11 +84,11 @@ Then verify and **offer** remediation — never install silently.
     - `.codex/config.toml`: `default_permissions` selects the guarded workspace
       profile, no legacy `sandbox_mode` shadows it, public network and live web
       search are enabled, `approval_policy = "never"` (always-approve), and
-      production launch adds `--sandbox danger-full-access`. Catastrophic work
-      still stops for the operator. Confirm the profile denies workspace
-      key/certificate files and `~/.codex/auth.json`, and that
-      `ignore_default_excludes = false` keeps Codex's secret-bearing
-      environment filter active.
+      production launch adds `--sandbox danger-full-access` (OS sandbox off;
+      git-guard, exec-guard, git hooks, and CI remain the floor). Confirm the
+      consult/`workspace-write` profile still denies workspace key/certificate
+      files and `~/.codex/auth.json`. `ignore_default_excludes = false` keeps
+      Codex's secret-bearing environment filter active even in production.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every

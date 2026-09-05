@@ -216,8 +216,8 @@ completion signal.
   enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
   installed tool that requires host state. When `HERDR_ENV=1`, native flags
-  come from `cf-herdr` (Auto by default; unattended overlay only if the
-  operator asked). That is not a write grant and not hook-trust bypass. Never
+  come from `cf-herdr` (production bypass; consult auto). That is not a
+  write grant and not hook-trust bypass. Never
   `--dangerously-skip-permissions` unless the operator named it, and never
   `--dangerously-bypass-hook-trust`. Consults still edit nothing. See
   <https://code.claude.com/docs/en/permission-modes> and

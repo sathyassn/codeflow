@@ -341,12 +341,11 @@ shell access as credential-bearing and tighten that task's tool boundary.
   `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` is a user/managed hardening option only
   after proving the project's hooks and stdio MCPs do not require those
   provider credentials.
-- Codex `auto_review` sends eligible escalation prompts to its reviewer
-  subagent. It preserves autonomy but does not make profile denies absolute:
-  an approved request can cross the sandbox boundary. Set
-  `approvals_reviewer = "user"` in the project or launch override when
-  organizational policy requires a human decision, and constrain allowed
-  reviewers in managed requirements where available.
+- Codex `auto_review` is configured but is not a human authorization path.
+  Production `approval_policy = "never"` plus `--sandbox danger-full-access`
+  does not pause for that subagent. Catastrophic work still stops for the
+  operator. Use `on-request` and `approvals_reviewer = "user"` only on a
+  consult/no-edit lane when policy requires a human decision.
 
 `docs/product.md` always describes the consuming project's purpose, users,
 scope, and non-goals—not the CodeFlow CLI. `docs/architecture.md` describes how
@@ -650,10 +649,11 @@ comes from two layers, and it helps to be precise about which does what.
   wires `codeflow hook git-guard` and `codeflow hook exec-guard` onto Codex's
   `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with a
   guarded workspace permission profile, broad public network, live search,
-  `approval_policy = "never"`, production `--sandbox danger-full-access`, and `approvals_reviewer = "auto_review"`.
-  The latter sends eligible prompts to a reviewer subagent, not a human; select
-  `user` in the project or launch override when policy requires a human approval
-  boundary, and enforce the allowed reviewer through managed requirements.
+  `approval_policy = "never"`, production `--sandbox danger-full-access`, and
+  `approvals_reviewer = "auto_review"` (vestigial under `never`: it is not a
+  human gate and does not fire on-request prompts). Catastrophic work still
+  stops for the operator. Git-guard, exec-guard, git hooks, and CI remain the
+  floor.
   The config intentionally contains no legacy `sandbox_mode`, because that
   would shadow the named profile. Codex's hook payload is byte-compatible with
   Claude's, so the same binaries run unchanged.

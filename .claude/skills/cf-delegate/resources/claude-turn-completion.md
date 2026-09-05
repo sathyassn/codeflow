@@ -19,8 +19,9 @@ transcripts, and it makes zero tmux calls — waiting is pure file polling.
 3. **The generated settings file is immutable.** Every later `arm`, `wait`,
    and hook invocation regenerates the expected content from exactly
    (run id, state-dir spelling) and rejects any difference as unsafe. Never
-   edit it or merge other keys into it. Select auto mode with
-   `--permission-mode auto` and make `autoMode.classifyAllShell` effective at
+   edit it or merge other keys into it. Production launches
+   `--permission-mode bypassPermissions`. Consult and no-edit review keep
+   `--permission-mode auto`. Make `autoMode.classifyAllShell` effective at
    user scope — Claude ignores it at project scope, and repeated `--settings`
    flags are not a supported composition mechanism — then prove the composed
    boundary with the preflight canary.
@@ -48,7 +49,9 @@ CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default or triggered escalation effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
-  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json"
+  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
+# consult / no-edit review (keep auto):
+# claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until ready --timeout-seconds 120
 printf '%s' "$PROMPT" > "$RUN_TMP/turn-1.prompt"   # outside the repo
