@@ -145,7 +145,9 @@ CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default or triggered escalation effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"  # prints generated settings.json
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
-  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json"
+  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
+# consult / no-edit review (keep auto):
+# claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
 codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
 tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
@@ -156,7 +158,8 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
 ```
 
 When `HERDR_ENV=1`, start Claude in the named Herdr tab per `cf-herdr`
-(include `--settings` and the selected model/effort; Auto by default).
+(include `--settings` and the selected model/effort; production
+`bypassPermissions`, consult auto).
 Deliver the armed file with `herdr pane send-text` then Enter as that skill
 names; do not `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
 completion signal.
@@ -209,7 +212,7 @@ completion signal.
   `autoMode.classifyAllShell` effective at user scope (Claude ignores it at
   project scope, and repeated `--settings` flags are not a supported merge
   contract; the generated task file carries only the lifecycle hooks). On the
-  degraded tmux path, use `--permission-mode auto` and keep the OS sandbox
+  degraded tmux path, use production `--permission-mode bypassPermissions` (consult: auto) and keep the OS sandbox
   enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
   installed tool that requires host state. When `HERDR_ENV=1`, native flags

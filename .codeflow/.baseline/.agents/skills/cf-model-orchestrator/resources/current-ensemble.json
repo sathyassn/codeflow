@@ -15,7 +15,7 @@
       "native_selectors": {
         "claude-code": "fable"
       },
-      "default_effort": "high",
+      "default_effort": "medium",
       "escalation_effort": "xhigh",
       "responsibilities": [
         "independent planning",
@@ -35,6 +35,11 @@
           "model_class": "latest-opus",
           "effort": "high",
           "use": "ambiguous or multi-step tool operation without transferring judgment"
+        },
+        {
+          "model_class": "latest-opus",
+          "effort": "xhigh",
+          "use": "CodeFlow instruction: complex in-family worker work; also the recorded fallback if Fable is unavailable (credits/rate-limit), without transferring primary judgment"
         }
       ]
     },
@@ -43,12 +48,12 @@
       "seat": "codex-primary",
       "provider": "openai",
       "lineage": "codex",
-      "model_class": "latest-strongest-sol-coding",
+      "model_class": "latest-astra-coding",
       "native_selectors": {
-        "codex-app": "gpt-5.6-sol",
-        "codex-cli": "gpt-5.6-sol"
+        "codex-app": "gpt-6-astra",
+        "codex-cli": "gpt-6-astra"
       },
-      "default_effort": "high",
+      "default_effort": "medium",
       "escalation_effort": "xhigh",
       "responsibilities": [
         "independent planning",
@@ -61,7 +66,7 @@
         {
           "model_class": "qualified-sol-worker",
           "effort": "medium-or-high",
-          "use": "bounded work through observed native routing"
+          "use": "bounded work through observed native routing; also the recorded fallback primary selector if Astra cannot run"
         },
         {
           "model_class": "qualified-terra-worker",
@@ -79,7 +84,7 @@
       "native_selectors": {
         "grok-cli": "grok-4.6"
       },
-      "default_effort": "high",
+      "default_effort": "medium",
       "escalation_effort": "xhigh",
       "responsibilities": [
         "host coordination when Grok Build is the active harness",
@@ -91,20 +96,23 @@
       "internal_routes": [
         {
           "model_class": "latest-grok-coding",
-          "effort": "high",
-          "use": "CodeFlow instruction: invoke grok-4.6 at high for planning, production, and named extra-family review; vendor-internal routers are not this policy"
+          "effort": "medium",
+          "use": "CodeFlow instruction: grok-4.6 at medium for ordinary in-family sub-agent work; vendor-internal routers are not this policy"
         },
         {
           "model_class": "latest-grok-coding",
-          "effort": "xhigh",
-          "use": "CodeFlow instruction: escalate only the affected Grok-primary task on a documented xhigh trigger; do not infer a vendor router"
+          "effort": "high",
+          "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; internals do not use xhigh"
         }
       ]
     }
   ],
+  "high_triggers": [
+    "complex or difficult architecture, technical, planning, or design work, whether greenfield or improving existing systems",
+    "material ambiguity that medium-effort work cannot settle"
+  ],
   "xhigh_triggers": [
     "capability-sensitive or long-horizon work",
-    "material ambiguity",
     "cross-cutting architecture or security",
     "unresolved cross-lineage disagreement",
     "failed or stalled high-effort work"
@@ -116,6 +124,8 @@
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
+    "Default effort is medium; escalate to high on a high_trigger, then xhigh on an xhigh_trigger. Novelty is not a trigger; complexity and difficulty are.",
+    "If Fable is unavailable, record Opus as the Claude fallback at the same effort. If Astra is unavailable, record gpt-5.6-sol as the Codex fallback at the same effort.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",
     "A changed concrete binding requires native-interactive qualification before promotion."
   ]

@@ -1810,14 +1810,16 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases.",
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable medium / Astra medium / grok-4.6 medium and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
         ],
         "signals": [
-          "claude_primary_high_default",
-          "codex_primary_high_default",
+          "claude_primary_fable_medium_default",
+          "codex_primary_astra_medium_default",
+          "grok_primary_46_medium_default",
+          "high_on_complex_architecture_technical_planning_or_design",
           "claude_primary_xhigh_on_trigger",
           "codex_primary_xhigh_on_trigger",
           "each_primary_owns_internal_routing",

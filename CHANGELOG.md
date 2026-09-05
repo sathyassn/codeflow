@@ -27,6 +27,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Medium-default effort, Astra Codex primary, contained worktrees (ADR-0055).**
+  All families default to medium and escalate to high/xhigh on complexity or
+  difficulty (new or existing architecture, technical, planning, or design work
+  — novelty is not a trigger). Codex primary is `gpt-6-astra` via the official
+  app-server, with interactive CLI as fallback; no third-party Grok Codex
+  plugins. Production host permissions are Claude `bypassPermissions` or
+  `auto`, Codex full-access/always-approve, Grok `--always-approve`. Consult
+  and no-edit review stay non-bypass. Linked checkouts live under
+  `.worktrees/<slug>` (gitignored). `core.hooksPath` stays project-relative.
+  Herdr/tmux cwd is the project being worked; reuse the same tab for the same
+  topic and close it when that work is done.
+
 - **Plan, develop, and consult craft.** After both seats settle Plan vN, planning
   synthesizes that ground and still asks live operator-owned questions. Develop
   tests through named interfaces first. Consult findings label `axis: standards`

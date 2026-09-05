@@ -684,7 +684,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "is reassignment: create Plan vN+1",
-            "same-seat high\u2192xhigh escalation"
+            "same-seat medium\u2192high or high\u2192xhigh escalation"
           ]
         }
       ]
@@ -807,7 +807,7 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"high\"",
+            "\"default_effort\": \"medium\"",
             "\"escalation_effort\": \"xhigh\"",
             "\"model_class\": \"qualified-terra-worker\"",
             "Claude-side internal routing belongs to the Claude primary",

@@ -176,9 +176,8 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
 
 ## Worktree doctrine
 
-Develop in a worktree per session (native worktree support). Protected branches
-stay checked out only at the repo root, so git itself refuses a second checkout —
-structural protection for free.
+Develop in a worktree per session. Checkouts go under `.worktrees/<slug>`
+(gitignored), not sibling folders. Protected branches stay at the repo root.
 
 At orientation and after a landing, use `codeflow status` to inventory linked
 worktrees and unattached local branches. Treat its removable/dirty/unproven

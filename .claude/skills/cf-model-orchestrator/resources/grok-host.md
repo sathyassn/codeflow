@@ -5,8 +5,9 @@ On-demand detail for a Grok Build (`grok` CLI) host. Durable duties stay in
 
 ## In-session guards
 
-CodeFlow binds the same `codeflow hook git-guard` / `exec-guard` /
-`session-orient` binaries to Grok as to Codex, via `.grok/hooks/codeflow.json`.
+CodeFlow binds `codeflow hook git-guard` / `exec-guard` on PreToolUse and
+`session-orient` on SessionStart plus Grok `PreCompact`/`PostCompact`, via
+`.grok/hooks/codeflow.json`.
 The guard parser accepts Grok's camelCase stdin (`toolName`, `toolInput`,
 `run_terminal_command`) as well as Claude/Codex snake_case. Grok also scans
 `.claude/settings.json` when compat is on. Project hooks load only after
@@ -17,13 +18,13 @@ when Grok hosts Claude.
 
 ## Launch
 
-Take selector and effort from the current ensemble record. Default:
+Take selector and effort from the current ensemble record. Production host:
 
 ```text
-grok --model <selector> --reasoning-effort <effort> --permission-mode auto
+grok --model <selector> --reasoning-effort <effort> --always-approve
 ```
 
-`--always-approve` is the unattended overlay, not the default. Never
+`--permission-mode auto` is the consult / no-edit alternative. Never
 `grok -p` / `--single` for a work session.
 
 `--sandbox <PROFILE>` when an OS sandbox is required. `grok --help` exposes
@@ -32,11 +33,11 @@ the flag; the Grok Build user guide names `workspace` / `read-only` /
 
 ## Peer lanes
 
-A Grok host reaches Claude and Codex through Herdr:
-
-- Claude: Herdr `claude` plus schema-v2 lifecycle (arm / accepted / terminal)
-- Codex: Herdr `codex` interactive TTY — not the official Codex plugin
-  (that plugin is Claude-Code-only)
+A Grok host reaches Claude through Herdr (`claude` + schema-v2). It reaches
+Codex through the official `codex` CLI, which talks to the local app-server
+daemon — start `codex app-server daemon start` when the socket is missing,
+then Herdr `codex` (tmux degraded). Do not install third-party Grok Codex
+plugins. The Claude-Code `codex-plugin-cc` is not a Grok-host lane.
 
 Do not claim the Grok-hosted duo complete until both canaries exist.
 

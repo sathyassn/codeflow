@@ -96,6 +96,13 @@ lanes are not claimed complete until their native canaries exist.
 - A later family still pays the catalog-plus-qualification cost. Presence in
   marketing or a protocol list is not enough.
 
+## Note (2026-09-05)
+
+ADR-0055: Grok reaches Codex through the official `codex` CLI and local
+app-server daemon (Herdr, tmux degraded), not a third-party Grok plugin. The
+Claude-Code `codex-plugin-cc` remains Claude-host-only. Default effort is
+medium. Production Grok launch is `--always-approve`.
+
 ## Rejected
 
 - Replacing the standing pair with a Grok+Claude or Grok+Codex default.

@@ -168,14 +168,27 @@ fn dogfood_codex_hooks_matches_shipped_scaffold() {
 }
 
 #[test]
-fn dogfood_grok_hooks_match_codex_payload() {
+fn dogfood_grok_hooks_share_pretooluse_and_add_compact_events() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let shipped = std::fs::read(root.join("assets/base/codex/hooks.json"))
-        .expect("read shipped codex hooks.json");
-    let grok = std::fs::read(root.join(".grok/hooks/codeflow.json"))
+    let shipped = std::fs::read_to_string(root.join("assets/base/grok/hooks.json"))
+        .expect("read shipped grok hooks.json");
+    let dogfood = std::fs::read_to_string(root.join(".grok/hooks/codeflow.json"))
         .expect("read dogfood .grok/hooks/codeflow.json");
     assert_eq!(
-        shipped, grok,
-        "dogfood Grok hooks must stay byte-identical to the Codex PreToolUse payload"
+        shipped, dogfood,
+        "dogfood Grok hooks drifted from assets/base/grok/hooks.json"
+    );
+    let grok: serde_json::Value = serde_json::from_str(&shipped).unwrap();
+    let codex: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("assets/base/codex/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        grok["hooks"]["PreToolUse"], codex["hooks"]["PreToolUse"],
+        "Grok PreToolUse must stay the same git-guard/exec-guard payload as Codex"
+    );
+    assert!(
+        grok["hooks"]["PreCompact"].is_array() && grok["hooks"]["PostCompact"].is_array(),
+        "Grok must wire session-orient on PreCompact/PostCompact"
     );
 }

@@ -54,8 +54,8 @@ not silently substitute another criterion.
 
 A change to the producer or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
-work continues. A same-seat high→xhigh escalation on a documented trigger is
-ledger evidence, not reassignment. A worker change within the approved primary
+work continues. A same-seat medium→high or high→xhigh escalation on a documented trigger is
+ledger evidence, not reassignment. Novelty is not a trigger. A worker change within the approved primary
 seat remains internal routing unless it changes the named producer or reviewer.
 
 ## Admissible cross-lineage evidence

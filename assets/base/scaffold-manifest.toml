@@ -229,10 +229,11 @@ ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # Grok Build reads `.grok/hooks/*.json` (and may also scan Claude settings).
-# Same `codeflow hook` binaries and PreToolUse payload as Codex (ADR-0008 analog).
+# Same PreToolUse git-guard/exec-guard binaries as Codex. SessionStart is
+# once-per-session on Grok; compaction uses PreCompact/PostCompact.
 # Project hooks need `/hooks-trust` or `--trust` once.
 [[entry]]
-src = "codex/hooks.json"
+src = "grok/hooks.json"
 dest = ".grok/hooks/codeflow.json"
 ownership = "managed"
 tiers = ["minimal", "standard", "full"]

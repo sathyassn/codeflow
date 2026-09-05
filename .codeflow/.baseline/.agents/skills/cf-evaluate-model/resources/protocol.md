@@ -30,7 +30,7 @@ trials and recomputes each status and the summary from observations.
   "suite_digest": "sha256:...",
   "system": {
     "model": "actual model version",
-    "effort": "high",
+    "effort": "medium",
     "harness": "qualified id from harnesses.json",
     "harness_version": "actual version",
     "codeflow_revision": "commit",

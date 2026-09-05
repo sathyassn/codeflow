@@ -150,10 +150,12 @@ layer, so unlike the PreToolUse guards it holds even in headless `codex exec`
 (ADR-0014); the `gh`/`docker` tool-token stores are deliberately left readable so
 those tools can read their own tokens. The profile is the only sandbox
 configuration—legacy `sandbox_mode` would shadow it—and also enables broad
-public egress, exact loopback for local UI tests, and live search. Private
-destinations and arbitrary Unix sockets stay closed; `on-request` escalations
-route to a reviewer subagent (or a human when the project/launch setting selects
-`approvals_reviewer = "user"`), and the shell keeps Codex's default
+public egress, exact loopback for local UI tests, and live search. When a
+session is launched without `--sandbox danger-full-access`, private destinations
+and arbitrary Unix sockets stay closed. Production Codex (ADR-0055) uses
+`approval_policy = "never"` plus `--sandbox danger-full-access`, so that OS
+sandbox is off for the process; git-guard, exec-guard, git hooks, and CI remain
+the floor. The shell keeps Codex's default
 `KEY`/`SECRET`/`TOKEN` environment scrub (ADR-0025, ADR-0026). Claude's
 sandbox removes the raw Anthropic, OpenAI, and AWS credentials named in
 ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
@@ -224,10 +226,11 @@ Plan/native-harness concerns (ADR-0040, ADR-0046).
 ### scaffold — `assets/`
 
 `cf-model-orchestrator` is the stage-aware harness-neutral default for every
-non-trivial repository task in standard/full scaffolds, with two
-vendor-maintained/native adapters: Claude Code reaches Codex through the
-official plugin/app-server integration, while Codex reaches an interactive
-Claude CLI through a task-scoped tmux session. Research/analysis, plan/design,
+non-trivial repository task in standard/full scaffolds. Claude Code reaches
+Codex through the official plugin/app-server; Grok reaches Codex through the
+official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
+reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
+to medium effort (ADR-0055). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
 stages the requested outcome needs. Claude-led design, capability-routed
 producer/cross-lineage-review assignments, evidence-routed effort, explicit

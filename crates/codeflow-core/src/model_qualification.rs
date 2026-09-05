@@ -61,6 +61,7 @@ struct EnsembleCatalog {
     policy_id: String,
     standing_roles: Vec<String>,
     bindings: Vec<EnsembleBinding>,
+    high_triggers: Vec<String>,
     xhigh_triggers: Vec<String>,
     rules: Vec<String>,
 }
@@ -299,6 +300,16 @@ pub fn harness_catalog() -> Result<BTreeMap<String, HarnessMetadata>, String> {
     Ok(indexed)
 }
 
+fn validate_ensemble_triggers(ensemble: &EnsembleCatalog) -> Result<(), String> {
+    if ensemble.high_triggers.is_empty()
+        || ensemble.xhigh_triggers.is_empty()
+        || ensemble.rules.is_empty()
+    {
+        return Err("current ensemble effort triggers and rules must not be empty".into());
+    }
+    Ok(())
+}
+
 /// Parse and validate the fully managed current ensemble.
 ///
 /// # Errors
@@ -341,9 +352,7 @@ pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
                 .into(),
         );
     }
-    if ensemble.xhigh_triggers.is_empty() || ensemble.rules.is_empty() {
-        return Err("current ensemble effort triggers and rules must not be empty".into());
-    }
+    validate_ensemble_triggers(&ensemble)?;
     let catalog = harness_catalog()?;
     let mut roles = BTreeMap::new();
     let mut seats = BTreeSet::new();

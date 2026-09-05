@@ -345,6 +345,19 @@ fn hooks_wiring_warning(root: &Path) -> Option<String> {
     if !shims.join("pre-commit").exists() {
         return None; // no scaffolded shims — nothing to wire
     }
+    // Prefer the configured string: relative `.codeflow/git-hooks` is the
+    // contract so each worktree uses its own shims. An absolute path (often
+    // the main checkout) is a Warn even if the files happen to exist.
+    if let Some(configured) = crate::scaffold::detect::configured_hooks_path(root) {
+        if configured == CODEFLOW_HOOKS_PATH {
+            return None;
+        }
+        if std::path::Path::new(&configured).is_absolute() {
+            return Some(format!(
+                "core.hooksPath is absolute ({configured}); set the project-relative `{CODEFLOW_HOOKS_PATH}` so each worktree uses its own shims — `git config core.hooksPath {CODEFLOW_HOOKS_PATH}`"
+            ));
+        }
+    }
     let active = crate::hooks::orient::git_hooks_dir(root)?;
     let wired = match (active.canonicalize(), shims.canonicalize()) {
         (Ok(a), Ok(s)) => a == s,
@@ -2261,6 +2274,34 @@ mod tests {
         );
         let r = check_hooks(&hooks_opts(dir.path()));
         assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_hooks_warns_when_hookspath_is_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        let absolute = dir.path().join(".codeflow/git-hooks");
+        git(
+            dir.path(),
+            &[
+                "config",
+                "core.hooksPath",
+                absolute.to_str().expect("utf-8 path"),
+            ],
+        );
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(
+            r.message.contains("absolute"),
+            "expected absolute-path warning, got: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("git config core.hooksPath .codeflow/git-hooks"),
+            "remedy: {}",
+            r.message
+        );
     }
 
     #[test]

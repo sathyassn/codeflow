@@ -11,7 +11,21 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
         "hooks": [
           { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
         ]

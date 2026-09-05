@@ -357,10 +357,11 @@ evidenced product voices, localization honesty, utility/product isolation,
 appearance-mode behavior, accessibility, and rendered fidelity
 (ADR-0043, ADR-0051).
 
-Claude Code reaches Codex through the official plugin. Codex App/interactive
-CLI reaches Claude through an interactive task-scoped tmux session. Grok Build
-hosts through Herdr for both peer lanes and does not claim those lanes complete
-without canaries. Another harness, including Hermes, normally delegates the
+Claude Code reaches Codex through the official plugin/app-server. Codex
+App/interactive CLI reaches Claude through Herdr (tmux degraded). Grok Build
+reaches Codex through the official `codex` CLI and local app-server daemon,
+and Claude through Herdr plus schema-v2. Those Grok-hosted lanes stay unclaimed
+until canaries exist. Another harness, including Hermes, normally delegates the
 repository task to one native CodeFlow host; direct coordination requires both
 native lanes and the full contract. Explicit host/peer/worker roles prevent recursive orchestration. The
 shared quality and routing resources require reproducible

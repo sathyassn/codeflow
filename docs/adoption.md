@@ -317,10 +317,12 @@ shell access as credential-bearing and tighten that task's tool boundary.
   `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user
   default but never writes it without approval.
 - Codex's `.codex/config.toml` selects the guarded workspace permission profile
-  without a legacy `sandbox_mode` override. It enables live search and broad
-  public egress, grants exact loopback for local verification, keeps private
-  destinations and arbitrary Unix sockets closed, and sends eligible
-  `on-request` escalations through reviewer-subagent safety review.
+  without a legacy `sandbox_mode` override, enables live search, and sets
+  `approval_policy = "never"` (always-approve) with `model_reasoning_effort =
+  "medium"`. Production launch also passes `--sandbox danger-full-access` (full
+  access), so the OS sandbox is off for that process; git-guard, exec-guard,
+  git hooks, and CI remain the floor. Catastrophic work still stops for the
+  operator.
 - A settings file cannot install or authenticate every task-specific tool.
   `/cf-customize` inventories and canaries authoritative-doc research, GitHub,
   the stack format/lint/test/coverage/security toolchain, browser/Playwright,
@@ -622,7 +624,7 @@ interactive canary in each direction.
 - `/cf-consult` gets an independent, read-only second opinion from the vendor
   the session is *not* — from Claude Code through the official
   `codex-plugin-cc` plugin (`/codex:review`); from Codex by driving the
-  interactive `claude` CLI in a task-scoped tmux session with Stop/StopFailure
+  interactive `claude` CLI via Herdr (tmux degraded) with Stop/StopFailure
   hook completion—and makes you synthesize it against your
   own analysis (never paste its reply as fact). Headless `codex exec` /
   `claude -p` are not sanctioned delegation transports (ADR-0023).
@@ -648,7 +650,7 @@ comes from two layers, and it helps to be precise about which does what.
   wires `codeflow hook git-guard` and `codeflow hook exec-guard` onto Codex's
   `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with a
   guarded workspace permission profile, broad public network, live search,
-  `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"`.
+  `approval_policy = "never"`, production `--sandbox danger-full-access`, and `approvals_reviewer = "auto_review"`.
   The latter sends eligible prompts to a reviewer subagent, not a human; select
   `user` in the project or launch override when policy requires a human approval
   boundary, and enforce the allowed reviewer through managed requirements.
