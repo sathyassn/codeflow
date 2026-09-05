@@ -368,6 +368,12 @@ dest = ".claude/skills/cf-model-orchestrator/resources/routing-policy.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/grok-host.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/grok-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Product/UX/UI/visual design direction stays on demand: the always-loaded
 # contract carries the obligation and this skill owns the adaptive method.
 [[entry]]
@@ -708,6 +714,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/routing-policy.json"
 dest = ".agents/skills/cf-model-orchestrator/resources/routing-policy.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/grok-host.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/grok-host.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

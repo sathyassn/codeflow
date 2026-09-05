@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; Claude produces design in its native session; the host routes each approved task to a capable producer and cross-lineage reviewer; extra catalog families review only when policy or the operator names them, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; Claude produces design in its native session; the host routes each approved task to a capable producer and cross-lineage reviewer; extra catalog families review only when named, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
@@ -16,8 +16,8 @@ the current concrete seats from
 extra-family rule from
 [resources/routing-policy.json](resources/routing-policy.json), before
 planning. The markdown resources own durable quality and task assignment;
-the JSON records own fast-changing model selectors, effort defaults, internal
-worker classes, escalation triggers, and when a catalog family is named.
+the JSON records own selectors, effort, internal workers, escalation, and
+when a catalog family is named.
 If `.codeflow/model-selection.json` contains project overrides, run
 `codeflow doctor --check model-bindings` and use only the effective qualified
 role bindings it reports. An absent or empty file keeps the managed defaults;
@@ -61,16 +61,14 @@ implementation stage for an analysis-only request.
   also applies `cf-design` and settles `DESIGN_INTENT`. A Grok or Codex host
   may pass options and review; it never drafts design for Claude to
   rubber-stamp. Codex challenges feasibility, operability, security,
-  proportionality, and implementation detail. Extra catalog families do not
-  author design.
+  proportionality, and implementation detail.
 - **Host routes execution.** Once both approve the same versioned plan, the host
   assigns every task a producer and cross-lineage reviewer by task fit, tools/
   context, independence, verified availability/routing, resources, and observed
   native usage signals only. Seat/lineage reassignment invalidates approvals.
 - **Review is producer-relative.** The producer first-verifies its own unit; the
   other lineage reviews it independently. Self-review is never independent.
-  Extra catalog families review only when `routing-policy.json` triggers or the
-  operator names them; that assignment is never a silent third vote.
+  Extra catalog families review only when named; never a silent third vote.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality
@@ -142,18 +140,16 @@ Detect capabilities, not model identity.
 |---|---|---|---|
 | Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
-| Grok Build (interactive `grok` CLI) | Herdr `claude` with schema-v2 lifecycle; Herdr `codex` (not the Codex plugin) | Grok host | Same capability-routed contract. Claude produces design in its native TTY. Catalog Grok may produce or take named extra-family review. Do not claim the Grok-hosted duo complete until the Claude schema-v2 canary and Codex Herdr lifecycle are proven |
+| Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; Herdr `codex` (not the plugin) | Grok host | Same contract. Claude produces design in its native TTY. Catalog Grok may produce or take named extra-family review. Duo unclaimed until canaries |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
 Desktop apps are not peer automation endpoints. Claude Code reaches Codex via
 the official plugin/app-server; Codex reaches Claude via interactive Claude CLI
-in durable tmux. Grok Build hosts through Herdr tabs for the standing pair;
-the Codex plugin is Claude-Code-only. Hermes and other non-catalog harnesses
-normally delegate the whole repository task to one native host; direct
-coordination requires both seats, tools, and the full contract. Otherwise
-report the missing lane and use the solo fallback. Never simulate a missing
-vendor with another host-model instance. Host is not duty: whoever starts
-coordinates; Claude still produces design.
+in durable tmux. Grok Build hosts through Herdr; the Codex plugin is
+Claude-Code-only. Hermes and other non-catalog harnesses normally delegate the
+whole repository task to one native host. Otherwise report the missing lane and
+use the solo fallback. Never simulate a missing vendor with another host-model
+instance. Host is not duty; Claude produces design.
 
 ## Preflight
 
@@ -180,14 +176,11 @@ coordinates; Claude still produces design.
      effort from the current ensemble record on the plugin task/rescue
      invocation, or its escalation effort when a recorded trigger applies; do
      not inherit an unobserved user default.
-   - Grok: `grok` is present, `grok --version` succeeds, and a short
-     **interactive** Grok canary authenticates. Launch
-     `--model <selector> --reasoning-effort <effort> --permission-mode auto`
-     from the current ensemble record. `--always-approve` is the unattended
-     overlay, not the default. Never `grok -p` / `--single` for a work
-     session. A Grok host reaches Claude and Codex through Herdr; do not use
-     the Codex plugin from Grok, and do not claim those peer lanes complete
-     without their canaries.
+   - Grok: `grok` present, `grok --version` succeeds, short interactive canary.
+     Launch `--model <selector> --reasoning-effort <effort> --permission-mode auto`
+     from the ensemble. `--always-approve` is overlay only. Never `grok -p` /
+     `--single`. Reach Claude/Codex through Herdr, not the Codex plugin; do
+     not claim those lanes complete without canaries.
    - Codex-host lane: choose the Claude primary selector and effort from the
      current ensemble record, then start
      Claude directly in a dedicated tmux session rooted at the worktree with
@@ -216,13 +209,8 @@ coordinates; Claude still produces design.
      `on-request`, public network and live search are enabled, and eligible
      escalation goes to auto-review. Auto-review is not human authorization;
      catastrophic work selects `user` and verifies the effective boundary.
-   - Grok: require `--permission-mode auto` as the ADR analog;
-     `--always-approve` only as the unattended overlay. Pass `--sandbox
-     <PROFILE>` when an OS sandbox is required; `grok --help` exposes the
-     flag, and the Grok Build user guide names `workspace` / `read-only` /
-     `strict` (VERIFY-ON-INSTALL against the installed CLI). Never `grok -p`
-     / `--single`. Grok-hosted Claude/Codex lanes remain unclaimed until
-     their canaries exist.
+   - Grok: `--permission-mode auto`; `--always-approve` overlay only;
+     `--sandbox <PROFILE>` when required. Never `grok -p`.
    - Platform: use native macOS/Linux sandboxes; on Windows, prefer WSL2 for
      Linux-equivalent tooling. Native Windows Codex must use its elevated
      sandbox and the guard must cover PowerShell/Bash. Claude Code has no
@@ -266,8 +254,7 @@ session**. When the brief already dictates one clear design direction, record
 that constraint and why option exploration was waived. Codex reviews the
 design for implementation feasibility, failure modes, security, testing, and
 maintainability. It also challenges whether a simpler proportionate design
-satisfies the same requirements. A Grok host does not author that design
-pass.
+satisfies the same requirements. A Grok host does not author that design pass.
 When a user-facing surface materially changes, apply `cf-design` and include its
 evidence-grounded `DESIGN_INTENT` in the plan. A cosmetic correction or
 conformance-only change records the skill's compact `N/A` or `conform` path

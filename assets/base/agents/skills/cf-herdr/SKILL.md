@@ -102,41 +102,33 @@ herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
 ```
 
 Native args after `--` are kind-specific. Take selector and effort from the
-current ensemble record (escalation effort when a documented trigger applies):
+current ensemble (escalation when a trigger applies):
 
 - Claude: `--model <selector> --effort <effort> --permission-mode auto`
 - Codex: `--model <selector> --ask-for-approval on-request --sandbox workspace-write`
-  (`--approve-for-me` when the operator wants unattended *and* ADR-shaped
-  auto-review). Do not pass `--effort` on Codex CLIs that reject it; record
-  requested effort from the ensemble.
+  (no `--effort` if the CLI rejects it; record requested effort). `--approve-for-me`
+  for unattended ADR-shaped auto-review.
 - Grok: `--model <selector> --reasoning-effort <effort> --permission-mode auto`
 
 Default launch is ADR-conformant: Claude `--permission-mode auto`; Codex
 `--ask-for-approval on-request --sandbox workspace-write`; Grok
 `--reasoning-effort <effort> --permission-mode auto`.
 
-When the operator has asked not to babysit routine approvals, overlay only
-for that seat: Claude `--permission-mode bypassPermissions`; Codex
+Unattended overlay only: Claude `--permission-mode bypassPermissions`; Codex
 `--ask-for-approval never --sandbox workspace-write`; Grok `--always-approve`.
-Herdr is not an external sandbox. Overlay is not an ADR amendment, not
-hook-trust bypass, not a write grant. Never `--dangerously-skip-permissions`
-unless the operator named it. Consults still verify an empty worktree diff.
+Herdr is not an external sandbox. Overlay is not an ADR amendment, hook-trust
+bypass, or write grant. Never `--dangerously-skip-permissions` unless named.
+Consults still verify an empty worktree diff.
 
-Put destructive-action rules in the prompt: consults edit nothing; no
-force-push or rebase of a shared branch; no merge of protected main; no
-`herdr server stop`; no keys to the caller pane; no closing tabs this run did
-not create.
+Prompt rules: consults edit nothing; no force-push or rebase of a shared
+branch; no merge of protected main; no `herdr server stop`; no keys to the
+caller pane; no closing tabs this run did not create.
 
-Pass native args after `--`. Wait until the agent is ready for input. Split a
-pane only when the **same** tab needs a log or server sibling — not as the
-default for a second model.
-
-From a Grok or other non-Claude/non-Codex host, a visible `herdr agent start
---kind codex` (or `claude`) is the interactive seat. From Claude Code, Codex
-still uses the official plugin. From Codex, Claude still uses schema-v2
-lifecycle; when `HERDR_ENV=1`, **start that Claude process in the Herdr pane**
-instead of a detached tmux session, then deliver the armed prompt into that
-pane. Lifecycle records remain the completion signal.
+Wait until the agent is ready. Split a pane only for a same-tab log/server
+sibling. From a Grok host, `herdr agent start --kind claude|codex` is the
+interactive seat. From Claude Code, Codex still uses the official plugin. From
+Codex, Claude still uses schema-v2; when `HERDR_ENV=1`, **start that Claude
+process in the Herdr pane**. Lifecycle records remain the completion signal.
 
 ## Deliver an armed prompt
 
