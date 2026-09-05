@@ -2298,7 +2298,8 @@ mod tests {
             r.message
         );
         assert!(
-            r.message.contains("git config core.hooksPath .codeflow/git-hooks"),
+            r.message
+                .contains("git config core.hooksPath .codeflow/git-hooks"),
             "remedy: {}",
             r.message
         );
