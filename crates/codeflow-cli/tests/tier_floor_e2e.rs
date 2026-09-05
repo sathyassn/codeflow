@@ -33,7 +33,7 @@ const FLOOR_HOOKS: [&str; 5] = [
 
 /// Dests that the redesign MOVED into the minimal tier — absent from an
 /// old-minimal install, and what `update` must reconcile into place.
-const NEWLY_IN_TIER: [&str; 9] = [
+const NEWLY_IN_TIER: [&str; 10] = [
     ".codeflow/git-hooks/commit-msg",
     ".codeflow/git-hooks/pre-push",
     ".codeflow/git-hooks/pre-merge-commit",
@@ -42,6 +42,7 @@ const NEWLY_IN_TIER: [&str; 9] = [
     ".claude/settings.json",
     ".codex/hooks.json",
     ".codex/config.toml",
+    ".grok/hooks/codeflow.json",
     "CLAUDE.md",
 ];
 
@@ -193,6 +194,10 @@ fn init_minimal_installs_the_four_plane_floor_and_not_the_method() {
     assert!(
         exists(&root, ".codex/hooks.json"),
         "minimal missing .codex/hooks.json"
+    );
+    assert!(
+        exists(&root, ".grok/hooks/codeflow.json"),
+        "minimal missing .grok/hooks/codeflow.json"
     );
     // Plane 4 — the armed policy, at block level.
     let policy = read(&root, ".codeflow/policy.json");

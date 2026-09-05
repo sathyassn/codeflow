@@ -166,3 +166,16 @@ fn dogfood_codex_hooks_matches_shipped_scaffold() {
         "dogfood .codex/hooks.json drifted from assets/base/codex/hooks.json"
     );
 }
+
+#[test]
+fn dogfood_grok_hooks_match_codex_payload() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let shipped = std::fs::read(root.join("assets/base/codex/hooks.json"))
+        .expect("read shipped codex hooks.json");
+    let grok = std::fs::read(root.join(".grok/hooks/codeflow.json"))
+        .expect("read dogfood .grok/hooks/codeflow.json");
+    assert_eq!(
+        shipped, grok,
+        "dogfood Grok hooks must stay byte-identical to the Codex PreToolUse payload"
+    );
+}

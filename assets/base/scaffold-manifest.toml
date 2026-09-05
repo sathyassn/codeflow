@@ -228,6 +228,15 @@ dest = ".codex/hooks.json"
 ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
+# Grok Build reads `.grok/hooks/*.json` (and may also scan Claude settings).
+# Same `codeflow hook` binaries and PreToolUse payload as Codex (ADR-0008 analog).
+# Project hooks need `/hooks-trust` or `--trust` once.
+[[entry]]
+src = "codex/hooks.json"
+dest = ".grok/hooks/codeflow.json"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
 [[entry]]
 src = "codex/config.toml"
 dest = ".codex/config.toml"

@@ -61,16 +61,24 @@ lanes are not claimed complete until their native canaries exist.
    documented trigger or explicit operator instruction. The extra seat is
    assigned in Plan vN; its output is recorded evidence. It never replaces
    either standing primary or silently outvotes them.
-6. **Harness catalog.** `grok-cli` is `capability-supported` from native Grok
+6. **In-session hook plane.** Scaffold `.grok/hooks/codeflow.json` with the
+   same PreToolUse payload as `.codex/hooks.json` (git-guard, exec-guard,
+   session-orient). Doctor `grok` reports structural wiring and the one-time
+   `/hooks-trust` step. Git hooks and CI remain the floor. Grok-as-host still
+   uses Claude schema-v2 for Claude turns; there is no second Grok Stop-hook
+   adapter.
+7. **Harness catalog.** `grok-cli` is `capability-supported` from native Grok
    Build evidence (interactive TTY, session UUID provenance, tools/MCP,
    `--cwd`/`--worktree`, session resume/export, `--permission-mode auto` as
    the ADR-shaped default, `--always-approve` as the unattended overlay,
    `--sandbox`, repository git backstop). Catalog status is not model
    qualification. Headless `grok -p` / `--single` is forbidden for work
    sessions, matching `claude -p` and `codex exec`.
-7. **Doctor.** `grok-cli-version` is a code-allowlisted probe of
-   `grok --version`. A catalog edit cannot invent a new executable.
-8. **Honest incompleteness.** Do not report a Grok-hosted duo as complete
+8. **Doctor.** `grok-cli-version` is a code-allowlisted probe of
+   `grok --version`. A catalog edit cannot invent a new executable. Doctor
+   `grok` reports in-session hook wiring separately from Claude↔Codex
+   `delegates`.
+9. **Honest incompleteness.** Do not report a Grok-hosted duo as complete
    until (a) a Grok-started Claude schema-v2 canary and (b) a Grok-started
    Codex Herdr lifecycle canary exist. Until then, Grok may host, consult, and
    take named catalog assignments; missing-lane degradation stays legible.

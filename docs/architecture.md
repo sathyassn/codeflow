@@ -138,8 +138,10 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 policy) and `exec-guard` (the `security` section: destructive commands block,
 privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
 through a byte-compatible PreToolUse payload, for an interactive Codex session in
-`.codex/hooks.json` (ADR-0008; headless `codex exec` 0.142.5 does not run project
-PreToolUse hooks, so headless Codex relies on the git-hook plane). Codex credential
+`.codex/hooks.json` and for Grok Build in `.grok/hooks/codeflow.json` (ADR-0008
+analog; Grok project hooks need `/hooks-trust` or `--trust`. Headless
+`codex exec` / `grok -p` do not run project PreToolUse hooks, so those
+invocations are not work-session lanes and rely on the git-hook plane). Codex credential
 *reads* are guarded too — not only the Bash guards: a `cf-guard` permission profile
 in `.codex/config.toml` (selected via `default_permissions`, extending `:workspace`)
 denies the home-dir secret stores and high-confidence workspace key material

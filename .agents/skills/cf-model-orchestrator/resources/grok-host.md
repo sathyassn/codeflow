@@ -3,6 +3,15 @@
 On-demand detail for a Grok Build (`grok` CLI) host. Durable duties stay in
 `SKILL.md`, `current-ensemble.json`, and `routing-policy.json`.
 
+## In-session guards
+
+CodeFlow binds the same `codeflow hook git-guard` / `exec-guard` /
+`session-orient` binaries Grok as Codex, via `.grok/hooks/codeflow.json`.
+Grok also scans `.claude/settings.json` when compat is on. Project hooks
+load only after `/hooks-trust` or `--trust`. Git hooks and CI remain the
+enforcement floor. This is not a Grok schema-v2 Stop-hook lifecycle;
+Claude turn completion still uses schema-v2 when Grok hosts Claude.
+
 ## Launch
 
 Take selector and effort from the current ensemble record. Default:

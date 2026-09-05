@@ -12,9 +12,10 @@
 //! The two `PreToolUse` guards share a lenient payload contract (`tool_name`,
 //! `tool_input.command`, `cwd`) that is byte-compatible with the Codex hooks
 //! engine, so the same `codeflow hook <guard>` binaries can bind an interactive
-//! Codex session via `.codex/hooks.json` as well as Claude. (Headless
-//! `codex exec` 0.142.5 does not invoke project `PreToolUse` hooks, so headless
-//! Codex leans on the harness-agnostic git-hook plane instead — ADR-0008.)
+//! Codex session via `.codex/hooks.json` and a Grok Build session via
+//! `.grok/hooks/codeflow.json` as well as Claude. (Headless `codex exec` /
+//! `grok -p` do not invoke project `PreToolUse` hooks, so those invocations
+//! are not work-session lanes — ADR-0008.)
 //!
 //! `session-orient` is likewise wired for Codex `SessionStart` (ADR-0013): the
 //! same plain-text handler, so an interactive Codex session opens with the
