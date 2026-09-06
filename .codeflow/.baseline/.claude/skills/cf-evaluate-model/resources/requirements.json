@@ -561,7 +561,7 @@
     {
       "id": "CF-GOV-002",
       "level": "hard",
-      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or red gates alone do not transfer an implementation tactic to the operator.",
+      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or job-name redness alone do not transfer an implementation tactic to the operator. An assertion-red check is honored; an unfinished CI job is missing evidence, not a failed test.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -571,7 +571,8 @@
             "Navigate blockers; do not orbit them",
             "One bounded confirmation of a prior failure",
             "never retry it again unchanged",
-            "redness alone does not make it an operator decision"
+            "Honor a red check",
+            "Job redness is not an operator decision"
           ]
         },
         {
@@ -1734,6 +1735,36 @@
       ]
     },
     {
+      "id": "CF-QA-013",
+      "level": "hard",
+      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere remains missing and is a blocker or declared limitation, never a pass. Agents still do not merge.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "A **gate** is the verification check",
+            "missing *job* evidence, not a failed check",
+            "An infra-incomplete duplicate job does not",
+            "failing or missing gate cannot be overridden by model consensus"
+          ]
+        },
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Honor a red check",
+            "unfinished CI job is missing evidence"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "a gate is the check, not the job name",
+            "an infra-killed job that only restacks already-green checks does not"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-REF-001",
       "level": "hard",
       "statement": "Work consults product scope and capabilities before building and uses architecture, ADRs, and recall for rationale rather than inventing it.",
@@ -1815,13 +1846,20 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",
+      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority.",
       "sources": [
         {
           "path": "AGENTS.md",
           "markers": [
             "Protected branches",
             "merged by a human"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "required *checks* are evidenced",
+            "An agent never merges into"
           ]
         }
       ]

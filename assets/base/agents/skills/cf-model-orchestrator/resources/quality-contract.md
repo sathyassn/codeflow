@@ -186,6 +186,31 @@ present verified state, attempts, options with consequences, and a
 recommendation. Gate failure is information to fix or honor, not automatic
 evidence that the operator must decide.
 
+A **gate** is the verification check (`codeflow test` target, coverage floor,
+OSV/security scan, `validate --docs`, …), not the CI job that happens to run
+it. Classify redness before acting:
+
+1. **Assertion-red.** The check ran to completion and failed its contract.
+   Honor it: fix, or do not ship. Model consensus and a green sibling job for a
+   *different* check cannot override it.
+2. **Infra-incomplete.** The job never finished (hosted runner lost
+   communication, SIGTERM/shutdown, OOM, billing or minutes cutoff, timeout
+   with no test result). That is missing *job* evidence, not a failed check.
+   Do not treat the job name as a failed test. If the same check already
+   completed green in a sibling CI job or a local `codeflow test` /
+   `codeflow validate` run of that target, the gate is evidenced; record the
+   infra death as `track once` (runner capacity or job shape), not a product
+   defect. Retrying the same unfinished umbrella job without a new hypothesis
+   is orbiting.
+3. **Never ran.** The owed check has no completed result anywhere. That is a
+   missing gate: blocker or declared limitation, never a pass.
+
+A red job that only restacks already-green checks is (2), not (1). Asking the
+operator to pick an implementation tactic because a job name is red is the
+failure ADR-0038 forbids. Asking them to wait, rerun, or override a host
+required-status that is infra-incomplete *is* operator-owned: it is merge
+authorization on that host, not a failed test. Agents still never merge.
+
 Remediation effort is planning input only. It may change sequence or ownership;
 it never lowers severity or justifies choosing an easy cosmetic change over a
 material one. Repeated minor symptoms may be evidence of one major systemic
@@ -509,3 +534,6 @@ worktree and review of the combined diff—not a collection of green task
 branches.
 
 A failing or missing gate cannot be overridden by model consensus.
+"Failing" means an assertion-red completed check. "Missing" means the owed
+check never completed anywhere. An infra-incomplete duplicate job does not
+make a completed same-check missing.

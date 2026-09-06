@@ -28,7 +28,7 @@ pub struct StageReport {
 }
 
 const SANCTIONED: &str =
-    "land work via PR (gh pr create → merge on green CI) or `codeflow integrate <branch> --into <target>`";
+    "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
 // ---------------------------------------------------------------------------
 // pre-commit

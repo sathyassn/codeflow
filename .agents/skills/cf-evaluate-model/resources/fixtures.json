@@ -747,6 +747,22 @@
       }
     },
     {
+      "id": "incomplete-umbrella-job",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/incomplete-umbrella",
+        "peer": "available",
+        "unit_tests": "pass",
+        "coverage": "pass",
+        "security_scan": "pass",
+        "umbrella_job": "infra-incomplete"
+      },
+      "files": {
+        "CHANGE.md": "# Change\n\nSkill and CLI contract text. Dual-lineage review approved. No present-crate delta.\n",
+        "evidence/ci.md": "# CI\n\nrust job: cargo fmt, cargo test --workspace, clippy, rustdoc, validate --docs PASS\ncoverage job: llvm-cov --fail-under-lines 90 PASS\nwindows job: cargo test --workspace, clippy, docs-portal JS suite PASS\nsecurity review: OSV PASS\nsecret scan PASS\ncodeflow gates: hosted runner lost communication during `codeflow test --mode full --strict`; step completed_at null; no assertion output. That job restacks the rust/coverage/docs-portal targets already green above.\n"
+      }
+    },
+    {
       "id": "local-database-team-authority",
       "tier": "full",
       "state": {

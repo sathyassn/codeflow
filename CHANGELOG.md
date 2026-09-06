@@ -27,6 +27,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Gate redness is classified (ADR-0017, ADR-0038).** A gate is the
+  verification check, not the CI job name. An assertion-red completed check
+  still cannot be overridden. An infra-killed job (runner, memory, billing)
+  is missing job evidence; a completed same-check in a sibling job or local
+  `codeflow test` satisfies it. Agents still never merge.
+
 - **Medium-default effort, Astra Codex primary, contained worktrees (ADR-0055).**
   All families default to medium and escalate to high/xhigh on complexity or
   difficulty (new or existing architecture, technical, planning, or design work

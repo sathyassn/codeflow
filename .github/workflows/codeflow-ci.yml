@@ -51,6 +51,9 @@ jobs:
           cargo build --release -p codeflow-cli
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
+      # Umbrella restack of targets already run in rust/coverage/windows jobs.
+      # An infra death here (runner lost communication, OOM, billing cutoff)
+      # is missing job evidence, not an assertion-red of those sibling checks.
       - name: codeflow test --mode full --strict
         run: codeflow test --mode full --strict
 

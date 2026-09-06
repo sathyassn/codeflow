@@ -835,7 +835,7 @@ fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
     (s, i)
 }
 
-const SANCTIONED: &str = "land work via PR (gh pr create → merge on green CI) or `codeflow integrate <branch> --into <target>`";
+const SANCTIONED: &str = "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
 #[allow(clippy::too_many_lines)]
 fn check_git(

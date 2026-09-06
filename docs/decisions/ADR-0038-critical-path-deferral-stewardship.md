@@ -85,6 +85,18 @@ state, attempts, options and consequences, and a recommendation. A red
 deterministic or safety gate must be fixed or honored; its color alone does not
 transfer an implementation choice to the operator.
 
+## Note (2026-09-05)
+
+Classify gate redness before honoring or escalating it. A **gate** is the
+verification check, not the CI job. Assertion-red (the check completed and
+failed) is fixed or honored; model consensus cannot override it. A job that
+never finished (runner, memory, billing, timeout with no result) is
+infra-incomplete: missing job evidence. A completed same-check in a sibling
+job or local `codeflow test` satisfies that gate. Asking the operator to
+choose an implementation tactic because a job name is red remains forbidden;
+waiting, rerunning, or overriding a host required-status that is
+infra-incomplete is merge authorization, not a failed test.
+
 ## Consequences
 
 - Models direct capable attention and tools to the outcome-controlling path

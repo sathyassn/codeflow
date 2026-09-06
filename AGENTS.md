@@ -144,7 +144,7 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   one gate never relaxed — not even during bootstrap grace.
 - **Protected branches** (`main`/`master` + policy globs): never commit, merge,
   push, force-push, delete, or hard-reset on them. Work lands by exactly two
-  paths: PR → green CI → merged by a human, or `codeflow integrate <branch>
+  paths: PR → evidenced-green checks → merged by a human, or `codeflow integrate <branch>
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
   can corrupt the root repo).
@@ -272,9 +272,9 @@ to reason from, not a rote checklist.
   tactic fails, step back to the real constraint and critical path, compare
   viable routes, and take the safest evidence-backed reversible route that
   preserves accepted outcome, scope, authority, and quality. Escalate only an
-  external dependency or operator-owned choice, with verified state, attempts,
-  options and consequences, and a recommendation. A red gate is fixed or
-  honored; redness alone does not make it an operator decision.
+  external dependency or operator-owned choice, with a recommendation. Honor a
+  red check. An unfinished CI job is missing evidence, not a failed test; a
+  completed same-check counts. Job redness is not an operator decision.
 - **Find broadly; act by materiality.** Do not let easy cosmetics displace
   consequential work. Substantiate candidate issues, classify the consequence
   if unresolved, then prioritize by severity, confidence, likelihood or

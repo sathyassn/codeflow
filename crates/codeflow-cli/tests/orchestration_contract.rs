@@ -330,6 +330,9 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "hard floor of **80%**",
         "normal target is **90% or higher**",
         "failing or missing gate cannot be overridden by model consensus",
+        "A **gate** is the verification check",
+        "missing *job* evidence, not a failed check",
+        "An infra-incomplete duplicate job does not",
     ] {
         assert!(
             normalize_whitespace(&quality).contains(required),
@@ -349,6 +352,8 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
         "Agreement without examination is a failure mode",
         "Think in depth, not at the surface.",
         "Decide by options and horizons.",
+        "unfinished CI job is missing evidence",
+        "Honor a red check.",
         "Write only what earns its keep.",
         "every material complexity maps to a current requirement",
         "DRY with judgment",
@@ -467,6 +472,8 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "Computer Use",
         "UI: N/A",
         "failing or missing gate cannot be overridden by model consensus",
+        "A **gate** is the verification check",
+        "missing *job* evidence, not a failed check",
         "SETTLED_TASK_GRAPH:",
         "TASK_BRANCH_WORKTREE_OWNER:",
         "SHARED_FILE_OWNER:",

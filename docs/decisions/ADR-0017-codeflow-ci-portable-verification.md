@@ -88,6 +88,15 @@ protection is inherently a per-host API operation, not a per-checkout command.
   actually enforced before merge (ADR-0006); on this repo that is a human merging
   on green, since remote protection is unavailable (private + GitHub Free).
 
+## Note (2026-09-05)
+
+A CI *job* may restack `codeflow test` / coverage / validate targets already
+run in sibling jobs. The perimeter is those checks, not the job name. If the
+umbrella job dies from runner loss, OOM, timeout, or billing cutoff with no
+assertion result, that is missing job evidence, not an assertion-red of the
+checks that already completed green elsewhere. Model consensus still cannot
+override a check that ran and failed.
+
 ## Architecture impact
 
 `docs/architecture.md` is updated in this PR: the four-planes paragraph now states

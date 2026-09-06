@@ -48,7 +48,7 @@ PreToolUse guards | git-guard · exec-guard, in-session
 codeflow ci | the same git standards, server-side
 remote protection | where the host arms it
 ->
-protected branches | human-merged PRs on green CI @positive
+protected branches | human-merged PRs on evidenced-green checks @positive
 caption: local planes are fast feedback — CI and remote protection are the authoritative perimeter
 ```
 
@@ -293,7 +293,10 @@ changed hypothesis, while an outcome-preserving reversible strategy may change
 without operator ceremony. Escalation is reserved for a true external
 dependency or a choice that changes intent, public contract, scope/authority,
 risk tolerance, or an irreversible tradeoff; deterministic and safety gates
-are fixed or honored rather than talked around (ADR-0038).
+are fixed or honored rather than talked around (ADR-0038). A gate is the
+check, not the CI job name: an unfinished runner/memory/billing death is
+missing job evidence, and a completed same-check in a sibling job or local
+run satisfies it (ADR-0017).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,
