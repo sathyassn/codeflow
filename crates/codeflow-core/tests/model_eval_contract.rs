@@ -724,7 +724,10 @@ fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
         "computer_use_via_codex_app_server",
         "every_interactive_control_in_changed_journeys",
     ] {
-        assert!(qa_signals.contains(signal), "Codex UI QA canary lost {signal}");
+        assert!(
+            qa_signals.contains(signal),
+            "Codex UI QA canary lost {signal}"
+        );
     }
     let qa_guards: BTreeSet<&str> = qa["expected"]["must_not"]
         .as_array()
