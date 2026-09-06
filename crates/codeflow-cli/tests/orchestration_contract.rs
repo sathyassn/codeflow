@@ -121,6 +121,8 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Other harness, including Hermes",
         "Claude produces design",
         "never a silent third vote",
+        "Name extra families on trigger if available",
+        "Spawn same-family high/xhigh workers",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -157,6 +159,9 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     let ensemble = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ));
+    let policy = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+    ));
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
@@ -184,10 +189,26 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
         "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
+        "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
+        "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(
             ensemble.contains(required),
             "current ensemble lost binding marker: {required}"
+        );
+    }
+
+    for required in [
+        "\"never_silent_vote\": true",
+        "\"requires_named_assignment\": true",
+        "\"invoke_when_available\": true",
+        "complex architecture",
+        "security-sensitive change",
+        "standing pair cannot reach justified confidence",
+    ] {
+        assert!(
+            policy.contains(required),
+            "routing policy lost extra-family marker: {required}"
         );
     }
 
@@ -203,11 +224,13 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
         "never a silent third vote",
+        "available-and-named or unavailable-with-limitation",
         "A Grok Build host coordinates the standing pair through Herdr",
         "implementer check",
         "Default UI assignment is Claude as",
         "Playwright remains the deterministic web driver",
         "plugin/app-server only",
+        "spawns same-family workers at that",
     ] {
         assert!(
             routing.contains(required),
@@ -267,6 +290,28 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
             "both independently research/analyze/plan; Claude leads design; the host assigns each task"
         ),
         "always-loaded AGENTS contract must expose independent planning"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains("fifteen health checks"),
+        "CAP-008 must count the grok doctor check"
+    );
+    let readme = normalize_whitespace(&read("README.md"));
+    let architecture = normalize_whitespace(&read("docs/architecture.md"));
+    assert!(
+        readme.contains("Health checks (15): hooks, claude, codex, grok, config"),
+        "README must list the grok doctor check"
+    );
+    assert!(
+        architecture.contains("15 checks — hooks, claude, codex, grok, config"),
+        "architecture must list the grok doctor check"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains("same-family high/xhigh workers mid-session"),
+        "CAP-010 must pin mid-session worker spawn"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains("named when a routing-policy trigger fires"),
+        "CAP-010 must pin extra-family invoke-when-available"
     );
     assert!(
         normalize_whitespace(&capabilities).contains(

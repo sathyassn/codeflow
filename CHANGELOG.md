@@ -15,7 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   review is named when a routing-policy trigger fires and the family is
   available; unavailable is an evidenced limitation, never a silent third vote.
   Claude produces design in its native session regardless of host. `grok-cli`
-  is catalog-supported with a `grok-cli-version` doctor probe. Grok-hosted
+  is catalog-supported with a `grok-cli-version` doctor probe and a fifteenth
+  doctor check for structural `.grok/hooks` wiring. Grok-hosted
   Claude/Codex lanes use Herdr and are not claimed complete without canaries.
   Headless `grok -p` is not a work-session lane.
 
