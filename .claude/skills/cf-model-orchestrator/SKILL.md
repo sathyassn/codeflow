@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; Claude produces design in its native session; the host routes each approved task to a capable producer and cross-lineage reviewer; extra catalog families review only when named, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; Claude produces design in its native session; the host routes each approved task to a capable producer and cross-lineage reviewer; extra catalog families review on trigger if available, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
@@ -68,7 +68,7 @@ implementation stage for an analysis-only request.
   native usage signals only. Seat/lineage reassignment invalidates approvals.
 - **Review is producer-relative.** The producer first-verifies its own unit; the
   other lineage reviews it independently. Self-review is never independent.
-  Extra catalog families review only when named; never a silent third vote.
+  Name extra families on trigger if available; never a silent third vote.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality
@@ -76,12 +76,12 @@ implementation stage for an analysis-only request.
   primary; its integrated pass is not independent review of its own unit.
 - **Qualified reasoning seats.** Use the concrete selectors, default effort,
   escalation effort/triggers, and permitted internal worker classes in the
-  current ensemble record. The durable rule is unchanged when those bindings
-  evolve: invoke each primary directly, let the owning primary control its
-  internal routing, retain primary planning/approval duties, never infer worker
-  routing or usage state, and never let a worker replace a primary or named
-  cross-lineage reviewer. A concrete binding change is usable only after
-  native-interactive qualification and explicit promotion.
+  current ensemble record: invoke each primary directly, let the owning primary
+  control its internal routing, retain primary planning/approval duties, never
+  infer worker routing or usage state, and never let a worker replace a primary
+  or named cross-lineage reviewer. Spawn same-family high/xhigh workers; the
+  medium primary stays the orchestrator. A binding change needs
+  native-interactive qualification and promotion.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -175,8 +175,8 @@ lane: solo fallback. Host is not duty; Claude produces design.
    - Claude-host lane: the `codex@openai-codex` plugin is enabled and
      `/codex:setup` succeeds. Pass the Codex primary selector and default
      effort from the current ensemble record on the plugin task/rescue
-     invocation, or its escalation effort when a recorded trigger applies; do
-     not inherit an unobserved user default.
+     invocation at default effort; workers take escalation. Do not inherit
+     an unobserved user default.
    - Grok: `grok` present, `grok --version` succeeds, short interactive canary.
      Launch `--model <selector> --reasoning-effort <effort> --always-approve`
      from the ensemble. `--permission-mode auto` is consult/no-edit. Never
@@ -191,7 +191,8 @@ lane: solo fallback. Host is not duty; Claude produces design.
      not a supported merge contract. Delegated work uses schema-v2 — `delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal
      with bounded cleanup — and the `cf-delegate` sibling Stop-hook preflight. If Fable is
      unavailable, record Opus as the fallback plus the same fail-closed
-     sandbox; use the record's escalation effort when a trigger applies.
+     sandbox; spawn workers at escalation effort and keep the primary at
+     default.
      Consult and no-edit review stay on `--permission-mode auto`. Never claim
      the fallback was the selected primary.
 4. Verify the autonomy boundary through the effective settings, not prose:

@@ -102,8 +102,9 @@ herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
   --pane "$pane_id" -- <native-args>
 ```
 
-Native args after `--` are kind-specific. Take selector and effort from the
-current ensemble (escalation when a trigger applies):
+Native args after `--` are kind-specific. Take selector and default effort
+from the current ensemble. Escalation effort is for same-family workers, not
+the launched primary:
 
 - Claude: `--model <selector> --effort <effort> --permission-mode bypassPermissions`
 - Codex: `--model <selector> -c model_reasoning_effort="<effort>" --ask-for-approval never --sandbox danger-full-access`

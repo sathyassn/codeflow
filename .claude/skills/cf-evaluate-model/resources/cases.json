@@ -1812,7 +1812,7 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable medium / Astra medium / grok-4.6 medium and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable medium / Astra medium / grok-4.6 medium and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The medium primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
@@ -1822,8 +1822,10 @@
           "codex_primary_astra_medium_default",
           "grok_primary_46_medium_default",
           "high_on_complex_architecture_technical_planning_or_design",
-          "claude_primary_xhigh_on_trigger",
-          "codex_primary_xhigh_on_trigger",
+          "medium_primary_stays_orchestrator",
+          "same_family_high_xhigh_workers_on_trigger",
+          "claude_fable_worker_xhigh_on_trigger",
+          "codex_astra_worker_xhigh_on_trigger",
           "each_primary_owns_internal_routing",
           "workers_require_verified_native_routing",
           "primary_seats_retain_plan_and_approval",
@@ -1840,6 +1842,8 @@
           "unverified_worker_routing",
           "worker_replaces_primary",
           "effort_change_weakens_duo",
+          "restart_host_session_at_high",
+          "opus_as_fable_high_substitute",
           "infer_usage"
         ]
       }
@@ -3565,6 +3569,39 @@
           "invent_new_seat",
           "treat_effort_escalation_as_reassignment",
           "unrecorded_escalation"
+        ]
+      }
+    },
+    {
+      "id": "extra-family-invoked-when-warranted",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "planning-brief",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-MM-015"
+      ],
+      "prompt": "The settled pair is unclear on a cross-cutting security architecture change. State whether the host must name the extra catalog family, what that assignment is, and what it must not become.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "extra_family_named_when_available",
+          "assignment_is_plan_vn_evidence",
+          "standing_pair_still_settles",
+          "claude_still_produces_design"
+        ],
+        "references": [],
+        "must_not": [
+          "silent_third_vote",
+          "skip_available_extra_family_on_security_or_architecture",
+          "two_model_cap",
+          "extra_family_replaces_standing_primary"
         ]
       }
     },

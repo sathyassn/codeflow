@@ -821,7 +821,7 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort, escalate only on its defined triggers, preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort; a medium primary that hits a trigger mid-session stays the orchestrator and spawns same-family workers at the escalation effort; extra catalog families are named when routing-policy triggers fire and they are available; preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -829,7 +829,9 @@
             "Use the concrete selectors",
             "invoke each primary directly",
             "retain primary planning/approval duties",
-            "never let a worker replace a primary"
+            "never let a worker replace a primary",
+            "Spawn same-family high/xhigh workers",
+            "the medium primary stays the orchestrator"
           ]
         },
         {
@@ -839,7 +841,37 @@
             "\"escalation_effort\": \"xhigh\"",
             "\"model_class\": \"qualified-terra-worker\"",
             "Claude-side internal routing belongs to the Claude primary",
+            "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-015",
+      "level": "hard",
+      "statement": "The standing pair is the default floor, not a two-model cap. When a routing-policy extra-family trigger fires and the catalog family is available, the host names it on Plan vN; its output is evidence, never a silent third vote, and never replaces either standing primary. Unavailable extra family is a recorded limitation.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Name extra families on trigger if available",
+            "never a silent third vote"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+          "markers": [
+            "When a trigger fires, the host records a disposition",
+            "never a silent third vote",
+            "invoke_when_available"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "when a documented trigger fires and the family is available",
+            "never a silent third vote"
           ]
         }
       ]

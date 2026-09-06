@@ -7,12 +7,18 @@
   "extra_family_review": {
     "never_silent_vote": true,
     "requires_named_assignment": true,
+    "invoke_when_available": true,
     "triggers": [
       "operator instruction",
+      "complex architecture",
+      "material technical depth",
+      "security-sensitive change",
       "capability-sensitive or long-horizon work",
-      "unresolved standing-pair disagreement after two rounds",
-      "security-sensitive change"
+      "unresolved standing-pair disagreement or unclear settlement",
+      "consequential or irreversible work",
+      "high or xhigh complexity",
+      "standing pair cannot reach justified confidence"
     ],
-    "rule": "Named extra-family review is an assigned Plan vN duty. Its output is evidence the host records. It does not replace either standing primary, does not settle Plan vN, and is never a silent third vote."
+    "rule": "When a trigger fires, the host records a disposition: named Plan vN assignment plus returned evidence if the extra catalog family is available, or an evidenced limitation if it is not. Unknown availability does not discharge the duty. Named extra-family review is an assigned duty. Its output is evidence the host records. It does not replace either standing primary, does not settle Plan vN, and is never a silent third vote."
   }
 }

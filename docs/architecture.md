@@ -230,7 +230,8 @@ non-trivial repository task in standard/full scaffolds. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the
 official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
 reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
-to medium effort (ADR-0055). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
+to medium effort and spawn same-family high/xhigh workers mid-session rather
+than restarting (ADR-0055). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
 stages the requested outcome needs. Claude-led design, capability-routed
 producer/cross-lineage-review assignments, evidence-routed effort, explicit
@@ -339,7 +340,7 @@ Fast-changing binding facts are isolated from durable orchestration doctrine
 quality resources. `current-ensemble.json` owns the managed concrete selectors,
 effort policy, permitted worker classes, escalation triggers, and the standing
 pair versus catalog split. `routing-policy.json` names when an extra family
-reviews: never as a silent third vote. Interactive Grok Build is a first-class
+must be invoked if available: never as a silent third vote. Interactive Grok Build is a first-class
 host; Claude still produces design in its native session. Hermes remains an
 outer coordinator that normally delegates the whole repository task. A consuming project
 may atomically map a stable role to an approved local binding ID in

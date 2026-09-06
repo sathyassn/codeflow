@@ -27,6 +27,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Mid-session effort and extra-family invoke.** The medium primary stays
+  the orchestrator and spawns same-family high/xhigh workers when a
+  complexity trigger fires. Extra catalog families are named when
+  routing-policy triggers fire and the family is available; still never a
+  silent third vote.
+
 - **Codex Computer Use QA of changed UI (ADR-0043).** Claude still produces
   `DESIGN_INTENT` and the implementer check. Codex independently QAs the
   changed surface through Computer Use on the app-server. Playwright stays

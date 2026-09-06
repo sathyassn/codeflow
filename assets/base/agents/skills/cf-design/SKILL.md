@@ -249,8 +249,8 @@ conformance feedback stays in the normal task record.
 
 The Claude judgment primary produces design intent and direction in its
 native session. Codex challenges the choice. Both standing primaries approve
-the exact Plan vN before implementation. Extra-family review, when named, is
-evidence — never a silent third vote.
+the exact Plan vN before implementation. Extra-family review, when a trigger
+fires and it is available, is evidence — never a silent third vote.
 
 ## 8. Critique before build
 

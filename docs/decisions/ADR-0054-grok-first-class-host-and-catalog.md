@@ -113,4 +113,12 @@ degrades to solo and does not open a Claude→Codex Herdr CLI lane. Decision 2's
 - Claiming the Grok-hosted duo complete from CLI flags and Herdr kind names
   alone.
 - Letting extra-family output silently settle Plan vN or closeout.
+
+## Note (2026-09-06)
+
+This note amends Decision 5. Extra-family review is invoke-when-warranted,
+not a two-model cap. When a documented trigger fires (architecture, material
+technical depth, security, unclear pair, consequential work, high/xhigh
+complexity) and the catalog family is available, the host names it on Plan
+vN. Output remains evidence; it still never silently settles Plan vN.
 ---

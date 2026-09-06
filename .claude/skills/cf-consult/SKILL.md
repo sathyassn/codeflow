@@ -46,8 +46,8 @@ independent.
      pane read` of the owned pane only) for bounded diagnosis or an explicit
      dialog—never as a stability heuristic and never against unrelated
      sessions. Launch the
-     consult with the Claude primary selector and default or escalation effort
-     from `../cf-model-orchestrator/resources/current-ensemble.json`. On the
+     consult with the Claude primary selector and default effort from
+     `../cf-model-orchestrator/resources/current-ensemble.json`. On the
      degraded tmux path, use
      `claude --model <selector> --effort <effort> --permission-mode auto
      --settings <state-dir>/settings.json`. On the Herdr path, native flags

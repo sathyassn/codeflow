@@ -110,10 +110,10 @@ only for a primary-owned subtask. A generic Claude subagent is not a Codex
 delegate, and a native Codex thread that recursively starts another duo has
 violated the assignment rather than completed it.
 
-Read the current Codex primary selector, default/escalation effort and permitted
+Read the current Codex primary selector, default effort, and permitted
 worker classes from
 `../cf-model-orchestrator/resources/current-ensemble.json`. Invoke the primary
-directly with that selector and effort. Any worker requires observed native
+directly with that selector and default effort; workers take escalation. Any worker requires observed native
 routing; the invoked primary retains the task, implementation, verification,
 and verdict. If `.codeflow/model-selection.json` is nonempty, first require
 `codeflow doctor --check model-bindings` to pass and use only its effective
@@ -142,7 +142,7 @@ turn, and the terminal event belongs to that turn. The sequence, compactly:
 ```sh
 # Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
-CLAUDE_EFFORT="<default or triggered escalation effort>"
+CLAUDE_EFFORT="<default effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"  # prints generated settings.json
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
   "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
@@ -204,11 +204,11 @@ completion signal.
   paste attachment still waiting in the input editor, send Enter once more and
   re-wait once. Never issue blind or repeated Enter retries.
 - **Effective autonomy is layered:** invoke the Claude primary with the selector
-  and default or escalation effort from
+  and default effort from
   `../cf-model-orchestrator/resources/current-ensemble.json`. The primary owns
   the native session, internal worker routing, interpretation, and judgment.
-  Launch with the selected
-  effort and the generated task settings; make
+  Launch with default effort and the generated task settings; workers take
+  escalation. Make
   `autoMode.classifyAllShell` effective at user scope (Claude ignores it at
   project scope, and repeated `--settings` flags are not a supported merge
   contract; the generated task file carries only the lifecycle hooks). On the

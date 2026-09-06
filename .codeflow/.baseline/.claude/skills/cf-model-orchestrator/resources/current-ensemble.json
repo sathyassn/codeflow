@@ -27,6 +27,16 @@
       ],
       "internal_routes": [
         {
+          "model_class": "latest-fable",
+          "effort": "high",
+          "use": "CodeFlow instruction: Fable at high for complex in-family worker work; the medium primary stays the orchestrator"
+        },
+        {
+          "model_class": "latest-fable",
+          "effort": "xhigh",
+          "use": "CodeFlow instruction: Fable at xhigh when high stalls or an xhigh_trigger applies; judgment stays with the primary"
+        },
+        {
           "model_class": "latest-opus",
           "effort": "medium",
           "use": "bounded deterministic tool or UI evidence collection"
@@ -39,7 +49,7 @@
         {
           "model_class": "latest-opus",
           "effort": "xhigh",
-          "use": "CodeFlow instruction: complex in-family worker work; also the recorded fallback if Fable is unavailable (credits/rate-limit), without transferring primary judgment"
+          "use": "recorded Claude fallback if Fable is unavailable (credits/rate-limit), without transferring primary judgment; not the high-effort substitute for Fable"
         }
       ]
     },
@@ -63,6 +73,16 @@
         "adversarial implementation and security review"
       ],
       "internal_routes": [
+        {
+          "model_class": "latest-astra-coding",
+          "effort": "high",
+          "use": "CodeFlow instruction: Astra at high for complex in-family worker work; the medium primary stays the orchestrator"
+        },
+        {
+          "model_class": "latest-astra-coding",
+          "effort": "xhigh",
+          "use": "CodeFlow instruction: Astra at xhigh when high stalls or an xhigh_trigger applies; judgment stays with the primary"
+        },
         {
           "model_class": "qualified-sol-worker",
           "effort": "medium-or-high",
@@ -91,7 +111,7 @@
         "independent planning when seated",
         "production when assigned",
         "first verification when producing",
-        "named extra-family review when policy or the operator requires it"
+        "named extra-family review when a documented trigger fires and the family is available"
       ],
       "internal_routes": [
         {
@@ -102,7 +122,12 @@
         {
           "model_class": "latest-grok-coding",
           "effort": "high",
-          "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; internals do not use xhigh"
+          "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; the medium primary stays the orchestrator"
+        },
+        {
+          "model_class": "latest-grok-coding",
+          "effort": "xhigh",
+          "use": "CodeFlow instruction: grok-4.6 at xhigh when high stalls or an xhigh_trigger applies"
         }
       ]
     }
@@ -120,6 +145,8 @@
   "rules": [
     "Primary seats retain independent planning and approval duties.",
     "The standing pair is the usual quality floor; extra catalog families never vote silently.",
+    "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
+    "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",

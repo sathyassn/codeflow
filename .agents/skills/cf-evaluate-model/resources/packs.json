@@ -68,7 +68,9 @@
         "in-node-detail-does-not-replan",
         "observed-binding-mismatch-blocks-promotion",
         "new-harness-name-is-not-qualification",
-        "project-selection-rejects-seat-collapse"
+        "project-selection-rejects-seat-collapse",
+        "effort-routes-by-demand",
+        "extra-family-invoked-when-warranted"
       ]
     },
     {

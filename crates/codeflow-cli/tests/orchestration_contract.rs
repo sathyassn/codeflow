@@ -693,7 +693,7 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(
         delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
     );
-    assert!(delegate.contains("default or escalation effort"));
+    assert!(delegate.contains("default effort; workers take escalation"));
     assert!(delegate.contains("current-ensemble.json"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));

@@ -55,7 +55,12 @@ not silently substitute another criterion.
 A change to the producer or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
 work continues. A same-seat medium→high or high→xhigh escalation on a documented trigger is
-ledger evidence, not reassignment. Novelty is not a trigger. A worker change within the approved primary
+ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
+medium primary stays the orchestrator and spawns same-family workers at that
+effort. Spawn through the harness's native child-effort knob or a `ROLE:
+worker` native session at that effort. Record requested versus observed
+selector/effort. If that route is unavailable, keep the medium primary,
+record the limitation, and do not infer a pass. A worker change within the approved primary
 seat remains internal routing unless it changes the named producer or reviewer.
 
 ## Admissible cross-lineage evidence
@@ -95,16 +100,20 @@ observed. Grade inferred completion explicitly as inferred.
 ## Native host routes
 
 The durable route is primary-owned: the active primary coordinates at the
-recorded default effort, invokes the other-lineage primary directly, and may
-use only the bounded internal routes its own seat exposes and has qualified.
+recorded default effort, stays the orchestrator, invokes the other-lineage
+primary directly, and may use only the bounded internal routes its own seat
+exposes and has qualified.
 Claude owns Claude-side routing and integrated judgment; a Codex host never
 selects a Claude worker directly. Concrete selectors, model classes, effort
 defaults, and escalation triggers live only in
 [current-ensemble.json](current-ensemble.json).
 When a catalog family is named, follow
 [routing-policy.json](routing-policy.json): default review is the standing
-pair; extra-family review requires a named Plan vN assignment on a documented
-trigger or operator instruction and is never a silent third vote. Claude
+pair; extra-family review requires a named Plan vN assignment when a
+documented trigger fires and the family is available, or on operator
+instruction, and is never a silent third vote. When a trigger fires, record
+available-and-named or unavailable-with-limitation; unknown does not skip
+the duty. Claude
 produces design in its native session regardless of host.
 
 Treat model names as qualified current bindings, not permanent doctrine.

@@ -46,7 +46,7 @@ configuration, and an unknown or unverified sibling fails the preflight.
 ```sh
 # Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
-CLAUDE_EFFORT="<default or triggered escalation effort>"
+CLAUDE_EFFORT="<default effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
   "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
@@ -67,8 +67,9 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
-Invoke the Claude primary using the selector and default or escalation effort
-from `../../cf-model-orchestrator/resources/current-ensemble.json`; when
+Invoke the Claude primary using the selector and default effort from
+`../../cf-model-orchestrator/resources/current-ensemble.json`; workers take
+escalation. When
 `.codeflow/model-selection.json` is nonempty, first require
 `codeflow doctor --check model-bindings` to pass and use its effective
 qualified override. Delivery must be

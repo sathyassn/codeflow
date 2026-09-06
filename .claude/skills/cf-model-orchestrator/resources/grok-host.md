@@ -44,6 +44,8 @@ Do not claim the Grok-hosted duo complete until both canaries exist.
 
 ## Duties
 
-Host is not duty. Claude produces design in its native session. Catalog Grok
-may produce or take named extra-family review; that assignment is never a
+Host is not duty. Claude produces design in its native session. A Grok
+medium host stays the orchestrator and may spawn grok-4.6 high/xhigh
+workers. Catalog Grok may produce or take named extra-family review when
+a documented trigger fires and it is available; that assignment is never a
 silent third vote.

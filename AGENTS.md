@@ -323,12 +323,9 @@ to reason from, not a rote checklist.
   parallel, and over time — then decide against short- and long-term priorities,
   both stated. Prefer the robust, durable solution that stands the test of time;
   when expedience wins, it wins deliberately and says so.
-- **Guard your context.** Long context degrades quality. Keep the thinking,
-  planning, and synthesis in your own session, but delegate breadth (wide
-  searches, reading many files), long or mechanical passes, and independent
-  checks to a subagent or workflow (where your harness has them) — each works in
-  its own context and returns a condensed result, so yours stays sharp for the
-  decisions.
+- **Guard your context.** Long context degrades quality. Orchestrate here:
+  keep thinking, planning, and synthesis; delegate breadth, long passes, and
+  independent checks to a subagent or workflow at the effort the unit needs.
 - **Write only what earns its keep.** Make the smallest clear, idiomatic, durable
   change that fully satisfies approved behavior—not minimum LOC. Add no
   speculative feature, abstraction, configuration, dependency, compatibility

@@ -82,6 +82,7 @@ struct RoutingPolicy {
 struct ExtraFamilyReview {
     never_silent_vote: bool,
     requires_named_assignment: bool,
+    invoke_when_available: bool,
     triggers: Vec<String>,
     rule: String,
 }
@@ -441,10 +442,11 @@ fn validate_routing_policy(policy_id: &str) -> Result<(), String> {
     }
     if !policy.extra_family_review.never_silent_vote
         || !policy.extra_family_review.requires_named_assignment
+        || !policy.extra_family_review.invoke_when_available
         || policy.extra_family_review.triggers.is_empty()
         || policy.extra_family_review.rule.is_empty()
     {
-        return Err("extra-family review must be named, triggered, and never a silent vote".into());
+        return Err("extra-family review must be named, triggered, invoked when available, and never a silent vote".into());
     }
     Ok(())
 }
@@ -1067,6 +1069,13 @@ mod tests {
         assert_eq!(ensemble["codex-engineering-primary"].seat, "codex-primary");
         assert_eq!(ensemble["grok-engineering-primary"].seat, "grok-primary");
         assert_eq!(ensemble["grok-engineering-primary"].lineage, "grok");
+        assert!(
+            ensemble["claude-judgment-primary"]
+                .internal_routes
+                .iter()
+                .any(|route| route.model_class == "latest-fable" && route.effort == "high"),
+            "Fable high in-family worker route missing"
+        );
         assert_ne!(
             ensemble["claude-judgment-primary"].lineage,
             ensemble["codex-engineering-primary"].lineage

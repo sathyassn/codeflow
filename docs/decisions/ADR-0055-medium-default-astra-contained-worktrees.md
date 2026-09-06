@@ -69,3 +69,11 @@ new tab; a finished session's tab is closed.
 `docs/architecture.md` host/effort/worktree sentences match this ADR. ADR-0028's
 high-default and ADR-0025's "never bypass on an ordinary production host" are
 amended by this decision; consult/no-edit review is unchanged.
+
+## Note (2026-09-06)
+
+A medium primary that hits a high or xhigh trigger mid-session stays the
+orchestrator and spawns same-family workers at that effort. It does not
+restart the host session. Judgment, plan approval, and named review stay
+with the primary. Opus/Sol/Terra remain bounded/simple routes, not the
+high-effort substitute for Fable/Astra. Grok internals may use xhigh.
