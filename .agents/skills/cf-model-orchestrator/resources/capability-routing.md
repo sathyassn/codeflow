@@ -120,14 +120,18 @@ reviews the integrated design/code and owns the final Claude quality judgment;
 for a unit authored by that primary, record Codex as the independent reviewer
 and do not label the primary's integrated judgment an independent unit review.
 For product, UX, UI, interaction, or visual design, that role owns intent and
-fidelity judgment under `cf-design` and the **implementer check** of the built
-surface. Codex, when named reviewer of that unit, independently **QAs** the
-changed surface and affected journeys through Computer Use on the official
-Codex app-server (interactive CLI via Herdr if the daemon is missing).
-Playwright remains the deterministic web driver; Computer Use is not a default
-web driver and not design authorship. A worker may collect rendered/tool
-evidence but never settles the direction or interprets it in place of the
-primary.
+fidelity judgment under `cf-design`. Default UI assignment is Claude as
+producer (**implementer check**) and Codex as reviewer (**independent
+interactive QA**). Codex QAs through Computer Use on the official app-server
+(from a Claude host: plugin/app-server only; from a Grok host or Codex host:
+CLI via Herdr if the daemon is missing). If Codex produces a UI unit, Claude
+is the independent reviewer and performs Computer Use QA in Claude Code;
+Codex producer verification is not independent QA. Playwright remains the
+deterministic web driver; Computer Use is not a default web driver and not
+design authorship. A worker may collect rendered/tool evidence but never
+settles the direction or interprets it in place of the primary. The
+`cf-reviewer` subagent may support the implementer check; it does not replace
+the Claude primary.
 
 If a planned seat, route, or required tool is unavailable before approval,
 select another qualified assignment and settle a new plan version. Mid-run loss

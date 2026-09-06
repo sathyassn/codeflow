@@ -48,7 +48,7 @@
     {
       "id": "CF-DES-003",
       "level": "hard",
-      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment and the implementer check of the built surface; Codex challenges the direction and, as named reviewer of a UI unit, independently QAs the changed surface through Computer Use on the Codex app-server; Playwright remains the deterministic web driver; bounded tool or rendered-evidence collection never transfers judgment to a worker.",
+      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment; default UI assignment is Claude producer (implementer check) and Codex reviewer (independent Computer Use QA via app-server); if Codex produces the UI, Claude independently QAs via Computer Use in Claude Code; Playwright remains the deterministic web driver; bounded tool collection never transfers judgment to a worker.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -61,7 +61,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "owns intent and fidelity judgment under `cf-design`",
-            "independently **QAs** the",
+            "Default UI assignment is Claude as",
             "never settles the direction or interprets it in place of the primary"
           ]
         }
@@ -70,7 +70,7 @@
     {
       "id": "CF-DES-004",
       "level": "hard",
-      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, never treats automated accessibility evidence as complete conformance, and on interactive changes requires Claude's implementer check plus Codex Computer Use QA of the changed journeys unless Computer Use is a declared limitation.",
+      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, never treats automated accessibility evidence as complete conformance, and on interactive changes requires the producer's implementer check plus independent other-lineage Computer Use QA of the changed journeys unless Computer Use is a declared limitation.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",

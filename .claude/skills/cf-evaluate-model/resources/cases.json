@@ -3362,7 +3362,7 @@
         "CF-DES-004",
         "CF-QA-002"
       ],
-      "prompt": "The account error-state UI change is implemented. Assign implementer check vs independent interactive QA, name the web driver vs Computer Use roles, and state what Codex must exercise on the changed journeys.",
+      "prompt": "The account error-state UI change is implemented. Assign default producer/reviewer, implementer check vs independent interactive QA, web driver vs Computer Use, what the reviewer must exercise on the changed journeys, and what happens if Codex produced the UI instead.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
@@ -3372,6 +3372,7 @@
           "codex_independent_interactive_qa",
           "playwright_remains_web_driver",
           "computer_use_via_codex_app_server",
+          "claude_reviews_codex_authored_ui_with_computer_use",
           "every_interactive_control_in_changed_journeys",
           "pointer_keyboard_and_applicable_viewports",
           "computer_use_unavailable_is_limitation_not_pass"

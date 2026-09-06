@@ -253,9 +253,10 @@ mirrored `cf-design` skill. It records a proportionate `DESIGN_INTENT` inside
 Plan vN: cosmetic work may be inapplicable, established-system work may conform,
 new surfaces settle one direction, and materially open novel surfaces compare
 two or three viable directions before settlement. The qualified Claude
-judgment role leads intent and the implementer check; Codex challenges
-feasibility and independently QAs the changed surface through Computer Use on
-the app-server (Playwright stays the web driver). Both approve the same plan. Language/voice and appearance modes are contextual,
+judgment role leads intent; default UI assignment is Claude implementer
+check and Codex Computer Use QA on the app-server (Playwright stays the web
+driver). If Codex produced the UI, Claude QAs independently. Both approve the
+same plan. Language/voice and appearance modes are contextual,
 collapsible intent dimensions governed by project evidence; utility defaults
 cannot become consuming-product authority. Rendered review grades
 evidence-backed drift from the brief, intent, accessibility target, or observed

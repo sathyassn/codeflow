@@ -205,8 +205,9 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "never a silent third vote",
         "A Grok Build host coordinates the standing pair through Herdr",
         "implementer check",
-        "independently **QAs** the",
+        "Default UI assignment is Claude as",
         "Playwright remains the deterministic web driver",
+        "plugin/app-server only",
     ] {
         assert!(
             routing.contains(required),

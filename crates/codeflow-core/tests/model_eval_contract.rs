@@ -722,6 +722,7 @@ fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
         "codex_independent_interactive_qa",
         "playwright_remains_web_driver",
         "computer_use_via_codex_app_server",
+        "claude_reviews_codex_authored_ui_with_computer_use",
         "every_interactive_control_in_changed_journeys",
     ] {
         assert!(

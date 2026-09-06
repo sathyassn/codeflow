@@ -295,12 +295,9 @@ the reasoning behind choices; it supplies no formats, bans, or house style.
 
 Implementation follows the established repository architecture and the
 orchestrator's quality contract, reusing the existing design system and adding
-reusable foundations or components only where recurrence is evidenced. The
-Claude judgment primary performs the **implementer check** of the built
-surface against `DESIGN_INTENT`. Codex, as named cross-lineage reviewer,
-independently QAs the changed surface through Computer Use on the Codex
-app-server per the quality contract — Playwright stays the deterministic web
-driver.
+reusable foundations or components only where recurrence is evidenced.
+Implementer check and other-lineage Computer Use QA follow the quality
+contract; Playwright stays the web driver.
 
 For web surfaces, WCAG 2.2 AA is the default minimum unless the project records
 a stronger or different surface-appropriate target with its rationale.

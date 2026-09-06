@@ -57,7 +57,8 @@ itself a blocker finding — return changes_requested.
      whole-flow proof
 5. For a user-facing change, follow the UI section of
    `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. This
-   Claude pass is the **implementer check**: Playwright for web behavior
+   Claude pass **supports** the primary's implementer check; it does not
+   replace it. Use Playwright for web behavior
    (headless is valid for deterministic E2E; headed only when visual, chrome,
    rendering, or debugging is material), the approved design, fidelity to
    `DESIGN_INTENT`, states,

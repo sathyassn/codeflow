@@ -70,13 +70,14 @@ paired comparison.
 
 ## Note (2026-09-06)
 
-Claude still produces `DESIGN_INTENT` and the implementer check. Codex, as
-named reviewer of a UI unit, independently QAs the changed surface through
-Computer Use on the official app-server. Playwright remains the deterministic
-web driver; Computer Use is not a default web driver and not design
-authorship. Adaptive viewports, accessibility, i18n/l10n including LTR/RTL,
-and system layers (tokens, primitives, components, composites) stay
-proportionate design-intent dimensions — collapse with an evidenced `N/A`.
+Claude still produces `DESIGN_INTENT`. Default UI assignment is Claude
+producer (implementer check) and Codex reviewer (Computer Use QA on the
+official app-server from a Claude host via plugin only). If Codex produces
+the UI, Claude independently QAs via Computer Use in Claude Code. Playwright
+remains the deterministic web driver; Computer Use is not a default web
+driver and not design authorship. Adaptive viewports, accessibility,
+i18n/l10n including LTR/RTL, and system layers stay proportionate intent
+dimensions — collapse with an evidenced `N/A`.
 
 ## Consequences
 
