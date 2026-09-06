@@ -394,7 +394,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "**Review / verification:**",
         "**Substantive documentation:**",
         "--model <selector> --effort <effort> --permission-mode bypassPermissions",
-        "use the record's escalation effort",
+        "spawn workers at escalation effort",
         "/codex:rescue --model <selector> --effort <effort>",
         "do not inherit an unobserved user default",
         "Make `autoMode.classifyAllShell` effective at user scope",

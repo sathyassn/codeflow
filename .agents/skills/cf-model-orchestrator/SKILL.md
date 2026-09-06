@@ -175,7 +175,7 @@ lane: solo fallback. Host is not duty; Claude produces design.
    - Claude-host lane: the `codex@openai-codex` plugin is enabled and
      `/codex:setup` succeeds. Pass the Codex primary selector and default
      effort from the current ensemble record on the plugin task/rescue
-     invocation at default effort; workers take escalation. Do not inherit
+     invocation at default effort; workers take escalation; do not inherit
      an unobserved user default.
    - Grok: `grok` present, `grok --version` succeeds, short interactive canary.
      Launch `--model <selector> --reasoning-effort <effort> --always-approve`
