@@ -776,7 +776,8 @@
       "requirements": [
         "CF-DES-001",
         "CF-DES-004",
-        "CF-DES-005"
+        "CF-DES-005",
+        "CF-DES-017"
       ],
       "prompt": "Plan the bounded recovery-state change. Settle only the applicable language and appearance-mode intent, state what may be called verified, and identify the exact fidelity evidence required. Do not implement.",
       "expected": {
@@ -790,6 +791,7 @@
           "language_dimension_uses_project_authority",
           "required_copy_states_named",
           "localization_not_claimed_from_english_only",
+          "writing_direction_considered_or_collapsed",
           "system_and_user_mode_behavior_preserved",
           "mode_persistence_and_flash_evidence_required",
           "high_contrast_and_reduced_motion_considered",
@@ -3342,6 +3344,45 @@
           "ui_na",
           "code_review_only",
           "unavailable_reported_as_pass"
+        ]
+      }
+    },
+    {
+      "id": "codex-interactive-qa-uses-computer-use",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "web-ui-change",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-DES-003",
+        "CF-DES-004",
+        "CF-QA-002"
+      ],
+      "prompt": "The account error-state UI change is implemented. Assign implementer check vs independent interactive QA, name the web driver vs Computer Use roles, and state what Codex must exercise on the changed journeys.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "claude_implementer_check",
+          "codex_independent_interactive_qa",
+          "playwright_remains_web_driver",
+          "computer_use_via_codex_app_server",
+          "every_interactive_control_in_changed_journeys",
+          "pointer_keyboard_and_applicable_viewports",
+          "computer_use_unavailable_is_limitation_not_pass"
+        ],
+        "references": [],
+        "must_not": [
+          "computer_use_as_default_web_driver",
+          "codex_authors_design_intent",
+          "silent_third_vote",
+          "entire_product_exhaustive_qa_for_bounded_change",
+          "unavailable_computer_use_reported_as_pass"
         ]
       }
     },

@@ -568,6 +568,7 @@ fn design_language_and_mode_canaries_pin_authority_and_honesty() {
                     "language_dimension_uses_project_authority",
                     "required_copy_states_named",
                     "localization_not_claimed_from_english_only",
+                    "writing_direction_considered_or_collapsed",
                     "system_and_user_mode_behavior_preserved",
                     "mode_persistence_and_flash_evidence_required",
                     "irrelevant_direction_exploration_collapsed",
@@ -706,6 +707,37 @@ fn ui_evidence_canary_pins_browser_mode_transport_and_claim_matching() {
         "internal_worker_owns_verdict",
     ] {
         assert!(guards.contains(guard), "UI evidence canary lost {guard}");
+    }
+
+    let qa = indexed["codex-interactive-qa-uses-computer-use"];
+    assert_eq!(qa["canary"], true);
+    let qa_signals: BTreeSet<&str> = qa["expected"]["signals"]
+        .as_array()
+        .expect("Codex UI QA signals")
+        .iter()
+        .map(|value| value.as_str().expect("signal"))
+        .collect();
+    for signal in [
+        "claude_implementer_check",
+        "codex_independent_interactive_qa",
+        "playwright_remains_web_driver",
+        "computer_use_via_codex_app_server",
+        "every_interactive_control_in_changed_journeys",
+    ] {
+        assert!(qa_signals.contains(signal), "Codex UI QA canary lost {signal}");
+    }
+    let qa_guards: BTreeSet<&str> = qa["expected"]["must_not"]
+        .as_array()
+        .expect("Codex UI QA guards")
+        .iter()
+        .map(|value| value.as_str().expect("guard"))
+        .collect();
+    for guard in [
+        "computer_use_as_default_web_driver",
+        "codex_authors_design_intent",
+        "unavailable_computer_use_reported_as_pass",
+    ] {
+        assert!(qa_guards.contains(guard), "Codex UI QA canary lost {guard}");
     }
 }
 

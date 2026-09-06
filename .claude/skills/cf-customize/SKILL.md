@@ -92,7 +92,8 @@ Then verify and **offer** remediation — never install silently.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every
-    native harness that will operate web UI; Computer Use or a surface-specific
+    native harness that will operate web UI; Codex app-server Computer Use for
+    independent interactive QA of changed UI; Computer Use or a surface-specific
     driver for native/mobile/desktop UI; design tools for UI work; and
     project-specific issue-tracker, database, cloud, or private-document MCPs.
     Prove tool access through the actual peer lane, not only by listing

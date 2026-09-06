@@ -68,6 +68,16 @@ direction, counterfactual evidence-grounded choice review, fidelity, and
 accessibility; a rendered case uses same-environment artifacts and blinded
 paired comparison.
 
+## Note (2026-09-06)
+
+Claude still produces `DESIGN_INTENT` and the implementer check. Codex, as
+named reviewer of a UI unit, independently QAs the changed surface through
+Computer Use on the official app-server. Playwright remains the deterministic
+web driver; Computer Use is not a default web driver and not design
+authorship. Adaptive viewports, accessibility, i18n/l10n including LTR/RTL,
+and system layers (tokens, primitives, components, composites) stay
+proportionate design-intent dimensions — collapse with an evidenced `N/A`.
+
 ## Consequences
 
 - Design reasoning becomes explicit and reviewable without expanding the

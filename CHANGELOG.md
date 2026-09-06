@@ -27,6 +27,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Codex Computer Use QA of changed UI (ADR-0043).** Claude still produces
+  `DESIGN_INTENT` and the implementer check. Codex independently QAs the
+  changed surface through Computer Use on the app-server. Playwright stays
+  the web driver. Adaptive viewports, accessibility, i18n/LTR-RTL, and
+  system layers stay proportionate intent dimensions.
+
 - **Gate redness is classified (ADR-0017, ADR-0038).** A gate is the
   verification check, not the CI job name. An assertion-red completed check
   still cannot be overridden. An infra-killed job (runner, memory, billing)

@@ -57,6 +57,8 @@ design system before proposing a parallel visual language:
 - product language, terminology, approved voice examples, and copy states;
 - applicable appearance modes, user or system preferences, and persistence;
 - platform conventions and the constraints of the target medium;
+- writing direction (LTR/RTL), localization, and viewports where composition
+  actually changes;
 - previous operator-approved examples and explicit rejected directions.
 
 Use authoritative evidence first. References never override the brief or
@@ -211,6 +213,7 @@ DESIGN_INTENT:
   APPEARANCE_MODES: <modes, preference/persistence | collapsed>
   VIEWPORTS_AND_PLATFORMS: <applicable sizes, input modes, platforms, where
     composition changes | collapsed>
+  WRITING_DIRECTION_AND_I18N: <LTR/RTL, expansion, locale variants | collapsed>
   SYSTEMS_AND_CONSTRAINTS:
   OPERATOR_DIRECTION:
   RESEARCH_OR_REFERENCES: <evidence or proportionate N/A>
@@ -292,7 +295,12 @@ the reasoning behind choices; it supplies no formats, bans, or house style.
 
 Implementation follows the established repository architecture and the
 orchestrator's quality contract, reusing the existing design system and adding
-reusable foundations or components only where recurrence is evidenced.
+reusable foundations or components only where recurrence is evidenced. The
+Claude judgment primary performs the **implementer check** of the built
+surface against `DESIGN_INTENT`. Codex, as named cross-lineage reviewer,
+independently QAs the changed surface through Computer Use on the Codex
+app-server per the quality contract — Playwright stays the deterministic web
+driver.
 
 For web surfaces, WCAG 2.2 AA is the default minimum unless the project records
 a stronger or different surface-appropriate target with its rationale.

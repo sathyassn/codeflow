@@ -423,7 +423,25 @@ peer-model transport. Use headed/UI mode when live observation, browser chrome,
 interaction debugging, or environment-specific rendering is material. For
 native, mobile, desktop, browser-chrome, or other surfaces outside Playwright's
 controlled page/context, prefer a surface-specific driver and use Computer Use
-only when no narrower driver reaches the surface. Check at least:
+only when no narrower driver reaches the surface.
+
+On an interactive user-facing change, split verification by seat. The Claude
+judgment primary performs the **implementer check** of the built surface
+against `DESIGN_INTENT` (design-system fit, states, Playwright or the platform
+driver). Codex, when named cross-lineage reviewer of that unit, independently
+**QAs** the changed surface and affected journeys through Computer Use on the
+official Codex app-server (interactive CLI via Herdr if the daemon is missing).
+Scope is every interactive control those journeys expose — buttons, links,
+tabs, menus, disclosures, fields, drag handles, scroll containers — with
+pointer (click, drag, scroll), keyboard (tab order, activation, shortcuts),
+and applicable touch/gesture. Cover applicable viewports including sizes
+where composition changes, not only the narrowest and widest. Playwright
+remains the deterministic web driver; Computer Use is the QA exploration
+layer, not a default web driver and not design authorship. Do not exhaust
+the entire product unless the work is a full-surface redesign. Unavailable
+Computer Use is a declared limitation, not a pass of interactive QA.
+
+Check at least:
 
 - before any concurrent browser work, allocate a task/run owner and isolate
   every mutable resource it uses: a fresh browser context/profile (prefer
@@ -464,11 +482,13 @@ only when no narrower driver reaches the surface. Check at least:
 - navigation, actions, guidance, validation, loading, empty, error, disabled,
   success, destructive, and recovery copy states where applicable;
 - visual/verbal coherence and terminology against the project voice; localized
-  variants and relevant language review before claiming localization quality;
+  variants, writing direction (LTR/RTL), and text expansion before claiming
+  localization quality;
 - applicable light, dark, high-contrast, system-following, manual-override,
   persistence, reduced-motion, imagery, and data-visualization behavior without
   an incorrect-mode flash;
-- responsive/layout behavior at relevant sizes;
+- responsive/adaptive behavior at relevant sizes, including the intermediate
+  viewports where composition actually changes;
 - keyboard navigation, focus, labels, contrast, and other applicable
   accessibility requirements against the project's target; for web surfaces,
   default to WCAG 2.2 AA unless a stronger target or a different

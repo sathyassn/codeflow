@@ -120,7 +120,12 @@ reviews the integrated design/code and owns the final Claude quality judgment;
 for a unit authored by that primary, record Codex as the independent reviewer
 and do not label the primary's integrated judgment an independent unit review.
 For product, UX, UI, interaction, or visual design, that role owns intent and
-fidelity judgment under `cf-design`; a worker may collect rendered/tool
+fidelity judgment under `cf-design` and the **implementer check** of the built
+surface. Codex, when named reviewer of that unit, independently **QAs** the
+changed surface and affected journeys through Computer Use on the official
+Codex app-server (interactive CLI via Herdr if the daemon is missing).
+Playwright remains the deterministic web driver; Computer Use is not a default
+web driver and not design authorship. A worker may collect rendered/tool
 evidence but never settles the direction or interprets it in place of the
 primary.
 

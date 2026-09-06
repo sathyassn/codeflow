@@ -48,7 +48,7 @@
     {
       "id": "CF-DES-003",
       "level": "hard",
-      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment, Codex challenges the direction, and bounded tool or rendered-evidence collection never transfers judgment to a worker.",
+      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment and the implementer check of the built surface; Codex challenges the direction and, as named reviewer of a UI unit, independently QAs the changed surface through Computer Use on the Codex app-server; Playwright remains the deterministic web driver; bounded tool or rendered-evidence collection never transfers judgment to a worker.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -61,6 +61,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "owns intent and fidelity judgment under `cf-design`",
+            "independently **QAs** the",
             "never settles the direction or interprets it in place of the primary"
           ]
         }
@@ -69,20 +70,22 @@
     {
       "id": "CF-DES-004",
       "level": "hard",
-      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, and never treats automated accessibility evidence as complete conformance.",
+      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, never treats automated accessibility evidence as complete conformance, and on interactive changes requires Claude's implementer check plus Codex Computer Use QA of the changed journeys unless Computer Use is a declared limitation.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
           "markers": [
             "default to WCAG 2.2 AA",
             "Compare the rendered result with the settled intent",
-            "reviewer's unsupported taste does not"
+            "reviewer's unsupported taste does not",
+            "independently",
+            "QAs** the changed surface"
           ]
         },
         {
           "path": ".claude/agents/cf-reviewer.md",
           "markers": [
-            "fidelity to the settled `DESIGN_INTENT`",
+            "implementer check",
             "unanchored aesthetic preference remains non-blocking"
           ]
         }
@@ -98,6 +101,7 @@
           "markers": [
             "Language and voice",
             "Appearance modes",
+            "WRITING_DIRECTION_AND_I18N",
             "CodeFlow supplies no preset and no house style",
             "runtime choices never become a product's direction"
           ]
@@ -114,7 +118,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
           "markers": [
             "applicable appearance modes",
-            "localized variants and relevant language review",
+            "localized variants, writing direction (LTR/RTL)",
             "without an incorrect-mode flash"
           ]
         }
@@ -381,6 +385,29 @@
           "markers": [
             "Pin the declaration so its priority survives the working tree",
             "Never edit the declaration to"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-017",
+      "level": "hard",
+      "statement": "Design intent considers, proportionately to the project, adaptive/responsive composition including intermediate viewports, accessibility, i18n/l10n with writing direction (LTR/RTL), and system layers (tokens, accessible primitives, components, composites); inapplicable dimensions collapse with an evidenced N/A rather than being silently skipped or universally mandated.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "WRITING_DIRECTION_AND_I18N",
+            "VIEWPORTS_AND_PLATFORMS",
+            "writing direction (LTR/RTL)"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "Responsive and platform behavior",
+            "writing direction (LTR and RTL)",
+            "Accessible primitives"
           ]
         }
       ]
@@ -1476,7 +1503,9 @@
             "prohibited headless peer-model transport",
             "Match evidence to the claim",
             "A screenshot alone does not prove interaction or accessibility",
-            "Tool unavailability is a blocker or declared limitation, not a pass"
+            "Tool unavailability is a blocker or declared limitation, not a pass",
+            "Playwright remains the deterministic web driver",
+            "Computer Use is the QA exploration"
           ]
         }
       ]

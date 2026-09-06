@@ -204,6 +204,9 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "generic same-lineage subagent cannot satisfy",
         "never a silent third vote",
         "A Grok Build host coordinates the standing pair through Herdr",
+        "implementer check",
+        "independently **QAs** the",
+        "Playwright remains the deterministic web driver",
     ] {
         assert!(
             routing.contains(required),
@@ -470,6 +473,9 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "race/concurrency test",
         "Playwright",
         "Computer Use",
+        "Playwright remains the deterministic web driver",
+        "implementer check",
+        "every interactive control",
         "UI: N/A",
         "failing or missing gate cannot be overridden by model consensus",
         "A **gate** is the verification check",
