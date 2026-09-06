@@ -12,7 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
   remains `claude-judgment-primary` and `codex-engineering-primary`;
   `grok-engineering-primary` is a catalog seat on `grok-4.6` at medium (ADR-0055). Extra-family
-  review is named in `routing-policy.json` and is never a silent third vote.
+  review is named when a routing-policy trigger fires and the family is
+  available; unavailable is an evidenced limitation, never a silent third vote.
   Claude produces design in its native session regardless of host. `grok-cli`
   is catalog-supported with a `grok-cli-version` doctor probe. Grok-hosted
   Claude/Codex lanes use Herdr and are not claimed complete without canaries.
@@ -35,7 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Codex Computer Use QA of changed UI (ADR-0043).** Claude still produces
   `DESIGN_INTENT` and the implementer check. Codex independently QAs the
-  changed surface through Computer Use on the app-server. Playwright stays
+  changed surface through Computer Use on the app-server. If Codex produced
+  the UI, Claude QAs with Computer Use in Claude Code. Playwright stays
   the web driver. Adaptive viewports, accessibility, i18n/LTR-RTL, and
   system layers stay proportionate intent dimensions.
 

@@ -60,8 +60,9 @@ Then verify and **offer** remediation — never install silently.
   - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
     environment-variable denies), `herdr` when `HERDR_ENV=1` else `tmux`, and
     `claude mcp list`, followed by authenticated interactive TTY canaries for
-    the current ensemble's Claude primary at its default and escalation
-    efforts. Production uses `bypassPermissions`; consult/no-edit review uses
+    the current ensemble's Claude primary at default effort. Escalation
+    efforts are exercised by in-family workers, not canaried on the primary.
+    Production uses `bypassPermissions`; consult/no-edit review uses
     auto with `autoMode.classifyAllShell: true` through `--settings`, plus one
     schema-v2 round trip — `delegate init` → wait-ready → `arm` → canonical
     UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal with
@@ -92,8 +93,9 @@ Then verify and **offer** remediation — never install silently.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every
-    native harness that will operate web UI; Codex app-server Computer Use for
-    independent interactive QA of changed UI; Computer Use or a surface-specific
+    native harness that will operate web UI; other-lineage Computer Use QA of
+    changed UI (Codex via app-server; Claude Code Computer Use when Claude
+    reviews a Codex-authored UI); Computer Use or a surface-specific
     driver for native/mobile/desktop UI; design tools for UI work; and
     project-specific issue-tracker, database, cloud, or private-document MCPs.
     Prove tool access through the actual peer lane, not only by listing

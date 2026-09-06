@@ -152,7 +152,7 @@
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
     "Default effort is medium; escalate to high on a high_trigger, then xhigh on an xhigh_trigger. Novelty is not a trigger; complexity and difficulty are.",
-    "If Fable is unavailable, record Opus as the Claude fallback at the same effort. If Astra is unavailable, record gpt-5.6-sol as the Codex fallback at the same effort.",
+    "If Fable is unavailable, record Opus as the Claude fallback at the same effort (Opus xhigh is that fallback, not a Fable-high substitute). If Astra is unavailable, record gpt-5.6-sol as the Codex fallback at the same effort.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",
     "A changed concrete binding requires native-interactive qualification before promotion."
   ]

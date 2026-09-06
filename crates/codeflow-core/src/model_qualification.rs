@@ -320,6 +320,12 @@ fn validate_ensemble_triggers(ensemble: &EnsembleCatalog) -> Result<(), String> 
 pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
     let ensemble: EnsembleCatalog =
         serde_json::from_str(CURRENT_ENSEMBLE).map_err(|error| error.to_string())?;
+    validate_parsed_ensemble(ensemble)
+}
+
+fn validate_parsed_ensemble(
+    ensemble: EnsembleCatalog,
+) -> Result<BTreeMap<String, EnsembleBinding>, String> {
     if ensemble.schema_version != 3 {
         return Err(format!(
             "unsupported current ensemble schema {}",
@@ -421,6 +427,10 @@ pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
 fn validate_routing_policy(policy_id: &str) -> Result<(), String> {
     let policy: RoutingPolicy =
         serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
+    validate_parsed_routing_policy(&policy, policy_id)
+}
+
+fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Result<(), String> {
     if policy.schema_version != 1 {
         return Err(format!(
             "unsupported routing policy schema {}",
@@ -1076,6 +1086,34 @@ mod tests {
                 .any(|route| route.model_class == "latest-fable" && route.effort == "high"),
             "Fable high in-family worker route missing"
         );
+        assert!(
+            ensemble["claude-judgment-primary"]
+                .internal_routes
+                .iter()
+                .any(|route| route.model_class == "latest-fable" && route.effort == "xhigh"),
+            "Fable xhigh in-family worker route missing"
+        );
+        assert!(
+            ensemble["codex-engineering-primary"]
+                .internal_routes
+                .iter()
+                .any(|route| route.model_class == "latest-astra-coding" && route.effort == "high"),
+            "Astra high in-family worker route missing"
+        );
+        assert!(
+            ensemble["codex-engineering-primary"]
+                .internal_routes
+                .iter()
+                .any(|route| route.model_class == "latest-astra-coding" && route.effort == "xhigh"),
+            "Astra xhigh in-family worker route missing"
+        );
+        assert!(
+            ensemble["grok-engineering-primary"]
+                .internal_routes
+                .iter()
+                .any(|route| route.model_class == "latest-grok-coding" && route.effort == "xhigh"),
+            "Grok xhigh in-family worker route missing"
+        );
         assert_ne!(
             ensemble["claude-judgment-primary"].lineage,
             ensemble["codex-engineering-primary"].lineage
@@ -1355,5 +1393,211 @@ mod tests {
         file.set_len(MAX_RECORD_BYTES + 1).unwrap();
         let error = load_bindings(directory.path()).unwrap_err();
         assert!(error.contains("binding exceeds 1048576 bytes"));
+    }
+
+    fn shipped_routing_policy() -> RoutingPolicy {
+        serde_json::from_str(ROUTING_POLICY).expect("shipped routing policy")
+    }
+
+    fn extra_family_review(invoke_when_available: bool) -> ExtraFamilyReview {
+        ExtraFamilyReview {
+            never_silent_vote: true,
+            requires_named_assignment: true,
+            invoke_when_available,
+            triggers: vec!["security-sensitive change".into()],
+            rule: "named evidence, never a silent third vote".into(),
+        }
+    }
+
+    fn routing_policy(invoke_when_available: bool) -> RoutingPolicy {
+        RoutingPolicy {
+            schema_version: 1,
+            policy_id: "claude-codex-duo".into(),
+            default_review: "standing-pair".into(),
+            design_production: "claude-native-session".into(),
+            host_does_not_own_duty: true,
+            extra_family_review: extra_family_review(invoke_when_available),
+        }
+    }
+
+    #[test]
+    fn shipped_routing_policy_invokes_extra_family_when_available() {
+        let policy = shipped_routing_policy();
+        validate_parsed_routing_policy(&policy, "claude-codex-duo").unwrap();
+        assert!(policy.extra_family_review.invoke_when_available);
+        assert!(policy.extra_family_review.never_silent_vote);
+        assert!(policy.extra_family_review.requires_named_assignment);
+        assert!(!policy.extra_family_review.triggers.is_empty());
+    }
+
+    #[test]
+    fn routing_policy_rejects_invoke_when_available_false() {
+        let error =
+            validate_parsed_routing_policy(&routing_policy(false), "claude-codex-duo").unwrap_err();
+        assert!(error.contains("invoked when available"));
+    }
+
+    #[test]
+    fn routing_policy_rejects_silent_vote_and_unnamed_assignment() {
+        let mut policy = routing_policy(true);
+        policy.extra_family_review.never_silent_vote = false;
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo").is_err());
+        policy.extra_family_review.never_silent_vote = true;
+        policy.extra_family_review.requires_named_assignment = false;
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo").is_err());
+        policy.extra_family_review.requires_named_assignment = true;
+        policy.extra_family_review.triggers.clear();
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo").is_err());
+        policy
+            .extra_family_review
+            .triggers
+            .push("security-sensitive change".into());
+        policy.extra_family_review.rule.clear();
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo").is_err());
+    }
+
+    #[test]
+    fn routing_policy_rejects_schema_and_duty_drift() {
+        let mut policy = routing_policy(true);
+        policy.schema_version = 2;
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
+            .unwrap_err()
+            .contains("unsupported routing policy schema"));
+        policy = routing_policy(true);
+        policy.policy_id = "other".into();
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
+            .unwrap_err()
+            .contains("must match the current ensemble"));
+        policy = routing_policy(true);
+        policy.default_review = "all-qualified".into();
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
+            .unwrap_err()
+            .contains("standing-pair"));
+        policy = routing_policy(true);
+        policy.design_production = "host-drafts".into();
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
+            .unwrap_err()
+            .contains("Claude native-session"));
+        policy = routing_policy(true);
+        policy.host_does_not_own_duty = false;
+        assert!(validate_parsed_routing_policy(&policy, "claude-codex-duo")
+            .unwrap_err()
+            .contains("host-does-not-own-duty"));
+    }
+
+    #[test]
+    fn routing_policy_rejects_unknown_fields() {
+        let error = serde_json::from_str::<RoutingPolicy>(
+            r#"{"schema_version":1,"policy_id":"claude-codex-duo","default_review":"standing-pair","design_production":"claude-native-session","host_does_not_own_duty":true,"extra_family_review":{"never_silent_vote":true,"requires_named_assignment":true,"invoke_when_available":true,"triggers":["x"],"rule":"y","silent":true}}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    fn shipped_ensemble() -> EnsembleCatalog {
+        serde_json::from_str(CURRENT_ENSEMBLE).expect("shipped ensemble")
+    }
+
+    fn binding_mut<'a>(ensemble: &'a mut EnsembleCatalog, role: &str) -> &'a mut EnsembleBinding {
+        ensemble
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.role == role)
+            .unwrap_or_else(|| panic!("missing role {role}"))
+    }
+
+    #[test]
+    fn parsed_ensemble_rejects_schema_and_pair_drift() {
+        let mut ensemble = shipped_ensemble();
+        ensemble.schema_version = 2;
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("unsupported current ensemble schema"));
+
+        let mut ensemble = shipped_ensemble();
+        ensemble.standing_roles.pop();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("exactly two primary roles"));
+
+        let mut ensemble = shipped_ensemble();
+        ensemble.bindings.truncate(1);
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("must include the standing pair"));
+
+        let mut ensemble = shipped_ensemble();
+        ensemble.standing_roles[1] = ensemble.standing_roles[0].clone();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("duplicate standing role"));
+
+        let mut ensemble = shipped_ensemble();
+        ensemble.standing_roles[1] = "grok-engineering-primary".into();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("must remain claude-judgment-primary"));
+    }
+
+    #[test]
+    fn parsed_ensemble_rejects_binding_and_trigger_defects() {
+        let mut ensemble = shipped_ensemble();
+        ensemble.high_triggers.clear();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("effort triggers and rules must not be empty"));
+
+        let mut ensemble = shipped_ensemble();
+        ensemble.bindings[1].seat = ensemble.bindings[0].seat.clone();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("duplicate ensemble seat"));
+
+        let mut ensemble = shipped_ensemble();
+        binding_mut(&mut ensemble, "claude-judgment-primary")
+            .native_selectors
+            .clear();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("has no selector or responsibility"));
+
+        let mut ensemble = shipped_ensemble();
+        binding_mut(&mut ensemble, "claude-judgment-primary").internal_routes[0]
+            .effort
+            .clear();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("internal route effort"));
+
+        let mut ensemble = shipped_ensemble();
+        ensemble
+            .bindings
+            .retain(|binding| binding.role != "claude-judgment-primary");
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("standing role claude-judgment-primary is missing"));
+
+        let mut ensemble = shipped_ensemble();
+        let claude_lineage = binding_mut(&mut ensemble, "claude-judgment-primary")
+            .lineage
+            .clone();
+        binding_mut(&mut ensemble, "grok-engineering-primary").lineage = claude_lineage;
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("primary lineage"));
+
+        let mut ensemble = shipped_ensemble();
+        binding_mut(&mut ensemble, "grok-engineering-primary")
+            .native_selectors
+            .insert("not-a-harness".into(), "x".into());
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("unsupported harness"));
+
+        let mut ensemble = shipped_ensemble();
+        binding_mut(&mut ensemble, "grok-engineering-primary").provider = "anthropic".into();
+        assert!(validate_parsed_ensemble(ensemble)
+            .unwrap_err()
+            .contains("mismatches harness"));
     }
 }
