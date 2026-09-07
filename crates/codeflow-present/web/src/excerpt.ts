@@ -34,9 +34,7 @@ export interface FeedbackExcerpt {
 
 export function visibleTextOf(element: Element): string {
   if (element.namespaceURI?.includes("svg") || element.querySelector("text, tspan")) {
-    const parts = [...element.querySelectorAll("text, tspan")]
-      .map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+    const parts = svgTextParts(element);
     if (parts.length) return collapse(parts.join(" "));
   }
   const aria = element.getAttribute("aria-label")?.trim() ?? "";
@@ -46,11 +44,22 @@ export function visibleTextOf(element: Element): string {
 
 export function quoteFromRange(range: Range): string {
   const fragment = range.cloneContents();
-  const svgParts = [...fragment.querySelectorAll("text, tspan")]
-    .map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+  const svgParts = svgTextParts(fragment);
   if (svgParts.length) return svgParts.join(" ");
   return range.toString();
+}
+
+function svgTextParts(root: Element | DocumentFragment): string[] {
+  const nodes = root instanceof Element && root.matches("text, tspan")
+    ? [root]
+    : [...root.querySelectorAll("text, tspan")];
+  const carriers = new Set(nodes);
+  return nodes.filter((node) => {
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      if (carriers.has(parent)) return false;
+    }
+    return true;
+  }).map((node) => collapse(node.textContent ?? "")).filter(Boolean);
 }
 
 export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string {
@@ -81,7 +90,7 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
     const text = visibleTextOf(node);
     if (text) parts.push(text);
   }
-  return uniqueJoin(parts).slice(0, 4000);
+  return parts.join(" ").slice(0, 4000);
 }
 
 /**
@@ -420,15 +429,4 @@ function rectArea(rect: DOMRect): number {
 
 function collapse(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function uniqueJoin(parts: string[]): string {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const part of parts) {
-    if (seen.has(part)) continue;
-    seen.add(part);
-    out.push(part);
-  }
-  return out.join(" ");
 }

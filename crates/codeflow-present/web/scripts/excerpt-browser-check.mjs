@@ -18,6 +18,27 @@ export async function checkDocumentExcerpts(browser) {
         <section data-cf-block-id="last" style="background:rgb(0,0,220);color:white"><p>Last evidence</p></section>
       </main>`);
     await page.addScriptTag({ content: compiled.outputFiles[0].text });
+    const labels = await page.evaluate(() => {
+      const fixture = document.createElement("div");
+      fixture.innerHTML = '<svg><text y="20"><tspan>Input</tspan></text><text y="40"><tspan>Input</tspan></text><text y="60">Review <tspan>and </tspan><tspan>evidence</tspan></text><tspan>Standalone</tspan></svg>';
+      document.body.append(fixture);
+      const svg = fixture.firstElementChild;
+      const range = document.createRange();
+      range.selectNodeContents(svg);
+      const mixed = svg.querySelectorAll("text")[2];
+      const result = {
+        element: excerptHarness.visibleTextOf(svg),
+        range: excerptHarness.quoteFromRange(range),
+        mixed: excerptHarness.visibleTextOf(mixed),
+        region: excerptHarness.intersectingVisibleText(fixture, fixture.getBoundingClientRect()),
+      };
+      fixture.remove();
+      return result;
+    });
+    assert.equal(labels.element, "Input Input Review and evidence Standalone");
+    assert.equal(labels.range, labels.element);
+    assert.equal(labels.mixed, "Review and evidence");
+    assert.ok(labels.region.startsWith("Input Input Review and evidence"), labels.region);
     const pixels = await page.evaluate(async () => {
       const root = document.getElementById("document");
       const box = root.getBoundingClientRect();
