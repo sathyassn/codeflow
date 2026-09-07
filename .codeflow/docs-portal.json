@@ -5,7 +5,7 @@
   "files": {
     ".gitignore": {
       "ownership": "managed",
-      "pristine_sha256": "e37fb59cbe39c6426fed03947e260b8141c0198cad54d7bef8c64324f9f8950b"
+      "pristine_sha256": "e107a5de2fad80f096e05d5bbc7b38423ef8f2b4ae3b6b54097e3b9a449fb4d9"
     },
     ".node-version": {
       "ownership": "managed",
@@ -13,15 +13,15 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "d267f011d53c4dc147e6a52f17531e9f225cad4b3064577ec018097a8d81e749"
+      "pristine_sha256": "da3762c8ad89b0fa91968b347af32d3459492fcb6c09b9a2cff761fe87daaba6"
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "9b68232f831d67c7f71b71eea7c1b6df0857936f2e685dd9bd4de4207450b63b"
+      "pristine_sha256": "b43340ca9b25b092ce9ba5d5a2b717d9a189dfee66d555154d3d2992ccf36880"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "d2b9d4fb641f098b59da5b31f5a5ca5d804ab005b829d63a0af463d54035a66c"
+      "pristine_sha256": "1b78b0f984d1cc98ac3ef14ad7a67477a4181dcda2729313c91378ba5db51890"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -31,17 +31,25 @@
       "ownership": "managed",
       "pristine_sha256": "b4023a362ccb997311a10ebe6c9f684888db90b82450a6da5909b094eb75f139"
     },
+    "public/fonts-LICENSE.txt": {
+      "ownership": "managed",
+      "pristine_sha256": "8458ce37901446a60b60b3ddce9f936512f739c7970a6c028a24efa59ba5a45c"
+    },
     "public/portal-preview.js": {
       "ownership": "managed",
       "pristine_sha256": "6ad7ee87347647c712b53b2fb82eb21ad43acacfbb6bc7492a9ef08992f68fb8"
     },
+    "public/portal-tabs.js": {
+      "ownership": "managed",
+      "pristine_sha256": "489ffe1e6ab194a198527cc84c65b5ad553014f3c329762c1be5e92e1d2f509c"
+    },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2868d04ad3dd07b66ed02d9506914792b574c2750b067ef6996bc8a7642a795a"
+      "pristine_sha256": "fea1d0a8d2c2794a47e4e30cbd66c88363ad5056eb89c61ee04da5b92cd27c28"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "81e7973b1fa07529789d25a713a07d6384eccc68903f5c7a74a963017c6ba9c0"
+      "pristine_sha256": "90563f6f84642e53aca07b8190332a14027b3f79e3c769ab4de25e93f20627ca"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -61,11 +69,11 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5127c2283287d628a5da6fe664571a56c7970c7ab8a379ce3d2bd746ab115dc2"
+      "pristine_sha256": "dc0ff9f5d489758251b9933b234b457f371a8e5b16fe6ce78145009419da1859"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0ae68cd2e7ae420f4d18223fd1d62d83c34f5aae2148492aaf67423e9173ed16"
+      "pristine_sha256": "bb679b6e7bb74ff658d57838e1d3caa386f8e6571bcbb3073ef8f1c2fddd5062"
     },
     "scripts/process-environment.mjs": {
       "ownership": "managed",
@@ -79,21 +87,57 @@
       "ownership": "managed",
       "pristine_sha256": "208a2cec916bf027ac44fe8bc32d31b70eb67ccd800a5ebb5662a4411273dbde"
     },
+    "src/components/PortalDisplay.astro": {
+      "ownership": "managed",
+      "pristine_sha256": "b6ad3d2712132c6fae144fd586912abcdd3a4017a44fc0ad8a184616436e63f0"
+    },
     "src/content.config.ts": {
       "ownership": "managed",
       "pristine_sha256": "1f8b206b5f7c0afb44c3715a3fe79954b448885fe9e753ba372dddf1210ecfd5"
     },
+    "src/fonts/Archivo.LICENSE": {
+      "ownership": "managed",
+      "pristine_sha256": "c3c8402eec0e31dc9a76851235b1c02a0bb821488b2db8e35bcc2ab60ca8fc2b"
+    },
+    "src/fonts/IBM-Plex-Sans.LICENSE": {
+      "ownership": "managed",
+      "pristine_sha256": "d0283623ef57e722fd0eb688a8041589670c608ab780cd3612d06ba6f153d3fd"
+    },
+    "src/fonts/Inter.LICENSE": {
+      "ownership": "managed",
+      "pristine_sha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345"
+    },
+    "src/fonts/README.md": {
+      "ownership": "managed",
+      "pristine_sha256": "e3cd9da2b81ef3f8868b25787f39266988dfefe8c69c14de12b292cd7b6a6071"
+    },
+    "src/fonts/archivo-latin-wght-normal.woff2": {
+      "ownership": "managed",
+      "pristine_sha256": "8f704806dbedeaaeca334b11ec348bc3ac3a439d6431544b3afb54f534ee4967"
+    },
+    "src/fonts/ibm-plex-sans-latin-wght-normal.woff2": {
+      "ownership": "managed",
+      "pristine_sha256": "e2291e842cf5af167122a22881a740c7f2dda7716f1e8cd76680264f4a859470"
+    },
+    "src/fonts/inter-latin-wght-normal.woff2": {
+      "ownership": "managed",
+      "pristine_sha256": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62"
+    },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "3557c3fe89538826b40ba42af63c967044060a6426412fc2fa76e6e336872b99"
+      "pristine_sha256": "b01c0d9633b2748bca73af3256435097449dc897feeace68653e899bbd0a9add"
+    },
+    "src/styles/utility-tokens.css": {
+      "ownership": "managed",
+      "pristine_sha256": "acc48812c9a9355202f044185cf0aec6624181eae33503ca3750773c5ff8cde1"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "a6699371d3ba60504b51656e783313d17b67f9a1e429d6e2d98fefc36d0d9ae7"
+      "pristine_sha256": "bf3a6a521f9ee20650f7d4192cdbe651c04cc40425dd29237cd84dffdc6cb3da"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
-      "pristine_sha256": "d1470ef82e4fc327a689ece814b38ad1a04e005f8c7578e6305a070e256f868d"
+      "pristine_sha256": "1260843bdef478478c9cf5791571749724142eb9ef9c1cfd32a89c362489528d"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",

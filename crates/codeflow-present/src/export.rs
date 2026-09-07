@@ -120,7 +120,7 @@ fn enhance_export(
     let bootstrap = EXPORT_BOOTSTRAP;
     let bootstrap_hash = STANDARD.encode(Sha256::digest(bootstrap.as_bytes()));
     let csp = format!(
-        "default-src 'none'; script-src 'sha256-{bootstrap_hash}' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'none'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+        "default-src 'none'; script-src 'sha256-{bootstrap_hash}' blob:; style-src 'unsafe-inline'; font-src data:; img-src data: blob:; media-src data:; connect-src 'none'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
     );
     let marker = "</head>";
     let theme = match theme {

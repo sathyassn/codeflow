@@ -75,13 +75,13 @@ implementation stage for an analysis-only request.
   verdict. Codex supplies independent review for a unit authored by that
   primary; its integrated pass is not independent review of its own unit.
 - **Qualified reasoning seats.** Use the concrete selectors, default effort,
-  escalation effort/triggers, and permitted internal worker classes in the
-  current ensemble record: invoke each primary directly, let the owning primary
-  control its internal routing, retain primary planning/approval duties, never
-  infer worker routing or usage state, and never let a worker replace a primary
-  or named cross-lineage reviewer. Spawn same-family high/xhigh workers; the
-  medium primary stays the orchestrator. A binding change needs
-  native-interactive qualification and promotion.
+  triggers/workers from the ensemble: invoke each primary directly;
+  retain primary planning/approval duties and internal routing. Never infer
+  usage or routing, and never let a worker replace a primary or named
+  cross-lineage reviewer. Spawn same-family high/xhigh workers on trigger;
+  the medium primary stays the orchestrator. Apply capability-routing as demand
+  changes: strongest qualified reasoning,
+  direct xhigh when triggered. Routine work does not automatically escalate.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -295,8 +295,8 @@ fitness check—or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
-and requires both approvals; same-seat medium→high or high→xhigh on a documented
-trigger is ledger evidence, not reassignment.
+and requires both approvals; trigger-based same-seat escalation (including
+medium→xhigh) is ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 

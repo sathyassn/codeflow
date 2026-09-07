@@ -543,7 +543,7 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
     // the final SVG sanitizer rejects active attributes and external CSS URLs.
     // Split directives keep scripts strict while allowing only local/inline CSS.
     let csp = format!(
-        "default-src 'none'; script-src 'self' {prepaint_hash}; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        "default-src 'none'; script-src 'self' {prepaint_hash}; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; font-src data:; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     );
     secure_html(StatusCode::OK, body, &csp)
 }

@@ -3,6 +3,21 @@
   "requirements_version": "2026-08-04-design-method-v3",
   "requirements": [
     {
+      "id": "CF-GIT-004",
+      "level": "hard",
+      "statement": "A ready PR describes the complete branch and attributes test/review evidence to its actual revision and scope; coverage PASS is not a measurement, executable changes cannot use a docs-only shortcut, operator journeys need whole-flow evidence, and protected-branch/cleanup boundaries remain in force.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "a job's `PASS` is not a coverage number",
+            "Whole-flow evidence includes changed operator/CLI journeys",
+            "Missing required evidence keeps the PR draft"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-DES-001",
       "level": "hard",
       "statement": "Material product, UX, interaction, and visual-design work settles proportionate evidence-grounded design intent before implementation; cosmetic and established-system changes collapse explicitly, operator direction is a binding constraint owed honest counsel, and audience or research evidence is never fabricated.",
@@ -712,7 +727,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "is reassignment: create Plan vN+1",
-            "same-seat medium\u2192high or high\u2192xhigh escalation"
+            "same-seat trigger-based effort escalation"
           ]
         }
       ]
@@ -771,7 +786,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "The Claude judgment primary owns integrated Claude judgment",
-            "let the owning primary control its internal routing",
+            "retain primary planning/approval duties and internal routing",
             "never let a worker replace a primary"
           ]
         },
@@ -821,7 +836,7 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort; a medium primary that hits a trigger mid-session stays the orchestrator and spawns same-family workers at the escalation effort; extra catalog families are named when routing-policy triggers fire and they are available; preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort; a medium primary stays the orchestrator and spawns strongest-qualified same-family reasoning workers at the trigger-appropriate high or xhigh effort, including direct xhigh, before demanding work or when a trigger emerges mid-session; extra catalog families are named when routing-policy triggers fire and they are available; preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -831,7 +846,9 @@
             "retain primary planning/approval duties",
             "never let a worker replace a primary",
             "Spawn same-family high/xhigh workers",
-            "the medium primary stays the orchestrator"
+            "the medium primary stays the orchestrator",
+            "direct xhigh when triggered",
+            "Routine work does not automatically escalate"
           ]
         },
         {
@@ -1462,7 +1479,9 @@
         {
           "path": ".agents/skills/cf-present/references/document-authoring.md",
           "markers": [
-            "without scripts, same-origin access, forms, navigation, or network",
+            "runtime scopes authored style selectors and contains its layout/paint",
+            "Scripts, forms, navigation, network",
+            "Offline exports additionally place authored HTML in a sandboxed frame",
             "orphaned annotations as visible unresolved context",
             "utility defaults never influence the product"
           ]

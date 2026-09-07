@@ -15,6 +15,7 @@ mod media;
 mod platform;
 pub mod render;
 mod safe_html;
+mod scoped_css;
 pub mod service;
 pub mod state;
 

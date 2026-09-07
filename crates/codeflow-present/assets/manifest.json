@@ -15,8 +15,8 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-GFD633EM.js",
-      "present.style": "/app/assets/app-326UFJJH.css"
+      "present.app": "/app/assets/app-FGYJCXXB.js",
+      "present.style": "/app/assets/app-ZMBSQOWF.css"
     },
     "inline": {
       "present.prepaint": {
@@ -27,30 +27,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-326UFJJH.css",
-        "stored_path": "service/app-326UFJJH.css.br",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 35020,
-        "encoded_bytes": 6642,
-        "sha256": "36fe2d3356a8abef5df0cb0d03a7a4e36d190c3f212d1493e7a81cff7bf9a1a1",
-        "etag": "\"sha256-Nv4tM1aoq+9d8MsNA6ek420ZDD8hLRST56gc/3v5oaE=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-GFD633EM.js",
-        "stored_path": "service/app-GFD633EM.js.br",
+        "request_path": "/app/assets/app-FGYJCXXB.js",
+        "stored_path": "service/app-FGYJCXXB.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 68950,
-        "encoded_bytes": 21417,
-        "sha256": "522e2b08edab05ac2bd949191d0a0b51f19b7cd1b50aad51d41d1de6415f2b0c",
-        "etag": "\"sha256-Ui4rCO2rBawr2UkZHQoLUfGbfNG1Cq1R1B0d5kFfKww=\"",
+        "raw_bytes": 69692,
+        "encoded_bytes": 21529,
+        "sha256": "0c0968f6f7adb95764f5c992d78f0ebdb6371bfcebb0670b996b0532abc27204",
+        "etag": "\"sha256-DAlo9vetuVdk9cmS148OvbY3G/zrsGcLmWsFMqvCcgQ=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
@@ -61,8 +45,28 @@
             "kind": "dynamic-import"
           },
           {
+            "request_path": "/app/assets/chunk-fonts-JQZUE2F7.js",
+            "kind": "dynamic-import"
+          },
+          {
             "request_path": "/app/assets/chunk-syntax-3KXI26U3.js",
             "kind": "dynamic-import"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-ZMBSQOWF.css",
+        "stored_path": "service/app-ZMBSQOWF.css.br",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 35144,
+        "encoded_bytes": 6682,
+        "sha256": "6f0d81fc6cc2ce21a9e23e696602d9c98be0213491a3e60ba7175991f2fcf727",
+        "etag": "\"sha256-bw2B/GzCziGp4j5pZgLZyYvgITSRo+YLpxdZkfL89yc=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
           }
         ]
       },
@@ -2901,6 +2905,22 @@
         ]
       },
       {
+        "request_path": "/app/assets/chunk-fonts-JQZUE2F7.js",
+        "stored_path": "service/chunk-fonts-JQZUE2F7.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 186275,
+        "encoded_bytes": 131167,
+        "sha256": "f41525ff31f33d4abfa40a6a925eb1da14c00d5c186e2f80c331ab9b6b01aaf4",
+        "etag": "\"sha256-9BUl/zHzPUq/pApqkl6x2hTADVwYbi+AwzGrm2sBqvQ=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
+            "kind": "import-statement"
+          }
+        ]
+      },
+      {
         "request_path": "/app/assets/chunk-ganttDiagram-PKOTCBZU-ICFS4RLZ.js",
         "stored_path": "service/chunk-ganttDiagram-PKOTCBZU-ICFS4RLZ.js.br",
         "media_type": "text/javascript; charset=utf-8",
@@ -5222,21 +5242,21 @@
       }
     ],
     "metrics": {
-      "asset_count": 118,
-      "raw_corpus_bytes": 4199462,
-      "brotli_corpus_bytes": 956475,
+      "asset_count": 119,
+      "raw_corpus_bytes": 4386603,
+      "brotli_corpus_bytes": 1087794,
       "largest_raw_chunk_bytes": 667680,
-      "largest_brotli_chunk_bytes": 119823
+      "largest_brotli_chunk_bytes": 131167
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-0b93f202b425c161.js.gz",
+      "stored_path": "export/renderer-5b8414972282adc2.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 4168314,
-      "encoded_bytes": 1074317,
-      "sha256": "0b93f202b425c161e430515c5e7b72af70b986e739592ef9ef2691ee485d65b3"
+      "raw_bytes": 4354864,
+      "encoded_bytes": 1207875,
+      "sha256": "5b8414972282adc20d869239a938b87b4d10fd39e8b50e32a70f65056110fc50"
     }
   },
   "budgets": {
@@ -5246,5 +5266,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "2826b6e4488965e517a75f21c7fcef310ab0a2a8d097ba87212ab73bdc5352b3"
+  "corpus_sha256": "42ee281b0595d10603a2a2a13945870cfc1ed7be9d7365aeaa407c4440a62f7e"
 }

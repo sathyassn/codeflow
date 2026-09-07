@@ -75,22 +75,60 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
 
   const exact = quoteFromRange(range);
   if (!exact.trim()) return null;
-  // Server validates against Block::canonical_review_text(), not live DOM
-  // textContent (markdown stripping vs rendered HTML can differ). Prefer the
-  // rendered canonical attribute; fall back to locating the quote in it.
+  // Anchor the actual DOM range, including its occurrence within the block.
+  // Rendered formatting and canonical text can differ in whitespace (and HTML
+  // blocks may have a canonical title prefix), but never guess through a
+  // substantive mismatch or an ambiguous mapping.
   const canonical =
     startElement.getAttribute("data-cf-canonical-text") ?? startElement.textContent ?? "";
-  const start = canonical.indexOf(exact);
-  const end = start >= 0 ? start + exact.length : -1;
-  if (start < 0 || canonical.slice(start, end) !== exact) return null;
+  const offsets = canonicalRangeOffsets(startElement, range, canonical);
+  if (!offsets) return null;
 
   return {
     blockId,
     blockLabel: block.dataset.cfBlockLabel ?? blockId,
-    selector: selectorFromOffsets(canonical, start, end),
+    selector: selectorFromOffsets(canonical, offsets.start, offsets.end),
     summary: `Text: ${truncate(exact.trim(), 96)}`,
     excerptText: exact.trim(),
   };
+}
+
+function canonicalRangeOffsets(root: HTMLElement, range: Range, canonical: string): { start: number; end: number } | null {
+  const compact = (text: string) => text.replace(/\s/gu, "");
+  const rendered = compact(reviewText(root));
+  const normalized = compact(canonical);
+  if (!rendered) return null;
+  const base = normalized.indexOf(rendered);
+  if (base < 0 || normalized.indexOf(rendered, base + 1) >= 0) return null;
+
+  const prefix = range.cloneRange();
+  prefix.selectNodeContents(root);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const start = base + compact(reviewText(prefix.cloneContents())).length;
+  const length = compact(reviewText(range.cloneContents())).length;
+  if (!length) return null;
+
+  // Preserve the server's exact UTF-16 coordinates, including internal
+  // whitespace, without confusing astral characters with single code units.
+  let unit = 0;
+  let first = -1;
+  for (let index = 0; index < canonical.length; index += 1) {
+    if (/\s/u.test(canonical.charAt(index))) continue;
+    if (unit === start) first = index;
+    unit += 1;
+    if (unit === start + length && first >= 0) return { start: first, end: index + 1 };
+  }
+  return null;
+}
+
+function reviewText(root: Node): string {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const parts: string[] = [];
+  while (walker.nextNode()) {
+    const text = walker.currentNode;
+    if (!text.parentElement?.closest("style, script")) parts.push(text.textContent ?? "");
+  }
+  return parts.join("");
 }
 
 export function captureElement(documentRoot: HTMLElement, rawTarget: Element): CapturedTarget | null {
@@ -182,6 +220,7 @@ export function captureDocument(documentRoot: HTMLElement): CapturedTarget | nul
       capture_height_px: Math.round(rect.height),
     },
     summary: "Whole document",
+    excerptText: intersectingVisibleText(documentRoot, rect),
   };
 }
 

@@ -77,6 +77,7 @@
     ],
     "rejected": [
       { "yaml": "id: invalid", "error": "invalid" },
+      { "yaml": "id: CAP-001-002", "error": "invalid" },
       { "yaml": "id: TSK-101\ndepends_on: [TSK-100, 7]", "error": "relationship" },
       { "yaml": "id: TSK-101\nrelated: not-an-id", "error": "relationship" },
       { "yaml": "id: TSK-101\nid: TSK-102", "error": "duplicate_key" }

@@ -290,6 +290,13 @@ async function assertDisplaySettings(page, engine) {
   };
   const accentOf = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--cf-accent").trim());
   const fontOf = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--cf-font-sans").trim());
+  for (const family of ["Archivo", "Inter", "IBM Plex Sans"]) {
+    const loaded = await page.evaluate(async (name) => {
+      const faces = await document.fonts.load(`400 16px "${name}"`);
+      return faces.length > 0 && faces.every((face) => face.status === "loaded");
+    }, family);
+    if (!loaded) throw new Error(`${engine}: bundled font ${family} was not available`);
+  }
   const before = { accent: await accentOf(), font: await fontOf() };
   await open();
   await page.locator('[data-testid="skin-editorial"]').first().click();

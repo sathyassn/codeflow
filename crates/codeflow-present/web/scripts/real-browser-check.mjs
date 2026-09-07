@@ -157,6 +157,18 @@ try {
   if (!initialText.includes("First revision")) {
     throw new Error(`Authenticated application omitted its document text at ${page.url()}: ${initialText.slice(0, 2_000)}`);
   }
+  await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+  const isolated = await page.evaluate(() => {
+    const chrome = document.querySelector("#cf-present-chrome");
+    const control = document.querySelector("#cf-comment-toggle");
+    const box = control.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    const authored = document.querySelector(".isolation-label");
+    return getComputedStyle(chrome).display !== "none"
+      && control.contains(hit)
+      && getComputedStyle(authored).fontWeight === "700";
+  });
+  if (!isolated) throw new Error("Authored CSS hid or overlaid review chrome, or valid scoped styling failed");
   await page.locator("[data-cf-diagram]").scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") === "ready");
   await page.locator("code[data-cf-language='rust']").scrollIntoViewIfNeeded();
@@ -242,6 +254,17 @@ try {
   if (delivered.notes[2].region_selector.scope !== "document") {
     throw new Error("Whole-document feedback did not retain document scope");
   }
+  for (const context of ["First revision", "Real service", "qualified", "Approve or request"]) {
+    if (!delivered.notes[2].excerpt?.text?.includes(context)) {
+      throw new Error(`Whole-document feedback lost ${context} context`);
+    }
+  }
+  if (!delivered.notes[0].excerpt?.text?.includes("qualified")) {
+    throw new Error("Element feedback lost visible code context needed by the consuming harness");
+  }
+  // Retain this synthetic fixture's actual CLI envelope so a reviewing native
+  // harness can inspect the same feedback, not merely a test's pass summary.
+  await writeFile(join(output, "feedback-envelope.json"), `${JSON.stringify(delivered, null, 2)}\n`, { mode: 0o600 });
   run(codeflow, [
     "present", "resolve", sessionId, delivered.event_id,
     "--event-version", "2", "--status", "addressed",
@@ -504,6 +527,7 @@ function documentFixture(revisionText) {
       { type: "code", id: "code", language: "rust", code: "fn qualified() -> bool { true }", caption: "Qualification example" },
       { type: "diagram", id: "flow", kind: "flowchart", source: "flowchart LR\nInput-->Review-->Evidence", acc_title: "Qualification flow", acc_description: "Input moves through review to evidence." },
       { type: "feedback_prompt", id: "decision", prompt: "Approve or request a concrete change." },
+      { type: "html", id: "css-isolation", title: "CSS isolation", html: "<style>body, #cf-present-chrome { display:none } .isolation-label { font-weight:700 } .isolation-overlay { position:fixed; inset:0; z-index:2147483647 }</style><p class='isolation-label'>Valid authored styling stays local.</p><div class='isolation-overlay' aria-hidden='true'></div>" },
     ],
   };
 }

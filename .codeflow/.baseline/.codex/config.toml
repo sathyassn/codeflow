@@ -6,11 +6,13 @@
 # while sensitive files, private-network destinations, privileged operations,
 # and destructive escalations remain guarded. Ordinary eligible escalation
 # prompts would go to Codex's reviewer subagent if approval_policy were
-# on-request. Production is `never` (always-approve) plus CLI
+# on-request. Production is `never` (never request approval) plus CLI
 # `--sandbox danger-full-access` (ADR-0055), so no approval prompts fire and
 # the OS sandbox is off for that process; git-guard/exec-guard/git hooks/CI
 # remain. Keep `approvals_reviewer` so flipping back to on-request restores
 # auto-review. Select `user` before any catastrophic/high-blast-radius action.
+# `never` alone grants no permissions: blocked operations fail rather than
+# asking. Filesystem/network authority comes from the effective sandbox profile.
 
 approval_policy = "never"
 approvals_reviewer = "auto_review"

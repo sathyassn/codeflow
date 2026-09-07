@@ -3,6 +3,9 @@ dist/
 .astro/
 .portal/generated/
 .portal/browser-evidence/
+.portal/publish.lock
+.portal/workflow.lock
+.portal/workflow.lock-*
 src/content/docs/
 public/llms.txt
 public/markdown/
@@ -10,3 +13,4 @@ public/media/
 public/.codeflow-generated.json
 playwright-report/
 test-results/
+.portal-test-runtime-*/

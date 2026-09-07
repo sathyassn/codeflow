@@ -84,7 +84,7 @@ Then verify and **offer** remediation — never install silently.
       hooks), then prove the composed boundary with a live canary.
     - `.codex/config.toml`: `default_permissions` selects the guarded workspace
       profile, no legacy `sandbox_mode` shadows it, public network and live web
-      search are enabled, `approval_policy = "never"` (always-approve), and
+      search are enabled, `approval_policy = "never"` (no approval prompts), and
       production launch adds `--sandbox danger-full-access` (OS sandbox off;
       git-guard, exec-guard, git hooks, and CI remain the floor). Confirm the
       consult/`workspace-write` profile still denies workspace key/certificate

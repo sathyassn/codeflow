@@ -40,8 +40,9 @@ new tab; a finished session's tab is closed.
    is the recorded fallback if Astra cannot run. Grok primary is `grok-4.6`;
    internals stay on `grok-4.6` at medium/high.
 3. **Permissions (production host).** Claude `bypassPermissions` or `auto`;
-   Codex `--sandbox danger-full-access --ask-for-approval never` (or always-approve
-   equivalent); Grok `--always-approve`. Consults and no-edit review stay
+   Codex `--sandbox danger-full-access --ask-for-approval never`;
+   Grok `--always-approve`. Codex's approval policy alone does not grant access;
+   the separate sandbox flag supplies production access. Consults and no-edit review stay
    non-bypass. Git-guard, exec-guard, git hooks, and CI remain the floor.
 4. **Codex transport.** Prefer official app-server. From a Grok host, or when
    Codex itself is the host CLI, if the daemon is missing and `codex` CLI is

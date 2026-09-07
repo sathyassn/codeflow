@@ -1056,9 +1056,7 @@ fn setup_portal_locked(
                 ScaffoldError::ManifestMissing(format!("{ASSET_PREFIX}{}", file.path))
             })?;
         charge_bundle_asset(&mut bundle_budget, &file.path, &asset)?;
-        let mut pristine = String::from_utf8(asset).map_err(|e| {
-            ScaffoldError::ManifestInvalid(format!("{} is not UTF-8: {e}", file.path))
-        })?;
+        let mut pristine = asset;
         let dest_rel = relative_root.join(&file.path);
         let dest_text = path_text(&dest_rel);
         let dest = guard_beneath_root(repo_root, &dest_rel)?;
@@ -1071,7 +1069,7 @@ fn setup_portal_locked(
             }
         }
         if file.path == "portal.config.json" && !dest.exists() {
-            let mut config: serde_json::Value = serde_json::from_str(&pristine)?;
+            let mut config: serde_json::Value = serde_json::from_slice(&pristine)?;
             let depth = relative_root
                 .components()
                 .filter(|component| matches!(component, Component::Normal(_)))
@@ -1081,9 +1079,9 @@ fn setup_portal_locked(
                     .collect::<Vec<_>>()
                     .join("/"),
             );
-            pristine = format!("{}\n", serde_json::to_string_pretty(&config)?);
+            pristine = format!("{}\n", serde_json::to_string_pretty(&config)?).into_bytes();
         }
-        let pristine_hash = sha256_hex(pristine.as_bytes());
+        let pristine_hash = sha256_hex(&pristine);
         let old_file = previous
             .as_ref()
             .and_then(|state| state.files.get(&file.path));
@@ -1097,7 +1095,7 @@ fn setup_portal_locked(
                 mutations.write(
                     repo_root,
                     &dest_text,
-                    pristine.as_bytes().to_vec(),
+                    pristine.clone(),
                     MAX_MANAGED_FILE_BYTES,
                     "user-owned portal destination",
                 )?;
@@ -1119,7 +1117,7 @@ fn setup_portal_locked(
             mutations.write(
                 repo_root,
                 &baseline_rel,
-                pristine.as_bytes().to_vec(),
+                pristine.clone(),
                 MAX_MANAGED_FILE_BYTES,
                 "portal baseline destination",
             )?;
@@ -1211,7 +1209,7 @@ fn reconcile_managed(
     context: &mut PortalReconciliation<'_>,
     dest_text: &str,
     baseline_rel: Option<&str>,
-    pristine: &str,
+    pristine: &[u8],
     old: Option<&PortalFileState>,
 ) -> Result<(), ScaffoldError> {
     let Some(current_bytes) = read_project_file(
@@ -1224,69 +1222,61 @@ fn reconcile_managed(
         context.mutations.write(
             context.root,
             dest_text,
-            pristine.as_bytes().to_vec(),
+            pristine.to_vec(),
             MAX_MANAGED_FILE_BYTES,
             "managed portal destination",
         )?;
         context.report.file(dest_text, Action::Added);
         return Ok(());
     };
-    let current =
-        String::from_utf8(current_bytes).map_err(|error| ScaffoldError::InvalidState {
-            what: dest_text.into(),
-            detail: format!("managed portal file is not UTF-8: {error}"),
-        })?;
-    if current == pristine {
+    if current_bytes == pristine {
         context.report.file(dest_text, Action::Unchanged);
         return Ok(());
     }
-    if old.is_some_and(|state| sha256_hex(current.as_bytes()) == state.pristine_sha256) {
+    if old.is_some_and(|state| sha256_hex(&current_bytes) == state.pristine_sha256) {
         context.mutations.write(
             context.root,
             dest_text,
-            pristine.as_bytes().to_vec(),
+            pristine.to_vec(),
             MAX_MANAGED_FILE_BYTES,
             "managed portal destination",
         )?;
         context.report.file(dest_text, Action::Changed);
         return Ok(());
     }
-    if old.is_some_and(|state| state.pristine_sha256 == sha256_hex(pristine.as_bytes())) {
+    if old.is_some_and(|state| state.pristine_sha256 == sha256_hex(pristine)) {
         context.report.file(dest_text, Action::KeptUserModified);
         return Ok(());
     }
     let base = match baseline_rel {
         Some(path) => {
             read_project_file(context.root, path, "portal baseline", context.read_budget)?
-                .map(String::from_utf8)
-                .transpose()
-                .map_err(|error| ScaffoldError::InvalidState {
-                    what: path.into(),
-                    detail: format!("portal baseline is not UTF-8: {error}"),
-                })?
                 .unwrap_or_default()
         }
-        None => String::new(),
+        None => Vec::new(),
     };
-    let baseline_is_authentic =
-        old.is_some_and(|state| sha256_hex(base.as_bytes()) == state.pristine_sha256);
+    let baseline_is_authentic = old.is_some_and(|state| sha256_hex(&base) == state.pristine_sha256);
     if !base.is_empty() && baseline_is_authentic {
-        if let Ok(merged) = diffy::merge(&base, &current, pristine) {
-            context.mutations.write(
-                context.root,
-                dest_text,
-                merged.into_bytes(),
-                MAX_MANAGED_FILE_BYTES,
-                "managed portal destination",
-            )?;
-            context.report.file(dest_text, Action::Merged);
-            return Ok(());
+        // Opaque assets reconcile by bytes; only genuine text gets a line merge.
+        if let (Some(base), Some(current), Some(pristine)) = (
+            mergeable_text(&base),
+            mergeable_text(&current_bytes),
+            mergeable_text(pristine),
+        ) {
+            if let Ok(merged) = diffy::merge(base, current, pristine) {
+                context.mutations.write(
+                    context.root,
+                    dest_text,
+                    merged.into_bytes(),
+                    MAX_MANAGED_FILE_BYTES,
+                    "managed portal destination",
+                )?;
+                context.report.file(dest_text, Action::Merged);
+                return Ok(());
+            }
         }
     }
-    let conflict = format!(
-        "{dest_text}.codeflow-{}.new",
-        &sha256_hex(pristine.as_bytes())[..12]
-    );
+    let conflict = format!("{dest_text}.codeflow-{}.new", &sha256_hex(pristine)[..12]);
     let conflict_path = guard_beneath_root(context.root, Path::new(&conflict))?;
     if std::fs::symlink_metadata(&conflict_path).is_ok() {
         return Err(ScaffoldError::InvalidState {
@@ -1297,7 +1287,7 @@ fn reconcile_managed(
     context.mutations.write(
         context.root,
         &conflict,
-        pristine.as_bytes().to_vec(),
+        pristine.to_vec(),
         MAX_MANAGED_FILE_BYTES,
         "portal conflict sidecar",
     )?;
@@ -1307,6 +1297,13 @@ fn reconcile_managed(
         vec![format!("new starter written to {conflict}")],
     );
     Ok(())
+}
+
+fn mergeable_text(bytes: &[u8]) -> Option<&str> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()
 }
 
 fn read_project_file(
@@ -1792,6 +1789,102 @@ mod tests {
         )
         .unwrap();
         temp
+    }
+
+    fn byte_source(version: &str, content: &[u8]) -> MapSource {
+        let mut bundle = source(version, "");
+        bundle
+            .0
+            .insert(format!("{ASSET_PREFIX}managed.txt"), content.to_vec());
+        bundle
+    }
+
+    #[test]
+    fn binary_setup_and_pristine_update_preserve_exact_bytes() {
+        let temp = initialized_root();
+        let first = b"\0\xff\x80original";
+        let next = b"\0\xfe\x81updated";
+        setup_portal(&byte_source("1", first), temp.path(), Path::new("guide")).unwrap();
+        let destination = temp.path().join("guide/managed.txt");
+        assert_eq!(std::fs::read(&destination).unwrap(), first);
+        assert_eq!(
+            std::fs::read(temp.path().join(baseline_path(&sha256_hex(first)))).unwrap(),
+            first
+        );
+        let report = update_adopted_portal(&byte_source("2", next), temp.path())
+            .unwrap()
+            .unwrap();
+        assert!(!report.has_conflicts());
+        assert_eq!(std::fs::read(&destination).unwrap(), next);
+        let repeated = update_adopted_portal(&byte_source("2", next), temp.path())
+            .unwrap()
+            .unwrap();
+        assert!(repeated.files.iter().any(|file| {
+            file.dest == "guide/managed.txt" && matches!(file.action, Action::Unchanged)
+        }));
+    }
+
+    #[test]
+    fn binary_user_edits_conflict_without_clobber_and_repeat_idempotently() {
+        for (first, custom, next) in [
+            (&b"\xfforiginal"[..], &b"\xfecustom"[..], &b"\xfdnext"[..]),
+            (
+                &b"a\0\nb\nc\n"[..],
+                &b"custom\0\nb\nc\n"[..],
+                &b"a\0\nb\nnext\n"[..],
+            ),
+            (&b"plain\n"[..], &b"\xffcustom"[..], &b"updated\n"[..]),
+        ] {
+            let temp = initialized_root();
+            setup_portal(&byte_source("1", first), temp.path(), Path::new("guide")).unwrap();
+            let destination = temp.path().join("guide/managed.txt");
+            std::fs::write(&destination, custom).unwrap();
+            let report = update_adopted_portal(&byte_source("2", next), temp.path())
+                .unwrap()
+                .unwrap();
+            assert!(report.has_conflicts());
+            let sidecar = temp.path().join(format!(
+                "guide/managed.txt.codeflow-{}.new",
+                &sha256_hex(next)[..12]
+            ));
+            assert_eq!(std::fs::read(&destination).unwrap(), custom);
+            assert_eq!(std::fs::read(&sidecar).unwrap(), next);
+            let state = std::fs::read(temp.path().join(STATE_PATH)).unwrap();
+            // A user's annotation to the sidecar must survive a repeated update too.
+            std::fs::write(&sidecar, b"user retained conflict notes").unwrap();
+            update_adopted_portal(&byte_source("2", next), temp.path()).unwrap();
+            assert_eq!(std::fs::read(&destination).unwrap(), custom);
+            assert_eq!(
+                std::fs::read(&sidecar).unwrap(),
+                b"user retained conflict notes"
+            );
+            assert_eq!(std::fs::read(temp.path().join(STATE_PATH)).unwrap(), state);
+        }
+    }
+
+    #[test]
+    fn text_updates_still_three_way_merge_independent_changes() {
+        let temp = initialized_root();
+        setup_portal(
+            &source("1", "first\nmiddle\nlast\n"),
+            temp.path(),
+            Path::new("guide"),
+        )
+        .unwrap();
+        let destination = temp.path().join("guide/managed.txt");
+        std::fs::write(&destination, "custom\nmiddle\nlast\n").unwrap();
+        let report = update_adopted_portal(&source("2", "first\nmiddle\nnext\n"), temp.path())
+            .unwrap()
+            .unwrap();
+        assert!(!report.has_conflicts());
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"custom\nmiddle\nnext\n"
+        );
+        assert!(report
+            .files
+            .iter()
+            .any(|file| matches!(file.action, Action::Merged)));
     }
 
     #[test]

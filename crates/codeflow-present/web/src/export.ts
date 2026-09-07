@@ -1,6 +1,9 @@
 import { DOCUMENT_ROOT_ID } from "./contracts";
 import { enhanceDocument } from "./enhance";
 import styles from "./styles.css";
+import { installFonts } from "./fonts";
+
+installFonts();
 
 const documentRoot = document.getElementById(DOCUMENT_ROOT_ID);
 if (!(documentRoot instanceof HTMLElement)) {

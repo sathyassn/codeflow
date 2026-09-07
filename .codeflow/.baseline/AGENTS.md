@@ -46,8 +46,8 @@ it as non-trivial.
 | Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex pair: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI; Grok Build hosts via Herdr. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
 | Clarify and materialize an agreed plan | `/cf-plan` — gathers project evidence, asks only consequential operator-owned questions, and creates the warranted epic/spec/task/ADR records inside the duo or after a recorded solo degradation |
 | Settle product/UX/UI/visual direction | `/cf-design` inside the orchestrated flow — establish proportionate, evidence-grounded `DESIGN_INTENT`; bounded conformance and unchanged-direction work use its compact collapse paths |
-| Present a complex result for interactive review | `/cf-present` — when one coherent visual surface and anchored feedback materially improve a substantial explanation, comparison, plan, decision, evidence set, diff, or review; keep simple answers in chat and never treat the utility as product UI or durable documentation |
-| Build or maintain a repository guide portal | `/cf-docs-portal` inside the orchestrated flow — explicitly adopt the optional source-linked utility, preserve Markdown authority, and verify generated evidence plus the rendered experience |
+| Present a complex result for interactive review | `/cf-present` — when one coherent visual surface and anchored feedback materially improve a substantial explanation, comparison, plan, decision, evidence set, diff, or review; author **this session's** subject in the catalog (runtime owns chrome and Comment); keep simple answers in chat; never treat the utility as product UI or durable documentation; never clone the design-exploration board |
+| Build or maintain a repository guide portal | `/cf-docs-portal` inside the orchestrated flow — same utility craft on durable source-linked docs for any consuming repo; no Comment lifecycle; adopt explicitly, preserve Markdown authority, verify generated evidence and rendered experience |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
@@ -130,7 +130,7 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   one gate never relaxed — not even during bootstrap grace.
 - **Protected branches** (`main`/`master` + policy globs): never commit, merge,
   push, force-push, delete, or hard-reset on them. Work lands by exactly two
-  paths: PR → green CI → merged by a human, or `codeflow integrate <branch>
+  paths: PR → evidenced-green checks → merged by a human, or `codeflow integrate <branch>
   --into <target>`. Never set override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
   tokens) — that is laundering — and never `gh pr merge --delete-branch` (it
   can corrupt the root repo).
@@ -162,9 +162,8 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
 
 ## Worktree doctrine
 
-Develop in a worktree per session (native worktree support). Protected branches
-stay checked out only at the repo root, so git itself refuses a second checkout —
-structural protection for free.
+Develop in a worktree per session. Checkouts go under `.worktrees/<slug>`
+(gitignored), not sibling folders. Protected branches stay at the repo root.
 
 At orientation and after a landing, use `codeflow status` to inventory linked
 worktrees and unattached local branches. Treat its removable/dirty/unproven
@@ -259,9 +258,9 @@ to reason from, not a rote checklist.
   tactic fails, step back to the real constraint and critical path, compare
   viable routes, and take the safest evidence-backed reversible route that
   preserves accepted outcome, scope, authority, and quality. Escalate only an
-  external dependency or operator-owned choice, with verified state, attempts,
-  options and consequences, and a recommendation. A red gate is fixed or
-  honored; redness alone does not make it an operator decision.
+  external dependency or operator-owned choice, with a recommendation. Honor a
+  red check. An unfinished CI job is missing evidence, not a failed test; a
+  completed same-check counts. Job redness is not an operator decision.
 - **Find broadly; act by materiality.** Do not let easy cosmetics displace
   consequential work. Substantiate candidate issues, classify the consequence
   if unresolved, then prioritize by severity, confidence, likelihood or

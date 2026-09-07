@@ -30,6 +30,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Post-merge quality and runtime hardening.** Presentation selections retain
+  the actual repeated-text occurrence; authored styles cannot hide review
+  controls or create top-layer escapes. Utility font choices load bundled
+  licensed faces offline in presentations and portals. Explanatory motion is
+  permitted with static meaning and reduced-motion alternatives.
+
+- **Review evidence and effort decisions.** PR guidance covers the full branch,
+  revision-bound tests and independent review; executable documentation cannot
+  bypass testing requirements. Medium-default primaries delegate demanding
+  reasoning to the strongest qualified same-family high/xhigh worker, including
+  direct xhigh when justified. Adversarial evaluation scenarios distinguish
+  those decisions from routine work and from observed native routing.
+
 - **Mid-session effort and extra-family invoke.** The medium primary stays
   the orchestrator and spawns same-family high/xhigh workers when a
   complexity trigger fires. Extra catalog families are named when

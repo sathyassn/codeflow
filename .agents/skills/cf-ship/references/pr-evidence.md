@@ -1,0 +1,38 @@
+# PR narrative and verification evidence
+
+Read when preparing or updating a PR, including an integration-to-main PR.
+
+Open the PR. Commits stay conventional (`type(scope): description`,
+≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
+≤ 72 chars, optional `BREAKING CHANGE:` footer); one logical change each.
+**Title** names the whole-branch outcome, not only the last commit.
+**Body** follows the template (summary, changes, testing, linked IDs).
+Tables for tabular data, fenced blocks for pasted output, and bullets for
+enumerable points; do not split necessary explanations to meet a line count.
+Summary is plain language a zero-context reader understands.
+Write Summary and Changes from `git log --oneline <base>..<head>` and
+`git diff --stat <base>...<head>` on source-of-truth paths — every logical
+change on the branch, not the last conversation, last review, or last
+commit. Inspect the actual diff as well: filenames and commit subjects
+alone cannot establish behavior, risk, or completeness. For a code change,
+**Testing is evidence you already ran**: identify the tested revision and
+commands, paste their real summaries, and state their scope. Use
+`codeflow test --mode essential --strict` (`full` when the change touches a
+full-only target). Report measured coverage TOTALs, metric, scope, and
+governing floor from the project's coverage command, locally or from a
+completed attributable CI run; a job's `PASS` is not a coverage number.
+Do not relabel subset coverage as workspace coverage. Unsupported coverage
+is `N/A` with a technical reason; unavailable or stale evidence is a gap,
+never zero, an invented percentage, or an inferred pass. Missing required
+evidence keeps the PR draft. Name new tests and what was NOT tested.
+Whole-flow evidence includes changed operator/CLI journeys, even without
+product UI. Docs-only means no executable behavior changed: scripts, hook
+settings, generated runtime assets, and executable examples do not qualify
+merely because they live under docs. Instruction-only changes name the doc
+checks and relevant behavioral evaluations; distinguish added cases from
+live trials actually run. Remove unused template tables or replace them
+with a reasoned N/A. After a rebase or substantive update, refresh the whole
+PR narrative and affected evidence before marking ready; preserve a prior
+review only with a reasoned unchanged-scope link. Lint with
+`codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
+<file>` before `git push` and `gh pr create`. No AI attribution, no emoji.

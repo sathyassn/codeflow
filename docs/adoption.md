@@ -318,11 +318,13 @@ shell access as credential-bearing and tighten that task's tool boundary.
   default but never writes it without approval.
 - Codex's `.codex/config.toml` selects the guarded workspace permission profile
   without a legacy `sandbox_mode` override, enables live search, and sets
-  `approval_policy = "never"` (always-approve) with `model_reasoning_effort =
+  `approval_policy = "never"` (never request approval) with `model_reasoning_effort =
   "medium"`. Production launch also passes `--sandbox danger-full-access` (full
   access), so the OS sandbox is off for that process; git-guard, exec-guard,
   git hooks, and CI remain the floor. Catastrophic work still stops for the
-  operator.
+  operator. `never` alone grants no access; operations outside the effective
+  sandbox fail instead of asking. Approval policy and sandbox authority are
+  separate controls ([Codex security](https://learn.chatgpt.com/docs/security)).
 - A settings file cannot install or authenticate every task-specific tool.
   `/cf-customize` inventories and canaries authoritative-doc research, GitHub,
   the stack format/lint/test/coverage/security toolchain, browser/Playwright,

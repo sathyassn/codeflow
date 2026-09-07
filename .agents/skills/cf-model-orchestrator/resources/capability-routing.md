@@ -54,14 +54,27 @@ not silently substitute another criterion.
 
 A change to the producer or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
-work continues. A same-seat medium→high or high→xhigh escalation on a documented trigger is
-ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
+work continues. A same-seat trigger-based effort escalation, including direct
+medium→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
 medium primary stays the orchestrator and spawns same-family workers at that
 effort. Spawn through the harness's native child-effort knob or a `ROLE:
 worker` native session at that effort. Record requested versus observed
 selector/effort. If that route is unavailable, keep the medium primary,
 record the limitation, and do not infer a pass. A worker change within the approved primary
 seat remains internal routing unless it changes the named producer or reviewer.
+
+Default effort is a starting point, not a ceiling. Assess demand before the
+subtask begins and when new evidence changes its difficulty. Complex architecture,
+technical planning, and design require the strongest qualified same-family
+reasoning worker suited to that unit at high or xhigh, selected from the active
+binding's permitted routes. A cheaper tool-collection worker is not an equivalent
+substitute for that reasoning. An xhigh trigger permits direct xhigh; do not spend
+a high attempt merely to fail first. Routine, well-specified work stays at the
+default or an appropriate bounded worker route without automatic escalation.
+The primary critically integrates worker findings and retains approvals; both
+families still plan independently and cross-lineage review remains mandatory.
+If no required capable route is available, record the unresolved quality gap and
+the bounded recovery or degradation rather than claiming medium work satisfied it.
 
 ## Admissible cross-lineage evidence
 

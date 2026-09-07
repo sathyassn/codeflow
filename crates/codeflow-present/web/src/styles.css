@@ -1,3 +1,12 @@
+/* Authored descendants cannot escape into the runtime shell, even with fixed
+   positioning, high z-index, or styles addressing their own scoped host. */
+.block--html {
+  contain: layout paint !important;
+  isolation: isolate !important;
+  overflow: clip !important;
+  position: relative !important;
+}
+
 :root {
   color-scheme: light dark;
   /* Utility presentation system — Instrument default (ADR-0053 / DESIGN_INTENT 2026-08-07) */

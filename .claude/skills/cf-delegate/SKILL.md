@@ -119,6 +119,11 @@ and verdict. If `.codeflow/model-selection.json` is nonempty, first require
 `codeflow doctor --check model-bindings` to pass and use only its effective
 qualified override for the active harness.
 
+Include difficulty/triggers. The primary applies capability-routing:
+default effort is not a ceiling; demanding work gets qualified high/xhigh
+workers, direct xhigh when warranted. Preserve proportionate routine work,
+primary approval, and cross-lineage review.
+
 **Output counts as Codex only with a native Codex thread behind it.** Every
 plugin exchange must yield the native thread ID, recheckable afterward
 through the plugin or the native Codex surface. A generic Claude subagent, an

@@ -319,6 +319,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-ship/references/pr-evidence.md"
+dest = ".claude/skills/cf-ship/references/pr-evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-stack/SKILL.md"
 dest = ".claude/skills/cf-stack/SKILL.md"
 ownership = "managed"
@@ -664,6 +670,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-ship/SKILL.md"
 dest = ".agents/skills/cf-ship/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-ship/references/pr-evidence.md"
+dest = ".agents/skills/cf-ship/references/pr-evidence.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

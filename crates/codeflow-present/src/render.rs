@@ -417,8 +417,14 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             // nodes/edges like the design-reference board. Export keeps iframe
             // sandboxing for a file that may be opened outside the session CSP.
             if options.interactive {
-                output.push_str("<figure class=\"stage\"><div class=\"cf-stage-host\">");
-                output.push_str(html);
+                let host = format!("cf-html-{}", sandbox_id(options.session_id, block.id()));
+                output.push_str("<figure class=\"stage\"><div class=\"cf-stage-host\" id=\"");
+                escape_attr_to(&host, output);
+                output.push_str("\">");
+                match crate::safe_html::scoped_html(html, &host) {
+                    Ok(scoped) => output.push_str(&scoped),
+                    Err(_) => output.push_str("<p>HTML content failed isolation validation.</p>"),
+                }
                 output.push_str("</div></figure>");
             } else {
                 output.push_str("<figure class=\"stage\"><iframe sandbox title=\"");
