@@ -123,6 +123,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "never a silent third vote",
         "Name extra families on trigger if available",
         "Spawn same-family high/xhigh workers",
+        "Consult canaries in grok-host.md",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -165,6 +166,28 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
+    let grok_host = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/grok-host.md",
+    ));
+    assert!(
+        grok_host.contains("not a qualified `grok-engineering-primary` binding"),
+        "grok-host.md must keep the unqualified-binding limit"
+    );
+    assert!(
+        grok_host.contains("Consuming scaffolds do not ship that file"),
+        "grok-host.md must not require a CodeFlow-only verification path"
+    );
+    let canary = repo_root().join("docs/verification/grok-host-duo-canary-2026-09-07.md");
+    assert!(
+        canary.is_file(),
+        "dated Grok-hosted duo canary record must exist"
+    );
+    let canary_text = normalize_whitespace(&read(
+        "docs/verification/grok-host-duo-canary-2026-09-07.md",
+    ));
+    assert!(canary_text.contains("GROK_HOST_SCHEMAV2_OK"));
+    assert!(canary_text.contains("GROK_HOST_CODEX_OK"));
+    assert!(canary_text.contains("not a full native-interactive promotion suite"));
 
     for required in [
         "\"seat\": \"claude-primary\"",

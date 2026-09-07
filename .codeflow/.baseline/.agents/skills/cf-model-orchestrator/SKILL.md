@@ -182,7 +182,7 @@ lane: solo fallback. Host is not duty; Claude produces design.
      from the ensemble. `--permission-mode auto` is consult/no-edit. Never
      `grok -p` / `--single`. Claude via Herdr+schema-v2 (tmux degraded); Codex
      via official `codex` CLI and app-server daemon. No third-party Grok Codex
-     plugins. Do not claim those lanes complete without canaries.
+     plugins. Consult canaries in grok-host.md; not a qualified binding.
    - Codex-host lane: start Claude via Herdr (tmux degraded) at the worktree
      with `--model <selector> --effort <effort> --permission-mode bypassPermissions --settings
      <state-dir>/settings.json` from the ensemble, then one scoped interactive

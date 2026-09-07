@@ -121,4 +121,12 @@ not a two-model cap. When a documented trigger fires (architecture, material
 technical depth, security, unclear pair, consequential work, high/xhigh
 complexity) and the catalog family is available, the host names it on Plan
 vN. Output remains evidence; it still never silently settles Plan vN.
+
+## Note (2026-09-07)
+
+Decision 9 canaries exist:
+`docs/verification/grok-host-duo-canary-2026-09-07.md`. Grok-started Claude
+schema-v2 (Opus medium after Fable 429; Fable was not the answering seat)
+and Grok-started Codex Herdr (`gpt-6-astra` medium). Catalog Grok is still
+not a promoted qualified binding.
 ---

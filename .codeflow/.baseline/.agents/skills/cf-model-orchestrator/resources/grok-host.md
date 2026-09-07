@@ -40,7 +40,12 @@ then Herdr `codex` (tmux degraded). If the daemon cannot start, keep the
 interactive CLI in Herdr. Do not install third-party Grok Codex plugins. The
 Claude-Code `codex-plugin-cc` is not a Grok-host lane.
 
-Do not claim the Grok-hosted duo complete until both canaries exist.
+Grok-started Claude schema-v2 (Herdr `send-text` of the armed file) and
+Codex Herdr consult canaries are recorded in the CodeFlow repository under
+`docs/verification/`. Consuming scaffolds do not ship that file. Those
+records are consult-posture, host-specific, and not a qualified
+`grok-engineering-primary` binding or a full promotion suite. Doctor does
+not claim the lanes.
 
 ## Duties
 

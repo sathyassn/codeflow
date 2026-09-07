@@ -278,7 +278,7 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002]
-adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036]
+adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
@@ -290,9 +290,9 @@ the interactive `claude` CLI through the schema-v2 lifecycle. When
 `HERDR_ENV=1`, `cf-herdr` hosts that TTY in a named tab (cwd-matched resume,
 no hijack of other panes); tmux is the degraded host. Herdr `idle`/`done` is
 not turn completion — Stop and StopFailure hook completion and schema-v2
-waits remain the signal rather than pane stability. The 2026-08-30 canary
-exercised named-tab consult hosting; schema-v2 armed `send-text` on Herdr
-remains pending. The
+waits remain the signal rather than pane stability. The 2026-08-30 canary exercised named-tab consult hosting. The 2026-09-07
+canary exercised Grok-started schema-v2 armed `send-text` on Herdr (consult
+posture, macOS arm64) and a Grok-started Codex Herdr consult thread. The
 `codeflow hook delegate-turn` adapter validates a unique run and private path,
 writes immutable `0600` terminal evidence, and signals only its scoped waiter;
 exact retries recover signalling without rewriting. The transport-neutral
@@ -316,7 +316,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md"]
 epics: [EPC-002, EPC-003, EPC-004, EPC-005]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055]
 ```
@@ -363,8 +363,9 @@ appearance-mode behavior, accessibility, and rendered fidelity
 Claude Code reaches Codex through the official plugin/app-server. Codex
 App/interactive CLI reaches Claude through Herdr (tmux degraded). Grok Build
 reaches Codex through the official `codex` CLI and local app-server daemon,
-and Claude through Herdr plus schema-v2. Those Grok-hosted lanes stay unclaimed
-until canaries exist. The standing pair remains the quality floor. Extra
+and Claude through Herdr plus schema-v2. Grok-hosted lane canaries are in
+`docs/verification/grok-host-duo-canary-2026-09-07.md`; they are not a
+qualified binding. The standing pair remains the quality floor. Extra
 catalog families (today Grok) are named when a routing-policy trigger fires
 and the family is available; unavailable is an evidenced limitation, never a
 silent third vote (ADR-0054). Primaries default to medium and spawn
