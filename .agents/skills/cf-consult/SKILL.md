@@ -23,8 +23,8 @@ independent.
    to the host lineage.
 2. Pick the TTY host, then the lane. When `HERDR_ENV=1`, load `cf-herdr` and
    host the other seat in a new or resumed named tab; do not hijack the caller
-   pane. Default launch is Auto / on-request; use the unattended overlay only
-   when the operator asked not to babysit. Do not require tmux. Herdr
+   pane. Consult launch is read-only (Claude auto; never bypass). Production
+   host flags live in `cf-herdr`. Do not require tmux. Herdr
    `idle`/`done` is not consult completion. Outside Herdr,
    use the lanes below (tmux for Claude is the degraded TTY).
    Pick the lane by your seat:
@@ -46,8 +46,8 @@ independent.
      pane read` of the owned pane only) for bounded diagnosis or an explicit
      dialog—never as a stability heuristic and never against unrelated
      sessions. Launch the
-     consult with the Claude primary selector and default or escalation effort
-     from `../cf-model-orchestrator/resources/current-ensemble.json`. On the
+     consult with the Claude primary selector and default effort from
+     `../cf-model-orchestrator/resources/current-ensemble.json`. On the
      degraded tmux path, use
      `claude --model <selector> --effort <effort> --permission-mode auto
      --settings <state-dir>/settings.json`. On the Herdr path, native flags

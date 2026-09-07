@@ -281,8 +281,10 @@ Build in this order, and stop where the evidence stops:
    size and input mode in scope; compressing a large layout is not a small
    layout.
 8. **Internationalization and localization.** Text expansion, writing
-   direction, formatting, sorting, and locale-correct content, verified in a
-   real variant when the product ships more than one.
+   direction (LTR and RTL), formatting, sorting, and locale-correct content,
+   considered in intent even when the first ship is one locale (collapse with
+   an evidenced `N/A` when the product has no localization path), and verified
+   in a real variant when it ships more than one.
 9. **Implementation fidelity.** The shipped surfaces use the designed
    components; one-off styling does not accumulate beside the system.
 

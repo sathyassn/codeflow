@@ -269,7 +269,12 @@ fn no_headless_peer_execution_anywhere_in_doctrine() {
     );
     assert_contains(
         ORCHESTRATOR,
-        &["Never use `codex exec`, `claude -p` / `--print`, or another headless peer invocation."],
+        &[
+            "Never use `codex exec`",
+            "`claude -p` / `--print`",
+            "`grok -p` / `--single`",
+            "or another headless peer invocation.",
+        ],
     );
     assert_contains(CONSULT, &["never headless (`codex exec`, `claude -p`)"]);
     assert_contains(CUSTOMIZE, &["Never use `claude -p`"]);

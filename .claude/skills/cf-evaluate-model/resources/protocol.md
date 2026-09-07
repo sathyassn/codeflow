@@ -30,7 +30,7 @@ trials and recomputes each status and the summary from observations.
   "suite_digest": "sha256:...",
   "system": {
     "model": "actual model version",
-    "effort": "high",
+    "effort": "medium",
     "harness": "qualified id from harnesses.json",
     "harness_version": "actual version",
     "codeflow_revision": "commit",
@@ -98,8 +98,10 @@ registry or launch configuration. Every listed harness must satisfy all
 contract capabilities: a native interactive session, native runtime
 provenance, configured tool access, a scoped workspace, bounded failure,
 recheckable results, an effective permission boundary, and the git backstop.
-Adding a harness requires evidence for every capability plus the full model
-suite; a name in a vendor catalog or protocol handshake is insufficient.
+Adding a harness requires evidence for every capability. Catalog status is
+not binding qualification: promoting a concrete binding still requires the
+full model suite; a name in a vendor catalog or protocol handshake is
+insufficient.
 The catalog maps each capability to retained repository evidence, and suite
 validation fails when a capability is unmapped or its reference is missing.
 The scaffolded `harness-evidence.md` is the portable index of CodeFlow's dated

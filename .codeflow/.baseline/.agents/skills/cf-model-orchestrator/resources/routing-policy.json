@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "policy_id": "claude-codex-duo",
+  "default_review": "standing-pair",
+  "design_production": "claude-native-session",
+  "host_does_not_own_duty": true,
+  "extra_family_review": {
+    "never_silent_vote": true,
+    "requires_named_assignment": true,
+    "invoke_when_available": true,
+    "triggers": [
+      "operator instruction",
+      "complex architecture",
+      "material technical depth",
+      "security-sensitive change",
+      "capability-sensitive or long-horizon work",
+      "unresolved standing-pair disagreement or unclear settlement",
+      "consequential or irreversible work",
+      "high or xhigh complexity",
+      "standing pair cannot reach justified confidence"
+    ],
+    "rule": "When a trigger fires, the host records a disposition: named Plan vN assignment plus returned evidence if the extra catalog family is available, or an evidenced limitation if it is not. Unknown availability does not discharge the duty. Named extra-family review is an assigned duty. Its output is evidence the host records. It does not replace either standing primary, does not settle Plan vN, and is never a silent third vote."
+  }
+}

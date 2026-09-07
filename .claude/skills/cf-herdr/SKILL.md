@@ -89,8 +89,9 @@ can take the *next* prompt — it is not proof the prior turn completed. Do not
 prompt an idle `cf-…` agent in a different cwd. Do not mint `…-cl02` for a
 same-work follow-up unless the first agent is gone or poisoned.
 
-**Create** a named tab otherwise, on the **existing repo workspace** (create a
-workspace only when none exists for this cwd):
+**Create** a named tab otherwise, on the **existing workspace for this project
+folder** (the cwd being worked — never another repo's space). Create a
+workspace only when none exists for that project cwd:
 
 ```bash
 created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" \
@@ -98,35 +99,34 @@ created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" \
 pane_id=$(printf '%s' "$created" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
 herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
-  --pane "$pane_id" -- --model <selector> --effort <effort> <unattended>
+  --pane "$pane_id" -- <native-args>
 ```
 
-Default launch is ADR-conformant: Claude `--permission-mode auto`; Codex
-`--ask-for-approval on-request --sandbox workspace-write` (`--approve-for-me`
-when the operator wants unattended *and* ADR-shaped auto-review).
+Native args after `--` are kind-specific. Take selector and default effort
+from the current ensemble. Escalation effort is for same-family workers, not
+the launched primary:
 
-When the operator has asked not to babysit routine approvals, overlay only
-for that seat: Claude `--permission-mode bypassPermissions`; Codex
-`--ask-for-approval never --sandbox workspace-write`; Grok `--always-approve`.
-Herdr is not an external sandbox. Overlay is not an ADR amendment, not
-hook-trust bypass, not a write grant. Never `--dangerously-skip-permissions`
-unless the operator named it. Consults still verify an empty worktree diff.
+- Claude: `--model <selector> --effort <effort> --permission-mode bypassPermissions`
+- Codex: `--model <selector> -c model_reasoning_effort="<effort>" --ask-for-approval never --sandbox danger-full-access`
+  (`codex app-server daemon start` if the socket is missing)
+- Grok: `--model <selector> --reasoning-effort <effort> --always-approve`
 
-Put destructive-action rules in the prompt: consults edit nothing; no
-force-push or rebase of a shared branch; no merge of protected main; no
-`herdr server stop`; no keys to the caller pane; no closing tabs this run did
-not create.
+Default production launch is ADR-conformant: Claude `bypassPermissions`; Codex
+never + `danger-full-access`; Grok `--always-approve`. Consult / no-edit review:
+Claude `--permission-mode auto` (never bypass); Codex `--ask-for-approval
+on-request --sandbox workspace-write`. Never
+`--dangerously-skip-permissions` unless named. Consults still verify an empty
+worktree diff. No third-party Grok Codex plugins.
 
-Pass native args after `--`. Wait until the agent is ready for input. Split a
-pane only when the **same** tab needs a log or server sibling — not as the
-default for a second model.
+Prompt rules: consults edit nothing; no force-push or rebase of a shared
+branch; no merge of protected main; no `herdr server stop`; no keys to the
+caller pane; no closing tabs this run did not create.
 
-From a Grok or other non-Claude/non-Codex host, a visible `herdr agent start
---kind codex` (or `claude`) is the interactive seat. From Claude Code, Codex
-still uses the official plugin. From Codex, Claude still uses schema-v2
-lifecycle; when `HERDR_ENV=1`, **start that Claude process in the Herdr pane**
-instead of a detached tmux session, then deliver the armed prompt into that
-pane. Lifecycle records remain the completion signal.
+Wait until the agent is ready. Split a pane only for a same-tab log/server
+sibling. From a Grok host, `herdr agent start --kind claude|codex` is the
+interactive seat. From Claude Code, Codex still uses the official plugin. From
+Codex, Claude still uses schema-v2; when `HERDR_ENV=1`, **start that Claude
+process in the Herdr pane**. Lifecycle records remain the completion signal.
 
 ## Deliver an armed prompt
 
@@ -164,10 +164,12 @@ cache looks right.
 
 ## Cleanup
 
-After harvest, if no follow-up is planned and the operator did not ask to
-keep the tab: record any native `claude --resume` / `codex resume` id, then
-close **only** the tab this run created. Leave blocked or working agents.
-Never close the caller tab.
+same topic / same review / follow-up: **resume this tab**. Do not mint a new
+pane for another turn of the same work. A **new topic** gets a new tab.
+
+After harvest, when that work is fully done and no follow-up is planned: record
+any native resume id, then close **only** the tab this run created. Leave
+blocked or working agents. Never close the caller tab.
 
 ## Completion
 

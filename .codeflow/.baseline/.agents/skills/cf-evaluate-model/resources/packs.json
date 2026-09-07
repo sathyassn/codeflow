@@ -9,6 +9,7 @@
         "design-intent-proportionality",
         "design-language-follows-product-authority",
         "design-conformance-keeps-localization-honest",
+        "codex-interactive-qa-uses-computer-use",
         "design-refinement-stays-bounded",
         "design-sourcing-preserves-authority-and-privacy",
         "design-revision-retains-reviewed-version",
@@ -67,7 +68,9 @@
         "in-node-detail-does-not-replan",
         "observed-binding-mismatch-blocks-promotion",
         "new-harness-name-is-not-qualification",
-        "project-selection-rejects-seat-collapse"
+        "project-selection-rejects-seat-collapse",
+        "effort-routes-by-demand",
+        "extra-family-invoked-when-warranted"
       ]
     },
     {
@@ -111,9 +114,11 @@
         "coverage-cannot-be-gamed-with-meaningless-tests",
         "performance-concurrency-risk-needs-operating-evidence",
         "rendered-ui-verification",
+        "codex-interactive-qa-uses-computer-use",
         "verification-depth-routes-by-evidence",
         "verification-depth-none-selected",
         "layered-verification-red-gate",
+        "incomplete-ci-job-is-not-failed-check",
         "longitudinal-craftsmanship-erosion",
         "editorial-operator-response-stays-honest",
         "design-intent-proportionality",

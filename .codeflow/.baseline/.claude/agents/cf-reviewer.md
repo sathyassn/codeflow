@@ -56,20 +56,21 @@ itself a blocker finding — return changes_requested.
      boundary or uncontrolled external seam is disclosed, not counted as
      whole-flow proof
 5. For a user-facing change, follow the UI section of
-   `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. Use
-   Playwright for web behavior; routine deterministic runs may keep the browser
-   headless, while headed mode needs a material visual, chrome, rendering, or
-   debugging reason. Match structured behavior, visual, console/network, and
-   failure/first-retry trace evidence to the claim; screenshots alone are not
-   interaction or accessibility proof. Use Computer Use or a surface-specific
-   driver only beyond the controlled web page. For concurrent work, verify the
-   task-owned isolated profile/context, non-overlapping endpoints, namespaced
-   test data, artifact directory, and teardown evidence. Reject attachment to
-   the operator's existing browser/profile/tabs or active desktop. Check the
-   approved design, its fidelity to the settled `DESIGN_INTENT`, required
-   user-visible states, relevant sizes, and applicable accessibility behavior
-   against the named target. Record the evidence; when no user-facing surface
-   changed, record
+   `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. This
+   Claude pass **supports** the primary's implementer check; it does not
+   replace it. Use Playwright for web behavior
+   (headless is valid for deterministic E2E; headed only when visual, chrome,
+   rendering, or debugging is material), the approved design, fidelity to
+   `DESIGN_INTENT`, states,
+   relevant sizes, writing direction/localization where claimed, and
+   accessibility against the named target. Screenshots alone are not
+   interaction or accessibility proof. Independent interactive QA — Computer
+   Use through Codex app-server over every interactive control in the changed
+   journeys — belongs to the named Codex reviewer, not this seat. Computer Use
+   is not the default web driver. For concurrent work, verify isolated
+   profile/context, endpoints, namespaced data, artifacts, and teardown.
+   Reject attachment to the operator's browser/profile/tabs or desktop. Record
+   evidence; when no user-facing surface changed, record
    `UI: N/A — no user-facing surface changed`.
 6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when

@@ -207,6 +207,11 @@ fn every_authored_asset_is_in_the_manifest() {
     let mut missing = Vec::new();
     for file in walk_files(&base) {
         let r = rel(&base, &file);
+        // Finder writes .DS_Store under assets/base on macOS; it is not a
+        // scaffold artifact. Do not allowlist it — the file is absent on CI.
+        if r.rsplit('/').next() == Some(".DS_Store") {
+            continue;
+        }
         if !allowlisted(&r) && !srcs.contains(r.as_str()) {
             missing.push(r);
         }

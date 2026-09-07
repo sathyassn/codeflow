@@ -317,10 +317,12 @@ shell access as credential-bearing and tighten that task's tool boundary.
   `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user
   default but never writes it without approval.
 - Codex's `.codex/config.toml` selects the guarded workspace permission profile
-  without a legacy `sandbox_mode` override. It enables live search and broad
-  public egress, grants exact loopback for local verification, keeps private
-  destinations and arbitrary Unix sockets closed, and sends eligible
-  `on-request` escalations through reviewer-subagent safety review.
+  without a legacy `sandbox_mode` override, enables live search, and sets
+  `approval_policy = "never"` (always-approve) with `model_reasoning_effort =
+  "medium"`. Production launch also passes `--sandbox danger-full-access` (full
+  access), so the OS sandbox is off for that process; git-guard, exec-guard,
+  git hooks, and CI remain the floor. Catastrophic work still stops for the
+  operator.
 - A settings file cannot install or authenticate every task-specific tool.
   `/cf-customize` inventories and canaries authoritative-doc research, GitHub,
   the stack format/lint/test/coverage/security toolchain, browser/Playwright,
@@ -339,12 +341,11 @@ shell access as credential-bearing and tighten that task's tool boundary.
   `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` is a user/managed hardening option only
   after proving the project's hooks and stdio MCPs do not require those
   provider credentials.
-- Codex `auto_review` sends eligible escalation prompts to its reviewer
-  subagent. It preserves autonomy but does not make profile denies absolute:
-  an approved request can cross the sandbox boundary. Set
-  `approvals_reviewer = "user"` in the project or launch override when
-  organizational policy requires a human decision, and constrain allowed
-  reviewers in managed requirements where available.
+- Codex `auto_review` is configured but is not a human authorization path.
+  Production `approval_policy = "never"` plus `--sandbox danger-full-access`
+  does not pause for that subagent. Catastrophic work still stops for the
+  operator. Use `on-request` and `approvals_reviewer = "user"` only on a
+  consult/no-edit lane when policy requires a human decision.
 
 `docs/product.md` always describes the consuming project's purpose, users,
 scope, and non-goals—not the CodeFlow CLI. `docs/architecture.md` describes how
@@ -372,8 +373,9 @@ not introduce a competing `project.md` or `projects.md`.
    validate --docs` green before push.
 4. **Land by PR, merged by a human.** Push the branch, open a PR from the
    template (summary, changes, testing, linked epic/capability IDs); a
-   human merges it on green CI (an agent-performed `gh pr merge` into a
-   protected base is blocked — that is the boundary). With no remote, `codeflow
+   human merges it when required checks are evidenced green (an infra-killed
+   duplicate CI job is not a failed check; an agent-performed `gh pr merge`
+   into a protected base is blocked — that is the boundary). With no remote, `codeflow
    integrate <branch> --into <target>` is the sanctioned local path, and a human
    can override the git layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
@@ -622,7 +624,7 @@ interactive canary in each direction.
 - `/cf-consult` gets an independent, read-only second opinion from the vendor
   the session is *not* — from Claude Code through the official
   `codex-plugin-cc` plugin (`/codex:review`); from Codex by driving the
-  interactive `claude` CLI in a task-scoped tmux session with Stop/StopFailure
+  interactive `claude` CLI via Herdr (tmux degraded) with Stop/StopFailure
   hook completion—and makes you synthesize it against your
   own analysis (never paste its reply as fact). Headless `codex exec` /
   `claude -p` are not sanctioned delegation transports (ADR-0023).
@@ -648,10 +650,11 @@ comes from two layers, and it helps to be precise about which does what.
   wires `codeflow hook git-guard` and `codeflow hook exec-guard` onto Codex's
   `PreToolUse` (Bash) event, and `config.toml` enables the hooks engine with a
   guarded workspace permission profile, broad public network, live search,
-  `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"`.
-  The latter sends eligible prompts to a reviewer subagent, not a human; select
-  `user` in the project or launch override when policy requires a human approval
-  boundary, and enforce the allowed reviewer through managed requirements.
+  `approval_policy = "never"`, production `--sandbox danger-full-access`, and
+  `approvals_reviewer = "auto_review"` (vestigial under `never`: it is not a
+  human gate and does not fire on-request prompts). Catastrophic work still
+  stops for the operator. Git-guard, exec-guard, git hooks, and CI remain the
+  floor.
   The config intentionally contains no legacy `sandbox_mode`, because that
   would shadow the named profile. Codex's hook payload is byte-compatible with
   Claude's, so the same binaries run unchanged.

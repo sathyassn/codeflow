@@ -48,7 +48,7 @@
     {
       "id": "CF-DES-003",
       "level": "hard",
-      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment, Codex challenges the direction, and bounded tool or rendered-evidence collection never transfers judgment to a worker.",
+      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment; default UI assignment is Claude producer (implementer check) and Codex reviewer (independent Computer Use QA via app-server); if Codex produces the UI, Claude independently QAs via Computer Use in Claude Code; Playwright remains the deterministic web driver; bounded tool collection never transfers judgment to a worker.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -61,6 +61,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "owns intent and fidelity judgment under `cf-design`",
+            "Default UI assignment is Claude as",
             "never settles the direction or interprets it in place of the primary"
           ]
         }
@@ -69,20 +70,22 @@
     {
       "id": "CF-DES-004",
       "level": "hard",
-      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, and never treats automated accessibility evidence as complete conformance.",
+      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, never treats automated accessibility evidence as complete conformance, and on interactive changes requires the producer's implementer check plus independent other-lineage Computer Use QA of the changed journeys unless Computer Use is a declared limitation.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
           "markers": [
             "default to WCAG 2.2 AA",
             "Compare the rendered result with the settled intent",
-            "reviewer's unsupported taste does not"
+            "reviewer's unsupported taste does not",
+            "independently",
+            "QAs** the changed surface"
           ]
         },
         {
           "path": ".claude/agents/cf-reviewer.md",
           "markers": [
-            "fidelity to the settled `DESIGN_INTENT`",
+            "implementer check",
             "unanchored aesthetic preference remains non-blocking"
           ]
         }
@@ -98,6 +101,7 @@
           "markers": [
             "Language and voice",
             "Appearance modes",
+            "WRITING_DIRECTION_AND_I18N",
             "CodeFlow supplies no preset and no house style",
             "runtime choices never become a product's direction"
           ]
@@ -114,7 +118,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
           "markers": [
             "applicable appearance modes",
-            "localized variants and relevant language review",
+            "localized variants, writing direction (LTR/RTL)",
             "without an incorrect-mode flash"
           ]
         }
@@ -386,6 +390,29 @@
       ]
     },
     {
+      "id": "CF-DES-017",
+      "level": "hard",
+      "statement": "Design intent considers, proportionately to the project, adaptive/responsive composition including intermediate viewports, accessibility, i18n/l10n with writing direction (LTR/RTL), and system layers (tokens, accessible primitives, components, composites); inapplicable dimensions collapse with an evidenced N/A rather than being silently skipped or universally mandated.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+            "WRITING_DIRECTION_AND_I18N",
+            "VIEWPORTS_AND_PLATFORMS",
+            "writing direction (LTR/RTL)"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
+          "markers": [
+            "Responsive and platform behavior",
+            "writing direction (LTR and RTL)",
+            "Accessible primitives"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-EVAL-001",
       "level": "hard",
       "statement": "Token efficiency is evaluated as reliable contract adherence per loaded token and never authorizes removal or weakening of a semantic duty.",
@@ -416,7 +443,8 @@
         {
           "path": ".agents/skills/cf-evaluate-model/resources/protocol.md",
           "markers": [
-            "Adding a harness requires evidence for every capability plus the full model suite",
+            "Adding a harness requires evidence for every capability",
+            "promoting a concrete binding still requires the full model suite",
             "Promotion additionally requires `system.observed`",
             "requested and observed model/effort match",
             "runtime routing config, or permission to auto-promote"
@@ -560,7 +588,7 @@
     {
       "id": "CF-GOV-002",
       "level": "hard",
-      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or red gates alone do not transfer an implementation tactic to the operator.",
+      "statement": "Missing product intent, public contracts, security boundaries, authority, risk tolerance, or irreversible choices block for a well-framed operator decision; local reversible details follow repository evidence without inventing requirements. Discoverable or technical blockers are reproduced and isolated; one bounded confirmation is allowed only when current provenance or freshness materially matters, then the same failure requires a changed hypothesis or strategy. A safe accepted-outcome-preserving strategic route may proceed, while retry counts or job-name redness alone do not transfer an implementation tactic to the operator. An assertion-red check is honored; an unfinished CI job is missing evidence, not a failed test.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -570,7 +598,8 @@
             "Navigate blockers; do not orbit them",
             "One bounded confirmation of a prior failure",
             "never retry it again unchanged",
-            "redness alone does not make it an operator decision"
+            "Honor a red check",
+            "Job redness is not an operator decision"
           ]
         },
         {
@@ -683,7 +712,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "is reassignment: create Plan vN+1",
-            "same-seat high\u2192xhigh escalation"
+            "same-seat medium\u2192high or high\u2192xhigh escalation"
           ]
         }
       ]
@@ -792,7 +821,7 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort, escalate only on its defined triggers, preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort; a medium primary that hits a trigger mid-session stays the orchestrator and spawns same-family workers at the escalation effort; extra catalog families are named when routing-policy triggers fire and they are available; preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -800,17 +829,49 @@
             "Use the concrete selectors",
             "invoke each primary directly",
             "retain primary planning/approval duties",
-            "never let a worker replace a primary"
+            "never let a worker replace a primary",
+            "Spawn same-family high/xhigh workers",
+            "the medium primary stays the orchestrator"
           ]
         },
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"high\"",
+            "\"default_effort\": \"medium\"",
             "\"escalation_effort\": \"xhigh\"",
             "\"model_class\": \"qualified-terra-worker\"",
             "Claude-side internal routing belongs to the Claude primary",
+            "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-015",
+      "level": "hard",
+      "statement": "The standing pair is the default floor, not a two-model cap. When a routing-policy extra-family trigger fires and the catalog family is available, the host names it on Plan vN; its output is evidence, never a silent third vote, and never replaces either standing primary. Unavailable extra family is a recorded limitation.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "Name extra families on trigger if available",
+            "never a silent third vote"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+          "markers": [
+            "When a trigger fires, the host records a disposition",
+            "never a silent third vote",
+            "invoke_when_available"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "when a documented trigger fires and the family is available",
+            "never a silent third vote"
           ]
         }
       ]
@@ -1474,7 +1535,9 @@
             "prohibited headless peer-model transport",
             "Match evidence to the claim",
             "A screenshot alone does not prove interaction or accessibility",
-            "Tool unavailability is a blocker or declared limitation, not a pass"
+            "Tool unavailability is a blocker or declared limitation, not a pass",
+            "Playwright remains the deterministic web driver",
+            "Computer Use is the QA exploration"
           ]
         }
       ]
@@ -1733,6 +1796,36 @@
       ]
     },
     {
+      "id": "CF-QA-013",
+      "level": "hard",
+      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere remains missing and is a blocker or declared limitation, never a pass. Agents still do not merge.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "A **gate** is the verification check",
+            "missing *job* evidence, not a failed check",
+            "An infra-incomplete duplicate job does not",
+            "failing or missing gate cannot be overridden by model consensus"
+          ]
+        },
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "Honor a red check",
+            "unfinished CI job is missing evidence"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "a gate is the check, not the job name",
+            "an infra-killed job that only restacks already-green checks does not"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-REF-001",
       "level": "hard",
       "statement": "Work consults product scope and capabilities before building and uses architecture, ADRs, and recall for rationale rather than inventing it.",
@@ -1814,13 +1907,20 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches.",
+      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority.",
       "sources": [
         {
           "path": "AGENTS.md",
           "markers": [
             "Protected branches",
             "merged by a human"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "required *checks* are evidenced",
+            "An agent never merges into"
           ]
         }
       ]

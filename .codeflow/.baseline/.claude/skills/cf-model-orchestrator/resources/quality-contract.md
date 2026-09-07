@@ -186,6 +186,31 @@ present verified state, attempts, options with consequences, and a
 recommendation. Gate failure is information to fix or honor, not automatic
 evidence that the operator must decide.
 
+A **gate** is the verification check (`codeflow test` target, coverage floor,
+OSV/security scan, `validate --docs`, …), not the CI job that happens to run
+it. Classify redness before acting:
+
+1. **Assertion-red.** The check ran to completion and failed its contract.
+   Honor it: fix, or do not ship. Model consensus and a green sibling job for a
+   *different* check cannot override it.
+2. **Infra-incomplete.** The job never finished (hosted runner lost
+   communication, SIGTERM/shutdown, OOM, billing or minutes cutoff, timeout
+   with no test result). That is missing *job* evidence, not a failed check.
+   Do not treat the job name as a failed test. If the same check already
+   completed green in a sibling CI job or a local `codeflow test` /
+   `codeflow validate` run of that target, the gate is evidenced; record the
+   infra death as `track once` (runner capacity or job shape), not a product
+   defect. Retrying the same unfinished umbrella job without a new hypothesis
+   is orbiting.
+3. **Never ran.** The owed check has no completed result anywhere. That is a
+   missing gate: blocker or declared limitation, never a pass.
+
+A red job that only restacks already-green checks is (2), not (1). Asking the
+operator to pick an implementation tactic because a job name is red is the
+failure ADR-0038 forbids. Asking them to wait, rerun, or override a host
+required-status that is infra-incomplete *is* operator-owned: it is merge
+authorization on that host, not a failed test. Agents still never merge.
+
 Remediation effort is planning input only. It may change sequence or ownership;
 it never lowers severity or justifies choosing an easy cosmetic change over a
 material one. Repeated minor symptoms may be evidence of one major systemic
@@ -398,7 +423,30 @@ peer-model transport. Use headed/UI mode when live observation, browser chrome,
 interaction debugging, or environment-specific rendering is material. For
 native, mobile, desktop, browser-chrome, or other surfaces outside Playwright's
 controlled page/context, prefer a surface-specific driver and use Computer Use
-only when no narrower driver reaches the surface. Check at least:
+only when no narrower driver reaches the surface.
+
+On an interactive user-facing change, split verification by seat. Default UI
+assignment is Claude as producer and Codex as reviewer. The producer performs
+the **implementer check** against `DESIGN_INTENT` (design-system fit, states,
+Playwright or the platform driver). The named other-lineage reviewer
+independently **QAs** the changed surface and affected journeys through
+Computer Use. When that reviewer is Codex, use official app-server Computer
+Use (Claude host: plugin/app-server only; Grok or Codex host: CLI via Herdr
+if the daemon is missing). When Claude reviews a Codex-authored UI unit,
+Claude performs Computer Use QA in Claude Code; Codex does not QA its own
+unit. The sentence above about Computer Use as a *driver of last resort*
+still holds for deterministic E2E. Playwright remains the deterministic web
+driver; Computer Use is the QA exploration layer, not a default web driver.
+Scope is every interactive
+control those journeys expose — buttons, links, tabs, menus, disclosures,
+fields, drag handles, scroll containers — with pointer (click, drag, scroll),
+keyboard (tab order, activation, shortcuts), and applicable touch/gesture.
+Cover applicable viewports including sizes where composition changes, not
+only the narrowest and widest. Do not exhaust the entire product unless the
+work is a full-surface redesign. Unavailable Computer Use is a declared
+limitation, not a pass of interactive QA.
+
+Check at least:
 
 - before any concurrent browser work, allocate a task/run owner and isolate
   every mutable resource it uses: a fresh browser context/profile (prefer
@@ -439,11 +487,13 @@ only when no narrower driver reaches the surface. Check at least:
 - navigation, actions, guidance, validation, loading, empty, error, disabled,
   success, destructive, and recovery copy states where applicable;
 - visual/verbal coherence and terminology against the project voice; localized
-  variants and relevant language review before claiming localization quality;
+  variants, writing direction (LTR/RTL), and text expansion before claiming
+  localization quality;
 - applicable light, dark, high-contrast, system-following, manual-override,
   persistence, reduced-motion, imagery, and data-visualization behavior without
   an incorrect-mode flash;
-- responsive/layout behavior at relevant sizes;
+- responsive/adaptive behavior at relevant sizes, including the intermediate
+  viewports where composition actually changes;
 - keyboard navigation, focus, labels, contrast, and other applicable
   accessibility requirements against the project's target; for web surfaces,
   default to WCAG 2.2 AA unless a stronger target or a different
@@ -509,3 +559,6 @@ worktree and review of the combined diff—not a collection of green task
 branches.
 
 A failing or missing gate cannot be overridden by model consensus.
+"Failing" means an assertion-red completed check. "Missing" means the owed
+check never completed anywhere. An infra-incomplete duplicate job does not
+make a completed same-check missing.

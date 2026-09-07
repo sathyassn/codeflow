@@ -18,7 +18,7 @@ init · update      git hooks · guards     codeflow test     ledger · records
 seed the rules     · ci — one policy      · validate        · recall
                    source
 
-         the harness (Claude Code, Codex, …) does the developing
+         the harness (Claude Code, Codex, Grok Build, …) does the developing
 ```
 
 The consuming repo is its own first consumer, so `assets/` is as much the
@@ -48,7 +48,7 @@ PreToolUse guards | git-guard · exec-guard, in-session
 codeflow ci | the same git standards, server-side
 remote protection | where the host arms it
 ->
-protected branches | human-merged PRs on green CI @positive
+protected branches | human-merged PRs on evidenced-green checks @positive
 caption: local planes are fast feedback — CI and remote protection are the authoritative perimeter
 ```
 
@@ -86,7 +86,7 @@ Core modules grouped by responsibility:
   lint, including structural task dependency identity/reference/cycle checks),
   the capability registry parser, FTS5 recall, and the cross-repo registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (14 checks — hooks, claude, codex, config,
+  `error.rs`): the doctor check table (15 checks — hooks, claude, codex, grok, config,
   permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
   ci-perimeter, managed-drift,
   customization, test-config), including bidirectional delegate readiness
@@ -138,8 +138,10 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 policy) and `exec-guard` (the `security` section: destructive commands block,
 privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
 through a byte-compatible PreToolUse payload, for an interactive Codex session in
-`.codex/hooks.json` (ADR-0008; headless `codex exec` 0.142.5 does not run project
-PreToolUse hooks, so headless Codex relies on the git-hook plane). Codex credential
+`.codex/hooks.json` and for Grok Build in `.grok/hooks/codeflow.json` (ADR-0008
+analog; Grok project hooks need `/hooks-trust` or `--trust`. Headless
+`codex exec` / `grok -p` do not run project PreToolUse hooks, so those
+invocations are not work-session lanes and rely on the git-hook plane). Codex credential
 *reads* are guarded too — not only the Bash guards: a `cf-guard` permission profile
 in `.codex/config.toml` (selected via `default_permissions`, extending `:workspace`)
 denies the home-dir secret stores and high-confidence workspace key material
@@ -148,10 +150,12 @@ layer, so unlike the PreToolUse guards it holds even in headless `codex exec`
 (ADR-0014); the `gh`/`docker` tool-token stores are deliberately left readable so
 those tools can read their own tokens. The profile is the only sandbox
 configuration—legacy `sandbox_mode` would shadow it—and also enables broad
-public egress, exact loopback for local UI tests, and live search. Private
-destinations and arbitrary Unix sockets stay closed; `on-request` escalations
-route to a reviewer subagent (or a human when the project/launch setting selects
-`approvals_reviewer = "user"`), and the shell keeps Codex's default
+public egress, exact loopback for local UI tests, and live search. When a
+session is launched without `--sandbox danger-full-access`, private destinations
+and arbitrary Unix sockets stay closed. Production Codex (ADR-0055) uses
+`approval_policy = "never"` plus `--sandbox danger-full-access`, so that OS
+sandbox is off for the process; git-guard, exec-guard, git hooks, and CI remain
+the floor. The shell keeps Codex's default
 `KEY`/`SECRET`/`TOKEN` environment scrub (ADR-0025, ADR-0026). Claude's
 sandbox removes the raw Anthropic, OpenAI, and AWS credentials named in
 ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
@@ -222,10 +226,12 @@ Plan/native-harness concerns (ADR-0040, ADR-0046).
 ### scaffold — `assets/`
 
 `cf-model-orchestrator` is the stage-aware harness-neutral default for every
-non-trivial repository task in standard/full scaffolds, with two
-vendor-maintained/native adapters: Claude Code reaches Codex through the
-official plugin/app-server integration, while Codex reaches an interactive
-Claude CLI through a task-scoped tmux session. Research/analysis, plan/design,
+non-trivial repository task in standard/full scaffolds. Claude Code reaches
+Codex through the official plugin/app-server; Grok reaches Codex through the
+official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
+reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
+to medium effort and spawn same-family high/xhigh workers mid-session rather
+than restarting (ADR-0055). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
 stages the requested outcome needs. Claude-led design, capability-routed
 producer/cross-lineage-review assignments, evidence-routed effort, explicit
@@ -248,8 +254,10 @@ mirrored `cf-design` skill. It records a proportionate `DESIGN_INTENT` inside
 Plan vN: cosmetic work may be inapplicable, established-system work may conform,
 new surfaces settle one direction, and materially open novel surfaces compare
 two or three viable directions before settlement. The qualified Claude
-judgment role leads intent, Codex challenges feasibility and fidelity, and both
-approve the same plan. Language/voice and appearance modes are contextual,
+judgment role leads intent; default UI assignment is Claude implementer
+check and Codex Computer Use QA on the app-server (Playwright stays the web
+driver). If Codex produced the UI, Claude QAs independently. Both approve the
+same plan. Language/voice and appearance modes are contextual,
 collapsible intent dimensions governed by project evidence; utility defaults
 cannot become consuming-product authority. Rendered review grades
 evidence-backed drift from the brief, intent, accessibility target, or observed
@@ -288,7 +296,10 @@ changed hypothesis, while an outcome-preserving reversible strategy may change
 without operator ceremony. Escalation is reserved for a true external
 dependency or a choice that changes intent, public contract, scope/authority,
 risk tolerance, or an irreversible tradeoff; deterministic and safety gates
-are fixed or honored rather than talked around (ADR-0038).
+are fixed or honored rather than talked around (ADR-0038). A gate is the
+check, not the CI job name: an unfinished runner/memory/billing death is
+missing job evidence, and a completed same-check in a sibling job or local
+run satisfies it (ADR-0017).
 
 Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
 project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,
@@ -325,9 +336,13 @@ Codex or Claude sessions with their configured tools; no engine model router,
 headless peer runner, CI model call, or general-purpose cleanup command is added.
 
 Fast-changing binding facts are isolated from durable orchestration doctrine
-(ADR-0039, ADR-0041). Stable role duties stay in the orchestrator and quality
-resources. `current-ensemble.json` owns the managed concrete selectors, effort
-policy, permitted worker classes, and escalation triggers. A consuming project
+(ADR-0039, ADR-0041, ADR-0054). Stable role duties stay in the orchestrator and
+quality resources. `current-ensemble.json` owns the managed concrete selectors,
+effort policy, permitted worker classes, escalation triggers, and the standing
+pair versus catalog split. `routing-policy.json` names when an extra family
+must be invoked if available: never as a silent third vote. Interactive Grok Build is a first-class
+host; Claude still produces design in its native session. Hermes remains an
+outer coordinator that normally delegates the whole repository task. A consuming project
 may atomically map a stable role to an approved local binding ID in
 `.codeflow/model-selection.json`; it cannot supply selectors, commands, or
 worker routes. An absent/empty file keeps the managed ensemble. Doctor resolves

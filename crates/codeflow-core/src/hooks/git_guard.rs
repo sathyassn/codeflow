@@ -33,12 +33,15 @@ pub type PrBaseLookup<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
 /// backstop). The CLI wires a `.git/HEAD` reader; tests inject a stub.
 pub type DirBranchLookup<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
 
-/// Parsed Claude Code `PreToolUse` hook payload (the fields the guard reads).
+/// Parsed `PreToolUse` hook payload (the fields the guard reads).
+///
+/// Claude and Codex send `snake_case` (`tool_name`, `tool_input`). Grok Build
+/// sends `camelCase` (`toolName`, `toolInput`) with shell tool `run_terminal_command`.
 #[derive(Debug, Deserialize)]
 pub struct HookPayload {
-    #[serde(default)]
+    #[serde(default, alias = "toolName")]
     pub tool_name: String,
-    #[serde(default)]
+    #[serde(default, alias = "toolInput")]
     pub tool_input: ToolInput,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
@@ -61,12 +64,16 @@ impl HookPayload {
         serde_json::from_str(json).map_err(|e| e.to_string())
     }
 
-    /// The command to evaluate when this is a Bash or `PowerShell` tool call.
+    /// The command to evaluate when this is a shell tool call.
     /// Claude exposes `PowerShell` as a distinct tool on native Windows; Codex
-    /// currently sends the same command shape under its shell hook.
+    /// currently sends the same command shape under its shell hook; Grok Build
+    /// sends `run_terminal_command` (aliased from `Bash` in matchers).
     #[must_use]
     pub fn shell_command(&self) -> Option<&str> {
-        if matches!(self.tool_name.as_str(), "Bash" | "PowerShell") {
+        if matches!(
+            self.tool_name.as_str(),
+            "Bash" | "PowerShell" | "run_terminal_command"
+        ) {
             self.tool_input.command.as_deref()
         } else {
             None
@@ -828,7 +835,7 @@ fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
     (s, i)
 }
 
-const SANCTIONED: &str = "land work via PR (gh pr create → merge on green CI) or `codeflow integrate <branch> --into <target>`";
+const SANCTIONED: &str = "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
 #[allow(clippy::too_many_lines)]
 fn check_git(
@@ -1808,6 +1815,19 @@ mod tests {
         let p = HookPayload::parse(json).unwrap();
         assert_eq!(p.shell_command(), Some("git status"));
         assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new(r"C:\repo")));
+    }
+
+    #[test]
+    fn test_payload_parse_grok_camelcase_shell() {
+        let json = r#"{
+            "hookEventName": "pre_tool_use",
+            "toolName": "run_terminal_command",
+            "toolInput": {"command": "git status"},
+            "cwd": "/repo"
+        }"#;
+        let p = HookPayload::parse(json).unwrap();
+        assert_eq!(p.shell_command(), Some("git status"));
+        assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
     }
 
     #[test]

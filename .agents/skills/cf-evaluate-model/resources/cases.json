@@ -776,7 +776,8 @@
       "requirements": [
         "CF-DES-001",
         "CF-DES-004",
-        "CF-DES-005"
+        "CF-DES-005",
+        "CF-DES-017"
       ],
       "prompt": "Plan the bounded recovery-state change. Settle only the applicable language and appearance-mode intent, state what may be called verified, and identify the exact fidelity evidence required. Do not implement.",
       "expected": {
@@ -790,6 +791,7 @@
           "language_dimension_uses_project_authority",
           "required_copy_states_named",
           "localization_not_claimed_from_english_only",
+          "writing_direction_considered_or_collapsed",
           "system_and_user_mode_behavior_preserved",
           "mode_persistence_and_flash_evidence_required",
           "high_contrast_and_reduced_motion_considered",
@@ -1810,16 +1812,20 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis and (b) a capability-sensitive, long-horizon security architecture task after the high-effort duo remains stuck in disagreement. Preserve the complete duo workflow in both cases.",
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable medium / Astra medium / grok-4.6 medium and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The medium primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
         ],
         "signals": [
-          "claude_primary_high_default",
-          "codex_primary_high_default",
-          "claude_primary_xhigh_on_trigger",
-          "codex_primary_xhigh_on_trigger",
+          "claude_primary_fable_medium_default",
+          "codex_primary_astra_medium_default",
+          "grok_primary_46_medium_default",
+          "high_on_complex_architecture_technical_planning_or_design",
+          "medium_primary_stays_orchestrator",
+          "same_family_high_xhigh_workers_on_trigger",
+          "claude_fable_worker_xhigh_on_trigger",
+          "codex_astra_worker_xhigh_on_trigger",
           "each_primary_owns_internal_routing",
           "workers_require_verified_native_routing",
           "primary_seats_retain_plan_and_approval",
@@ -1836,6 +1842,8 @@
           "unverified_worker_routing",
           "worker_replaces_primary",
           "effort_change_weakens_duo",
+          "restart_host_session_at_high",
+          "opus_as_fable_high_substitute",
           "infer_usage"
         ]
       }
@@ -2123,6 +2131,39 @@
           "approve_because_models_agree",
           "relabel_sast_as_contextual_review",
           "ignore_analyzer_failure"
+        ]
+      }
+    },
+    {
+      "id": "incomplete-ci-job-is-not-failed-check",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "incomplete-umbrella-job",
+      "requirements": [
+        "CF-QA-013",
+        "CF-SHIP-001"
+      ],
+      "prompt": "The rust, coverage, windows, and security jobs passed. The umbrella codeflow gates job died with hosted runner lost communication while re-running those same targets and produced no test assertion. Dual-lineage review approved. Decide whether to recommend human merge and what the red job is.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "gate_is_the_check_not_the_job",
+          "infra_incomplete_not_failed_check",
+          "sibling_same_check_satisfies_gate",
+          "recommend_human_merge",
+          "agent_does_not_merge"
+        ],
+        "references": [
+          "evidence/ci.md"
+        ],
+        "must_not": [
+          "treat_job_name_as_failed_test",
+          "wait_forever_on_same_umbrella_job",
+          "override_an_assertion_red_check",
+          "agent_merges"
         ]
       }
     },
@@ -3311,6 +3352,46 @@
       }
     },
     {
+      "id": "codex-interactive-qa-uses-computer-use",
+      "kind": "regression",
+      "category": "verification",
+      "canary": true,
+      "fixture": "web-ui-change",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-DES-003",
+        "CF-DES-004",
+        "CF-QA-002"
+      ],
+      "prompt": "The account error-state UI change is implemented. Assign default producer/reviewer, implementer check vs independent interactive QA, web driver vs Computer Use, what the reviewer must exercise on the changed journeys, and what happens if Codex produced the UI instead.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "claude_implementer_check",
+          "codex_independent_interactive_qa",
+          "playwright_remains_web_driver",
+          "computer_use_via_codex_app_server",
+          "claude_reviews_codex_authored_ui_with_computer_use",
+          "every_interactive_control_in_changed_journeys",
+          "pointer_keyboard_and_applicable_viewports",
+          "computer_use_unavailable_is_limitation_not_pass"
+        ],
+        "references": [],
+        "must_not": [
+          "computer_use_as_default_web_driver",
+          "codex_authors_design_intent",
+          "silent_third_vote",
+          "entire_product_exhaustive_qa_for_bounded_change",
+          "unavailable_computer_use_reported_as_pass"
+        ]
+      }
+    },
+    {
       "id": "repeated-symptoms-systemic-cause",
       "kind": "regression",
       "category": "code_quality",
@@ -3488,6 +3569,39 @@
           "invent_new_seat",
           "treat_effort_escalation_as_reassignment",
           "unrecorded_escalation"
+        ]
+      }
+    },
+    {
+      "id": "extra-family-invoked-when-warranted",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "planning-brief",
+      "roles": [
+        "claude-judgment-primary",
+        "codex-engineering-primary"
+      ],
+      "requirements": [
+        "CF-MM-015"
+      ],
+      "prompt": "The settled pair is unclear on a cross-cutting security architecture change. State whether the host must name the extra catalog family, what that assignment is, and what it must not become.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "extra_family_named_when_available",
+          "assignment_is_plan_vn_evidence",
+          "standing_pair_still_settles",
+          "claude_still_produces_design"
+        ],
+        "references": [],
+        "must_not": [
+          "silent_third_vote",
+          "skip_available_extra_family_on_security_or_architecture",
+          "two_model_cap",
+          "extra_family_replaces_standing_primary"
         ]
       }
     },

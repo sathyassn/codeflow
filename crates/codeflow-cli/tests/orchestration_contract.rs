@@ -28,7 +28,7 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
         "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
     ))
     .expect("harness catalog JSON");
-    assert_eq!(ensemble["schema_version"], 2);
+    assert_eq!(ensemble["schema_version"], 3);
     let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
         .as_array()
         .expect("harnesses")
@@ -47,8 +47,21 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
             )
         })
         .collect();
+    let standing: BTreeSet<&str> = ensemble["standing_roles"]
+        .as_array()
+        .expect("standing_roles")
+        .iter()
+        .map(|role| role.as_str().expect("standing role"))
+        .collect();
+    assert_eq!(
+        standing,
+        BTreeSet::from(["claude-judgment-primary", "codex-engineering-primary"])
+    );
     let bindings = ensemble["bindings"].as_array().expect("bindings");
-    assert_eq!(bindings.len(), 2, "the current duo must have two primaries");
+    assert!(
+        bindings.len() >= 2,
+        "the current ensemble must include the standing pair"
+    );
     let mut seats = BTreeSet::new();
     let mut lineages = BTreeSet::new();
     let mut roles = BTreeSet::new();
@@ -83,11 +96,11 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
             );
         }
     }
-    assert_eq!(lineages, BTreeSet::from(["claude", "codex"]));
-    assert_eq!(
-        roles,
-        BTreeSet::from(["claude-judgment-primary", "codex-engineering-primary"])
-    );
+    assert!(lineages.contains("claude") && lineages.contains("codex"));
+    assert!(lineages.contains("grok"), "catalog family grok is missing");
+    assert!(roles.contains("claude-judgment-primary"));
+    assert!(roles.contains("codex-engineering-primary"));
+    assert!(roles.contains("grok-engineering-primary"));
     assert!(!ensemble["xhigh_triggers"]
         .as_array()
         .expect("xhigh triggers")
@@ -99,18 +112,18 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
-    let ensemble = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
-    ));
 
     for required in [
         "Detect capabilities, not model identity.",
         "Claude Code",
         "Codex App or interactive Codex CLI",
+        "Grok Build (interactive `grok` CLI)",
         "Other harness, including Hermes",
+        "Claude produces design",
+        "never a silent third vote",
+        "Name extra families on trigger if available",
+        "Spawn same-family high/xhigh workers",
+        "Consult canaries in grok-host.md",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -137,6 +150,48 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
             "orchestrator lost required behavior marker: {required}"
         );
     }
+}
+
+#[test]
+fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
+    let grok_host = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/grok-host.md",
+    ));
+    assert!(
+        grok_host.contains("not a qualified `grok-engineering-primary` binding"),
+        "grok-host.md must keep the unqualified-binding limit"
+    );
+    assert!(
+        grok_host.contains("Consuming scaffolds do not ship that file"),
+        "grok-host.md must not require a CodeFlow-only verification path"
+    );
+    let canary = repo_root().join("docs/verification/grok-host-duo-canary-2026-09-07.md");
+    assert!(
+        canary.is_file(),
+        "dated Grok-hosted duo canary record must exist"
+    );
+    let canary_text = normalize_whitespace(&read(
+        "docs/verification/grok-host-duo-canary-2026-09-07.md",
+    ));
+    assert!(canary_text.contains("GROK_HOST_SCHEMAV2_OK"));
+    assert!(canary_text.contains("GROK_HOST_CODEX_OK"));
+    assert!(canary_text.contains("not a full native-interactive promotion suite"));
+}
+
+#[test]
+fn current_ensemble_and_routing_pin_grok_catalog() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let ensemble = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ));
+    let policy = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+    ));
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
 
     for required in [
         "\"seat\": \"claude-primary\"",
@@ -145,18 +200,42 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "\"model_class\": \"latest-opus\"",
         "\"seat\": \"codex-primary\"",
         "\"role\": \"codex-engineering-primary\"",
-        "\"model_class\": \"latest-strongest-sol-coding\"",
+        "\"model_class\": \"latest-astra-coding\"",
+        "\"model_class\": \"qualified-sol-worker\"",
         "\"model_class\": \"qualified-terra-worker\"",
-        "\"default_effort\": \"high\"",
+        "\"seat\": \"grok-primary\"",
+        "\"role\": \"grok-engineering-primary\"",
+        "\"model_class\": \"latest-grok-coding\"",
+        "\"grok-cli\": \"grok-4.6\"",
+        "\"default_effort\": \"medium\"",
         "\"escalation_effort\": \"xhigh\"",
         "Primary seats retain independent planning and approval duties.",
+        "The standing pair is the usual quality floor; extra catalog families never vote silently.",
         "Internal workers never replace a primary or named cross-lineage reviewer.",
         "Claude-side internal routing belongs to the Claude primary.",
+        "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
+        "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
+        "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
+        "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(
             ensemble.contains(required),
             "current ensemble lost binding marker: {required}"
+        );
+    }
+
+    for required in [
+        "\"never_silent_vote\": true",
+        "\"requires_named_assignment\": true",
+        "\"invoke_when_available\": true",
+        "complex architecture",
+        "security-sensitive change",
+        "standing pair cannot reach justified confidence",
+    ] {
+        assert!(
+            policy.contains(required),
+            "routing policy lost extra-family marker: {required}"
         );
     }
 
@@ -166,11 +245,19 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Unknown remains unknown",
         "never infer quota, availability, or a worker route",
         "is reassignment: create Plan vN+1",
-        "same-seat high→xhigh escalation",
+        "same-seat medium→high or high→xhigh escalation",
         "A model cannot independently review its own authored unit",
         "The first line of every cross-harness task declares",
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
+        "never a silent third vote",
+        "available-and-named or unavailable-with-limitation",
+        "A Grok Build host coordinates the standing pair through Herdr",
+        "implementer check",
+        "Default UI assignment is Claude as",
+        "Playwright remains the deterministic web driver",
+        "plugin/app-server only",
+        "spawns same-family workers at that",
     ] {
         assert!(
             routing.contains(required),
@@ -230,6 +317,28 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
             "both independently research/analyze/plan; Claude leads design; the host assigns each task"
         ),
         "always-loaded AGENTS contract must expose independent planning"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains("fifteen health checks"),
+        "CAP-008 must count the grok doctor check"
+    );
+    let readme = normalize_whitespace(&read("README.md"));
+    let architecture = normalize_whitespace(&read("docs/architecture.md"));
+    assert!(
+        readme.contains("Health checks (15): hooks, claude, codex, grok, config"),
+        "README must list the grok doctor check"
+    );
+    assert!(
+        architecture.contains("15 checks — hooks, claude, codex, grok, config"),
+        "architecture must list the grok doctor check"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains("same-family high/xhigh workers mid-session"),
+        "CAP-010 must pin mid-session worker spawn"
+    );
+    assert!(
+        normalize_whitespace(&capabilities).contains("named when a routing-policy trigger fires"),
+        "CAP-010 must pin extra-family invoke-when-available"
     );
     assert!(
         normalize_whitespace(&capabilities).contains(
@@ -297,6 +406,9 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "hard floor of **80%**",
         "normal target is **90% or higher**",
         "failing or missing gate cannot be overridden by model consensus",
+        "A **gate** is the verification check",
+        "missing *job* evidence, not a failed check",
+        "An infra-incomplete duplicate job does not",
     ] {
         assert!(
             normalize_whitespace(&quality).contains(required),
@@ -316,6 +428,8 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
         "Agreement without examination is a failure mode",
         "Think in depth, not at the surface.",
         "Decide by options and horizons.",
+        "unfinished CI job is missing evidence",
+        "Honor a red check.",
         "Write only what earns its keep.",
         "every material complexity maps to a current requirement",
         "DRY with judgment",
@@ -351,13 +465,13 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "**Implementation:**",
         "**Review / verification:**",
         "**Substantive documentation:**",
-        "--model <selector> --effort <effort> --permission-mode auto",
-        "use the record's escalation effort",
+        "--model <selector> --effort <effort> --permission-mode bypassPermissions",
+        "spawn workers at escalation effort",
         "/codex:rescue --model <selector> --effort <effort>",
         "do not inherit an unobserved user default",
         "Make `autoMode.classifyAllShell` effective at user scope",
         "repeated `--settings` flags are not a supported merge contract",
-        "Never fall through to bypass mode on an ordinary host",
+        "Consult and no-edit review stay",
         "session in auto mode under the same fail-closed sandbox",
         "not plan or bypass",
         "public network and live search are enabled",
@@ -369,10 +483,11 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         );
     }
     for required in [
-        "\"default_effort\": \"high\"",
+        "\"default_effort\": \"medium\"",
         "\"escalation_effort\": \"xhigh\"",
         "\"claude-code\": \"fable\"",
-        "\"codex-cli\": \"gpt-5.6-sol\"",
+        "\"codex-cli\": \"gpt-6-astra\"",
+        "\"grok-cli\": \"grok-4.6\"",
     ] {
         assert!(
             ensemble.contains(required),
@@ -431,8 +546,13 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "race/concurrency test",
         "Playwright",
         "Computer Use",
+        "Playwright remains the deterministic web driver",
+        "implementer check",
+        "every interactive control",
         "UI: N/A",
         "failing or missing gate cannot be overridden by model consensus",
+        "A **gate** is the verification check",
+        "missing *job* evidence, not a failed check",
         "SETTLED_TASK_GRAPH:",
         "TASK_BRANCH_WORKTREE_OWNER:",
         "SHARED_FILE_OWNER:",
@@ -645,7 +765,7 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(
         delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
     );
-    assert!(delegate.contains("default or escalation effort"));
+    assert!(delegate.contains("default effort; workers take escalation"));
     assert!(delegate.contains("current-ensemble.json"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));

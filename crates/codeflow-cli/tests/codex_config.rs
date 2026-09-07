@@ -50,12 +50,12 @@ fn guarded_profile_is_the_only_sandbox_configuration() {
 #[test]
 fn autonomy_and_automatic_review_are_enabled() {
     let cfg = shipped_config();
-    assert_eq!(cfg["approval_policy"].as_str(), Some("on-request"));
+    assert_eq!(cfg["approval_policy"].as_str(), Some("never"));
     assert_eq!(cfg["approvals_reviewer"].as_str(), Some("auto_review"));
     assert_eq!(cfg["web_search"].as_str(), Some("live"));
     assert_eq!(
         cfg["model_reasoning_effort"].as_str(),
-        Some("high"),
+        Some("medium"),
         "the primary Codex seat must not inherit an unrelated user-level effort"
     );
     assert_eq!(cfg["features"]["hooks"].as_bool(), Some(true));

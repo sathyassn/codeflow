@@ -5,17 +5,20 @@
 # access, broad public-network access, and loopback access for local UI testing,
 # while sensitive files, private-network destinations, privileged operations,
 # and destructive escalations remain guarded. Ordinary eligible escalation
-# prompts go to Codex's reviewer subagent; auto-review is not human
-# authorization. Select `user` in the project or launch override before any
-# catastrophic/high-blast-radius action; managed requirements can enforce it.
+# prompts would go to Codex's reviewer subagent if approval_policy were
+# on-request. Production is `never` (always-approve) plus CLI
+# `--sandbox danger-full-access` (ADR-0055), so no approval prompts fire and
+# the OS sandbox is off for that process; git-guard/exec-guard/git hooks/CI
+# remain. Keep `approvals_reviewer` so flipping back to on-request restores
+# auto-review. Select `user` before any catastrophic/high-blast-radius action.
 
-approval_policy = "on-request"
+approval_policy = "never"
 approvals_reviewer = "auto_review"
 web_search = "live"
 default_permissions = "cf-guard"
-# Pin the primary Codex seat's ordinary starting effort. The orchestrator may
-# select xhigh for a task with a documented escalation trigger.
-model_reasoning_effort = "high"
+# Pin the primary Codex seat's ordinary starting effort. Escalate to high/xhigh
+# on a documented complexity trigger (ADR-0055).
+model_reasoning_effort = "medium"
 
 # Codex uses its Linux sandbox inside WSL2. On native Windows, prefer the
 # elevated native sandbox; this table is ignored on other platforms.

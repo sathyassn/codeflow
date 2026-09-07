@@ -8,6 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Grok Build as a first-class host and catalog family (ADR-0054).** Interactive
+  `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
+  remains `claude-judgment-primary` and `codex-engineering-primary`;
+  `grok-engineering-primary` is a catalog seat on `grok-4.6` at medium (ADR-0055). Extra-family
+  review is named when a routing-policy trigger fires and the family is
+  available; unavailable is an evidenced limitation, never a silent third vote.
+  Claude produces design in its native session regardless of host. `grok-cli`
+  is catalog-supported with a `grok-cli-version` doctor probe and a fifteenth
+  doctor check for structural `.grok/hooks` wiring. Grok-hosted
+  Claude/Codex lanes use Herdr; dated schema-v2 and Codex Herdr canaries
+  live in `docs/verification/grok-host-duo-canary-2026-09-07.md` and are
+  not a qualified binding. Headless `grok -p` is not a work-session lane.
+
 - **Herdr-primary consult and delegate TTY overlay.** Inside Herdr, dual-lineage
   seats open in named tabs (`cf/<repo>/<work>/<kind>/<nn>`) without hijacking
   the caller pane. Resume requires the agent's cwd to match the intended
@@ -16,6 +29,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and run in the test gate.
 
 ### Changed
+
+- **Mid-session effort and extra-family invoke.** The medium primary stays
+  the orchestrator and spawns same-family high/xhigh workers when a
+  complexity trigger fires. Extra catalog families are named when
+  routing-policy triggers fire and the family is available; still never a
+  silent third vote.
+
+- **Codex Computer Use QA of changed UI (ADR-0043).** Claude still produces
+  `DESIGN_INTENT` and the implementer check. Codex independently QAs the
+  changed surface through Computer Use on the app-server. If Codex produced
+  the UI, Claude QAs with Computer Use in Claude Code. Playwright stays
+  the web driver. Adaptive viewports, accessibility, i18n/LTR-RTL, and
+  system layers stay proportionate intent dimensions.
+
+- **Gate redness is classified (ADR-0017, ADR-0038).** A gate is the
+  verification check, not the CI job name. An assertion-red completed check
+  still cannot be overridden. An infra-killed job (runner, memory, billing)
+  is missing job evidence; a completed same-check in a sibling job or local
+  `codeflow test` satisfies it. Agents still never merge.
+
+- **Medium-default effort, Astra Codex primary, contained worktrees (ADR-0055).**
+  All families default to medium and escalate to high/xhigh on complexity or
+  difficulty (new or existing architecture, technical, planning, or design work
+  — novelty is not a trigger). Codex primary is `gpt-6-astra` via the official
+  app-server, with interactive CLI as the Grok-host/Codex-host fallback (the
+  Claude Code lane stays plugin-only); no third-party Grok Codex plugins.
+  Production host permissions are Claude `bypassPermissions` or
+  `auto`, Codex full-access/always-approve, Grok `--always-approve`. Consult
+  and no-edit review stay non-bypass. Linked checkouts live under
+  `.worktrees/<slug>` (gitignored). `core.hooksPath` stays project-relative.
+  Herdr/tmux cwd is the project being worked; reuse the same tab for the same
+  topic and close it when that work is done.
 
 - **Plan, develop, and consult craft.** After both seats settle Plan vN, planning
   synthesizes that ground and still asks live operator-owned questions. Develop

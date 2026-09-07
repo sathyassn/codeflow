@@ -121,7 +121,8 @@ git commit -am "chore(release): $NEXT"
 git push -u origin chore/release   # then open the PR
 ```
 
-- A **human merges** the release PR on green CI (ADR-0006/0007) — agents never
+- A **human merges** the release PR when required checks are evidenced green
+  (ADR-0006/0007; an infra-killed duplicate job is not a failed check) — agents never
   merge to `main`.
 - **Before tagging, re-verify the harness-parity claims** against the
   currently installed harness versions — these surfaces move fast, and

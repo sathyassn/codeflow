@@ -221,9 +221,8 @@ fn resolve_dir_branch(cwd: &std::path::Path, dir: &str) -> Option<String> {
 /// modules against the command per the `security` policy section (ADR-0008).
 ///
 /// Payload parsing reuses [`git_guard::HookPayload`], which is lenient by
-/// construction (serde ignores the extra `turn_id`/`model`/`permission_mode`
-/// fields and the nullable `transcript_path` a Codex payload carries), so this
-/// one handler serves both the Claude and Codex hooks engines unchanged.
+/// construction (serde ignores extra harness fields and accepts Grok camelCase
+/// aliases), so this one handler serves Claude, Codex, and Grok Build.
 fn exec_guard(stdin: &str) -> i32 {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,

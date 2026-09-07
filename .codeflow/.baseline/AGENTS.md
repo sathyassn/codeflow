@@ -43,7 +43,7 @@ it as non-trivial.
 
 | Intent | Use |
 |---|---|
-| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex default: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
+| Any non-trivial repository work | `/cf-model-orchestrator` — the host-neutral Claude+Codex pair: both independently research/analyze/plan; Claude leads design; the host assigns each task a producer and cross-lineage reviewer by verified capability; the qualified Claude judgment primary owns the integrated Claude verdict. Claude Code hosts through the official Codex plugin; Codex hosts through the durable delegate lifecycle over the interactive Claude CLI; Grok Build hosts via Herdr. Every delegated exchange meets the five-obligation evidence contract — launch, provenance, return, failure, recheck (`cf-delegate`). Missing seats degrade legibly after preflight |
 | Clarify and materialize an agreed plan | `/cf-plan` — gathers project evidence, asks only consequential operator-owned questions, and creates the warranted epic/spec/task/ADR records inside the duo or after a recorded solo degradation |
 | Settle product/UX/UI/visual direction | `/cf-design` inside the orchestrated flow — establish proportionate, evidence-grounded `DESIGN_INTENT`; bounded conformance and unchanged-direction work use its compact collapse paths |
 | Present a complex result for interactive review | `/cf-present` — when one coherent visual surface and anchored feedback materially improve a substantial explanation, comparison, plan, decision, evidence set, diff, or review; keep simple answers in chat and never treat the utility as product UI or durable documentation |
@@ -310,12 +310,9 @@ to reason from, not a rote checklist.
   parallel, and over time — then decide against short- and long-term priorities,
   both stated. Prefer the robust, durable solution that stands the test of time;
   when expedience wins, it wins deliberately and says so.
-- **Guard your context.** Long context degrades quality. Keep the thinking,
-  planning, and synthesis in your own session, but delegate breadth (wide
-  searches, reading many files), long or mechanical passes, and independent
-  checks to a subagent or workflow (where your harness has them) — each works in
-  its own context and returns a condensed result, so yours stays sharp for the
-  decisions.
+- **Guard your context.** Long context degrades quality. Orchestrate here:
+  keep thinking, planning, and synthesis; delegate breadth, long passes, and
+  independent checks to a subagent or workflow at the effort the unit needs.
 - **Write only what earns its keep.** Make the smallest clear, idiomatic, durable
   change that fully satisfies approved behavior—not minimum LOC. Add no
   speculative feature, abstraction, configuration, dependency, compatibility

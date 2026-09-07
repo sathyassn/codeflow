@@ -53,11 +53,17 @@ description: Land finished work — docs and capability updates, then a PR throu
    what was NOT tested. Docs-only: one line plus the doc checks. Lint with
    `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
    <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
-7. Land via a PR **merged by a human** on green CI, or `codeflow integrate
-   <branch> --into <target>` when there is no remote. An agent never merges into
-   a protected branch — no `gh pr merge` into a protected base, no by-hand
-   merge, never `gh pr merge --delete-branch`. Override envs
-   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
+7. Land via a PR **merged by a human** when required *checks* are evidenced
+   green (the same `codeflow test` / `validate` / coverage / security targets,
+   locally or in completed CI jobs — a gate is the check, not the job name).
+   Classify CI redness with the quality contract: assertion-red blocks;
+   an infra-killed job that only restacks already-green checks does not. If
+   the host merge UI still requires that unfinished job by name, the human
+   waits, reruns, or overrides — that is merge authorization, not a failed
+   test. Or `codeflow integrate <branch> --into <target>` when there is no
+   remote. An agent never merges into a protected branch — no `gh pr merge`
+   into a protected base, no by-hand merge, never `gh pr merge --delete-branch`.
+   Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 8. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.
 9. Clean up after the human merge, with proof. From outside the task worktree:

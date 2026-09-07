@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex duo for every non-trivial repository task from either Claude Code, Codex, or another capable host. Both models independently research, analyze, and plan; Claude leads design; the host routes each approved task to a capable producer and cross-lineage reviewer; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; Claude produces design in its native session; the host routes each approved task to a capable producer and cross-lineage reviewer; extra catalog families review on trigger if available, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
@@ -12,10 +12,12 @@ duo; material judgment, research, multiple surfaces, or deeper evidence does.
 Read [resources/quality-contract.md](resources/quality-contract.md) and
 [resources/capability-routing.md](resources/capability-routing.md), then load
 the current concrete seats from
-[resources/current-ensemble.json](resources/current-ensemble.json), before
+[resources/current-ensemble.json](resources/current-ensemble.json) and the
+extra-family rule from
+[resources/routing-policy.json](resources/routing-policy.json), before
 planning. The markdown resources own durable quality and task assignment;
-the JSON record owns fast-changing model selectors, effort defaults, internal
-worker classes, and escalation triggers.
+the JSON records own selectors, effort, internal workers, escalation, and
+when a catalog family is named.
 If `.codeflow/model-selection.json` contains project overrides, run
 `codeflow doctor --check model-bindings` and use only the effective qualified
 role bindings it reports. An absent or empty file keeps the managed defaults;
@@ -52,11 +54,13 @@ implementation stage for an analysis-only request.
   brief, task ledger, bounded reconciliation, durable evidence, and escalation.
 - **Both think independently.** Claude and Codex research, analyze, identify
   risks, and draft a plan in parallel before seeing the other's conclusions.
-- **Claude leads design.** The qualified Claude judgment primary proposes the
-  primary solution design and, unless the brief already fixes a clear
-  direction, compares 2–3 viable options. For material product, UX, UI,
-  interaction, or visual design, it also applies `cf-design` and settles
-  `DESIGN_INTENT`. Codex challenges feasibility, operability, security,
+- **Claude leads design.** The qualified Claude judgment primary **produces**
+  the primary solution design in its own native interactive session and,
+  unless the brief already fixes a clear direction, compares 2–3 viable
+  options. For material product, UX, UI, interaction, or visual design, it
+  also applies `cf-design` and settles `DESIGN_INTENT`. A Grok or Codex host
+  may pass options and review; it never drafts design for Claude to
+  rubber-stamp. Codex challenges feasibility, operability, security,
   proportionality, and implementation detail.
 - **Host routes execution.** Once both approve the same versioned plan, the host
   assigns every task a producer and cross-lineage reviewer by task fit, tools/
@@ -64,6 +68,7 @@ implementation stage for an analysis-only request.
   native usage signals only. Seat/lineage reassignment invalidates approvals.
 - **Review is producer-relative.** The producer first-verifies its own unit; the
   other lineage reviews it independently. Self-review is never independent.
+  Name extra families on trigger if available; never a silent third vote.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality
@@ -71,12 +76,12 @@ implementation stage for an analysis-only request.
   primary; its integrated pass is not independent review of its own unit.
 - **Qualified reasoning seats.** Use the concrete selectors, default effort,
   escalation effort/triggers, and permitted internal worker classes in the
-  current ensemble record. The durable rule is unchanged when those bindings
-  evolve: invoke each primary directly, let the owning primary control its
-  internal routing, retain primary planning/approval duties, never infer worker
-  routing or usage state, and never let a worker replace a primary or named
-  cross-lineage reviewer. A concrete binding change is usable only after
-  native-interactive qualification and explicit promotion.
+  current ensemble record: invoke each primary directly, let the owning primary
+  control its internal routing, retain primary planning/approval duties, never
+  infer worker routing or usage state, and never let a worker replace a primary
+  or named cross-lineage reviewer. Spawn same-family high/xhigh workers; the
+  medium primary stays the orchestrator. A binding change needs
+  native-interactive qualification and promotion.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -111,7 +116,8 @@ implementation stage for an analysis-only request.
   the peer to evade the host boundary. The quality contract owns full evidence.
 - **Native interactive sessions only.** Each model runs in its own vendor
   harness with its configured tools and MCP servers. Never use `codex exec`,
-  `claude -p` / `--print`, or another headless peer invocation.
+  `claude -p` / `--print`, `grok -p` / `--single`, or another headless peer
+  invocation.
 - **Bounded, evidence-moving loops.** Plan reconciliation and post-review
   rework are each bounded to at most two rounds. A repeated attempt without a
   new hypothesis or changed evidence is not another round. At the bound,
@@ -132,16 +138,19 @@ Detect capabilities, not model identity.
 
 | Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|
-| Claude Code | Official `codex-plugin-cc`, backed by Codex app-server | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
-| Codex App or interactive Codex CLI | Interactive Claude Code CLI in a task-scoped tmux session | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Claude Code | Official `codex-plugin-cc` / Codex app-server only | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. Claude produces design natively. Catalog Grok may produce or take named extra-family review |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
-Desktop apps are not peer automation endpoints. Claude Code reaches Codex via
-the official plugin/app-server; Codex reaches Claude via interactive Claude CLI
-in durable tmux. Another harness normally delegates the whole repository task
-to one native host; direct coordination requires both seats, tools, and the
-full contract. Otherwise report the missing lane and use the solo fallback.
-Never simulate a missing vendor with another host-model instance.
+Herdr/tmux cwd is the project being worked. Same topic reuses the tab; a new
+topic gets a new tab; close it when that work is done. Claude Code reaches
+Codex via plugin/app-server only (missing plugin degrades; no Herdr CLI third
+lane). Grok reaches Codex via official `codex` CLI and the app-server daemon
+(Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
+Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
+harnesses delegate to one native host unless both lanes are proven. Missing
+lane: solo fallback. Host is not duty; Claude produces design.
 
 ## Preflight
 
@@ -159,43 +168,46 @@ Never simulate a missing vendor with another host-model instance.
 3. Verify command and tool readiness:
    - Codex: `codex` is present, `codex login status` succeeds, and
      `codex mcp list` shows the tools required by the task.
-   - Claude: `claude` and `tmux` are present and `claude mcp list`
-     succeeds. Verify account access with a short **interactive** Claude canary;
-     do not treat a status subcommand as authoritative when it contradicts a
-     working authenticated TTY.
+   - Claude: `claude` is present and `claude mcp list` succeeds. Prefer Herdr
+     when `HERDR_ENV=1`; `tmux` is the degraded TTY. Verify account access with
+     a short **interactive** Claude canary; do not treat a status subcommand as
+     authoritative when it contradicts a working authenticated TTY.
    - Claude-host lane: the `codex@openai-codex` plugin is enabled and
      `/codex:setup` succeeds. Pass the Codex primary selector and default
      effort from the current ensemble record on the plugin task/rescue
-     invocation, or its escalation effort when a recorded trigger applies; do
-     not inherit an unobserved user default.
-   - Codex-host lane: choose the Claude primary selector and effort from the
-     current ensemble record, then start
-     Claude directly in a dedicated tmux session rooted at the worktree with
-     `--model <selector> --effort <effort> --permission-mode auto --settings
-     <state-dir>/settings.json` and complete one scoped interactive canary.
-     Make `autoMode.classifyAllShell` effective at user scope; Claude
-     intentionally ignores it from repository settings, and repeated
-     `--settings` flags are not a supported merge contract. Delegated work then
-     runs
-     through the schema-v2 delegate lifecycle — `delegate init` → wait-ready →
-     `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted →
-     wait-terminal with bounded cleanup — using the generated immutable hook
-     settings and the
-     `cf-delegate` sibling Stop-hook preflight. If the selected Claude judgment
-     primary or auto mode is unavailable, record the exact capability gap and
-     use the strongest supported qualified Claude reasoning fallback with
-     `acceptEdits` plus the same fail-closed sandbox; use the record's escalation
-     effort when a trigger applies. Never fall through to bypass mode on an
-     ordinary host or claim the fallback was the selected primary.
+     invocation at default effort; workers take escalation; do not inherit
+     an unobserved user default.
+   - Grok: `grok` present, `grok --version` succeeds, short interactive canary.
+     Launch `--model <selector> --reasoning-effort <effort> --always-approve`
+     from the ensemble. `--permission-mode auto` is consult/no-edit. Never
+     `grok -p` / `--single`. Claude via Herdr+schema-v2 (tmux degraded); Codex
+     via official `codex` CLI and app-server daemon. No third-party Grok Codex
+     plugins. Consult canaries in grok-host.md; not a qualified binding.
+   - Codex-host lane: start Claude via Herdr (tmux degraded) at the worktree
+     with `--model <selector> --effort <effort> --permission-mode bypassPermissions --settings
+     <state-dir>/settings.json` from the ensemble, then one scoped interactive
+     canary. Make `autoMode.classifyAllShell` effective at user scope; Claude
+     ignores it from repository settings, and repeated `--settings` flags are
+     not a supported merge contract. Delegated work uses schema-v2 — `delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal
+     with bounded cleanup — and the `cf-delegate` sibling Stop-hook preflight. If Fable is
+     unavailable, record Opus as the fallback plus the same fail-closed
+     sandbox; spawn workers at escalation effort and keep the primary at
+     default.
+     Consult and no-edit review stay on `--permission-mode auto`. Never claim
+     the fallback was the selected primary.
 4. Verify the autonomy boundary through the effective settings, not prose:
    - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
-     autonomy, raw-secret denies, and user-scope auto + `classifyAllShell`.
-     Only a trusted installed tool may receive one classified unsandboxed retry;
+     autonomy, and raw-secret denies. Production uses `bypassPermissions`.
+     Consult/no-edit uses auto plus user-scope `classifyAllShell`. Only a
+     trusted installed tool may receive one classified unsandboxed retry;
      arbitrary unsandboxed commands remain out of bounds.
-   - Codex: require the named profile, no competing legacy `sandbox_mode`,
-     `on-request`, public network and live search are enabled, and eligible
-     escalation goes to auto-review. Auto-review is not human authorization;
-     catastrophic work selects `user` and verifies the effective boundary.
+   - Codex: prefer app-server (`codex app-server daemon version` running);
+     otherwise interactive CLI. Production: `--ask-for-approval never` and
+     `--sandbox danger-full-access`. public network and live search are enabled.
+     Auto-review is not human authorization; catastrophic work still stops for
+     the operator.
+   - Grok: `--always-approve` for production; `--permission-mode auto` for
+     consult/no-edit; `--sandbox <PROFILE>` when required. Never `grok -p`.
    - Platform: use native macOS/Linux sandboxes; on Windows, prefer WSL2 for
      Linux-equivalent tooling. Native Windows Codex must use its elevated
      sandbox and the guard must cover PowerShell/Bash. Claude Code has no
@@ -234,11 +246,12 @@ The host records both outputs without collapsing disagreements.
 
 ### 2. Design and plan settlement
 
-Claude supplies the design options and recommendation. When the brief already
-dictates one clear design direction, record that constraint and why option
-exploration was waived. Codex reviews the design for implementation feasibility,
-failure modes, security, testing, and maintainability. It also challenges
-whether a simpler proportionate design satisfies the same requirements.
+Claude supplies the design options and recommendation **from its native
+session**. When the brief already dictates one clear design direction, record
+that constraint and why option exploration was waived. Codex reviews the
+design for implementation feasibility, failure modes, security, testing, and
+maintainability. It also challenges whether a simpler proportionate design
+satisfies the same requirements. A Grok host does not author that design pass.
 When a user-facing surface materially changes, apply `cf-design` and include its
 evidence-grounded `DESIGN_INTENT` in the plan. A cosmetic correction or
 conformance-only change records the skill's compact `N/A` or `conform` path
@@ -282,8 +295,8 @@ fitness check—or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
-and requires both approvals; same-seat high→xhigh on a documented trigger is
-ledger evidence, not reassignment.
+and requires both approvals; same-seat medium→high or high→xhigh on a documented
+trigger is ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
@@ -338,7 +351,7 @@ that starts a primary Codex reasoning turn. Every plugin exchange must yield a
 native Codex thread ID, recheckable through the plugin or the native Codex
 surface — a generic Claude subagent or an unverified relay never counts as
 Codex. Record model and effort as observed only when the transport exposes the
-actual values; otherwise label them requested — a project-level high default is
+actual values; otherwise label them requested — a project-level medium default is
 a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 

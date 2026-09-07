@@ -65,6 +65,7 @@ QUALIFIED_ROLES = frozenset(
         "evidence-worker",
         "claude-judgment-primary",
         "codex-engineering-primary",
+        "grok-engineering-primary",
     }
 )
 GRADER_MATERIAL_DIRS = (

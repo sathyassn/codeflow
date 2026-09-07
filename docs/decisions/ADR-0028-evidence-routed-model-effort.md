@@ -63,3 +63,10 @@ cannot compensate for a semantic or quality regression.
 The orchestrator, consult/delegate adapters, onboarding guidance, always-loaded
 Claude guidance, capability record, and behavioral evaluation corpus share one
 high-default/xhigh-trigger policy. The binary remains model agnostic.
+
+## Note (2026-09-05)
+
+ADR-0055 amends the default: primaries start at medium and escalate to high
+then xhigh on recorded complexity/difficulty triggers. The rest of this
+decision (primary-owned internals, no worker replacing a primary, qualification
+before a binding change) stands.

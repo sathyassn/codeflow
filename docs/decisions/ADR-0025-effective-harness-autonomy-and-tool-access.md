@@ -110,3 +110,10 @@ route model turns.
   <https://code.claude.com/docs/en/permission-modes>,
   <https://code.claude.com/docs/en/auto-mode-config>,
   <https://code.claude.com/docs/en/sandboxing>
+
+## Note (2026-09-05)
+
+ADR-0055 amends production-host autonomy: Claude `bypassPermissions` or
+`auto`, Codex `approval_policy = "never"` plus `--sandbox danger-full-access`,
+Grok `--always-approve`. Consult and no-edit review stay non-bypass. Git
+hooks, git-guard, exec-guard, and CI remain the floor.

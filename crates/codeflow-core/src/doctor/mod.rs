@@ -184,6 +184,7 @@ const CHECK_NAMES: &[&str] = &[
     "hooks",
     "claude",
     "codex",
+    "grok",
     "config",
     "permissions",
     "network",
@@ -212,6 +213,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("hooks", check_hooks);
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
+    m.insert("grok", check_grok);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -343,6 +345,19 @@ fn hooks_wiring_warning(root: &Path) -> Option<String> {
     if !shims.join("pre-commit").exists() {
         return None; // no scaffolded shims — nothing to wire
     }
+    // Prefer the configured string: relative `.codeflow/git-hooks` is the
+    // contract so each worktree uses its own shims. An absolute path (often
+    // the main checkout) is a Warn even if the files happen to exist.
+    if let Some(configured) = crate::scaffold::detect::configured_hooks_path(root) {
+        if configured == CODEFLOW_HOOKS_PATH {
+            return None;
+        }
+        if std::path::Path::new(&configured).is_absolute() {
+            return Some(format!(
+                "core.hooksPath is absolute ({configured}); set the project-relative `{CODEFLOW_HOOKS_PATH}` so each worktree uses its own shims — `git config core.hooksPath {CODEFLOW_HOOKS_PATH}`"
+            ));
+        }
+    }
     let active = crate::hooks::orient::git_hooks_dir(root)?;
     let wired = match (active.canonicalize(), shims.canonicalize()) {
         (Ok(a), Ok(s)) => a == s,
@@ -420,6 +435,47 @@ fn check_codex(opts: &Options) -> CheckResult {
         status: Status::Warn,
         message: format!(
             ".codex/hooks.json present, {presence} — in-session guards are wired structurally; trust is a one-time in-codex step: run `/hooks` inside interactive codex and approve the CodeFlow hooks (trust state is not inspectable from here; git hooks + CI enforce regardless)"
+        ),
+        duration: start.elapsed(),
+    }
+}
+
+/// Grok Build in-session wiring. Project hooks live in `.grok/hooks/*.json`
+/// (Grok also scans `.claude/settings.json` when compat is on). Trust is a
+/// one-time `/hooks-trust` (or `--trust`); it is not inspectable here. Warn,
+/// not fail: git hooks + CI bind a Grok session regardless.
+fn check_grok(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let hooks_dir = Path::new(&opts.project_dir).join(".grok").join("hooks");
+    let has_project_hooks = hooks_dir.is_dir()
+        && std::fs::read_dir(&hooks_dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            })
+        });
+
+    if !has_project_hooks {
+        return CheckResult {
+            name: "grok".into(),
+            status: Status::Pass,
+            message: "no .grok/hooks/*.json (grok in-session hook plane not scaffolded)".into(),
+            duration: start.elapsed(),
+        };
+    }
+
+    let presence = if opts.do_look_path("grok").is_ok() {
+        "grok CLI found"
+    } else {
+        "grok CLI not found in PATH"
+    };
+    CheckResult {
+        name: "grok".into(),
+        status: Status::Warn,
+        message: format!(
+            ".grok/hooks present, {presence} — in-session guards are wired structurally; trust is a one-time in-grok step: run `/hooks-trust` (or `--trust`) so project hooks load (trust state is not inspectable from here; git hooks + CI enforce regardless)"
         ),
         duration: start.elapsed(),
     }
@@ -704,6 +760,7 @@ fn probe_version<'a>(probe_id: &str, observed: &'a str) -> Option<&'a str> {
     match probe_id {
         "claude-cli-version" => tokens.next(),
         "codex-cli-version" if tokens.next() == Some("codex-cli") => tokens.next(),
+        "grok-cli-version" if tokens.next() == Some("grok") => tokens.next(),
         _ => None,
     }
 }
@@ -984,7 +1041,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
             name: "delegates".into(),
             status: Status::Pass,
             message: format!(
-                "bidirectional prerequisites present (Codex auth/MCP + Claude plugin/MCP + tmux); retain live interactive canaries for both lanes{agy_note}"
+                "Claude↔Codex bidirectional prerequisites present (Codex auth/MCP + Claude plugin/MCP + tmux); retain live interactive canaries. Grok-hosted Claude/Codex lanes use Herdr and are not claimed complete by this check{agy_note}"
             ),
             duration: start.elapsed(),
         }
@@ -1597,7 +1654,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 14);
+        assert_eq!(check_names().len(), 15);
     }
 
     #[test]
@@ -1837,6 +1894,10 @@ mod tests {
             probe_version("codex-cli-version", "codex-cli 0.144.3"),
             Some("0.144.3")
         );
+        assert_eq!(
+            probe_version("grok-cli-version", "grok 1.0.13 (5e9a58528b76) [stable]"),
+            Some("1.0.13")
+        );
         assert_ne!(
             probe_version("claude-cli-version", "3.0.0 (compat 2.1.220)"),
             Some("2.1.220")
@@ -1966,6 +2027,46 @@ mod tests {
             r.message
         );
         assert!(r.message.contains("codex CLI found"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_check_grok_not_scaffolded_passes_quietly() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_grok(&opts);
+        assert_eq!(r.status, Status::Pass);
+        assert!(
+            r.message.contains("no .grok/hooks/*.json"),
+            "got: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_check_grok_wired_warns_with_trust_step() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".grok/hooks")).unwrap();
+        std::fs::write(dir.path().join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_grok(&opts);
+        assert_eq!(r.status, Status::Warn);
+        assert!(
+            r.message.contains("wired structurally"),
+            "got: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("/hooks-trust"),
+            "names the one-time step: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("grok CLI not found"),
+            "got: {}",
+            r.message
+        );
     }
 
     #[test]
@@ -2176,6 +2277,35 @@ mod tests {
     }
 
     #[test]
+    fn test_check_hooks_warns_when_hookspath_is_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        let absolute = dir.path().join(".codeflow/git-hooks");
+        git(
+            dir.path(),
+            &[
+                "config",
+                "core.hooksPath",
+                absolute.to_str().expect("utf-8 path"),
+            ],
+        );
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(
+            r.message.contains("absolute"),
+            "expected absolute-path warning, got: {}",
+            r.message
+        );
+        assert!(
+            r.message
+                .contains("git config core.hooksPath .codeflow/git-hooks"),
+            "remedy: {}",
+            r.message
+        );
+    }
+
+    #[test]
     fn test_check_hooks_recorded_unwired_warns_with_manager_remedy() {
         // Another hook manager owned the hooks at init (recorded, deliberate:
         // init never clobbers) — the remedy is calling the shims from that
@@ -2338,6 +2468,11 @@ mod tests {
             result.message
         );
         assert!(result.message.contains("interactive canaries"));
+        assert!(
+            result.message.contains("Grok-hosted"),
+            "must not claim Grok-hosted lanes complete: {}",
+            result.message
+        );
     }
 
     #[test]

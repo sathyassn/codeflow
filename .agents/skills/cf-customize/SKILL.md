@@ -38,7 +38,8 @@ solo is a preflight-proven degradation, not an equivalent preference:
 - **Solo** (`/cf-develop`) — always in play.
 - **Duo** (`/cf-model-orchestrator`) — host-neutral when both native
   interactive seats are available: Claude Code → Codex through the official
-  plugin, or Codex → Claude through interactive Claude CLI + tmux (CodeFlow ADR-0023).
+  plugin/app-server, Codex → Claude through Herdr (tmux degraded), Grok →
+  Codex through official `codex` CLI + app-server (CodeFlow ADR-0023, ADR-0055).
 - **Batch** — the pipeline preset; single-vendor by design, even when its
   assurance stages resemble parts of the duo.
 
@@ -52,24 +53,23 @@ Then verify and **offer** remediation — never install silently.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
   - **Claude-host lane** — `codex login status`, `codex mcp list`, the enabled
     `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
-    plugin is the only sanctioned Claude → Codex transport; never use headless
-    `codex exec`, a hand-rolled app-server driver, or tmux-driving Codex.
+    plugin/app-server is the only Claude → Codex transport (ADR-0023). If it
+    is down, degrade to solo — do not start Codex via Herdr from Claude Code.
+    Never use headless `codex exec`, a hand-rolled app-server driver,
+    tmux-driving Codex, or a third-party Grok Codex plugin.
   - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
-    environment-variable denies), `tmux`, and `claude mcp list`, followed by
-    authenticated interactive TTY canaries for the current ensemble's Claude
-    primary at its default and escalation efforts, in auto mode with
-    `autoMode.classifyAllShell: true` supplied through `--settings`,
-    plus one schema-v2 delegate lifecycle round trip — `delegate init` →
-    wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery →
-    wait-accepted → wait-terminal with bounded cleanup (`codeflow doctor
-    --check delegate-roundtrip` drives the synthetic path; the live canary
-    proves the real session) — including
-    the `cf-delegate` sibling Stop-hook preflight over the effective Stop-hook
-    set. Never use `claude -p`, bare `tmux wait-for` signalling, or pane
-    stability as the work protocol. If the selected Claude judgment primary or
-    auto mode is unavailable, record it and canary the strongest qualified
-    reasoning fallback with `acceptEdits`; never select bypass on an ordinary
-    host or claim the fallback was the selected primary.
+    environment-variable denies), `herdr` when `HERDR_ENV=1` else `tmux`, and
+    `claude mcp list`, followed by authenticated interactive TTY canaries for
+    the current ensemble's Claude primary at default effort. Escalation
+    efforts are exercised by in-family workers, not canaried on the primary.
+    Production uses `bypassPermissions`; consult/no-edit review uses
+    auto with `autoMode.classifyAllShell: true` through `--settings`, plus one
+    schema-v2 round trip — `delegate init` → wait-ready → `arm` → canonical
+    UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal with
+    bounded cleanup — including the `cf-delegate` sibling Stop-hook preflight.
+    Never use `claude -p`, bare `tmux wait-for`, or pane
+    stability as the work protocol. If Fable is unavailable, record Opus as
+    the fallback; never claim the fallback was the selected primary.
   - **Autonomy settings** — parse and inspect the effective files rather than
     trusting their comments:
     - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
@@ -84,18 +84,18 @@ Then verify and **offer** remediation — never install silently.
       hooks), then prove the composed boundary with a live canary.
     - `.codex/config.toml`: `default_permissions` selects the guarded workspace
       profile, no legacy `sandbox_mode` shadows it, public network and live web
-      search are enabled, and `on-request` approvals route eligible requests to
-      the `auto_review` reviewer subagent. Explain that approved escalations can
-      cross the sandbox deny boundary; offer `approvals_reviewer = "user"` in
-      the project or launch override when policy requires a human for every
-      request, and verify managed reviewer constraints. Confirm the profile
-      denies workspace key/certificate files and `~/.codex/auth.json`, and that
-      `ignore_default_excludes = false` keeps
-      Codex's built-in secret-bearing environment filter active.
+      search are enabled, `approval_policy = "never"` (always-approve), and
+      production launch adds `--sandbox danger-full-access` (OS sandbox off;
+      git-guard, exec-guard, git hooks, and CI remain the floor). Confirm the
+      consult/`workspace-write` profile still denies workspace key/certificate
+      files and `~/.codex/auth.json`. `ignore_default_excludes = false` keeps
+      Codex's secret-bearing environment filter active even in production.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every
-    native harness that will operate web UI; Computer Use or a surface-specific
+    native harness that will operate web UI; other-lineage Computer Use QA of
+    changed UI (Codex via app-server; Claude Code Computer Use when Claude
+    reviews a Codex-authored UI); Computer Use or a surface-specific
     driver for native/mobile/desktop UI; design tools for UI work; and
     project-specific issue-tracker, database, cloud, or private-document MCPs.
     Prove tool access through the actual peer lane, not only by listing

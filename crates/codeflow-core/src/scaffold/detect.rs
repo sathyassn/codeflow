@@ -40,6 +40,12 @@ impl std::fmt::Display for HookManager {
 /// Path codeflow wires hooks into via `core.hooksPath`.
 pub const CODEFLOW_HOOKS_PATH: &str = ".codeflow/git-hooks";
 
+/// Raw `core.hooksPath` as git stores it (relative or absolute). `None` if unset.
+#[must_use]
+pub fn configured_hooks_path(root: &Path) -> Option<String> {
+    gitutil::config_get(root, "core.hooksPath")
+}
+
 /// Detects an existing hook manager that owns this repo's hooks.
 #[must_use]
 pub fn detect_hook_manager(root: &Path) -> Option<HookManager> {

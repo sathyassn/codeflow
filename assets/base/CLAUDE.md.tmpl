@@ -57,7 +57,8 @@ or one obvious local check.
   touches it.
 - **Stay lean by delegating** — the Claude mechanism for AGENTS.md's "Guard your
   context." Wide search → the `Explore` subagent; independent review → the
-  `cf-reviewer` subagent; batch/parallel or novel orchestration → a workflow.
-  Parallel branches use separate worktrees, bounded fan-out based on host
+  `cf-reviewer` subagent; hard in-family work → a Fable high/xhigh worker;
+  batch/parallel or novel orchestration → a workflow. This session stays the
+  orchestrator. Parallel branches use separate worktrees, bounded fan-out based on host
   memory/CPU, explicit file ownership, and serialized integration; do not trade
   machine pressure or merge ambiguity for nominal concurrency.

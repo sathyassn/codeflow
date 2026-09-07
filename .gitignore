@@ -27,6 +27,9 @@ lcov.info
 # local-only claude settings
 .claude/settings.local.json
 
+# linked worktree checkouts (not git's .git/worktrees/ metadata)
+.worktrees/
+
 # crash-recovery/locking state for opt-in portal reconciliation
 .codeflow/.docs-portal.lock
 .codeflow/.docs-portal-transaction/
