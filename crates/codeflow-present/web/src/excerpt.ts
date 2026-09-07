@@ -58,6 +58,8 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
   // but is not document content — its digits must never enter an excerpt.
   const nodes = [...root.querySelectorAll(TEXT_CARRIERS)].filter((node) => {
     if (node.closest(".cf-marker-layer")) return false;
+    const style = getComputedStyle(node);
+    if (style.visibility === "hidden" || style.display === "none") return false;
     const rect = node.getBoundingClientRect();
     return rect.width >= 2 && rect.height >= 2 && intersects(rect, box);
   });
@@ -76,7 +78,7 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
       ancestor = ancestor.parentElement;
     }
     if (covered) continue;
-    const text = collapse(node.textContent ?? "");
+    const text = visibleTextOf(node);
     if (text) parts.push(text);
   }
   return uniqueJoin(parts).slice(0, 4000);

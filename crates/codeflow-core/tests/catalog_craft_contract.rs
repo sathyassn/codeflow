@@ -96,10 +96,24 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
     assert_contains(
         "assets/base/agents/skills/cf-ship/SKILL.md",
         &[
+            "Prepare the whole-branch PR using",
+            "[references/pr-evidence.md](references/pr-evidence.md)",
+            "attribute measured evidence to its revision and scope",
+            "Missing required evidence keeps the PR draft",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        &[
             "git log --oneline",
             "git diff --stat",
             "not the last conversation",
-            "do not defer to CI",
+            "Inspect the actual diff as well",
+            "Report measured coverage TOTALs, metric, scope, and governing floor",
+            "completed attributable CI run",
+            "a job's `PASS` is not a coverage number",
+            "Do not relabel subset coverage as workspace coverage",
+            "unavailable or stale evidence is a gap",
             "codeflow test --mode essential --strict",
         ],
     );
@@ -109,7 +123,9 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
             "git log --oneline",
             "git diff --stat",
             "Do not write from the last",
-            "same one CI uses",
+            "measured TOTAL from the project's command",
+            "name revision, command, metric, and scope",
+            "CI PASS alone is insufficient",
         ],
     );
     let asset = read("assets/base/ci/pull_request_template.md");

@@ -6,6 +6,7 @@ dist/
 .portal/publish.lock
 .portal/workflow.lock
 .portal/workflow.lock-*
+.portal/.workflow-lock-candidate-*/
 src/content/docs/
 public/llms.txt
 public/markdown/

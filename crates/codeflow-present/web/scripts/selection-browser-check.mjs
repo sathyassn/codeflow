@@ -42,7 +42,14 @@ export async function checkSelectionOccurrences(browser) {
       const styled = capture("<style>@scope (#host) { p { color: red } }</style><p>First passed. Second <em>passed</em>.</p>", repeated, "em", 0, 6);
       const mismatch = capture("<p>First passed. Second passed.</p>", "First passed. Unrelated passed.", "p", 21, 27);
       const ambiguous = capture("<p>passed</p>", "passed passed", "p", 0, 6);
-      return { first, second, formatted, astral, spacing, styled, mismatch, ambiguous };
+      root.innerHTML = `<section data-cf-block-id="evidence" data-cf-block-digest="digest">
+        <style>/* private-style-text */</style>
+        <ul><li style="display:grid;grid-template-columns:150px 250px"><strong>Real service</strong><span>Authenticated loopback journey</span></li></ul>
+        <p>Visible context<span hidden>hidden-descendant-text</span></p>
+        <p style="visibility:hidden">hidden-block-text</p>
+      </section>`;
+      const documentText = selectionHarness.captureDocument(root)?.excerptText;
+      return { first, second, formatted, astral, spacing, styled, mismatch, ambiguous, documentText };
     });
     assert.equal(results.first.start_utf16, 6);
     assert.equal(results.second.start_utf16, 21);
@@ -61,6 +68,11 @@ export async function checkSelectionOccurrences(browser) {
     assert.equal(results.styled.exact, "passed");
     assert.equal(results.mismatch, null, "Substantive canonical mismatch must not guess an occurrence");
     assert.equal(results.ambiguous, null, "Ambiguous canonical mapping must not guess an occurrence");
+    assert.ok(results.documentText.includes("Real service Authenticated loopback journey"));
+    assert.ok(results.documentText.includes("Visible context"));
+    for (const hidden of ["private-style-text", "hidden-descendant-text", "hidden-block-text"]) {
+      assert.ok(!results.documentText.includes(hidden), `Document excerpt exposed ${hidden}`);
+    }
   } finally {
     await context.close();
   }

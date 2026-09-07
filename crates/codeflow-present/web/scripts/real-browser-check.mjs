@@ -254,7 +254,7 @@ try {
   if (delivered.notes[2].region_selector.scope !== "document") {
     throw new Error("Whole-document feedback did not retain document scope");
   }
-  for (const context of ["First revision", "Real service", "qualified", "Approve or request"]) {
+  for (const context of ["First revision", "Real service Authenticated loopback journey", "qualified", "Approve or request"]) {
     if (!delivered.notes[2].excerpt?.text?.includes(context)) {
       throw new Error(`Whole-document feedback lost ${context} context`);
     }
