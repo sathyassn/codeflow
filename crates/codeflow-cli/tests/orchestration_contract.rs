@@ -153,19 +153,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
 }
 
 #[test]
-fn current_ensemble_and_routing_pin_grok_catalog() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
-    let ensemble = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
-    ));
-    let policy = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
-    ));
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
     let grok_host = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/grok-host.md",
     ));
@@ -188,6 +176,22 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     assert!(canary_text.contains("GROK_HOST_SCHEMAV2_OK"));
     assert!(canary_text.contains("GROK_HOST_CODEX_OK"));
     assert!(canary_text.contains("not a full native-interactive promotion suite"));
+}
+
+#[test]
+fn current_ensemble_and_routing_pin_grok_catalog() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let ensemble = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ));
+    let policy = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+    ));
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
 
     for required in [
         "\"seat\": \"claude-primary\"",
