@@ -106,6 +106,15 @@ pub(crate) fn validate_sandbox_html(source: &str) -> Result<()> {
 
 fn validate_element(element: ElementRef<'_>) -> Result<()> {
     let tag = element.value().name().to_ascii_lowercase();
+    // These obsolete raw-text/fallback modes do not compose safely with the
+    // surrounding review document. In particular, </plaintext> does not end
+    // plaintext mode: serialization cannot keep later runtime markup outside it.
+    // Literal examples belong in pre/code with escaped markup instead.
+    if matches!(tag.as_str(), "plaintext" | "xmp" | "noembed" | "noframes") {
+        return Err(invalid(format!(
+            "obsolete raw-text element <{tag}> is not supported; use pre/code with escaped markup"
+        )));
+    }
     if FORBIDDEN_ELEMENTS.contains(&tag.as_str()) {
         return Err(invalid(format!(
             "sandboxed html element <{tag}> can navigate, embed, submit, or execute content"
@@ -249,6 +258,29 @@ mod tests {
         assert!(scoped.contains("#cf-host .label"));
         assert_eq!(visible_text_from_html(html), "Visible passed passed");
         assert_eq!(visible_text_from_html(&scoped), "Visible passed passed");
+    }
+
+    #[test]
+    fn rejects_obsolete_raw_text_modes_before_document_composition() {
+        for tag in ["plaintext", "xmp", "noembed", "noframes"] {
+            for source in [
+                format!("<{tag}>authored text</{tag}>"),
+                format!("<{}>unclosed text", tag.to_uppercase()),
+                format!("<svg><foreignObject><{tag}>text</{tag}></foreignObject></svg>"),
+            ] {
+                assert!(
+                    scoped_html(&source, "cf-host").is_err(),
+                    "accepted {source}"
+                );
+            }
+        }
+        // Pre/code is the composable way to show literal markup.
+        let html = scoped_html("<pre><code>&lt;plaintext&gt;text</code></pre>", "cf-host").unwrap();
+        let document = Html::parse_document(&format!(
+            "<div id='cf-host'>{html}</div><button id='review'>Comment</button>"
+        ));
+        let review = scraper::Selector::parse("button#review").unwrap();
+        assert_eq!(document.select(&review).count(), 1);
     }
 
     #[test]

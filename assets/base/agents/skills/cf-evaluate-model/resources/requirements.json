@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-04-design-method-v3",
+  "requirements_version": "2026-09-08-high-primary-v1",
   "requirements": [
     {
       "id": "CF-GIT-004",
@@ -836,7 +836,7 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort; a medium primary stays the orchestrator and spawns strongest-qualified same-family reasoning workers at the trigger-appropriate high or xhigh effort, including direct xhigh, before demanding work or when a trigger emerges mid-session; extra catalog families are named when routing-policy triggers fire and they are available; preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's high default; the primary retains orchestration and approval, may perform suitable high reasoning directly, and uses strongest-qualified same-family workers when delegation adds value or a trigger requires xhigh. Bounded routine workers may use medium; do not inflate effort or add a redundant high worker merely to satisfy a label. Extra catalog families are named when routing-policy triggers fire and they are available. Preserve independent plans, primary approval, owning-family internal routing, and verified native evidence.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -846,7 +846,7 @@
             "retain primary planning/approval duties",
             "never let a worker replace a primary",
             "Spawn same-family high/xhigh workers",
-            "the medium primary stays the orchestrator",
+            "the high primary stays the orchestrator",
             "direct xhigh when triggered",
             "Routine work does not automatically escalate"
           ]
@@ -854,11 +854,11 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"medium\"",
+            "\"default_effort\": \"high\"",
             "\"escalation_effort\": \"xhigh\"",
             "\"model_class\": \"qualified-terra-worker\"",
             "Claude-side internal routing belongs to the Claude primary",
-            "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator",
+            "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
           ]
         }

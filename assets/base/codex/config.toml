@@ -18,9 +18,9 @@ approval_policy = "never"
 approvals_reviewer = "auto_review"
 web_search = "live"
 default_permissions = "cf-guard"
-# Pin the primary Codex seat's ordinary starting effort. Escalate to high/xhigh
-# on a documented complexity trigger (ADR-0055).
-model_reasoning_effort = "medium"
+# Pin the primary Codex seat's ordinary starting effort. Use bounded medium
+# workers where appropriate and xhigh on a documented trigger (ADR-0056).
+model_reasoning_effort = "high"
 
 # Codex uses its Linux sandbox inside WSL2. On native Windows, prefer the
 # elevated native sandbox; this table is ignored on other platforms.

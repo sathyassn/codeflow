@@ -30,6 +30,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **High default for development primaries (ADR-0056).** Claude, Codex, and
+  catalog Grok primaries now start at high; bounded routine workers may use
+  medium, while xhigh remains trigger-driven and owned by the receiving family.
+  This supersedes the earlier medium-default entries below, not their transport
+  or safety decisions. Regenerate managed settings on update; explicit local
+  effort overrides remain deliberate project/operator choices.
+
 - **Post-merge quality and runtime hardening.** Presentation selections retain
   the actual repeated-text occurrence; authored styles cannot hide review
   controls or create top-layer escapes. Utility font choices load bundled

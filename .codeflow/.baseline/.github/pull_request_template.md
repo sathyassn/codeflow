@@ -47,7 +47,9 @@
      Docs-only PR? State "Docs-only — no code paths changed" plus doc checks
      and relevant instruction evaluations actually run. Scripts, hook settings,
      generated runtime assets, and executable examples require behavioral checks
-     even when stored under docs. Added eval cases are not completed trials. -->
+     even when stored under docs. Shipped templates and agent instructions also
+     need behavioral evidence even when written in Markdown. Added eval cases
+     are not completed trials. -->
 
 - Results:
 

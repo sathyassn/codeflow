@@ -15,7 +15,7 @@
       "native_selectors": {
         "claude-code": "fable"
       },
-      "default_effort": "medium",
+      "default_effort": "high",
       "escalation_effort": "xhigh",
       "responsibilities": [
         "independent planning",
@@ -29,7 +29,7 @@
         {
           "model_class": "latest-fable",
           "effort": "high",
-          "use": "CodeFlow instruction: Fable at high for complex in-family worker work; the medium primary stays the orchestrator"
+          "use": "CodeFlow instruction: Fable at high for complex in-family worker work; the high primary stays the orchestrator"
         },
         {
           "model_class": "latest-fable",
@@ -63,7 +63,7 @@
         "codex-app": "gpt-6-astra",
         "codex-cli": "gpt-6-astra"
       },
-      "default_effort": "medium",
+      "default_effort": "high",
       "escalation_effort": "xhigh",
       "responsibilities": [
         "independent planning",
@@ -76,7 +76,7 @@
         {
           "model_class": "latest-astra-coding",
           "effort": "high",
-          "use": "CodeFlow instruction: Astra at high for complex in-family worker work; the medium primary stays the orchestrator"
+          "use": "CodeFlow instruction: Astra at high for complex in-family worker work; the high primary stays the orchestrator"
         },
         {
           "model_class": "latest-astra-coding",
@@ -104,7 +104,7 @@
       "native_selectors": {
         "grok-cli": "grok-4.6"
       },
-      "default_effort": "medium",
+      "default_effort": "high",
       "escalation_effort": "xhigh",
       "responsibilities": [
         "host coordination when Grok Build is the active harness",
@@ -122,7 +122,7 @@
         {
           "model_class": "latest-grok-coding",
           "effort": "high",
-          "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; the medium primary stays the orchestrator"
+          "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; the high primary stays the orchestrator"
         },
         {
           "model_class": "latest-grok-coding",
@@ -145,14 +145,14 @@
   "rules": [
     "Primary seats retain independent planning and approval duties.",
     "The standing pair is the usual quality floor; extra catalog families never vote silently.",
-    "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
+    "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
     "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
     "Cross-family entry always invokes the receiving qualified primary at default effort as ROLE: peer; only that primary dispatches its own same-family ROLE: worker escalation. A caller never selects a foreign worker directly.",
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
-    "Default effort is medium, not a ceiling: complex architecture, technical planning, and design use the strongest qualified same-family reasoning worker suited to the task at high or xhigh through the binding's permitted routes.",
+    "Default effort is high, not a ceiling: complex architecture, technical planning, and design use the strongest qualified same-family reasoning seat suited to the task at high or xhigh through the binding's permitted routes.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
     "If Fable is unavailable, record Opus as the Claude fallback at the same effort (Opus xhigh is that fallback, not a Fable-high substitute). If Astra is unavailable, record gpt-5.6-sol as the Codex fallback at the same effort.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",

@@ -285,5 +285,6 @@
         "~/.claude/plugins/cache"
       ]
     }
-  }
+  },
+  "effortLevel": "high"
 }

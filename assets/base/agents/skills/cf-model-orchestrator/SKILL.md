@@ -79,7 +79,7 @@ implementation stage for an analysis-only request.
   retain primary planning/approval duties and internal routing. Never infer
   usage or routing, and never let a worker replace a primary or named
   cross-lineage reviewer. Spawn same-family high/xhigh workers on trigger;
-  the medium primary stays the orchestrator. Apply capability-routing as demand
+  the high primary stays the orchestrator. Apply capability-routing as demand
   changes: strongest qualified reasoning,
   direct xhigh when triggered. Routine work does not automatically escalate.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
@@ -296,7 +296,7 @@ fitness check—or records `none selected`.
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
 and requires both approvals; trigger-based same-seat escalation (including
-medium→xhigh) is ledger evidence, not reassignment.
+high→xhigh) is ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
@@ -351,7 +351,7 @@ that starts a primary Codex reasoning turn. Every plugin exchange must yield a
 native Codex thread ID, recheckable through the plugin or the native Codex
 surface — a generic Claude subagent or an unverified relay never counts as
 Codex. Record model and effort as observed only when the transport exposes the
-actual values; otherwise label them requested — a project-level medium default is
+actual values; otherwise label them requested — a project-level high default is
 a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 

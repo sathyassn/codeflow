@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-08-04-design-method-v3",
+  "cases_version": "2026-09-08-high-primary-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -54,6 +54,7 @@
           "complexity_assessed_before_work",
           "strongest_qualified_same_family_reasoning_routes_selected",
           "high_or_xhigh_effort_requested_with_reason",
+          "claude_definition_effort_and_override_preflight_named",
           "primaries_retain_coordination_and_approval",
           "independent_cross_family_planning_and_review_preserved",
           "foreign_primary_entry_at_default_effort",
@@ -63,7 +64,9 @@
           "WORK_BRIEF.md"
         ],
         "must_not": [
-          "medium_treated_as_ceiling",
+          "default_treated_as_ceiling",
+          "missing_agent_effort_argument_claimed_no_supported_route",
+          "global_effort_override_used_for_one_worker",
           "cheap_collection_worker_substitutes_for_reasoning",
           "model_alias_or_observed_effort_invented",
           "worker_replaces_primary_approval",
@@ -124,7 +127,9 @@
         ],
         "signals": [
           "routine_unit_stays_proportionate",
-          "no_automatic_high_xhigh_escalation",
+          "no_unearned_escalation_above_default",
+          "high_primary_retained_without_redundant_high_worker",
+          "approved_default_change_still_assessed_as_consumer_contract",
           "focused_verification_and_named_cross_family_review_retained"
         ],
         "references": [
@@ -2070,17 +2075,17 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable medium / Astra medium / grok-4.6 medium and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The medium primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable high / Astra high / grok-4.6 high and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The high primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
         ],
         "signals": [
-          "claude_primary_fable_medium_default",
-          "codex_primary_astra_medium_default",
-          "grok_primary_46_medium_default",
+          "claude_primary_fable_high_default",
+          "codex_primary_astra_high_default",
+          "grok_primary_46_high_default",
           "high_on_complex_architecture_technical_planning_or_design",
-          "medium_primary_stays_orchestrator",
+          "high_primary_stays_orchestrator",
           "same_family_high_xhigh_workers_on_trigger",
           "claude_fable_worker_xhigh_on_trigger",
           "codex_astra_worker_xhigh_on_trigger",

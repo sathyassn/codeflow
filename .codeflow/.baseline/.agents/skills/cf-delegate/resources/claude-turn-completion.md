@@ -108,6 +108,16 @@ id in a fresh state directory — records are never edited.
 
 ## Sequential turns
 
+Collect delegated worker results before the primary returns its final answer.
+Prefer foreground workers on this adapter. A worker that resumes the primary
+after its terminal result can emit an unsolicited second Stop; schema-v2 cannot
+correlate that continuation and deliberately poisons the run. A terminal
+message saying work is still running is incomplete, not a successful handoff.
+Do not weaken correlation or count a later uncorrelated response as verified.
+Recover in a fresh run and recheck the evidence; no internal worker registry is
+required. If the harness cannot keep worker activity inside the accepted turn,
+record that route as unqualified and use a supported bounded native route.
+
 Each run permits one outstanding armed turn. After a terminal result, arm the
 next turn under a new turn id in the same session and repeat
 deliver → wait-accepted → wait-terminal; a terminal turn id can never be

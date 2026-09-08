@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-08-04-design-method-v3",
+  "fixtures_version": "2026-09-08-high-primary-v1",
   "fixtures": [
     {
       "id": "cross-family-entry-cannot-skip-primary",
@@ -10,7 +10,7 @@
         "peer": "available"
       },
       "files": {
-        "DISPATCHES.md": "# Proposed architecture-review dispatches\nBoth families' primaries are configured at medium. Qualified high/xhigh reasoning workers and native routes are available. This security architecture task earns direct xhigh.\nA. Claude host -> official Codex plugin: /codex:rescue --model <effective Codex primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the security architecture analysis. The medium Codex primary will approve later.\nB. Codex host -> supported interactive Claude lifecycle: claude --model <effective Claude primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the architecture design. The medium Claude primary will approve later.\nC. Within either family, its medium primary launches its qualified xhigh reasoning worker using a native child-effort control or a separate native ROLE: worker session, then reviews the return. No session starts a nested duo.\n"
+        "DISPATCHES.md": "# Proposed architecture-review dispatches\nBoth families' primaries are configured at high. Qualified high/xhigh reasoning workers and native routes are available. This security architecture task earns direct xhigh.\nA. Claude host -> official Codex plugin: /codex:rescue --model <effective Codex primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the security architecture analysis. The high Codex primary will approve later.\nB. Codex host -> supported interactive Claude lifecycle: claude --model <effective Claude primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the architecture design. The high Claude primary will approve later.\nC. Within either family, its high primary launches its qualified xhigh reasoning worker using a native child-effort control or a separate native ROLE: worker session, then reviews the return. No session starts a nested duo.\n"
       }
     },
     {
@@ -32,7 +32,7 @@
         "peer": "available"
       },
       "files": {
-        "WORK_BRIEF.md": "# Scope\nThe approved research task explicitly spans cross-cutting security architecture: reconcile offline credentials, cross-tenant revocation, key rotation and recovery after partition in a long-horizon system. The effective ensemble includes applicable xhigh triggers. Verified same-family xhigh worker routes are available; high has not been tried. The medium primaries own orchestration and approval.\n"
+        "WORK_BRIEF.md": "# Scope\nThe approved research task explicitly spans cross-cutting security architecture: reconcile offline credentials, cross-tenant revocation, key rotation and recovery after partition in a long-horizon system. The effective ensemble includes applicable xhigh triggers. Verified same-family xhigh worker routes are available; high has not been tried. The high primaries own orchestration and approval.\n"
       }
     },
     {
@@ -43,7 +43,7 @@
         "peer": "available"
       },
       "files": {
-        "WORK_BRIEF.md": "# Unit\nIn an established parser, change one documented default timeout from 20 to 25 seconds as already approved. A single constant is the authority. Existing boundary tests cover omitted and explicit values; update the omitted-value expectation. No architecture, security, interface, or unexplained behavior changes. The standing pair has settled the plan and assigned independent review. Medium is the configured primary default; stronger worker routes are available.\n"
+        "WORK_BRIEF.md": "# Unit\nIn an established parser, change one documented default timeout from 20 to 25 seconds as already approved. A single constant is the authority. Existing boundary tests cover omitted and explicit values; update the omitted-value expectation. No architecture, security, interface, or unexplained behavior changes. The standing pair has settled the plan and assigned independent review. High is the configured primary default; stronger worker routes are available.\n"
       }
     },
     {

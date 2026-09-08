@@ -368,9 +368,9 @@ and Claude through Herdr plus schema-v2. Grok-hosted lane canaries are in
 qualified binding. The standing pair remains the quality floor. Extra
 catalog families (today Grok) are named when a routing-policy trigger fires
 and the family is available; unavailable is an evidenced limitation, never a
-silent third vote (ADR-0054). Primaries default to medium and spawn
+silent third vote (ADR-0054). Primaries default to high and spawn
 same-family high/xhigh workers mid-session rather than restarting the host
-(ADR-0055). Default UI assignment is Claude implementer check plus Codex
+(ADR-0056). Default UI assignment is Claude implementer check plus Codex
 Computer Use QA on the app-server; if Codex produced the UI, Claude QAs
 independently. Another harness, including Hermes, normally delegates the
 repository task to one native CodeFlow host; direct coordination requires both

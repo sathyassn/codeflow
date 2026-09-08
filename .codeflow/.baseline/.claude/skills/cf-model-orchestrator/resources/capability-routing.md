@@ -58,26 +58,53 @@ not silently substitute another criterion.
 A change to the producer or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
 work continues. A same-seat trigger-based effort escalation, including direct
-medium→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
-medium primary stays the orchestrator and spawns same-family workers at that
+high→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
+high primary stays the orchestrator and spawns same-family workers at that
 effort. Spawn through the harness's native child-effort knob or a `ROLE:
 worker` native session at that effort. Record requested versus observed
-selector/effort. If that route is unavailable, keep the medium primary,
+selector/effort. If that route is unavailable, keep the high primary,
 record the limitation, and do not infer a pass. A worker change within the approved primary
 seat remains internal routing unless it changes the named producer or reviewer.
 
-Default effort is a starting point, not a ceiling. Assess demand before the
+Default effort is high for primary seats, not a ceiling or a mandate to make
+every worker high. A primary already qualified at high can perform suitable
+reasoning directly; do not add another high worker merely to satisfy a label.
+Delegate when bounded specialization, independent scrutiny, or parallel work
+earns the coordination cost. Assess demand before the
 subtask begins and when new evidence changes its difficulty. Complex architecture,
 technical planning, and design require the strongest qualified same-family
-reasoning worker suited to that unit at high or xhigh, selected from the active
+reasoning seat suited to that unit at high or xhigh, selected from the active
 binding's permitted routes. A cheaper tool-collection worker is not an equivalent
-substitute for that reasoning. An xhigh trigger permits direct xhigh; do not spend
+substitute for that reasoning. An xhigh trigger requires the owning primary to
+obtain xhigh reasoning through a supported same-family worker route; do not spend
 a high attempt merely to fail first. Routine, well-specified work stays at the
 default or an appropriate bounded worker route without automatic escalation.
 The primary critically integrates worker findings and retains approvals; both
 families still plan independently and cross-lineage review remains mandatory.
 If no required capable route is available, record the unresolved quality gap and
 the bounded recovery or degradation rather than claiming medium work satisfied it.
+
+## Claude worker effort preflight
+
+Absence of an effort parameter on the Agent tool is not proof that Claude
+cannot run stronger workers. Check the installed version's supported
+[subagent definitions](https://code.claude.com/docs/en/sub-agents): `effort`
+frontmatter or a session-scoped `--agents` JSON definition can set a child's
+effort independently of the primary. At launch, define only the bounded worker
+needed, with `description`, `prompt`, permitted `model`, and `effort`; the
+owning Claude primary invokes that named `subagent_type`. In an existing
+session, verify a supported definition is loaded before invoking it. Never
+invent a missing Agent argument or install a permanent fleet of worker roles.
+
+Keep the primary at its default effort. Inspect effective
+[effort precedence](https://code.claude.com/docs/en/model-config):
+`CLAUDE_CODE_EFFORT_LEVEL` can override the child's definition, and supported
+levels depend on the selected model and organization limits. Do not change
+global settings or blanket defaults to make one worker stronger. Resolve an
+override only within an authorized task process, retaining the primary's
+explicit default; otherwise record the limitation. Use an approved binding's
+route and a bounded native canary. Definition values remain requested until
+native metadata verifies the model/effort; self-report is insufficient.
 
 ## Admissible cross-lineage evidence
 

@@ -179,6 +179,25 @@ fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
 }
 
 #[test]
+fn cross_family_entry_preserves_receiving_primary_ownership() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    for required in [
+        "The first line of every cross-family task declares `ROLE: peer`",
+        "qualified primary at its default effort",
+        "only for same-family work owned and dispatched by that family's primary",
+        "a caller never selects a foreign worker directly",
+        "Later primary-approval prose cannot repair an incorrect initial dispatch",
+    ] {
+        assert!(
+            routing.contains(required),
+            "primary-entry contract lost: {required}"
+        );
+    }
+}
+
+#[test]
 fn current_ensemble_and_routing_pin_grok_catalog() {
     let routing = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
@@ -207,7 +226,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "\"role\": \"grok-engineering-primary\"",
         "\"model_class\": \"latest-grok-coding\"",
         "\"grok-cli\": \"grok-4.6\"",
-        "\"default_effort\": \"medium\"",
+        "\"default_effort\": \"high\"",
         "\"escalation_effort\": \"xhigh\"",
         "Primary seats retain independent planning and approval duties.",
         "The standing pair is the usual quality floor; extra catalog families never vote silently.",
@@ -216,7 +235,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
         "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
-        "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
+        "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
         "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(
@@ -245,18 +264,13 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "Unknown remains unknown",
         "never infer quota, availability, or a worker route",
         "is reassignment: create Plan vN+1",
-        "same-seat trigger-based effort escalation, including direct medium→xhigh",
-        "Default effort is a starting point, not a ceiling",
-        "strongest qualified same-family reasoning worker",
-        "An xhigh trigger permits direct xhigh",
+        "same-seat trigger-based effort escalation, including direct high→xhigh",
+        "Default effort is high for primary seats, not a ceiling",
+        "strongest qualified same-family reasoning seat",
+        "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
         "Routine, well-specified work stays at the default",
         "both families still plan independently and cross-lineage review remains mandatory",
         "A model cannot independently review its own authored unit",
-        "The first line of every cross-family task declares `ROLE: peer`",
-        "qualified primary at its default effort",
-        "only for same-family work owned and dispatched by that family's primary",
-        "a caller never selects a foreign worker directly",
-        "Later primary-approval prose cannot repair an incorrect initial dispatch",
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
         "never a silent third vote",
@@ -492,7 +506,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         );
     }
     for required in [
-        "\"default_effort\": \"medium\"",
+        "\"default_effort\": \"high\"",
         "\"escalation_effort\": \"xhigh\"",
         "\"claude-code\": \"fable\"",
         "\"codex-cli\": \"gpt-6-astra\"",

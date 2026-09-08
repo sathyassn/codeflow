@@ -556,6 +556,16 @@ fn docs_only(range_files: Option<&[String]>) -> bool {
 fn is_docs_path(path: &str) -> bool {
     let p = path.trim();
     let name = p.rsplit('/').next().unwrap_or(p);
+    // Instructions and shipped assets can change runtime/agent behavior even
+    // when their serialization is Markdown. Prefer extra evidence to a prose
+    // exemption for these contract surfaces.
+    if matches!(name, "AGENTS.md" | "CLAUDE.md")
+        || ["assets/", ".agents/", ".claude/", ".codeflow/"]
+            .iter()
+            .any(|prefix| p.starts_with(prefix))
+    {
+        return false;
+    }
     let extension = Path::new(name)
         .extension()
         .and_then(|value| value.to_str())
@@ -1255,6 +1265,31 @@ mod tests {
         assert!(!docs_only(None));
         assert!(!docs_only(Some(&[])));
         assert!(docs_only(Some(&["docs/a.md".to_string()])));
+    }
+
+    #[test]
+    fn instruction_and_shipped_markdown_requires_code_evidence() {
+        for path in [
+            "assets/base/agents/skills/cf-plan/SKILL.md",
+            "assets/base/README.md",
+            ".agents/skills/cf-plan/SKILL.md",
+            ".claude/agents/reviewer.md",
+            ".codeflow/.baseline/AGENTS.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "packages/web/AGENTS.md",
+        ] {
+            let files = vec![path.to_string()];
+            assert!(!docs_only(Some(&files)), "behavioral contract: {path}");
+            let violations =
+                evaluate_pr_structure(&git(), "## Summary\nChange guidance\n", Some(&files));
+            assert!(
+                violations.iter().any(|v| v.message.contains("Testing")),
+                "missing evidence requirement: {path}"
+            );
+        }
+        assert!(is_docs_path("docs/assets/overview.md"));
+        assert!(is_docs_path("assets-guide.md"));
     }
 
     // -- range detection --------------------------------------------------
