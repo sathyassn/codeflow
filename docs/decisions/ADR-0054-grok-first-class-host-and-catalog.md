@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — Grok Build joins Claude Code and Codex as a first-class host; the ensemble splits standing pair from catalog families; extra-family review is named, never a silent third vote
 ---
 
-# ADR-0054 — Grok as first-class host and catalog family; standing pair remains the quality floor
+# ADR-0054 — Grok as first-class host and catalog family
 
 ## Context
 

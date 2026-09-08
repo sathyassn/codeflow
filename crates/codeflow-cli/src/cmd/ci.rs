@@ -559,10 +559,14 @@ fn is_docs_path(path: &str) -> bool {
     // Instructions and shipped assets can change runtime/agent behavior even
     // when their serialization is Markdown. Prefer extra evidence to a prose
     // exemption for these contract surfaces.
-    if matches!(name, "AGENTS.md" | "CLAUDE.md")
-        || ["assets/", ".agents/", ".claude/", ".codeflow/"]
-            .iter()
-            .any(|prefix| p.starts_with(prefix))
+    if matches!(name, "AGENTS.md" | "CLAUDE.md" | "SKILL.md")
+        || p.starts_with("assets/")
+        || p.split('/').any(|part| {
+            matches!(
+                part,
+                ".agents" | ".claude" | ".codex" | ".grok" | ".codeflow"
+            )
+        })
     {
         return false;
     }
@@ -1278,6 +1282,10 @@ mod tests {
             "AGENTS.md",
             "CLAUDE.md",
             "packages/web/AGENTS.md",
+            "packages/web/.claude/agents/review.md",
+            ".codex/instructions.md",
+            ".grok/instructions.md",
+            "custom-agent/skills/explain/SKILL.md",
         ] {
             let files = vec![path.to_string()];
             assert!(!docs_only(Some(&files)), "behavioral contract: {path}");

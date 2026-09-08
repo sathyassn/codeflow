@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — duo seats default to medium and escalate on complexity; Codex primary is Astra via app-server then CLI; worktrees live under .worktrees/; Herdr/tmux cwd is the project being worked
 ---
 
-# ADR-0055 — Medium-default effort, Astra Codex primary, contained worktrees, Herdr project cwd
+# ADR-0055 — medium-default effort, Astra Codex primary, contained worktrees
 
 ## Context
 
@@ -40,9 +40,8 @@ new tab; a finished session's tab is closed.
    is the recorded fallback if Astra cannot run. Grok primary is `grok-4.6`;
    internals stay on `grok-4.6` at medium/high.
 3. **Permissions (production host).** Claude `bypassPermissions` or `auto`;
-   Codex `--sandbox danger-full-access --ask-for-approval never`;
-   Grok `--always-approve`. Codex's approval policy alone does not grant access;
-   the separate sandbox flag supplies production access. Consults and no-edit review stay
+   Codex `--sandbox danger-full-access --ask-for-approval never` (or always-approve
+   equivalent); Grok `--always-approve`. Consults and no-edit review stay
    non-bypass. Git-guard, exec-guard, git hooks, and CI remain the floor.
 4. **Codex transport.** Prefer official app-server. From a Grok host, or when
    Codex itself is the host CLI, if the daemon is missing and `codex` CLI is

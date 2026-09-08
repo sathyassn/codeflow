@@ -5251,12 +5251,12 @@
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-5b8414972282adc2.js.gz",
+      "stored_path": "export/renderer-09cc015dfb9d69a5.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
       "raw_bytes": 4354864,
-      "encoded_bytes": 1207875,
-      "sha256": "5b8414972282adc20d869239a938b87b4d10fd39e8b50e32a70f65056110fc50"
+      "encoded_bytes": 1198947,
+      "sha256": "09cc015dfb9d69a504825d0af474e8b25ee1133efb9f3e9bcb8cdd44c9b9c8ef"
     }
   },
   "budgets": {
@@ -5266,5 +5266,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "aa7bf6900b9245f13c3beccca3c6b11e4473b3bcf8ffd1c47448f3935e63c40f"
+  "corpus_sha256": "cd868a2aeeab44232cef00ae45da4609a751f5a6c193d775eb1e964a4e9ea96f"
 }

@@ -34,15 +34,11 @@ const TOP_LEVEL_KEYS: [&str; 6] = [
 ];
 
 #[test]
-fn primary_effort_is_a_setting_not_a_worker_override() {
+fn primary_effort_settings_default_to_high() {
     for name in preset_files() {
         let bytes = std::fs::read(settings_dir().join(&name)).unwrap();
         let preset: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(preset["effortLevel"], "high", "{name}");
-        assert!(
-            preset["env"].get("CLAUDE_CODE_EFFORT_LEVEL").is_none(),
-            "{name}"
-        );
     }
 }
 

@@ -356,8 +356,10 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         "architecture must list the grok doctor check"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("same-family high/xhigh workers mid-session"),
-        "CAP-010 must pin mid-session worker spawn"
+        normalize_whitespace(&capabilities).contains(
+            "medium/high workers when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
+        ),
+        "CAP-010 must preserve proportionate workers and mid-session escalation without host restart"
     );
     assert!(
         normalize_whitespace(&capabilities).contains("named when a routing-policy trigger fires"),

@@ -45,9 +45,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Review evidence and effort decisions.** PR guidance covers the full branch,
   revision-bound tests and independent review; executable documentation cannot
-  bypass testing requirements. Medium-default primaries delegate demanding
-  reasoning to the strongest qualified same-family high/xhigh worker, including
-  direct xhigh when justified. Adversarial evaluation scenarios distinguish
+  bypass testing requirements. High-default primaries own proportionate
+  same-family worker routing, including direct xhigh when justified; bounded
+  routine workers may use medium. Adversarial evaluation scenarios distinguish
   those decisions from routine work and from observed native routing.
 
 - **Mid-session effort and extra-family invoke.** The medium primary stays

@@ -134,7 +134,7 @@
   ],
   "high_triggers": [
     "complex or difficult architecture, technical, planning, or design work, whether greenfield or improving existing systems",
-    "material ambiguity that medium-effort work cannot settle"
+    "material ambiguity or complexity beyond a bounded routine worker's qualified medium scope"
   ],
   "xhigh_triggers": [
     "capability-sensitive or long-horizon work",
@@ -144,6 +144,7 @@
   ],
   "rules": [
     "Primary seats retain independent planning and approval duties.",
+    "High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.",
     "The standing pair is the usual quality floor; extra catalog families never vote silently.",
     "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
     "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",

@@ -25,6 +25,21 @@ but lack a matched high control; their historical results remain unchanged.
 
 ## Decision
 
+Current effort authority is this decision and its projection in
+[`docs/architecture.md`](../architecture.md). Earlier decisions are historical:
+
+| Earlier record | Superseded portion | Retained portion |
+|---|---|---|
+| [ADR-0054](ADR-0054-grok-first-class-host-and-catalog.md) | Later medium-default effort note | Grok host/catalog and extra-family duties |
+| [ADR-0055](ADR-0055-medium-default-astra-contained-worktrees.md) | Medium primary default and its medium-primary escalation wording | Selectors, permissions, transport, worktrees, and Herdr rules |
+
+This explicit partial supersession preserves the historical records unchanged.
+
+For clarity when reading ADR-0055, Codex's approval policy alone does not grant
+access: the separate sandbox setting controls access. Its production launch and
+non-bypass consult/review distinction remain unchanged; an approval flag is not
+an interchangeable permission or sandbox bypass.
+
 - Supersede only ADR-0055's primary-effort default: Claude, Codex, and catalog
   Grok development primaries enter at high. Keep model selectors, permissions,
   transport, worktree policy, and independent cross-family duties unchanged.

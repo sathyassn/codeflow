@@ -174,5 +174,46 @@ Current deterministic checks: 15 orchestration contracts, 18 settings-preset
 checks, both greenfield/brownfield init tests, suite validation and workspace
 Clippy passed. Suite digest:
 `sha256:550c0187fb7117b64f7993d5f99bd849f7b97ee9fe2b7da66585c186001c156d`.
-High-default native trials, fresh integrated review, final aggregate rerun and
-PR creation are still outstanding; no completion or promotion is claimed here.
+Those checks precede the final review corrections described next; no model
+binding promotion is claimed from deterministic checks.
+
+## High-default final verification and limits
+
+The full strict aggregate at `83903695d` passed all 12 configured targets in
+one invocation (`/tmp/cf-high-full-aggregate-0908.log`), including live
+presentation qualification, cleanup fault injection, and the documentation
+portal. The workspace coverage report measured 90.25% lines (53,824 lines,
+5,246 missed), against the 90% floor; this is Rust coverage, not UI coverage.
+The later narrow review delta reran orchestration (15), settings (18),
+behavioral-Markdown classification, Clippy, evaluation-kit (45), and docs checks.
+The portal's 89 checks passed; its publication correctly rejected uncommitted
+source, so its final build must run after the source commit.
+
+The aggregate rebuild changed the export renderer's gzip encoding between
+Homebrew and official Node 26.4.0 builds, which bundle different zlib versions.
+Decoded JavaScript is identical:
+`sha256:cc3bc0577005e491443a0af69dbe2ed9834d950766d4e488e329b8a68232c895`.
+The checked-in manifest records the newly qualified compressed bytes; this
+does not establish compression reproducibility across different Node builds.
+
+A fresh Fable/high review retry reached accepted prompt
+`45410ab6-b3ac-4de7-b8ac-5ad9f62f0b24` in session
+`13c5b0f7-35ad-4f17-a73e-2cf0f7164d64` and failed with native HTTP 429.
+Opus/high is the explicit fallback, not a Fable approval. Its independent
+review of CodeFlow `83903695d` and Agent OS `5adf939` completed in session
+`d01b6bee-6124-424a-9a8e-16a5f38ac0b4`, prompt
+`dc986367-8e9c-45a0-80a7-21acfc3cee3f`, with changes requested. Corrections
+clarify that high triggers are minimum unit reasoning, not redundant worker
+requirements; cover nested harness instructions in PR evidence classification;
+and link partial supersession from new decisions without rewriting old ADRs.
+
+The blind Opus/high planning trial completed in session
+`ac5902b7-8304-4d65-bc74-10f568f43109`, prompt
+`ae14fddf-bd83-4b87-9ea6-006db4658303`; fixture digest
+`sha256:d34f7639ce5dd0185a2e79a42bfaabf71be0b4edec01117b29ff853294933427`.
+It prepared high/peer foreign entry and receiving-family xhigh ownership, but
+inferred Fable availability from configuration. That unsupported claim fails
+the evidence requirement. This is a planning diagnostic, not a successful
+native delegation or worker-effort qualification. High effort does not remove
+the need to verify model claims. No receiving-family launch, Hermes runtime,
+or automatic chat insertion is qualified by this answer.
