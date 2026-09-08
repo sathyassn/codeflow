@@ -137,7 +137,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "e8aeba48a9df70f14ec54dc3c0c1b7e98de91acaedad173c960c8be4e5b8061c",
+      "sha256": "05007befd39b0f97cc7b7c958fcd084c4e74285172e3b33a3b5ea627ca691fd3",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
@@ -491,7 +491,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "e8aeba48a9df70f14ec54dc3c0c1b7e98de91acaedad173c960c8be4e5b8061c",
+      "sha256": "05007befd39b0f97cc7b7c958fcd084c4e74285172e3b33a3b5ea627ca691fd3",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {

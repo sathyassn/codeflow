@@ -29,6 +29,9 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
     ))
     .expect("harness catalog JSON");
     assert_eq!(ensemble["schema_version"], 3);
+    assert!(ensemble["rules"].as_array().unwrap().iter().any(|rule| {
+        rule.as_str() == Some("High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.")
+    }), "high reasoning floor must not mandate redundant escalation");
     let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
         .as_array()
         .expect("harnesses")

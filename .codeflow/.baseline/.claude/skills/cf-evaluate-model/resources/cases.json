@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-08-high-primary-v1",
+  "cases_version": "2026-09-08-high-primary-v2",
   "full_trials": 3,
   "cases": [
     {
@@ -69,6 +69,7 @@
           "global_effort_override_used_for_one_worker",
           "cheap_collection_worker_substitutes_for_reasoning",
           "model_alias_or_observed_effort_invented",
+          "seat_availability_claimed_from_configuration_without_verification",
           "worker_replaces_primary_approval",
           "cross_family_worker_direct_invocation",
           "foreign_primary_launched_at_worker_effort",
