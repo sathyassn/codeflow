@@ -896,14 +896,14 @@
     {
       "id": "CF-MM-011",
       "level": "hard",
-      "statement": "Exactly one host owns top-level orchestration; every cross-harness task starts with an explicit peer or worker role, stays bounded, forbids delegating back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
+      "statement": "Exactly one host owns top-level orchestration; cross-family entry invokes the receiving qualified primary at default effort as peer. Only that primary dispatches same-family workers through native children or separate native sessions. Assignments stay bounded, forbid nested orchestration or delegation back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "**One orchestration owner.**",
             "Only the host runs this top-level flow",
-            "the first line of every cross-harness task declares",
+            "every cross-family entry uses `ROLE: peer`",
             "generic same-lineage subagent never satisfies"
           ]
         },
@@ -911,7 +911,8 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "Every native session declares one role",
-            "The first line of every cross-harness task declares",
+            "The first line of every cross-family task declares `ROLE: peer`",
+            "Later primary-approval prose cannot repair an incorrect initial dispatch",
             "delegating back to the host lineage",
             "generic same-lineage subagent cannot satisfy"
           ]

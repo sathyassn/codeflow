@@ -105,10 +105,10 @@ The plugin's commands cover both modes:
 
 Start every delegated plugin prompt with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
-model orchestrator or delegate back to the host lineage (Claude).` Use `worker` instead of `peer`
-only for a primary-owned subtask. A generic Claude subagent is not a Codex
-delegate, and a native Codex thread that recursively starts another duo has
-violated the assignment rather than completed it.
+model orchestrator or delegate back to the host lineage (Claude).` Cross-family
+entry always targets the primary at default effort. Only that primary may
+dispatch same-family `ROLE: worker` escalation; never call a foreign worker
+directly. Claude subagents are not Codex; nested duos violate scope.
 
 Read the current Codex primary selector, default effort, and permitted
 worker classes from

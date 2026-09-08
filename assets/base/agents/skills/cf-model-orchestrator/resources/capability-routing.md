@@ -16,7 +16,10 @@ Every native session declares one role:
   approve the plan or replace a named reviewer.
 
 Only `host` invokes `cf-model-orchestrator`. The first line of every
-cross-harness task declares `ROLE: peer` or `ROLE: worker`; the prompt limits
+cross-family task declares `ROLE: peer` and invokes the receiving family's
+qualified primary at its default effort. `ROLE: worker` is only for same-family
+work owned and dispatched by that family's primary, through a native child or
+separate native session. The prompt limits
 the session to that bounded assignment and explicitly forbids starting the
 top-level orchestrator or delegating back to the host lineage. A generic
 same-lineage subagent cannot satisfy a named cross-lineage assignment. A Grok
@@ -116,8 +119,12 @@ The durable route is primary-owned: the active primary coordinates at the
 recorded default effort, stays the orchestrator, invokes the other-lineage
 primary directly, and may use only the bounded internal routes its own seat
 exposes and has qualified.
-Claude owns Claude-side routing and integrated judgment; a Codex host never
-selects a Claude worker directly. Concrete selectors, model classes, effort
+Each primary owns its family's routing: a caller never selects a foreign
+worker directly or passes worker escalation effort on the foreign primary's
+entry command. Instead, send complexity and the required outcome to that
+primary; it launches its own qualified high/xhigh worker and reviews the return.
+Later primary-approval prose cannot repair an incorrect initial dispatch.
+Claude retains integrated judgment. Concrete selectors, model classes, effort
 defaults, and escalation triggers live only in
 [current-ensemble.json](current-ensemble.json).
 When a catalog family is named, follow

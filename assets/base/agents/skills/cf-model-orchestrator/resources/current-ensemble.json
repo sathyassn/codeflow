@@ -148,6 +148,7 @@
     "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
     "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
+    "Cross-family entry always invokes the receiving qualified primary at default effort as ROLE: peer; only that primary dispatches its own same-family ROLE: worker escalation. A caller never selects a foreign worker directly.",
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",

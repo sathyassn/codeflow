@@ -75,6 +75,15 @@ The installed official Codex plugin has a sibling Stop hook; the required
 precondition, not an authentication, usage-credit, or consultation-approval issue.
 No plugin-private state was inspected or guard bypassed.
 
+Update, September 8: at the operator's request to check the plugin, its public
+`codex-companion.mjs setup --json` command reported `reviewGateEnabled: false`
+and `actionsTaken: []`. No setting was changed. The interactive Fable run
+`hardening-review-0908` then reached ready and exact-prompt acceptance, but
+returned native `StopFailure` / `rate_limit` (HTTP 429). The authorized Opus
+fallback is reviewing the same scope in a fresh native session
+`5835a785-c743-4654-b592-a611b2d4a911`; its diagnostic terminal identifies
+Opus 5 at medium. Review results remain pending until the lifecycle returns.
+
 Portable CLI feedback retrieval is verified. Automatic insertion into each
 harness chat UI and native Hermes consumption are not established by that test.
 Do not promote these results to universal harness compatibility or behavioral
@@ -94,3 +103,25 @@ The retry also verified the release binary's repeatable hash and its unchanged
 size budgets: service delta 1,190,688 bytes against 1,250,000; combined service
 and export delta 2,412,880 against 2,600,000. The final web asset tree is
 `7c173f857a857699b4879f89543f46e237f1b2519825be6206515ff4272855d2`.
+
+## Native effort diagnostic: failed dispatch boundary
+
+One fresh Opus/medium Claude Code trial of
+`complex-planning-delegates-qualified-reasoning` completed through schema-v2
+session `437780a8-46ef-4ba0-b011-ef8ffc00768a`, prompt
+`c0935fef-e0ab-427c-8e94-139242b76fee`. Fixture digest:
+`sha256:75410d397476d81df7facc19356521d9f34f8e5a19acb4af4d42dba048e58d58`.
+The subject received only `Read TASK.md and complete the task.`; graders and
+expected signals were excluded by the materializer. The retained native result
+is `/tmp/cf-effort-planning-0908/turns/trial-1/result.json`.
+
+The trial correctly selected stronger reasoning for cross-cutting architecture
+and security, rejected a cheaper collection worker as a substitute, and left
+the plan unapproved. Nevertheless, its concrete proposed Codex command used
+`--effort xhigh` and `ROLE: worker` directly from Claude. That bypasses the
+receiving default-effort primary and its internal routing ownership. Treat this
+as a failed behavioral result, not a pass based on surrounding medium-primary
+prose. The case asks for assignments and prompts, so it proves neither actual
+worker launch nor observed worker effort. Correcting symmetric family-entry
+guidance and the graders, then running fresh trials, is required before
+claiming this boundary works.

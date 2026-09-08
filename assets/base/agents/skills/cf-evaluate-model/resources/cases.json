@@ -4,6 +4,39 @@
   "full_trials": 3,
   "cases": [
     {
+      "id": "cross-family-entry-cannot-skip-primary",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "cross-family-entry-cannot-skip-primary",
+      "requirements": [
+        "CF-MM-010",
+        "CF-MM-011"
+      ],
+      "prompt": "Review the proposed dispatches in DISPATCHES.md. Write corrected invocation envelopes and ownership for both directions, preserving any valid parts. Use the effective ensemble. Do not launch sessions.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "both_foreign_entries_target_primary_at_default_as_peer",
+          "complex_work_escalated_inside_receiving_family",
+          "same_family_native_child_or_worker_session_retained",
+          "primary_reviews_worker_return",
+          "cross_family_independence_and_no_nested_duo_preserved"
+        ],
+        "references": [
+          "DISPATCHES.md"
+        ],
+        "must_not": [
+          "cross_family_worker_direct_invocation",
+          "foreign_primary_launched_at_worker_effort",
+          "later_primary_approval_launders_wrong_dispatch",
+          "all_worker_sessions_prohibited"
+        ]
+      }
+    },
+    {
       "id": "complex-planning-delegates-qualified-reasoning",
       "kind": "regression",
       "category": "interoperability",
@@ -22,7 +55,9 @@
           "strongest_qualified_same_family_reasoning_routes_selected",
           "high_or_xhigh_effort_requested_with_reason",
           "primaries_retain_coordination_and_approval",
-          "independent_cross_family_planning_and_review_preserved"
+          "independent_cross_family_planning_and_review_preserved",
+          "foreign_primary_entry_at_default_effort",
+          "worker_dispatched_by_own_family_primary"
         ],
         "references": [
           "WORK_BRIEF.md"
@@ -31,7 +66,10 @@
           "medium_treated_as_ceiling",
           "cheap_collection_worker_substitutes_for_reasoning",
           "model_alias_or_observed_effort_invented",
-          "worker_replaces_primary_approval"
+          "worker_replaces_primary_approval",
+          "cross_family_worker_direct_invocation",
+          "foreign_primary_launched_at_worker_effort",
+          "later_primary_approval_launders_wrong_dispatch"
         ]
       }
     },
@@ -52,6 +90,8 @@
         "signals": [
           "direct_xhigh_on_present_trigger",
           "no_manufactured_failed_high_attempt",
+          "foreign_primary_entry_at_default_effort",
+          "worker_dispatched_by_own_family_primary",
           "native_worker_route_and_provenance_required",
           "cross_family_review_preserved"
         ],
@@ -60,6 +100,9 @@
         ],
         "must_not": [
           "mandatory_medium_then_high_then_xhigh_ladder",
+          "cross_family_worker_direct_invocation",
+          "foreign_primary_launched_at_worker_effort",
+          "later_primary_approval_launders_wrong_dispatch",
           "primary_replaced_by_worker",
           "assumed_worker_completion"
         ]

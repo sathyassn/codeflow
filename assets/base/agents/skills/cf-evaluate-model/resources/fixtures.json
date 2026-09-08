@@ -3,6 +3,17 @@
   "fixtures_version": "2026-08-04-design-method-v3",
   "fixtures": [
     {
+      "id": "cross-family-entry-cannot-skip-primary",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/primary-entry",
+        "peer": "available"
+      },
+      "files": {
+        "DISPATCHES.md": "# Proposed architecture-review dispatches\nBoth families' primaries are configured at medium. Qualified high/xhigh reasoning workers and native routes are available. This security architecture task earns direct xhigh.\nA. Claude host -> official Codex plugin: /codex:rescue --model <effective Codex primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the security architecture analysis. The medium Codex primary will approve later.\nB. Codex host -> supported interactive Claude lifecycle: claude --model <effective Claude primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the architecture design. The medium Claude primary will approve later.\nC. Within either family, its medium primary launches its qualified xhigh reasoning worker using a native child-effort control or a separate native ROLE: worker session, then reviews the return. No session starts a nested duo.\n"
+      }
+    },
+    {
       "id": "complex-planning-delegates-qualified-reasoning",
       "tier": "standard",
       "state": {

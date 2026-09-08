@@ -160,11 +160,11 @@ lane: solo fallback. Host is not duty; Claude produces design.
    operator-owned outcome, public behavior, authority, material security
    boundary, or irreversible action.
 2. Identify the active host and required lane from the matrix. Set the current
-   session role to `host`; the first line of every cross-harness task declares
-   `ROLE: peer` or `ROLE: worker`, limits the task to that bounded assignment,
-   and explicitly prohibits starting the top-level orchestrator or delegating
-   back to the host lineage. A generic same-lineage subagent never satisfies
-   the named cross-lineage assignment.
+   session role to `host`; every cross-family entry uses `ROLE: peer` and the
+   receiving primary's default effort. Only that primary dispatches its own
+   `ROLE: worker` escalation. Bound the assignment; forbid nested orchestration
+   or delegating back to the host lineage. A generic same-lineage subagent
+   never satisfies the named cross-lineage assignment.
 3. Verify command and tool readiness:
    - Codex: `codex` is present, `codex login status` succeeds, and
      `codex mcp list` shows the tools required by the task.
@@ -342,8 +342,8 @@ For a Claude host, use the official plugin for Codex-produced or Codex-reviewed
 units:
 
 - `/codex:review` or `/codex:adversarial-review` for read-only critiques;
-- `/codex:rescue --model <selector> --effort <effort>` for production and
-  verification, taking both values from the current ensemble record;
+- `/codex:rescue --model <primary-selector> --effort <primary-default>` for
+  production/verification; the receiving primary owns worker escalation;
 - `/codex:transfer` for a persistent task visible in Codex App/TUI.
 
 Apply the same explicit selector and effort selection to every plugin task
