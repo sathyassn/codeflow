@@ -1,7 +1,7 @@
 # Post-merge hardening work and evidence
 
-Status: implementation and verification in progress. This record does not certify
-native model behavior or visual quality before the corresponding trials finish.
+Status: implementation reviewed; local gates passed with the scope and native
+qualification limits below. This is not a universal model or platform certification.
 
 Base: CodeFlow `cf0f124c544eb13a08b71483aa33a2b9f03e3b8b`; companion Agent OS
 alignment starts at `919bdbae410b7225d7470ed008236a4eff9743f2`.
@@ -135,8 +135,9 @@ permissions, independent planning/review and worker ownership stay unchanged.
 Claude presets now provide `effortLevel: high`; Codex provides
 `model_reasoning_effort = "high"`. Medium workers remain permitted, and a high
 primary need not spawn an equivalent high worker without a delegation benefit.
-The current evaluation suite is `2026-09-08-high-primary-v1`; previous trials
-below are diagnostic history, not evidence of the revised high-default suite.
+The first high-default evaluation corpus was `2026-09-08-high-primary-v1`;
+previous medium trials below are diagnostic history, not evidence of that
+revised high-default suite. The final rubric correction is recorded below.
 
 - Opus review session `5835a785-c743-4654-b592-a611b2d4a911` independently
   tested the earlier candidate and requested an Agent OS ADR-0055 citation;
@@ -217,3 +218,44 @@ the evidence requirement. This is a planning diagnostic, not a successful
 native delegation or worker-effort qualification. High effort does not remove
 the need to verify model claims. No receiving-family launch, Hermes runtime,
 or automatic chat insertion is qualified by this answer.
+
+Opus/high review turn 2 (same review session, prompt
+`430acac4-d314-4f3f-8940-dd2843b77d53`) approved both repository deltas with
+explicit limits, independently confirming the gzip decode, manifest and budget,
+supersession links, and semantic routing corrections. Four presentation cleanup
+tests could not run in its Bash sandbox because `/bin/ps` was denied; root's
+105-test and full live qualification results remain the evidence for that scope.
+The peer also graded the blind planning answer as failed, identifying a missing
+rubric prohibition despite the existing doctrine rule. CodeFlow `8e0f63d59`
+adds that prohibition and a deterministic regression proving all positive
+routing signals cannot outweigh the observed availability violation. Cases are
+now `2026-09-08-high-primary-v2`, suite digest
+`sha256:2e5656b7048e3d893701705c440ed79984eadd8aefd38e23bb5269267359b77a`.
+All 46 evaluation-kit tests pass. This is a rubric correction, not a new live
+trial or retrospective pass; model availability remains unqualified until
+native evidence establishes it.
+
+The final production-code delta `a9c648599` passed the full workspace coverage
+command again: 90.25% line coverage, 53,831 lines and 5,247 missed. Its committed
+portal build produced 103 routes and validated 97 source pages. The later
+`8e0f63d59` delta changes only tests, rubric and synchronized corpus files;
+production Rust and browser code are unchanged.
+
+At `8e0f63d59`, the final strict essential gate passed all nine targets, including
+the complete Rust workspace, Clippy, rustdoc, eval kit and documentation graph.
+Native Opus/high review turn 3 approved CodeFlow `8e0f63d59` and Agent OS
+`25870cb` (prompt `f0f61c0b-cc9c-4bf8-8b3c-22b8d2a0cac2`). Turn 4 approved
+the corrected, revision-bound CodeFlow PR narrative (prompt
+`bc4d9b3f-c8a4-40cb-9ad3-34ecaac19fb5`). Subsequent changes to this record
+only transcribe those results; they do not change the reviewed implementation.
+
+The saved real-browser feedback envelope
+`34c66e09-c000-4b04-92d8-fc983176b7f9`, revision 1, was read in that native
+session. The first interpretation omitted two `region_selector` fields and
+must not be scored as a full first-pass success. On explicit reinspection,
+the reader correctly distinguished the DOM-element note, block-relative area
+rectangle and document-wide rectangle, with their coordinates and capture
+dimensions. The payload preserved all fields; this was a reader correction,
+not a transport fix. No synthetic note was implemented or resolved, and no
+human approval inferred. This proves bounded saved-envelope interpretation,
+not automatic chat insertion or a fresh live browser-to-Claude round trip.
