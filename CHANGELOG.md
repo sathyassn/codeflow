@@ -109,6 +109,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Presentation build reproducibility.** Maintainer asset builds now require
+  the official pinned Node distribution's compression libraries and explain
+  incompatible system-library builds. Regenerated export bytes match that
+  qualified toolchain; normal CLI use and consumer Rust builds still need no Node.
+
 - **Reliable presentation selections.** Comment capture revalidates the live
   selection, rejects invalid or oversized anchors, distinguishes repeated words
   and preserves toolbar selection across focus changes. Exiting Comment clears

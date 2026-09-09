@@ -13,6 +13,7 @@ const committedAssets = join(crateRoot, "assets");
 
 run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
+run("node", ["--test", "scripts/toolchain.test.mjs"]);
 await checkSelectorOffsets();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));

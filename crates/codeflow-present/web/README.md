@@ -23,7 +23,14 @@ Changing them requires a matching Rust change and contract test.
 
 ## Maintainer workflow
 
-Use exactly Node 26.4.0 and npm 11.17.0, as pinned in `package.json`.
+Use the official Node 26.4.0 distribution and npm 11.17.0, as pinned in
+`package.json`. The build also checks the bundled zlib and Brotli versions:
+system-library builds can report the same Node version but emit different
+compressed bytes. CI's `actions/setup-node` uses the official distribution.
+On a deliberate toolchain upgrade, requalify compression and regenerate all
+assets together. The two-build, byte-for-byte check remains the final proof;
+version checks alone do not prove reproducibility. Direct Node invocation has
+no npm operation to check; npm invocations must carry the pinned npm version.
 
 ```text
 npm ci --ignore-scripts
