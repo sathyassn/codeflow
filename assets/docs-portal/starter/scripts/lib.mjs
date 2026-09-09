@@ -169,7 +169,7 @@ function escapeGeneratedHtml(value) {
 }
 
 // The Starlight shell already renders the page title; a leading depth-1
-// heading that repeats it — exactly, or with only a record-ID prefix such as
+// heading that repeats it — allowing initial-letter case and a record-ID prefix such as
 // "ADR-0053 — <title>" — would render the title twice (the ID stays visible
 // in Record context and provenance). Any other heading is author content.
 export function stripLeadingTitleHeading(markdown, title) {
@@ -177,8 +177,11 @@ export function stripLeadingTitleHeading(markdown, title) {
   const first = tree.children[0];
   if (!first || first.type !== "heading" || first.depth !== 1) return markdown;
   const text = visibleNodeText(first).trim();
-  const prefix = text.endsWith(title) ? text.slice(0, text.length - title.length) : null;
-  if (text !== title && !(prefix !== null && /^(?:ADR|EPC|SPC|TSK|CAP)-\d+(?:-\d+)?\s*[—–:-]\s*$/.test(prefix))) return markdown;
+  const unprefixed = text.replace(/^(?:ADR|EPC|SPC|TSK|CAP)-\d+(?:-\d+)?\s*[—–:-]\s*/, "");
+  // Only sentence-initial case is presentation; internal case may name an API.
+  const matches = text === title || unprefixed === title || (unprefixed.slice(1) === title.slice(1)
+    && unprefixed.slice(0, 1).toLowerCase() === title.slice(0, 1).toLowerCase());
+  if (!matches) return markdown;
   tree.children.shift();
   return stringifyMarkdown(tree);
 }

@@ -376,7 +376,16 @@ test("cf-stage fences render token-driven figures and fail closed", () => {
 test("a leading H1 that repeats the page title renders once", () => {
   assert.equal(stripLeadingTitleHeading("# Guide\n\nBody.", "Guide"), "Body.");
   assert.equal(stripLeadingTitleHeading("# ADR-0053 — Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# ADR-0053 — Guide\n\nBody.", "ADR-0053 — Guide"), "Body.");
   assert.equal(stripLeadingTitleHeading("# TSK-002-001: Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# ADR-0056 — high primary effort with bounded workers\n\nBody.", "High primary effort with bounded workers"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# Guide\n\nBody.", "guide"), "Body.");
+  for (const heading of ["ApI guide", "API Guide", "ADR-0053 — Something else", "NOTE-001 — API guide"]) {
+    const source = `# ${heading}\n\nBody.`;
+    assert.equal(stripLeadingTitleHeading(source, "API guide"), source);
+  }
+  assert.equal(stripLeadingTitleHeading("## Guide\n\nBody.", "Guide"), "## Guide\n\nBody.");
   assert.equal(stripLeadingTitleHeading("# Introduction to Guide\n\nBody.", "Guide"), "# Introduction to Guide\n\nBody.");
   assert.equal(stripLeadingTitleHeading("# Other\n\nBody.", "Guide"), "# Other\n\nBody.");
   assert.equal(stripLeadingTitleHeading("Intro first.\n\n# Guide", "Guide"), "Intro first.\n\n# Guide");

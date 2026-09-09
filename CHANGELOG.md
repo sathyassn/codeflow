@@ -116,7 +116,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cover neighboring text with comment overlays; leaving Comment mode restores
   their pointer interaction without changing the surrounding layout.
 
-- **Portal dependency security updates.** The repository portal and distributed
+- **Portal title rendering.** A leading title repeated with different initial
+  capitalization now renders once, including record-ID prefixes. Other wording
+  and internal capitalization remain source-owned; source documents are unchanged.
+
+- **Breaking: portal dependency security updates.** The repository portal and distributed
   starter use Astro 7.2.8, Sharp 0.35.4, js-yaml 4.3.2 and SVGO 4.1.0 to address
   six reported advisories. Dependency lifecycle scripts remain disabled.
   The portal build requires Node 22.19.0 or newer to match the updated transitive
