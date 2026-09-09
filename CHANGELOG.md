@@ -109,6 +109,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Breaking: presentation build reproducibility.** Maintainer asset builds now require
+  the official pinned Node distribution's compression libraries and explain
+  incompatible system-library builds. Regenerated export bytes match that
+  qualified toolchain; normal CLI use and consumer Rust builds still need no Node.
+
+- **Reliable presentation selections.** Comment capture revalidates the live
+  selection, rejects invalid or oversized anchors, distinguishes repeated words
+  and preserves toolbar selection across focus changes. Exiting Comment clears
+  capture state so the same anchor can be selected again. Embedded views no longer
+  cover neighboring text with comment overlays; leaving Comment mode restores
+  their pointer interaction without changing the surrounding layout.
+
+- **Portal title rendering.** A leading title repeated with different initial
+  capitalization now renders once, including record-ID prefixes. Other wording
+  and internal capitalization remain source-owned; source documents are unchanged.
+
+- **Breaking: portal dependency security updates.** The repository portal and distributed
+  starter use Astro 7.2.8, Sharp 0.35.4, js-yaml 4.3.2 and SVGO 4.1.0 to address
+  six reported advisories. Dependency lifecycle scripts remain disabled.
+  The portal build requires Node 22.19.0 or newer to match the updated transitive
+  HTTP library; the pinned Node 26.4.0 toolchain is unchanged.
+  Existing adopters receive the managed-file reconciliation through
+  `codeflow update` after installing the corrected CLI; resolve any reported
+  local customization conflicts and rerun the portal's locked install and checks.
+
 - **Presentation qualification now exercises the real owned runtime and offline
   export boundary.** A full-only gate drives the CLI, authenticated loopback
   service, isolated headless browser profiles, feedback/update/reopen flow,

@@ -154,8 +154,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const captureModeRef = useRef<CaptureMode>(null);
   const notesCountRef = useRef(0);
   const dragGestureRef = useRef<DragGesture | null>(null);
-  const lastSelectionRef = useRef<CapturedTarget | null>(null);
-  const lastPinnedExactRef = useRef<string>("");
+  // Only the toolbar uses this stash: focusing its button can collapse the
+  // native selection. Debounced gestures always recapture the live range.
+  const toolbarSelectionRef = useRef<CapturedTarget | null>(null);
+  const lastPinnedSelectionRef = useRef<string>("");
   const composerOpenRef = useRef(false);
   const pendingPinRef = useRef<PendingPin | null>(null);
   const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: { openComposer?: boolean }) => void>(() => undefined);
@@ -201,6 +203,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setCommentMode(on);
     commentModeRef.current = on;
     if (!on) {
+      lastPinnedSelectionRef.current = "";
+      toolbarSelectionRef.current = null;
       setPanelOpen(false);
       setCaptureMode(null);
       captureModeRef.current = null;
@@ -260,27 +264,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     };
   }, [documentRoot, config.revision]);
 
-  // Iframe stages swallow pointer events. When Comment is armed, cover them so
-  // click/drag pin the figure instead of disappearing into the child document.
+  // While commenting, native hit-testing reaches the containing figure/block
+  // instead of the iframe document. No overlay can obscure neighboring prose,
+  // and the browser retains clipping, transforms and scroll semantics.
+  // Only frames present when mode/revision changes are managed, as before.
   useEffect(() => {
     if (!commentMode) return undefined;
-    const covers: HTMLElement[] = [];
-    documentRoot.querySelectorAll("iframe").forEach((frame) => {
-      const parent = frame.parentElement;
-      if (!parent) return;
-      if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
-      const cover = document.createElement("div");
-      cover.dataset.cfCommentCover = "true";
-      cover.setAttribute("aria-hidden", "true");
-      Object.assign(cover.style, {
-        position: "absolute",
-        inset: "0",
-        zIndex: "2",
-      });
-      parent.append(cover);
-      covers.push(cover);
+    const frames = [...documentRoot.querySelectorAll("iframe")].map((frame) => {
+      const value = frame.style.getPropertyValue("pointer-events");
+      const priority = frame.style.getPropertyPriority("pointer-events");
+      frame.style.setProperty("pointer-events", "none", "important");
+      return { frame, value, priority };
     });
-    return () => covers.forEach((el) => el.remove());
+    return () => frames.forEach(({ frame, value, priority }) => {
+      if (value) frame.style.setProperty("pointer-events", value, priority);
+      else frame.style.removeProperty("pointer-events");
+    });
   }, [commentMode, documentRoot, config.revision]);
 
   /* ─── Explicit capture modes (a11y / advanced tools) ─── */
@@ -415,27 +414,28 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     shiftRef.current = false;
     let pinTimer = 0;
     const onSelection = (): void => {
+      window.clearTimeout(pinTimer);
       if (!commentModeRef.current || captureModeRef.current) return;
       const drag = dragGestureRef.current;
       if (drag && !drag.proseOnly && drag.region) return;
       const selected = captureSelection(documentRoot);
-      if (selected?.selector) lastSelectionRef.current = selected;
       if (!selected?.selector) return;
       if (selected.selector.exact.length > config.review_limits.max_selector_utf16) {
         setStatus(`Selected text is too long. Select at most ${config.review_limits.max_selector_utf16} characters.`);
         return;
       }
       setHintMode("text");
-      if (selected.selector.exact === lastPinnedExactRef.current) return;
-      window.clearTimeout(pinTimer);
       pinTimer = window.setTimeout(() => {
         if (!commentModeRef.current || captureModeRef.current) return;
-        const live = lastSelectionRef.current;
-        if (!live?.selector) return;
-        lastPinnedExactRef.current = live.selector.exact;
-        const rect = window.getSelection()?.getRangeAt(0)?.getBoundingClientRect();
-        const cx = rect ? rect.left + rect.width / 2 - 40 : 80;
-        pinCaptureRef.current(live, cx, rect?.bottom ?? 120, { openComposer: false });
+        const live = captureSelection(documentRoot);
+        const selection = window.getSelection();
+        if (!live?.selector || live.selector.exact.length > config.review_limits.max_selector_utf16 || selection?.rangeCount !== 1) return;
+        const identity = JSON.stringify([live.blockId, live.selector]);
+        if (identity === lastPinnedSelectionRef.current) return;
+        lastPinnedSelectionRef.current = identity;
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        const cx = rect.left + rect.width / 2 - 40;
+        pinCaptureRef.current(live, cx, rect.bottom, { openComposer: false });
       }, 160);
     };
 
@@ -454,7 +454,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (event.target.closest("button, a, input, textarea, select")) return;
       if (pendingPinRef.current) {
         setPendingPin(null);
-        lastPinnedExactRef.current = "";
+        lastPinnedSelectionRef.current = "";
         setHotSel(null);
       }
       regionDraftRef.current = null;
@@ -685,7 +685,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       ]);
       setVerdict((v) => (v === "approve" ? "approve_with_notes" : v));
       setStatus(`Note saved for ${c.summary}.`);
-      lastPinnedExactRef.current = "";
+      lastPinnedSelectionRef.current = "";
       window.getSelection()?.removeAllRanges();
     }
     clearHot();
@@ -706,7 +706,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerBody("");
     setEditingId(null);
     setPendingPin(null);
-    lastPinnedExactRef.current = "";
+    lastPinnedSelectionRef.current = "";
     clearHot();
     setRegionDraft(null);
     regionDraftRef.current = null;
@@ -724,13 +724,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   /* ─── Tool helpers (secondary path; selection captured on pointerdown so click does not clear it) ─── */
   const stashSelection = (): void => {
     const selected = captureSelection(documentRoot);
-    if (selected?.selector) lastSelectionRef.current = selected;
+    toolbarSelectionRef.current = selected?.selector && selected.selector.exact.length <= config.review_limits.max_selector_utf16
+      ? selected : null;
   };
   const addNoteFromSelection = (): void => {
     if (busy) return;
     if (!commentMode) armComment(true);
-    const selected = lastSelectionRef.current ?? captureSelection(documentRoot);
-    lastSelectionRef.current = null;
+    const selected = toolbarSelectionRef.current ?? captureSelection(documentRoot);
+    toolbarSelectionRef.current = null;
     if (!selected?.selector) {
       setStatus("Select text inside one reviewable block, then add a note.");
       return;
@@ -813,7 +814,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           event.preventDefault();
           pendingPinRef.current = null;
           setPendingPin(null);
-          lastPinnedExactRef.current = "";
+          lastPinnedSelectionRef.current = "";
           clearHot();
           setRegionDraft(null);
           regionDraftRef.current = null;
@@ -1074,7 +1075,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             data-testid="float-esc"
             onClick={() => {
               setPendingPin(null);
-              lastPinnedExactRef.current = "";
+              lastPinnedSelectionRef.current = "";
               clearHot();
               setRegionDraft(null);
               regionDraftRef.current = null;

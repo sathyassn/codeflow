@@ -6,6 +6,8 @@ import axe from "axe-core";
 import { chromium } from "playwright-core";
 import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
 import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
+import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
+import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetsRoot = resolve(webRoot, "../assets");
@@ -28,7 +30,8 @@ const server = createServer(async (request, response) => {
         "Cache-Control": "no-store",
         "Content-Security-Policy": applicationCsp,
       });
-      response.end(fixtureHtml(url.searchParams.get("case") === "prose"));
+      const fixture = url.searchParams.get("case");
+      response.end(fixtureHtml(["prose", "selection", "iframe"].includes(fixture), fixture === "selection", fixture === "iframe"));
       return;
     }
     if (url.pathname === "/export") {
@@ -103,6 +106,8 @@ try {
   await checkSelectionOccurrences(browser);
   await checkDocumentExcerpts(browser);
   await checkProseLazyPath(browser, origin);
+  await checkSelectionLifecycle(browser, origin);
+  await checkIframeComments(browser, origin);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, diagrams, axe, and 320 px reflow\n");
@@ -291,21 +296,43 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
-  {
-    const prose = page.locator("#cf-present-document [data-cf-review-text-root]").first();
+  for (const steps of [1, 10]) {
+    await revealDocumentForGestures();
+    const prose = page.locator("#gesture-root");
+    await prose.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
     const box = await prose.boundingBox();
     if (!box) throw new Error("Prose review-text-root has no box");
-    await page.mouse.move(box.x + 8, box.y + 4);
+    const endpoint = await page.locator("#gesture-target").evaluate((el) => {
+      const range = document.createRange();
+      range.setStart(el.firstChild, 0);
+      range.setEnd(el.firstChild, 6);
+      const rect = range.getBoundingClientRect();
+      return { x: rect.right, y: rect.top + rect.height / 2 };
+    });
+    const start = { x: box.x + 4, y: endpoint.y };
+    const hits = await page.evaluate(({ start, endpoint }) => ({
+      start: document.elementFromPoint(start.x, start.y)?.id,
+      end: document.elementFromPoint(endpoint.x, endpoint.y)?.id,
+      startElement: document.elementFromPoint(start.x, start.y)?.outerHTML.slice(0, 200),
+      endElement: document.elementFromPoint(endpoint.x, endpoint.y)?.outerHTML.slice(0, 200),
+    }), { start, endpoint });
+    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
+      throw new Error(`Prose drag is obscured or off-screen: ${JSON.stringify({ box, hits })}`);
+    }
+    await page.mouse.move(start.x, start.y);
     await page.mouse.down();
-    await page.mouse.move(box.x + 160, box.y + 22, { steps: 10 });
+    await page.mouse.move(endpoint.x, endpoint.y, { steps });
     const marquee = await page.locator(".cf-region-draft").count();
     await page.mouse.up();
+    const quote = await page.evaluate(() => String(getSelection()));
+    if (quote !== "Review") throw new Error(`Prose drag (${steps} steps) selected ${JSON.stringify(quote)}, expected Review`);
     await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
     if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
     if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
+    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error("Prose drag pinned a stale quote");
     await page.keyboard.press("Escape");
-    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).
@@ -650,7 +677,7 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
   assertLoopbackOnly(responses);
 }
 
-function fixtureHtml(proseOnly) {
+function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
   const denseSource = denseDiagramSource(300);
   const enhancements = proseOnly
     ? ""
@@ -674,7 +701,16 @@ function fixtureHtml(proseOnly) {
           <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
         </div>
       </section>`;
-  const sandbox = proseOnly ? "" : '<figure><iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture"></iframe></figure>';
+  const sandbox = iframeOnly
+    ? `<section data-cf-block-id="frame-block" data-cf-block-label="Embedded view" data-cf-block-digest="${"e".repeat(64)}">
+        <h2>Embedded view</h2>
+        <div id="frame-scroll" style="height:240px;overflow:auto;transform:translateX(0)">
+          <figure id="frame-figure" style="margin:0;height:420px">
+            <iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture" style="height:400px;pointer-events:auto !important"></iframe>
+          </figure>
+        </div>
+      </section>`
+    : proseOnly ? "" : '<figure><iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture"></iframe></figure>';
   const attackSandbox = proseOnly ? "" : '<iframe sandbox title="Attack sandbox" src="/sandbox/1/attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0"></iframe>';
   const config = JSON.stringify({
     schema_version: 1,
@@ -743,8 +779,14 @@ function fixtureHtml(proseOnly) {
     <header><p>Outcome</p><h1>${proseOnly ? "A focused explanation" : "A bounded review runtime"}</h1></header>
     <section data-cf-block-id="block-summary" data-cf-block-label="Summary" data-cf-block-digest="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc">
       <h2 id="summary">Summary</h2>
+      <div data-cf-review-text-root id="gesture-root" style="padding:12px"><p id="gesture-target" style="margin:0">Review me.</p></div>
       <div data-cf-review-text-root><p>The document remains readable without its review controls.</p></div>
     </section>
+    ${selectionOnly ? `<section data-cf-block-id="selection-cases" data-cf-block-label="Selection cases" data-cf-block-digest="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd">
+      <h2>Selection cases</h2>
+      <div data-cf-review-text-root><p id="selection-limit">0123456789abcdefZ</p></div>
+      <div data-cf-review-text-root><p id="selection-repeat">First passed. Next passed. End.</p></div>
+    </section>` : ""}
     ${enhancements}
     ${sandbox}
     ${attackSandbox}

@@ -711,6 +711,11 @@ catalog; the runtime owns chrome, themes, and the Comment system. The
 design-exploration board is craft reference, not a document to clone. Durable
 docs belong to `cf-docs-portal`.
 
+Text feedback retains the selected occurrence and revalidates live ranges before
+pinning. Toolbar capture survives focus changes; leaving Comment releases its
+capture state. Iframe figures use native hit-testing while commenting and regain
+their prior pointer interaction afterward, without overlays on neighboring text.
+
 The runtime validates the declarative block tree, embeds its deterministic
 renderer, stores immutable revisions and append-only feedback in owner-private
 project-keyed durable state, keeps browser-owned profile/cache and bounded
@@ -782,7 +787,8 @@ adrs: [ADR-0048]
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-starter is absent from ordinary initialization, materializes offline once at
+portal build requires Node 22.19.0 or newer; the pinned toolchain is Node 26.4.0.
+The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 ordinary never-clobber updates through opaque content-addressed pristine
 baselines. The source-authority adapter generates disposable pages, Markdown

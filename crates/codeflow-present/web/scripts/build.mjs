@@ -11,6 +11,9 @@ const crateRoot = resolve(webRoot, "..");
 const defaultAssetsRoot = join(crateRoot, "assets");
 const expectedNode = "v26.4.0";
 const expectedNpm = "11.17.0";
+// Official Node builds use these compressors. Distribution builds can keep the
+// Node version while changing gzip bytes; the full tree check remains the proof.
+const expectedCompression = Object.freeze({ zlib: "1.3.2.1-motley-3246f1b", brotli: "1.2.0" });
 
 export const budgets = Object.freeze({
   raw_corpus_bytes: 5_000_000,
@@ -265,13 +268,18 @@ function sha256Base64(value) {
   return createHash("sha256").update(value).digest("base64");
 }
 
-function assertToolchain() {
-  if (process.version !== expectedNode) {
-    throw new Error(`Node ${expectedNode.slice(1)} is required; found ${process.version.slice(1)}`);
+export function assertToolchain(versions = process.versions, userAgent = process.env.npm_config_user_agent) {
+  if (`v${versions.node}` !== expectedNode) {
+    throw new Error(`Node ${expectedNode.slice(1)} is required; found ${versions.node}`);
   }
-  const npmVersion = process.env.npm_config_user_agent?.match(/npm\/([^ ]+)/u)?.[1];
+  const npmVersion = userAgent?.match(/npm\/([^ ]+)/u)?.[1];
   if (npmVersion && npmVersion !== expectedNpm) {
     throw new Error(`npm ${expectedNpm} is required; found ${npmVersion}`);
+  }
+  for (const [name, expected] of Object.entries(expectedCompression)) {
+    if (versions[name] !== expected) {
+      throw new Error(`${name} ${expected} is required for reproducible assets; found ${versions[name] ?? "unavailable"}. Use the official Node ${expectedNode.slice(1)} distribution, not a system-library rebuild.`);
+    }
   }
 }
 
