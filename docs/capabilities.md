@@ -711,6 +711,11 @@ catalog; the runtime owns chrome, themes, and the Comment system. The
 design-exploration board is craft reference, not a document to clone. Durable
 docs belong to `cf-docs-portal`.
 
+Text feedback retains the selected occurrence and revalidates live ranges before
+pinning. Toolbar capture survives focus changes; leaving Comment releases its
+capture state. Iframe figures use native hit-testing while commenting and regain
+their prior pointer interaction afterward, without overlays on neighboring text.
+
 The runtime validates the declarative block tree, embeds its deterministic
 renderer, stores immutable revisions and append-only feedback in owner-private
 project-keyed durable state, keeps browser-owned profile/cache and bounded

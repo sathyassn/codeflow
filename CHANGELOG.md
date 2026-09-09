@@ -109,6 +109,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Reliable presentation selections.** Comment capture revalidates the live
+  selection, rejects invalid or oversized anchors, distinguishes repeated words
+  and preserves toolbar selection across focus changes. Exiting Comment clears
+  capture state so the same anchor can be selected again. Embedded views no longer
+  cover neighboring text with comment overlays; leaving Comment mode restores
+  their pointer interaction without changing the surrounding layout.
+
 - **Portal dependency security updates.** The repository portal and distributed
   starter use Astro 7.2.8, Sharp 0.35.4, js-yaml 4.3.2 and SVGO 4.1.0 to address
   six reported advisories. Dependency lifecycle scripts remain disabled.
