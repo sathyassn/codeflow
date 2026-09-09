@@ -541,8 +541,9 @@ fn evaluate_pr_structure(
 }
 
 /// `true` when the range is known and every touched path is documentation:
-/// `*.md`, `*.txt`, a `LICENSE*` file, anything under `docs/`, or a `.github`
-/// template. `None` (unresolved range) and an empty file list are both treated
+/// Recognized prose, inert documentation images, license text, or GitHub issue
+/// forms. A docs directory alone does not make executable content documentation.
+/// `None` (unresolved range) and an empty file list are both treated
 /// as code — the conservative direction, so a range whose files could not be
 /// listed still requires the code sections.
 fn docs_only(range_files: Option<&[String]>) -> bool {
@@ -554,22 +555,35 @@ fn docs_only(range_files: Option<&[String]>) -> bool {
 /// code change; in particular `.github/workflows/**` is CI config, not docs.
 fn is_docs_path(path: &str) -> bool {
     let p = path.trim();
-    if p.starts_with("docs/") || p.starts_with(".github/ISSUE_TEMPLATE/") {
-        return true;
-    }
     let name = p.rsplit('/').next().unwrap_or(p);
-    if name.to_ascii_uppercase().starts_with("LICENSE") {
-        return true;
-    }
-    if p.starts_with(".github/")
-        && !p.starts_with(".github/workflows/")
-        && name.to_ascii_lowercase().contains("template")
+    // Instructions and shipped assets can change runtime/agent behavior even
+    // when their serialization is Markdown. Prefer extra evidence to a prose
+    // exemption for these contract surfaces.
+    if matches!(name, "AGENTS.md" | "CLAUDE.md" | "SKILL.md")
+        || p.starts_with("assets/")
+        || p.split('/').any(|part| {
+            matches!(
+                part,
+                ".agents" | ".claude" | ".codex" | ".grok" | ".codeflow"
+            )
+        })
     {
+        return false;
+    }
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name.to_ascii_uppercase().starts_with("LICENSE") && extension.is_empty() {
         return true;
     }
-    Path::new(name)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("txt"))
+    if p.starts_with(".github/ISSUE_TEMPLATE/") && matches!(extension.as_str(), "yml" | "yaml") {
+        return true;
+    }
+    matches!(extension.as_str(), "md" | "txt" | "rst" | "adoc")
+        || (p.starts_with("docs/")
+            && matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp"))
 }
 
 /// Find a required section `name` in the body: a `##`/`###` heading whose
@@ -1231,7 +1245,7 @@ mod tests {
         assert!(docs("README.md"));
         assert!(docs("notes.txt"));
         assert!(docs("LICENSE-MIT"));
-        assert!(docs("docs/img/arch.png"), "anything under docs/ is docs");
+        assert!(docs("docs/img/arch.png"));
         assert!(docs(".github/ISSUE_TEMPLATE/bug.yml"));
         assert!(docs(".github/pull_request_template.md"));
         // Code, config, CI yml, Cargo.*, src — all code.
@@ -1239,10 +1253,51 @@ mod tests {
         assert!(!docs("Cargo.toml"));
         assert!(!docs(".github/workflows/ci.yml"));
         assert!(!docs(".github/dependabot.yml"));
+        for executable in [
+            "docs/examples/install.sh",
+            "docs/site.config.ts",
+            "docs/view.html",
+            "docs/diagram.svg",
+            "docs/.claude/settings.json",
+            "LICENSE.rs",
+            ".github/pull_request_template.sh",
+            ".github/ISSUE_TEMPLATE/helper.py",
+        ] {
+            assert!(!docs(executable), "executable path: {executable}");
+        }
         // Unknown or empty ranges are conservatively code.
         assert!(!docs_only(None));
         assert!(!docs_only(Some(&[])));
         assert!(docs_only(Some(&["docs/a.md".to_string()])));
+    }
+
+    #[test]
+    fn instruction_and_shipped_markdown_requires_code_evidence() {
+        for path in [
+            "assets/base/agents/skills/cf-plan/SKILL.md",
+            "assets/base/README.md",
+            ".agents/skills/cf-plan/SKILL.md",
+            ".claude/agents/reviewer.md",
+            ".codeflow/.baseline/AGENTS.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "packages/web/AGENTS.md",
+            "packages/web/.claude/agents/review.md",
+            ".codex/instructions.md",
+            ".grok/instructions.md",
+            "custom-agent/skills/explain/SKILL.md",
+        ] {
+            let files = vec![path.to_string()];
+            assert!(!docs_only(Some(&files)), "behavioral contract: {path}");
+            let violations =
+                evaluate_pr_structure(&git(), "## Summary\nChange guidance\n", Some(&files));
+            assert!(
+                violations.iter().any(|v| v.message.contains("Testing")),
+                "missing evidence requirement: {path}"
+            );
+        }
+        assert!(is_docs_path("docs/assets/overview.md"));
+        assert!(is_docs_path("assets-guide.md"));
     }
 
     // -- range detection --------------------------------------------------

@@ -1,7 +1,22 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-08-04-design-method-v3",
+  "requirements_version": "2026-09-08-high-primary-v1",
   "requirements": [
+    {
+      "id": "CF-GIT-004",
+      "level": "hard",
+      "statement": "A ready PR describes the complete branch and attributes test/review evidence to its actual revision and scope; coverage PASS is not a measurement, executable changes cannot use a docs-only shortcut, operator journeys need whole-flow evidence, and protected-branch/cleanup boundaries remain in force.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "a job's `PASS` is not a coverage number",
+            "Whole-flow evidence includes changed operator/CLI journeys",
+            "Missing required evidence keeps the PR draft"
+          ]
+        }
+      ]
+    },
     {
       "id": "CF-DES-001",
       "level": "hard",
@@ -712,7 +727,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "is reassignment: create Plan vN+1",
-            "same-seat medium\u2192high or high\u2192xhigh escalation"
+            "same-seat trigger-based effort escalation"
           ]
         }
       ]
@@ -771,7 +786,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "The Claude judgment primary owns integrated Claude judgment",
-            "let the owning primary control its internal routing",
+            "retain primary planning/approval duties and internal routing",
             "never let a worker replace a primary"
           ]
         },
@@ -821,7 +836,7 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's default effort; a medium primary that hits a trigger mid-session stays the orchestrator and spawns same-family workers at the escalation effort; extra catalog families are named when routing-policy triggers fire and they are available; preserve primary plan/approval duties, leave internal routing to the owning primary, and use workers only through verified native routing.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's high default; the primary retains orchestration and approval, may perform suitable high reasoning directly, and uses strongest-qualified same-family workers when delegation adds value or a trigger requires xhigh. Bounded routine workers may use medium; do not inflate effort or add a redundant high worker merely to satisfy a label. Extra catalog families are named when routing-policy triggers fire and they are available. Preserve independent plans, primary approval, owning-family internal routing, and verified native evidence.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -831,17 +846,19 @@
             "retain primary planning/approval duties",
             "never let a worker replace a primary",
             "Spawn same-family high/xhigh workers",
-            "the medium primary stays the orchestrator"
+            "the high primary stays the orchestrator",
+            "direct xhigh when triggered",
+            "Routine work does not automatically escalate"
           ]
         },
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"medium\"",
+            "\"default_effort\": \"high\"",
             "\"escalation_effort\": \"xhigh\"",
             "\"model_class\": \"qualified-terra-worker\"",
             "Claude-side internal routing belongs to the Claude primary",
-            "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator",
+            "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
           ]
         }
@@ -879,14 +896,14 @@
     {
       "id": "CF-MM-011",
       "level": "hard",
-      "statement": "Exactly one host owns top-level orchestration; every cross-harness task starts with an explicit peer or worker role, stays bounded, forbids delegating back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
+      "statement": "Exactly one host owns top-level orchestration; cross-family entry invokes the receiving qualified primary at default effort as peer. Only that primary dispatches same-family workers through native children or separate native sessions. Assignments stay bounded, forbid nested orchestration or delegation back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "**One orchestration owner.**",
             "Only the host runs this top-level flow",
-            "the first line of every cross-harness task declares",
+            "every cross-family entry uses `ROLE: peer`",
             "generic same-lineage subagent never satisfies"
           ]
         },
@@ -894,7 +911,8 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "Every native session declares one role",
-            "The first line of every cross-harness task declares",
+            "The first line of every cross-family task declares `ROLE: peer`",
+            "Later primary-approval prose cannot repair an incorrect initial dispatch",
             "delegating back to the host lineage",
             "generic same-lineage subagent cannot satisfy"
           ]
@@ -1462,7 +1480,9 @@
         {
           "path": ".agents/skills/cf-present/references/document-authoring.md",
           "markers": [
-            "without scripts, same-origin access, forms, navigation, or network",
+            "runtime scopes authored style selectors and contains its layout/paint",
+            "Scripts, forms, navigation, network",
+            "Offline exports additionally place authored HTML in a sandboxed frame",
             "orphaned annotations as visible unresolved context",
             "utility defaults never influence the product"
           ]

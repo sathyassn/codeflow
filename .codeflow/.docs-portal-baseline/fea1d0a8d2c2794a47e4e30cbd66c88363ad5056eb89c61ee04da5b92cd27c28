@@ -3,10 +3,10 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships,
+  amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
   pinnedSourceUrl as providerSourceUrl, referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
-  strictUrlSegment, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
+  recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
@@ -24,7 +24,9 @@ const MAX_TOTAL_MEDIA_BYTES = 64 * 1024 * 1024;
 const MAX_MEDIA_FILES = 1_000;
 const MAX_STALE_REASON_BYTES = 512;
 const MAX_STALE_STUB_BYTES = 4 * 1024;
-const portalRoot = process.cwd();
+// Canonicalize before comparing paths: Windows runners may expose the same
+// directory through both long and 8.3 names, which are not lexically relative.
+const portalRoot = await realpath(process.cwd());
 await recoverOwnedCorpus(portalRoot);
 const discoveredRepositoryRoot = await findRepositoryRoot(portalRoot);
 const repositoryRoot = await realpath(discoveredRepositoryRoot);
@@ -45,7 +47,7 @@ if (!filesystemPathsEqual(repositoryRoot, configuredRepositoryRoot)) throw new E
 const adapterRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const selfContainedRuntime = filesystemPathsEqual(path.resolve(adapterRoot), path.resolve(portalRoot));
 const runtimeInputs = selfContainedRuntime
-  ? [".node-version", "astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/content.config.ts", "src/styles", "tsconfig.json"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
+  ? [".node-version", "astro.config.mjs", "package.json", "package-lock.json", "scripts", "src/components", "src/content.config.ts", "src/styles", "tsconfig.json"].map((item) => safeRelative(path.relative(repositoryRoot, path.join(portalRoot, item)).split(path.sep).join("/"), "portal runtime input"))
   : [];
 const publicRootRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "public")).split(path.sep).join("/"), "portal public path");
 const publicRecords = selfContainedRuntime
@@ -109,10 +111,10 @@ for (const sourcePath of sources) {
     if (ids.length > EVIDENCE_LIMITS.idsPerPage) throw new Error(`${sourcePath}: identity count exceeds ${EVIDENCE_LIMITS.idsPerPage}`);
     if (relationships.length > EVIDENCE_LIMITS.relationshipsPerPage) throw new Error(`${sourcePath}: relationship count exceeds ${EVIDENCE_LIMITS.relationshipsPerPage}`);
     const excerpt = excerptFor(text);
-    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
+    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, unavailable_ids: [], lookup_ids: ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
   } catch (error) {
     sourceAnchors.delete(sourcePath);
-    pages.push(staleStubPage(sourcePath, sourceHash, error));
+    pages.push(staleStubPage(sourcePath, sourceHash, bytes, error));
   }
 }
 git.assertClean(snapshotPaths);
@@ -123,7 +125,7 @@ if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while
 
 const ownerById = new Map();
 for (const page of pages) {
-  for (const id of page.ids) {
+  for (const id of page.lookup_ids) {
     if (ownerById.has(id)) throw new Error(`duplicate identity ${id}: ${ownerById.get(id).source_path} and ${page.source_path}`);
     ownerById.set(id, page);
   }
@@ -157,7 +159,7 @@ for (const page of pages) {
   page.snippets = page.stale || !page.excerpt ? [] : [{ start_line: page.excerpt.start, end_line: page.excerpt.end, sha256: sha256(page.excerpt.text) }];
   assertEvidencePageLimits(page, page.source_path);
   page.status = typeof page.frontmatter?.status === "string" ? page.frontmatter.status : null;
-  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer;
+  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer; delete page.lookup_ids;
 }
 
 const renderedLandings = [];
@@ -249,7 +251,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
   }).join("\n");
   const backlinks = page.backlinks.map((backlink) => `- **${backlink.type.replaceAll("_", " ")}** ← [${backlink.source_id ?? backlink.source_route}](${withBase(base, backlink.source_route)})`).join("\n");
   const referenced = referencedIds(page.body).filter((id) => routesById.has(id) && !page.ids.includes(id));
-  const safeBody = rewriteRepositoryMarkdown(page.body, {
+  const safeBody = decorateAltitude(renderStageFences(rewriteRepositoryMarkdown(stripLeadingTitleHeading(page.body, page.title), {
     sourcePath: page.source_path,
     sourceRoutes,
     repositoryFiles,
@@ -259,7 +261,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
     strictTargets: previews,
     mediaReferences: referencedMedia,
     sourceAnchors: anchorsBySource,
-  });
+  }), page.source_path));
   const snippetMarker = page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->` : "";
   const context = [];
   const facts = [];
@@ -328,8 +330,11 @@ function renderIndex(definitions, allPages) {
   return `---\ntitle: ${JSON.stringify(config.title)}\ndescription: ${JSON.stringify(config.description)}\nslug: "index"\ntemplate: splash\nhero:\n  tagline: ${JSON.stringify(config.description)}\n---\n\n<nav aria-label="Guide journey">\n<ul class="portal-journey">\n${steps}\n</ul>\n</nav>\n\n<p class="portal-version">Repository <code>${commit}</code>${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>1.0.0</code></p>\n`;
 }
 
-function staleStubPage(sourcePath, sourceHash, error) {
+function staleStubPage(sourcePath, sourceHash, bytes, error) {
   const layer = chooseLayer(sourcePath, layers);
+  let text = "";
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch {}
+  const unavailableIds = recoverUnavailableIds(text, sourcePath);
   return {
     source_path: sourcePath,
     source_sha256: sourceHash,
@@ -340,6 +345,8 @@ function staleStubPage(sourcePath, sourceHash, error) {
     frontmatter: {},
     body: "",
     ids: [],
+    unavailable_ids: unavailableIds,
+    lookup_ids: unavailableIds,
     relationships: [],
     backlinks: [],
     stale: true,
@@ -390,7 +397,9 @@ async function assertWorktreeMatchesCommit(records, committedBlobs, perFileBytes
     const worktree = await readBoundedRegularFile(path.join(repositoryRoot, record.path), perFileBytes, `${label} ${record.path}`);
     totalBytes += committed.length;
     if (totalBytes > totalLimit) throw new Error(`${label} inputs exceed ${totalLimit} bytes`);
-    if (!committed.equals(worktree)) throw new Error(`${label} does not match ${commit}: ${record.path}`);
+    // Git may materialize committed LF text as CRLF on Windows. Accept only
+    // that reversible text transformation; committed blobs remain authority.
+    if (!checkoutEquivalentBytes(committed, worktree)) throw new Error(`${label} does not match ${commit}: ${record.path}`);
   }
 }
 

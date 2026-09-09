@@ -2,6 +2,17 @@
   "schema_version": 1,
   "packs": [
     {
+      "id": "git-delivery",
+      "description": "Behavioral PR drafting, evidence attribution, executable-doc classification, review freshness, and safe closeout diagnostics.",
+      "includes": [],
+      "cases": [
+        "pr-evidence-covers-whole-branch",
+        "pr-missing-coverage-is-not-pass",
+        "pr-docs-path-does-not-exempt-runtime",
+        "pr-revision-refresh-and-merge-authority"
+      ]
+    },
+    {
       "id": "design-direction",
       "description": "Focused product, UX, visual-direction, fidelity, accessibility, and rendered-output diagnostics.",
       "includes": [],
@@ -70,6 +81,10 @@
         "new-harness-name-is-not-qualification",
         "project-selection-rejects-seat-collapse",
         "effort-routes-by-demand",
+        "complex-planning-delegates-qualified-reasoning",
+        "direct-xhigh-does-not-require-failure",
+        "cross-family-entry-cannot-skip-primary",
+        "routine-work-avoids-effort-inflation",
         "extra-family-invoked-when-warranted"
       ]
     },
@@ -144,7 +159,8 @@
         "safety-governance",
         "project-organization",
         "presentation-review",
-        "documentation-portal"
+        "documentation-portal",
+        "git-delivery"
       ],
       "cases": []
     },

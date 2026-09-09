@@ -4,8 +4,8 @@
      - TABLES for tabular data: coverage metrics, test→what-it-pins lists,
        exit-code or before/after matrices. Never force these into sentences.
      - Fenced blocks for pasted output. Numbered lists for sequences.
-     - Bullets only for genuinely enumerable points — one point per bullet,
-       ONE line where possible; a bullet wrapping past ~2 lines is two bullets.
+     - Bullets for genuinely enumerable points; keep one coherent point per
+       bullet. Do not split a necessary explanation just to meet a line count.
      - PLAIN language in Summary: a reader with zero context must understand
        it — no jargon, no internal shorthand; say what it means for the user.
      - Evidence over claims, numbers over adjectives.
@@ -14,12 +14,17 @@
      conventional commits — `type(scope): …` and the `!` / `BREAKING CHANGE:`
      footer — which drive the version bump and the CHANGELOG.
 
-     Delete the `## Notes` section if you have nothing for it. -->
+     Delete unused tables and `## Notes` when empty. Keep evidence gaps explicit;
+     blank placeholders and invented numbers are not completed evidence. -->
 
 ## Summary
 
-<!-- 2–4 bullets, plain words: what this does and why now. The test: someone
-     who has never seen this repo understands every bullet. -->
+<!-- Proportionate plain-language explanation: what this does and why. Someone
+     who has never seen this repo understands every bullet. Derive from
+     `git log --oneline <base>..<head>` and `git diff --stat <base>...<head>`.
+     Cover every logical change on the branch. Do not write from the last
+     conversation turn, last review round, or latest commit subject. Inspect
+     the full diff too; refresh the title/body after substantive branch updates. -->
 
 -
 
@@ -35,8 +40,16 @@
 <!-- REQUIRED for any code change — a code PR without real test evidence is
      not reviewable. Paste actual output; put tabular data in the tables.
 
-     Docs-only PR? Replace this section's content with one line — "Docs-only —
-     no code paths changed" — plus the doc checks you ran. -->
+     Identify the tested revision and exact commands. Attribute prior or CI
+     evidence to its revision and scope; do not imply it covers later changes.
+     Missing required checks keep the PR draft.
+
+     Docs-only PR? State "Docs-only — no code paths changed" plus doc checks
+     and relevant instruction evaluations actually run. Scripts, hook settings,
+     generated runtime assets, and executable examples require behavioral checks
+     even when stored under docs. Shipped templates and agent instructions also
+     need behavioral evidence even when written in Markdown. Added eval cases
+     are not completed trials. -->
 
 - Results:
 
@@ -44,11 +57,15 @@
 (paste the real test summary output here)
 ```
 
-- Coverage (from the CI coverage job — paste numbers, don't link):
+- Coverage (measured TOTAL from the project's command; name revision, command, metric, and scope; CI PASS alone is insufficient):
 
-| Metric | This PR | Floor / main |
-|---|---|---|
-| Line coverage |  |  |
+| Metric and scope | Measured result | Required floor | Evidence revision / command |
+|---|---|---|---|
+| Line coverage |  |  |  |
+
+<!-- Unsupported coverage: replace with N/A and the technical reason. Unrun,
+     stale, or unavailable required coverage is a gap, not N/A or a pass.
+     Never present focused-target coverage as whole-project coverage. -->
 
 - New / changed tests:
 
@@ -64,12 +81,13 @@
 
 - Whole-flow evidence:
 
-<!-- For every materially changed user or operator journey, show the affected
-     boundaries exercised together. Name controlled doubles and any seam not
+<!-- For every materially changed user or operator journey (including CLI,
+     install/update, hooks, and harness delegation), show the affected
+     boundaries exercised together. Name controlled doubles and any boundary not
      exercised. If no journey changed, replace the table with one reasoned
      `N/A — ...` line. -->
 
-| Changed journey | Boundaries exercised | Exact run and observed result | Controlled or unverified seams |
+| Changed journey | Boundaries exercised | Exact run and observed result | Controlled or unverified boundaries |
 |---|---|---|---|
 |  |  |  |  |
 

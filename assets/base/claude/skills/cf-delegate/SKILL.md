@@ -105,10 +105,10 @@ The plugin's commands cover both modes:
 
 Start every delegated plugin prompt with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
-model orchestrator or delegate back to the host lineage (Claude).` Use `worker` instead of `peer`
-only for a primary-owned subtask. A generic Claude subagent is not a Codex
-delegate, and a native Codex thread that recursively starts another duo has
-violated the assignment rather than completed it.
+model orchestrator or delegate back to the host lineage (Claude).` Cross-family
+entry always targets the primary at default effort. Only that primary may
+dispatch same-family `ROLE: worker` escalation; never call a foreign worker
+directly. Claude subagents are not Codex; nested duos violate scope.
 
 Read the current Codex primary selector, default effort, and permitted
 worker classes from
@@ -118,6 +118,11 @@ routing; the invoked primary retains the task, implementation, verification,
 and verdict. If `.codeflow/model-selection.json` is nonempty, first require
 `codeflow doctor --check model-bindings` to pass and use only its effective
 qualified override for the active harness.
+
+Include difficulty/triggers. The primary applies capability-routing:
+default effort is not a ceiling; demanding work gets qualified high/xhigh
+workers, direct xhigh when warranted. Preserve proportionate routine work,
+primary approval, and cross-lineage review.
 
 **Output counts as Codex only with a native Codex thread behind it.** Every
 plugin exchange must yield the native thread ID, recheckable afterward

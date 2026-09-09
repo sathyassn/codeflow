@@ -301,6 +301,7 @@ version = "3.0.0"
 dependencies = [
  "axum",
  "base64",
+ "cssparser",
  "fs2",
  "getrandom 0.4.3",
  "git2",

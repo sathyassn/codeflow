@@ -147,8 +147,12 @@ side by side.
 SVG/HTML composition drawn with utility tokens (`var(--cf-…)`), labeled nodes,
 and named edges, when the governing claim needs true geometry (the example
 JSON's first block) — and an exceptional static layout the standard catalog
-cannot express. It runs without scripts, same-origin access, forms, navigation,
-or network. Never use it as a component SDK, a way around the schema, or a
+cannot express. Interactive HTML stays in the document for annotation; the
+runtime scopes authored style selectors and contains its layout/paint so it
+cannot style or overlay review controls. Scripts, forms, navigation, network
+loads, reserved runtime identities, and top-layer controls are prohibited.
+Offline exports additionally place authored HTML in a sandboxed frame.
+Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
 HTML, and never make Mermaid/ASCII stand in for a stage the claim deserves.
 

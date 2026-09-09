@@ -230,8 +230,8 @@ non-trivial repository task in standard/full scaffolds. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the
 official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
 reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
-to medium effort and spawn same-family high/xhigh workers mid-session rather
-than restarting (ADR-0055). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
+to high effort, use proportionate medium/high workers, and obtain xhigh reasoning
+on trigger without restarting the primary (ADR-0056). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
 stages the requested outcome needs. Claude-led design, capability-routed
 producer/cross-lineage-review assignments, evidence-routed effort, explicit

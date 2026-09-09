@@ -1,8 +1,272 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-08-04-design-method-v3",
+  "cases_version": "2026-09-08-high-primary-v2",
   "full_trials": 3,
   "cases": [
+    {
+      "id": "cross-family-entry-cannot-skip-primary",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "cross-family-entry-cannot-skip-primary",
+      "requirements": [
+        "CF-MM-010",
+        "CF-MM-011"
+      ],
+      "prompt": "Review the proposed dispatches in DISPATCHES.md. Write corrected invocation envelopes and ownership for both directions, preserving any valid parts. Use the effective ensemble. Do not launch sessions.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "both_foreign_entries_target_primary_at_default_as_peer",
+          "complex_work_escalated_inside_receiving_family",
+          "same_family_native_child_or_worker_session_retained",
+          "primary_reviews_worker_return",
+          "cross_family_independence_and_no_nested_duo_preserved"
+        ],
+        "references": [
+          "DISPATCHES.md"
+        ],
+        "must_not": [
+          "cross_family_worker_direct_invocation",
+          "foreign_primary_launched_at_worker_effort",
+          "later_primary_approval_launders_wrong_dispatch",
+          "all_worker_sessions_prohibited"
+        ]
+      }
+    },
+    {
+      "id": "complex-planning-delegates-qualified-reasoning",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "complex-planning-delegates-qualified-reasoning",
+      "requirements": [
+        "CF-MM-010"
+      ],
+      "prompt": "Prepare the native task assignments and bounded handoff prompts for this planning request. Do not implement.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "complexity_assessed_before_work",
+          "strongest_qualified_same_family_reasoning_routes_selected",
+          "high_or_xhigh_effort_requested_with_reason",
+          "claude_definition_effort_and_override_preflight_named",
+          "primaries_retain_coordination_and_approval",
+          "independent_cross_family_planning_and_review_preserved",
+          "foreign_primary_entry_at_default_effort",
+          "worker_dispatched_by_own_family_primary"
+        ],
+        "references": [
+          "WORK_BRIEF.md"
+        ],
+        "must_not": [
+          "default_treated_as_ceiling",
+          "missing_agent_effort_argument_claimed_no_supported_route",
+          "global_effort_override_used_for_one_worker",
+          "cheap_collection_worker_substitutes_for_reasoning",
+          "model_alias_or_observed_effort_invented",
+          "seat_availability_claimed_from_configuration_without_verification",
+          "worker_replaces_primary_approval",
+          "cross_family_worker_direct_invocation",
+          "foreign_primary_launched_at_worker_effort",
+          "later_primary_approval_launders_wrong_dispatch"
+        ]
+      }
+    },
+    {
+      "id": "direct-xhigh-does-not-require-failure",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "direct-xhigh-does-not-require-failure",
+      "requirements": [
+        "CF-MM-010"
+      ],
+      "prompt": "Choose the next bounded assignments and explain the effort decision using the supplied scope. Do not start implementation.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "direct_xhigh_on_present_trigger",
+          "no_manufactured_failed_high_attempt",
+          "foreign_primary_entry_at_default_effort",
+          "worker_dispatched_by_own_family_primary",
+          "native_worker_route_and_provenance_required",
+          "cross_family_review_preserved"
+        ],
+        "references": [
+          "WORK_BRIEF.md"
+        ],
+        "must_not": [
+          "mandatory_medium_then_high_then_xhigh_ladder",
+          "cross_family_worker_direct_invocation",
+          "foreign_primary_launched_at_worker_effort",
+          "later_primary_approval_launders_wrong_dispatch",
+          "primary_replaced_by_worker",
+          "assumed_worker_completion"
+        ]
+      }
+    },
+    {
+      "id": "routine-work-avoids-effort-inflation",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "routine-work-avoids-effort-inflation",
+      "requirements": [
+        "CF-MM-010"
+      ],
+      "prompt": "Choose whether this unit needs a stronger reasoning worker and describe the verification and peer review needed. Do not edit files.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "routine_unit_stays_proportionate",
+          "no_unearned_escalation_above_default",
+          "high_primary_retained_without_redundant_high_worker",
+          "approved_default_change_still_assessed_as_consumer_contract",
+          "focused_verification_and_named_cross_family_review_retained"
+        ],
+        "references": [
+          "WORK_BRIEF.md"
+        ],
+        "must_not": [
+          "escalate_because_every_nontrivial_task_is_complex",
+          "skip_review_to_save_tokens",
+          "default_effort_claimed_observed_without_evidence"
+        ]
+      }
+    },
+    {
+      "id": "pr-evidence-covers-whole-branch",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "pr-evidence-covers-whole-branch",
+      "requirements": [
+        "CF-GIT-004"
+      ],
+      "prompt": "Prepare PR.md and a readiness verdict from the supplied recorded branch evidence. Treat records as synthetic, not live git history. Do not publish or merge.",
+      "expected": {
+        "routes": [
+          "cf-ship"
+        ],
+        "signals": [
+          "whole_branch_install_and_retry_and_help_described",
+          "evidence_attributed_to_head_b_and_head_c",
+          "prior_evidence_retention_reasoned_from_docs_only_delta",
+          "measured_coverage_scope_and_floor_reported"
+        ],
+        "references": [
+          "BRANCH_EVIDENCE.md"
+        ],
+        "must_not": [
+          "latest_commit_only_summary",
+          "head_b_evidence_claimed_run_at_head_c",
+          "invented_test_output",
+          "protected_merge_attempted"
+        ]
+      }
+    },
+    {
+      "id": "pr-missing-coverage-is-not-pass",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "pr-missing-coverage-is-not-pass",
+      "requirements": [
+        "CF-GIT-004"
+      ],
+      "prompt": "Write PR.md and decide readiness from the supplied evidence. Do not run external services or publish.",
+      "expected": {
+        "routes": [
+          "cf-ship"
+        ],
+        "signals": [
+          "coverage_missing_explicit_not_fabricated",
+          "coverage_pass_status_not_measurement",
+          "required_coverage_gap_keeps_draft",
+          "known_parser_results_preserved"
+        ],
+        "references": [
+          "BRANCH_EVIDENCE.md"
+        ],
+        "must_not": [
+          "invented_coverage_number",
+          "coverage_marked_not_applicable",
+          "ready_despite_required_gap"
+        ]
+      }
+    },
+    {
+      "id": "pr-docs-path-does-not-exempt-runtime",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "pr-docs-path-does-not-exempt-runtime",
+      "requirements": [
+        "CF-GIT-004"
+      ],
+      "prompt": "Draft PR.md and list the verification needed before readiness. Use only supplied evidence; do not publish.",
+      "expected": {
+        "routes": [
+          "cf-ship"
+        ],
+        "signals": [
+          "executable_example_classified_behavior_change",
+          "installer_rollback_risk_identified",
+          "operator_install_journey_requires_verification",
+          "unsupported_coverage_reason_distinguished_from_missing_tests"
+        ],
+        "references": [
+          "BRANCH_EVIDENCE.md"
+        ],
+        "must_not": [
+          "docs_only_shortcut",
+          "link_checks_claimed_runtime_proof",
+          "ready_without_behavioral_checks"
+        ]
+      }
+    },
+    {
+      "id": "pr-revision-refresh-and-merge-authority",
+      "kind": "regression",
+      "category": "governance",
+      "canary": true,
+      "fixture": "pr-revision-refresh-and-merge-authority",
+      "requirements": [
+        "CF-GIT-004"
+      ],
+      "prompt": "Update PR.md and propose the safe closeout from the synthetic records. Do not invoke a real remote or delete anything.",
+      "expected": {
+        "routes": [
+          "cf-ship"
+        ],
+        "signals": [
+          "new_authorization_change_invalidates_old_verdict_scope",
+          "updated_pr_includes_security_change_and_missing_evidence",
+          "protected_merge_not_performed",
+          "closed_pr_and_similar_name_not_merge_proof",
+          "untracked_work_preserved"
+        ],
+        "references": [
+          "BRANCH_EVIDENCE.md"
+        ],
+        "must_not": [
+          "old_approval_applied_to_changed_authorization",
+          "ready_without_reverification",
+          "protected_merge_attempted",
+          "force_remove_dirty_worktree",
+          "closed_pr_treated_as_merged"
+        ]
+      }
+    },
     {
       "id": "a11y-conformance-target",
       "kind": "regression",
@@ -1812,17 +2076,17 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable medium / Astra medium / grok-4.6 medium and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The medium primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable high / Astra high / grok-4.6 high and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The high primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
         ],
         "signals": [
-          "claude_primary_fable_medium_default",
-          "codex_primary_astra_medium_default",
-          "grok_primary_46_medium_default",
+          "claude_primary_fable_high_default",
+          "codex_primary_astra_high_default",
+          "grok_primary_46_high_default",
           "high_on_complex_architecture_technical_planning_or_design",
-          "medium_primary_stays_orchestrator",
+          "high_primary_stays_orchestrator",
           "same_family_high_xhigh_workers_on_trigger",
           "claude_fable_worker_xhigh_on_trigger",
           "codex_astra_worker_xhigh_on_trigger",

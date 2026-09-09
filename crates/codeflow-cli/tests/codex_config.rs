@@ -55,7 +55,7 @@ fn autonomy_and_automatic_review_are_enabled() {
     assert_eq!(cfg["web_search"].as_str(), Some("live"));
     assert_eq!(
         cfg["model_reasoning_effort"].as_str(),
-        Some("medium"),
+        Some("high"),
         "the primary Codex seat must not inherit an unrelated user-level effort"
     );
     assert_eq!(cfg["features"]["hooks"].as_bool(), Some(true));

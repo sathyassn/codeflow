@@ -34,9 +34,7 @@ export interface FeedbackExcerpt {
 
 export function visibleTextOf(element: Element): string {
   if (element.namespaceURI?.includes("svg") || element.querySelector("text, tspan")) {
-    const parts = [...element.querySelectorAll("text, tspan")]
-      .map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+    const parts = svgTextParts(element);
     if (parts.length) return collapse(parts.join(" "));
   }
   const aria = element.getAttribute("aria-label")?.trim() ?? "";
@@ -46,11 +44,22 @@ export function visibleTextOf(element: Element): string {
 
 export function quoteFromRange(range: Range): string {
   const fragment = range.cloneContents();
-  const svgParts = [...fragment.querySelectorAll("text, tspan")]
-    .map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+  const svgParts = svgTextParts(fragment);
   if (svgParts.length) return svgParts.join(" ");
   return range.toString();
+}
+
+function svgTextParts(root: Element | DocumentFragment): string[] {
+  const nodes = root instanceof Element && root.matches("text, tspan")
+    ? [root]
+    : [...root.querySelectorAll("text, tspan")];
+  const carriers = new Set(nodes);
+  return nodes.filter((node) => {
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      if (carriers.has(parent)) return false;
+    }
+    return true;
+  }).map((node) => collapse(node.textContent ?? "")).filter(Boolean);
 }
 
 export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string {
@@ -58,6 +67,8 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
   // but is not document content — its digits must never enter an excerpt.
   const nodes = [...root.querySelectorAll(TEXT_CARRIERS)].filter((node) => {
     if (node.closest(".cf-marker-layer")) return false;
+    const style = getComputedStyle(node);
+    if (style.visibility === "hidden" || style.display === "none") return false;
     const rect = node.getBoundingClientRect();
     return rect.width >= 2 && rect.height >= 2 && intersects(rect, box);
   });
@@ -76,10 +87,10 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
       ancestor = ancestor.parentElement;
     }
     if (covered) continue;
-    const text = collapse(node.textContent ?? "");
+    const text = visibleTextOf(node);
     if (text) parts.push(text);
   }
-  return uniqueJoin(parts).slice(0, 4000);
+  return parts.join(" ").slice(0, 4000);
 }
 
 /**
@@ -94,7 +105,7 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
 export async function captureRectJpeg(root: HTMLElement, box: DOMRect): Promise<ExcerptImage | null> {
   if (box.width < 4 || box.height < 4) return null;
   const svg = intersectingSvg(root, box);
-  if (svg && coverage(svg.getBoundingClientRect(), box) >= 0.4) {
+  if (svg && containsRect(svg.getBoundingClientRect(), box)) {
     const fromSvg = await rasterizeSvgCrop(svg, box);
     if (fromSvg) return fromSvg;
   }
@@ -128,7 +139,7 @@ async function rasterizeSvgCrop(svg: SVGSVGElement, box: DOMRect): Promise<Excer
   return canvasFromSvgMarkup(new XMLSerializer().serializeToString(clone), box);
 }
 
-function rasterizeDomSlice(root: HTMLElement, box: DOMRect): ExcerptImage | null {
+async function rasterizeDomSlice(root: HTMLElement, box: DOMRect): Promise<ExcerptImage | null> {
   const scale = Math.min(MAX_CROP_WIDTH / box.width, MAX_CROP_HEIGHT / box.height, 1);
   const width = Math.max(1, Math.round(box.width * scale));
   const height = Math.max(1, Math.round(box.height * scale));
@@ -144,29 +155,25 @@ function rasterizeDomSlice(root: HTMLElement, box: DOMRect): ExcerptImage | null
     || "#ffffff";
   ctx.fillRect(0, 0, width, height);
 
-  const painted = paintElementTree(ctx, source, box, scale);
-  if (!painted) {
-    const fallback = intersectingVisibleText(root, box) || visibleTextOf(source);
-    if (!fallback) return null;
-    paintTextCard(ctx, fallback, width, height);
-  }
+  const painted = await paintElementTree(ctx, source, box, scale);
+  if (!painted) return null;
   return jpegFromCanvas(ctx, canvas);
 }
 
 function bestHtmlSource(root: HTMLElement, box: DOMRect): HTMLElement {
   const blocks = [...root.querySelectorAll<HTMLElement>("[data-cf-block-id]")];
   const hit = blocks
-    .filter((block) => intersects(block.getBoundingClientRect(), box))
+    .filter((block) => containsRect(block.getBoundingClientRect(), box))
     .sort((left, right) => rectArea(left.getBoundingClientRect()) - rectArea(right.getBoundingClientRect()))[0];
   return hit ?? root;
 }
 
-function paintElementTree(
+async function paintElementTree(
   ctx: CanvasRenderingContext2D,
   source: HTMLElement,
   box: DOMRect,
   scale: number,
-): number {
+): Promise<number> {
   let painted = 0;
   const elements: HTMLElement[] = [];
   const collect = (node: Element): void => {
@@ -214,12 +221,34 @@ function paintElementTree(
     }
   }
 
+  for (const svg of source.querySelectorAll<SVGSVGElement>("svg")) {
+    if (svg.closest(".cf-marker-layer") || svg.parentElement?.closest("svg")) continue;
+    const rect = svg.getBoundingClientRect();
+    if (!intersects(rect, box) || rect.width <= 0 || rect.height <= 0) continue;
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    bakeSvgPaints(svg, clone);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(rect.width));
+    clone.setAttribute("height", String(rect.height));
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml" }));
+    try {
+      const image = await loadImage(url);
+      ctx.drawImage(image, (rect.left - box.left) * scale, (rect.top - box.top) * scale, rect.width * scale, rect.height * scale);
+      painted += 1;
+    } catch {
+      // Keep real text/layout context if an unsupported SVG cannot be painted.
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT);
   let node: Node | null;
   while ((node = walker.nextNode())) {
     if (!(node instanceof Text) || !node.parentElement) continue;
     const parent = node.parentElement;
-    if (parent.closest(".cf-marker-layer")) continue;
+    if (parent.closest(".cf-marker-layer, style, script")) continue;
+    if (parent.closest("svg") && !parent.closest("foreignObject")) continue;
     const style = getComputedStyle(parent);
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
     painted += paintTextNode(ctx, node, style, box, scale);
@@ -245,7 +274,7 @@ function paintTextNode(
   ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.clip();
   ctx.fillStyle = style.color || "#111111";
-  const fontSize = Math.max(8, (parseFloat(style.fontSize) || 16) * scale);
+  const fontSize = Math.max(1, (parseFloat(style.fontSize) || 16) * scale);
   ctx.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
@@ -274,36 +303,6 @@ function paintTextNode(
   }
   ctx.restore();
   return painted;
-}
-
-function paintTextCard(ctx: CanvasRenderingContext2D, text: string, width: number, height: number): void {
-  ctx.fillStyle = "#f6f3ee";
-  ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = "#c8bfb3";
-  ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
-  ctx.fillStyle = "#1a1714";
-  const fontSize = Math.max(11, Math.min(16, Math.round(height / 8)));
-  ctx.font = `${fontSize}px ui-serif, Georgia, serif`;
-  ctx.textBaseline = "top";
-  const pad = 10;
-  const lineHeight = fontSize * 1.35;
-  const maxWidth = Math.max(12, width - pad * 2);
-  let x = pad;
-  let y = pad;
-  const words = collapse(text).split(" ");
-  let line = "";
-  for (const word of words) {
-    const next = line ? `${line} ${word}` : word;
-    if (ctx.measureText(next).width > maxWidth && line) {
-      ctx.fillText(line, x, y);
-      y += lineHeight;
-      if (y > height - pad - lineHeight) break;
-      line = word;
-    } else {
-      line = next;
-    }
-  }
-  if (line && y <= height - pad - lineHeight) ctx.fillText(line, x, y);
 }
 
 async function canvasFromSvgMarkup(markup: string, box: DOMRect): Promise<ExcerptImage | null> {
@@ -416,18 +415,8 @@ function opaqueColor(color: string): string | null {
   return isTransparent(color) ? null : color;
 }
 
-function coverage(inner: DOMRect, outer: DOMRect): number {
-  const overlap = intersectionArea(inner, outer);
-  const area = rectArea(outer);
-  return area <= 0 ? 0 : overlap / area;
-}
-
-function intersectionArea(left: DOMRect, right: DOMRect): number {
-  const x = Math.max(left.left, right.left);
-  const y = Math.max(left.top, right.top);
-  const edgeX = Math.min(left.right, right.right);
-  const edgeY = Math.min(left.bottom, right.bottom);
-  return edgeX > x && edgeY > y ? (edgeX - x) * (edgeY - y) : 0;
+function containsRect(outer: DOMRect, inner: DOMRect): boolean {
+  return inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom;
 }
 
 function intersects(left: DOMRect, right: DOMRect): boolean {
@@ -440,15 +429,4 @@ function rectArea(rect: DOMRect): number {
 
 function collapse(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function uniqueJoin(parts: string[]): string {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const part of parts) {
-    if (seen.has(part)) continue;
-    seen.add(part);
-    out.push(part);
-  }
-  return out.join(" ");
 }

@@ -277,6 +277,36 @@ fn ci_docs_only_range_does_not_require_code_sections() {
 }
 
 #[test]
+fn ci_executable_documentation_requires_testing_for_the_entire_range() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "docs");
+    std::fs::create_dir_all(dir.path().join("docs/examples")).unwrap();
+    std::fs::write(
+        dir.path().join("docs/examples/install.sh"),
+        "#!/bin/sh\nprintf 'install example\\n'\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(
+        dir.path(),
+        &["commit", "-m", "fix: update installer example"],
+    );
+    // A final prose-only commit must not hide the earlier executable change.
+    std::fs::write(dir.path().join("guide.md"), "# Updated guide\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: clarify guide"]);
+
+    let missing = ci_with_body(
+        dir.path(),
+        "## Summary\n\nUpdate installation.\n\n## Changes\n\n- Update example.\n",
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("'## Testing'"));
+    let complete = ci_with_body(dir.path(), FULL_BODY);
+    assert_eq!(complete.status.code(), Some(0));
+}
+
+#[test]
 fn ci_warn_level_structure_reports_and_proceeds() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");

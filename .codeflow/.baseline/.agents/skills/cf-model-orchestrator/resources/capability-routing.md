@@ -16,7 +16,10 @@ Every native session declares one role:
   approve the plan or replace a named reviewer.
 
 Only `host` invokes `cf-model-orchestrator`. The first line of every
-cross-harness task declares `ROLE: peer` or `ROLE: worker`; the prompt limits
+cross-family task declares `ROLE: peer` and invokes the receiving family's
+qualified primary at its default effort. `ROLE: worker` is only for same-family
+work owned and dispatched by that family's primary, through a native child or
+separate native session. The prompt limits
 the session to that bounded assignment and explicitly forbids starting the
 top-level orchestrator or delegating back to the host lineage. A generic
 same-lineage subagent cannot satisfy a named cross-lineage assignment. A Grok
@@ -54,14 +57,54 @@ not silently substitute another criterion.
 
 A change to the producer or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
-work continues. A same-seat medium→high or high→xhigh escalation on a documented trigger is
-ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
-medium primary stays the orchestrator and spawns same-family workers at that
+work continues. A same-seat trigger-based effort escalation, including direct
+high→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
+high primary stays the orchestrator and spawns same-family workers at that
 effort. Spawn through the harness's native child-effort knob or a `ROLE:
 worker` native session at that effort. Record requested versus observed
-selector/effort. If that route is unavailable, keep the medium primary,
+selector/effort. If that route is unavailable, keep the high primary,
 record the limitation, and do not infer a pass. A worker change within the approved primary
 seat remains internal routing unless it changes the named producer or reviewer.
+
+Default effort is high for primary seats, not a ceiling or a mandate to make
+every worker high. A primary already qualified at high can perform suitable
+reasoning directly; do not add another high worker merely to satisfy a label.
+Delegate when bounded specialization, independent scrutiny, or parallel work
+earns the coordination cost. Assess demand before the
+subtask begins and when new evidence changes its difficulty. Complex architecture,
+technical planning, and design require the strongest qualified same-family
+reasoning seat suited to that unit at high or xhigh, selected from the active
+binding's permitted routes. A cheaper tool-collection worker is not an equivalent
+substitute for that reasoning. An xhigh trigger requires the owning primary to
+obtain xhigh reasoning through a supported same-family worker route; do not spend
+a high attempt merely to fail first. Routine, well-specified work stays at the
+default or an appropriate bounded worker route without automatic escalation.
+The primary critically integrates worker findings and retains approvals; both
+families still plan independently and cross-lineage review remains mandatory.
+If no required capable route is available, record the unresolved quality gap and
+the bounded recovery or degradation rather than claiming medium work satisfied it.
+
+## Claude worker effort preflight
+
+Absence of an effort parameter on the Agent tool is not proof that Claude
+cannot run stronger workers. Check the installed version's supported
+[subagent definitions](https://code.claude.com/docs/en/sub-agents): `effort`
+frontmatter or a session-scoped `--agents` JSON definition can set a child's
+effort independently of the primary. At launch, define only the bounded worker
+needed, with `description`, `prompt`, permitted `model`, and `effort`; the
+owning Claude primary invokes that named `subagent_type`. In an existing
+session, verify a supported definition is loaded before invoking it. Never
+invent a missing Agent argument or install a permanent fleet of worker roles.
+
+Keep the primary at its default effort. Inspect effective
+[effort precedence](https://code.claude.com/docs/en/model-config):
+`CLAUDE_CODE_EFFORT_LEVEL` can override the child's definition, and supported
+levels depend on the selected model and organization limits. Do not change
+global settings or blanket defaults to make one worker stronger. Resolve an
+override only within an authorized task process, retaining the primary's
+explicit default; otherwise record the limitation. Use an approved binding's
+route and a bounded native canary. Definition values remain requested until
+native metadata verifies the model/effort; self-report is insufficient.
 
 ## Admissible cross-lineage evidence
 
@@ -103,8 +146,12 @@ The durable route is primary-owned: the active primary coordinates at the
 recorded default effort, stays the orchestrator, invokes the other-lineage
 primary directly, and may use only the bounded internal routes its own seat
 exposes and has qualified.
-Claude owns Claude-side routing and integrated judgment; a Codex host never
-selects a Claude worker directly. Concrete selectors, model classes, effort
+Each primary owns its family's routing: a caller never selects a foreign
+worker directly or passes worker escalation effort on the foreign primary's
+entry command. Instead, send complexity and the required outcome to that
+primary; it launches its own qualified high/xhigh worker and reviews the return.
+Later primary-approval prose cannot repair an incorrect initial dispatch.
+Claude retains integrated judgment. Concrete selectors, model classes, effort
 defaults, and escalation triggers live only in
 [current-ensemble.json](current-ensemble.json).
 When a catalog family is named, follow

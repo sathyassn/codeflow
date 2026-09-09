@@ -4,6 +4,8 @@ import { CHROME_ROOT_ID, DOCUMENT_ROOT_ID, readChromeConfig } from "./contracts"
 import { enhanceDocument } from "./enhance";
 import "./styles.css";
 
+void import("./fonts").then(({ installFonts }) => installFonts());
+
 const chromeRoot = document.getElementById(CHROME_ROOT_ID);
 const documentRoot = document.getElementById(DOCUMENT_ROOT_ID);
 

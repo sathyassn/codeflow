@@ -30,6 +30,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **High default for development primaries (ADR-0056).** Claude, Codex, and
+  catalog Grok primaries now start at high; bounded routine workers may use
+  medium, while xhigh remains trigger-driven and owned by the receiving family.
+  This supersedes the earlier medium-default entries below, not their transport
+  or safety decisions. Regenerate managed settings on update; explicit local
+  effort overrides remain deliberate project/operator choices.
+
+- **Post-merge quality and runtime hardening.** Presentation selections retain
+  the actual repeated-text occurrence; authored styles cannot hide review
+  controls or create top-layer escapes. Utility font choices load bundled
+  licensed faces offline in presentations and portals. Explanatory motion is
+  permitted with static meaning and reduced-motion alternatives.
+
+- **Review evidence and effort decisions.** PR guidance covers the full branch,
+  revision-bound tests and independent review; executable documentation cannot
+  bypass testing requirements. High-default primaries own proportionate
+  same-family worker routing, including direct xhigh when justified; bounded
+  routine workers may use medium. Adversarial evaluation scenarios distinguish
+  those decisions from routine work and from observed native routing.
+
 - **Mid-session effort and extra-family invoke.** The medium primary stays
   the orchestrator and spawns same-family high/xhigh workers when a
   complexity trigger fires. Extra catalog families are named when

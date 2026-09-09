@@ -50,7 +50,7 @@ not claim the lanes.
 ## Duties
 
 Host is not duty. Claude produces design in its native session. A Grok
-medium host stays the orchestrator and may spawn grok-4.6 high/xhigh
+high host stays the orchestrator and may spawn grok-4.6 high/xhigh
 workers. Catalog Grok may produce or take named extra-family review when
 a documented trigger fires and it is available; that assignment is never a
 silent third vote.

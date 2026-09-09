@@ -1,4 +1,3 @@
-# managed by codeflow (scaffold) — extend freely below the marker block
 # codeflow:managed:begin
 # secrets — never tracked
 .env

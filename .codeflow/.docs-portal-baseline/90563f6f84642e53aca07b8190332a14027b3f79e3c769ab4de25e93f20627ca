@@ -166,10 +166,14 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     await assertKeyboardPath(page, name);
     await searchForResult(page, name, config, generated.pages);
 
-    await page.getByLabel("Select theme").first().selectOption("light");
+    await page.locator('[data-testid="portal-display-btn"]').first().click();
+    await page.locator('[data-testid="appearance-light"]').first().click();
+    if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${name}: Appearance Light did not apply`);
+    await page.keyboard.press("Escape");
     await page.reload({ waitUntil: "networkidle" });
     if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${name}: light preference did not persist`);
     await assertBeforePaintTheme(page, name, "light");
+    await assertDisplaySettings(page, name);
 
     for (const layer of config.layers) {
       await visit(page, routeUrl(origin, config.base, layer.id));
@@ -178,6 +182,8 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     }
 
     await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
+    const altitudeResult = await assertAltitudeTabs(page, name, origin, config, surfaces.altitudeTabs);
+    const chromeResult = await assertUtilityChrome(page, name, origin, config, surfaces);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
@@ -203,7 +209,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     return {
       engine: name,
       status: "passed",
-      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search", "system-and-mode-persistence-before-paint", "layer-journey", "deep-link", previewResult, "source-link", "keyboard-traversal-and-focus", "signal-and-folio-light-dark", "target-size", "responsive", "console", "network-isolation"],
+      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "layer-journey", "deep-link", altitudeResult, chromeResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -253,19 +259,119 @@ async function searchForResult(page, engine, config, pages) {
   const search = page.getByRole("button", { name: "Search" }).first();
   await search.waitFor({ state: "visible" });
   await page.waitForFunction(() => !document.querySelector("button[data-open-modal]")?.disabled);
-  await search.click();
+  // "/" is first-class portal chrome: it must open the dialog with the query
+  // focused, and a portal-owned term must return a followable Pagefind hit.
+  await page.keyboard.press("/");
   const input = page.getByRole("dialog", { name: "Search" }).locator("input");
+  await input.waitFor({ state: "visible" });
+  if (!await input.evaluate((element) => element === document.activeElement)) throw new Error(`${engine}: "/" did not focus the search input`);
   const corpus = [config.title, config.description, ...pages.slice(0, 16).flatMap((item) => [item?.title, item?.source_path])].filter((value) => typeof value === "string").join(" ");
   const candidates = [...new Set(corpus.split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}]/gu, "")).filter((word) => word.length >= 2))].slice(0, 12);
   if (!candidates.length) candidates.push(config.title);
   for (const candidate of candidates) {
     await input.fill(candidate);
-    if (await page.locator("dialog[open] a").first().waitFor({ state: "visible", timeout: 2_000 }).then(() => true, () => false)) {
-      await page.keyboard.press("Escape");
+    const hit = page.locator("dialog[open] a").first();
+    if (await hit.waitFor({ state: "visible", timeout: 2_000 }).then(() => true, () => false)) {
+      const href = await hit.getAttribute("href");
+      const target = new URL(href, page.url());
+      if (target.origin !== new URL(page.url()).origin) throw new Error(`${engine}: search hit left the portal origin: ${href}`);
+      await hit.click();
+      await page.waitForURL((url) => url.pathname === target.pathname, { timeout: 10_000 });
       return;
     }
   }
   throw new Error(`${engine}: search returned no result for portal-owned terms`);
+}
+
+async function assertDisplaySettings(page, engine) {
+  const open = async () => {
+    const button = page.locator('[data-testid="portal-display-btn"]').first();
+    if (await page.locator('[data-testid="portal-display-panel"]').first().isHidden()) await button.click();
+  };
+  const accentOf = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--cf-accent").trim());
+  const fontOf = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--cf-font-sans").trim());
+  for (const family of ["Archivo", "Inter", "IBM Plex Sans"]) {
+    const loaded = await page.evaluate(async (name) => {
+      const faces = await document.fonts.load(`400 16px "${name}"`);
+      return faces.length > 0 && faces.every((face) => face.status === "loaded");
+    }, family);
+    if (!loaded) throw new Error(`${engine}: bundled font ${family} was not available`);
+  }
+  const before = { accent: await accentOf(), font: await fontOf() };
+  await open();
+  await page.locator('[data-testid="skin-editorial"]').first().click();
+  const editorialAccent = await accentOf();
+  if (!editorialAccent || editorialAccent === before.accent) throw new Error(`${engine}: Palette Cool did not change the accent token`);
+  await page.locator('[data-testid="typeface-plex"]').first().click();
+  if (!(await fontOf()).includes("IBM Plex Sans")) throw new Error(`${engine}: Font Plex Sans did not change the sans stack`);
+  await page.reload({ waitUntil: "networkidle" });
+  const persisted = await page.evaluate(() => ({ skin: document.documentElement.dataset.cfpSkin, typeface: document.documentElement.dataset.cfpTypeface }));
+  if (persisted.skin !== "editorial" || persisted.typeface !== "plex") throw new Error(`${engine}: display settings did not persist across reload: ${JSON.stringify(persisted)}`);
+  if (await accentOf() !== editorialAccent) throw new Error(`${engine}: persisted skin did not reapply its accent token`);
+  await page.evaluate(() => { for (const key of ["cf-portal-skin", "cf-portal-typeface", "cf-portal-scale"]) localStorage.removeItem(key); });
+  await page.reload({ waitUntil: "networkidle" });
+  if (await accentOf() !== before.accent) throw new Error(`${engine}: clearing display settings did not restore the configured theme`);
+}
+
+function architectureShapedLayers(config) {
+  return config.layers.filter((layer) =>
+    layer.id === "system"
+    || /\barchitecture\b/i.test(`${layer.label} ${layer.description}`)
+    || [...(layer.paths ?? []), ...(layer.prefixes ?? [])].some((item) => /architecture/i.test(item)));
+}
+
+async function assertAltitudeTabs(page, engine, origin, config, routes) {
+  // An architecture-shaped layer with no altitude page is the failure this
+  // check exists to catch: one hero page with the rest left as a plain shell.
+  for (const layer of architectureShapedLayers(config)) {
+    if (!routes.some((route) => route.startsWith(`${layer.id}/`))) {
+      throw new Error(`${engine}: architecture-shaped layer "${layer.id}" has zero altitude pages — author the Concept/Architecture/Technical trio in its sources`);
+    }
+  }
+  if (!routes.length) return "altitude-tabs-not-applicable";
+  for (const route of routes) {
+    await visit(page, routeUrl(origin, config.base, route));
+    const tabs = page.locator('.portal-altitude-tabs [role="tab"]');
+    const count = await tabs.count();
+    if (count < 2) throw new Error(`${engine}: ${route}: altitude tablist is missing its tabs`);
+    const panelIds = [];
+    for (let index = 0; index < count; index += 1) panelIds.push(await tabs.nth(index).getAttribute("aria-controls"));
+    const visiblePanels = async () => {
+      let visible = 0;
+      for (const id of panelIds) if (await page.locator(`#${id}`).isVisible()) visible += 1;
+      return visible;
+    };
+    if (await visiblePanels() !== 1) throw new Error(`${engine}: ${route} shows ${await visiblePanels()} panels at once — tabs must hide inactive layers`);
+    await assertA11y(page, engine, `initial altitude panel on ${route}`);
+    await tabs.nth(1).click();
+    if (await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`${engine}: ${route}: first altitude panel is still visible while the second tab is selected`);
+    if (!await page.locator(`#${panelIds[1]}`).isVisible() || await visiblePanels() !== 1) throw new Error(`${engine}: ${route}: selected altitude tab did not reveal exactly its own panel`);
+    const anchor = await tabs.nth(1).getAttribute("data-anchor");
+    if (await page.evaluate(() => decodeURIComponent(location.hash.slice(1))) !== anchor) throw new Error(`${engine}: ${route}: selected altitude tab is not recorded in the URL`);
+    await tabs.nth(1).focus();
+    await page.keyboard.press("ArrowLeft");
+    if (await tabs.nth(0).getAttribute("aria-selected") !== "true" || !await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`${engine}: ${route}: arrow keys do not move the altitude selection`);
+    await page.keyboard.press("End");
+    if (await tabs.nth(count - 1).getAttribute("aria-selected") !== "true") throw new Error(`${engine}: ${route}: End does not select the last altitude tab`);
+    await visit(page, `${routeUrl(origin, config.base, route)}#${encodeURIComponent(anchor)}`);
+    if (!await page.locator(`#${panelIds[1]}`).isVisible() || await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`${engine}: ${route}: loading #${anchor} did not show that panel only`);
+    await assertA11y(page, engine, `altitude tabs on ${route}`);
+  }
+  return `altitude-tabs-hide-inactive:${routes.length}`;
+}
+
+async function assertUtilityChrome(page, engine, origin, config, surfaces) {
+  // Every page class carries the utility chrome — not only the hero page.
+  const routes = new Set([...Object.values(surfaces.layerSamples).flat(), ...surfaces.altitudeTabs]);
+  for (const route of routes) {
+    await visit(page, routeUrl(origin, config.base, route));
+    if (await page.locator("h1:visible").count() !== 1) throw new Error(`${engine}: ${route} must show exactly one h1`);
+    if (!await page.locator(".portal-provenance").first().isVisible()) throw new Error(`${engine}: ${route} lacks the visible provenance line`);
+    if (!await page.locator('[data-testid="portal-display-btn"]').first().isVisible()) throw new Error(`${engine}: ${route} lacks the Display control`);
+    const commentChrome = await page.evaluate(() => ["[data-testid=comment-btn]", ".cf-float", ".cf-dock", ".cf-hint", ".cf-composer"].map((selector) => document.querySelector(selector)).filter(Boolean).length);
+    if (commentChrome !== 0) throw new Error(`${engine}: ${route} carries present Comment chrome`);
+  }
+  return `utility-chrome:${routes.size}`;
 }
 
 async function assertDeepLink(page, engine, origin, base, route) {
@@ -325,22 +431,24 @@ async function assertSourceLink(page, engine, origin, config, generated) {
 
 async function assertThemeMatrix(page, engine, output) {
   await page.setViewportSize({ width: 1440, height: 900 });
-  for (const utilityTheme of ["signal", "folio"]) {
+  const accents = { light: new Set(), dark: new Set() };
+  for (const skin of ["instrument", "editorial", "ink"]) {
     for (const mode of ["light", "dark"]) {
-      const tokens = await page.evaluate(async ({ utilityTheme, mode }) => {
-        document.documentElement.dataset.portalTheme = utilityTheme;
+      const tokens = await page.evaluate(async ({ skin, mode }) => {
+        document.documentElement.dataset.cfpSkin = skin;
         document.documentElement.dataset.theme = mode;
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const style = getComputedStyle(document.documentElement);
-        return { font: style.getPropertyValue("--sl-font").trim(), accent: style.getPropertyValue("--sl-color-accent").trim() };
-      }, { utilityTheme, mode });
-      if (!tokens.font || !tokens.accent) throw new Error(`${engine}: ${utilityTheme}/${mode} utility tokens are absent`);
-      if (utilityTheme === "folio" && !tokens.font.includes("Georgia")) throw new Error(`${engine}: folio typography was not applied`);
-      if (utilityTheme === "signal" && !tokens.font.includes("Inter")) throw new Error(`${engine}: signal typography was not applied`);
-      await assertA11y(page, engine, `${utilityTheme}/${mode}`);
-      await page.screenshot({ path: path.join(output, `${engine}-${utilityTheme}-${mode}.png`), fullPage: true });
+        return { font: style.getPropertyValue("--cf-font-sans").trim(), accent: style.getPropertyValue("--cf-accent").trim() };
+      }, { skin, mode });
+      if (!tokens.font || !tokens.accent) throw new Error(`${engine}: ${skin}/${mode} utility tokens are absent`);
+      accents[mode].add(tokens.accent);
+      await assertA11y(page, engine, `${skin}/${mode}`);
+      await page.screenshot({ path: path.join(output, `${engine}-${skin}-${mode}.png`), fullPage: true });
     }
   }
+  if (accents.light.size !== 3 || accents.dark.size !== 3) throw new Error(`${engine}: the three utility skins do not produce three distinct palettes per mode`);
+  await page.evaluate((skin) => { document.documentElement.dataset.cfpSkin = skin; document.documentElement.dataset.theme = "light"; }, await page.evaluate(() => document.documentElement.dataset.portalTheme === "folio" ? "ink" : "instrument"));
 }
 
 async function assertKeyboardPath(page, engine) {
@@ -395,6 +503,10 @@ export async function discoverSurfaceRoutes(pages, portalRoot = root) {
   let remaining = 256 * 1024 * 1024;
   let deepLink = null;
   let strictPreview = null;
+  // Quality is not a hero-page property: every altitude page is exercised, so
+  // the whole corpus is scanned rather than stopping at the first match.
+  const altitudeTabs = [];
+  const layerSamples = new Map();
   for (const page of active) {
     const relative = safeRelative(page.output_markdown, "generated page output");
     const maximum = Math.min(8 * 1024 * 1024, remaining);
@@ -404,9 +516,12 @@ export async function discoverSurfaceRoutes(pages, portalRoot = root) {
     const text = bytes.toString("utf8");
     if (deepLink === null && /^#{2,3}\s+\S/m.test(text)) deepLink = page.route;
     if (strictPreview === null && text.includes("portal-id-preview")) strictPreview = page.route;
-    if (deepLink !== null && strictPreview !== null) break;
+    if (text.includes('class="portal-altitude-tabs"')) altitudeTabs.push(page.route);
+    const layer = page.route.split("/")[0];
+    if (!layerSamples.has(layer)) layerSamples.set(layer, [page.route]);
+    else layerSamples.get(layer)[1] = page.route;
   }
-  return { deepLink, strictPreview };
+  return { deepLink, strictPreview, altitudeTabs, layerSamples: Object.fromEntries(layerSamples) };
 }
 
 export function assertArtifactClaims(claimed, actual, phase) {

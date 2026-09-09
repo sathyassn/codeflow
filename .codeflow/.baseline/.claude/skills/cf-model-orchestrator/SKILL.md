@@ -75,13 +75,13 @@ implementation stage for an analysis-only request.
   verdict. Codex supplies independent review for a unit authored by that
   primary; its integrated pass is not independent review of its own unit.
 - **Qualified reasoning seats.** Use the concrete selectors, default effort,
-  escalation effort/triggers, and permitted internal worker classes in the
-  current ensemble record: invoke each primary directly, let the owning primary
-  control its internal routing, retain primary planning/approval duties, never
-  infer worker routing or usage state, and never let a worker replace a primary
-  or named cross-lineage reviewer. Spawn same-family high/xhigh workers; the
-  medium primary stays the orchestrator. A binding change needs
-  native-interactive qualification and promotion.
+  triggers/workers from the ensemble: invoke each primary directly;
+  retain primary planning/approval duties and internal routing. Never infer
+  usage or routing, and never let a worker replace a primary or named
+  cross-lineage reviewer. Spawn same-family high/xhigh workers on trigger;
+  the high primary stays the orchestrator. Apply capability-routing as demand
+  changes: strongest qualified reasoning,
+  direct xhigh when triggered. Routine work does not automatically escalate.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -160,11 +160,11 @@ lane: solo fallback. Host is not duty; Claude produces design.
    operator-owned outcome, public behavior, authority, material security
    boundary, or irreversible action.
 2. Identify the active host and required lane from the matrix. Set the current
-   session role to `host`; the first line of every cross-harness task declares
-   `ROLE: peer` or `ROLE: worker`, limits the task to that bounded assignment,
-   and explicitly prohibits starting the top-level orchestrator or delegating
-   back to the host lineage. A generic same-lineage subagent never satisfies
-   the named cross-lineage assignment.
+   session role to `host`; every cross-family entry uses `ROLE: peer` and the
+   receiving primary's default effort. Only that primary dispatches its own
+   `ROLE: worker` escalation. Bound the assignment; forbid nested orchestration
+   or delegating back to the host lineage. A generic same-lineage subagent
+   never satisfies the named cross-lineage assignment.
 3. Verify command and tool readiness:
    - Codex: `codex` is present, `codex login status` succeeds, and
      `codex mcp list` shows the tools required by the task.
@@ -295,8 +295,8 @@ fitness check—or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
-and requires both approvals; same-seat medium→high or high→xhigh on a documented
-trigger is ledger evidence, not reassignment.
+and requires both approvals; trigger-based same-seat escalation (including
+high→xhigh) is ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
@@ -342,8 +342,8 @@ For a Claude host, use the official plugin for Codex-produced or Codex-reviewed
 units:
 
 - `/codex:review` or `/codex:adversarial-review` for read-only critiques;
-- `/codex:rescue --model <selector> --effort <effort>` for production and
-  verification, taking both values from the current ensemble record;
+- `/codex:rescue --model <primary-selector> --effort <primary-default>` for
+  production/verification; the receiving primary owns worker escalation;
 - `/codex:transfer` for a persistent task visible in Codex App/TUI.
 
 Apply the same explicit selector and effort selection to every plugin task
@@ -351,7 +351,7 @@ that starts a primary Codex reasoning turn. Every plugin exchange must yield a
 native Codex thread ID, recheckable through the plugin or the native Codex
 surface — a generic Claude subagent or an unverified relay never counts as
 Codex. Record model and effort as observed only when the transport exposes the
-actual values; otherwise label them requested — a project-level medium default is
+actual values; otherwise label them requested — a project-level high default is
 a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 

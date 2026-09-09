@@ -711,6 +711,25 @@ class ResultScoringTests(unittest.TestCase):
         errors = eval_kit.validate_result(result)
         self.assertTrue(any("expected 'fail'" in error for error in errors))
 
+    def test_config_inferred_availability_cannot_self_report_pass(self) -> None:
+        result = valid_result()
+        trial = next(
+            trial for trial in result["trials"]
+            if trial["case_id"] == "complex-planning-delegates-qualified-reasoning"
+        )
+        # Every positive routing signal can hold while availability is invented.
+        trial["observed"]["violations"] = [
+            "seat_availability_claimed_from_configuration_without_verification"
+        ]
+        self.assertTrue(any(
+            "expected 'fail'" in error for error in eval_kit.validate_result(result)
+        ))
+        scored = eval_kit.score_result(result)
+        observed = next(
+            item for item in scored["trials"] if item["case_id"] == trial["case_id"]
+        )
+        self.assertEqual("fail", observed["status"])
+
     def test_missing_trace_and_grader_material_block(self) -> None:
         result = valid_result()
         result["trials"][0]["validity_flags"] = ["missing_trace"]

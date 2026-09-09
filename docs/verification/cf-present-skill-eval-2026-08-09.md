@@ -1,5 +1,11 @@
 # cf-present / cf-docs-portal skill evaluation — 2026-08-09
 
+Historical record: unchecked items and pending verdicts below describe this
+dated candidate, not current merge status. See the
+[post-merge hardening record](post-merge-hardening-2026-09-07.md) for current
+work and evidence boundaries. A merge does not retroactively complete an
+unrun model trial.
+
 **Suite:** `cf-evaluate-model` validate-suite + case  
 `complex-review-uses-declarative-presentation` (canary capability)  
 **Binary:** `./target/debug/codeflow` 3.0.0 (integration branch)  

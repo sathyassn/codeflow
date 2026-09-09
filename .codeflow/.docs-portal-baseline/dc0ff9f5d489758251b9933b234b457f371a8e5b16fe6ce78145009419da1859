@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
+import { TextDecoder } from "node:util";
 import GithubSlugger from "github-slugger";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
@@ -9,6 +10,22 @@ import { unified } from "unified";
 import YAML from "yaml";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+export function checkoutEquivalentBytes(committed, worktree) {
+  if (committed.equals(worktree)) return true;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  try {
+    const canonical = (bytes) => {
+      const text = decoder.decode(bytes);
+      const normalized = text.replace(/\r\n/g, "\n");
+      return normalized.includes("\r") ? null : normalized;
+    };
+    const committedText = canonical(committed);
+    return committedText !== null && committedText === canonical(worktree);
+  } catch {
+    return false;
+  }
+}
 
 // JavaScript's relational string comparison is specified over UTF-16 code
 // units. Keep evidence ordering independent of the host locale and ICU build.
@@ -133,6 +150,7 @@ export function rewriteRepositoryMarkdown(body, {
     const children = [];
     let cursor = 0;
     for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
+      if (!strictId(match[0])) continue;
       if (match.index > cursor) children.push({ type: "text", value: node.value.slice(cursor, match.index) });
       const target = strictTargets.get(match[0]);
       if (!target) children.push({ type: "text", value: match[0] });
@@ -150,10 +168,144 @@ function escapeGeneratedHtml(value) {
   return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
+// The Starlight shell already renders the page title; a leading depth-1
+// heading that repeats it — exactly, or with only a record-ID prefix such as
+// "ADR-0053 — <title>" — would render the title twice (the ID stays visible
+// in Record context and provenance). Any other heading is author content.
+export function stripLeadingTitleHeading(markdown, title) {
+  const tree = markdownTree(markdown);
+  const first = tree.children[0];
+  if (!first || first.type !== "heading" || first.depth !== 1) return markdown;
+  const text = visibleNodeText(first).trim();
+  const prefix = text.endsWith(title) ? text.slice(0, text.length - title.length) : null;
+  if (text !== title && !(prefix !== null && /^(?:ADR|EPC|SPC|TSK|CAP)-\d+(?:-\d+)?\s*[—–:-]\s*$/.test(prefix))) return markdown;
+  tree.children.shift();
+  return stringifyMarkdown(tree);
+}
+
+// Subject-led stage figures (utility presentation system, ADR-0053). A
+// `cf-stage` fence authors a labeled left-to-right flow in plain text; the
+// adapter renders it into generated HTML that uses only --cf-* tokens, so
+// sources never hand-author portal markup and raw HTML stays escaped.
+//
+//   node line     NAME | sublabel @role     (role: accent|positive|warn|danger)
+//   `->` line     next stage (nodes between arrows are parallel)
+//   caption: …    one mono caption under the figure
+//
+// Invalid grammar fails the page loudly (bounded stale stub), never silently.
+const STAGE_ROLES = new Set(["accent", "positive", "warn", "danger", "neutral"]);
+const STAGE_LIMITS = { stages: 6, nodesPerStage: 5, name: 64, sublabel: 96, caption: 160 };
+
+export function parseStageFence(source, context = "cf-stage") {
+  const stages = [[]];
+  let caption = null;
+  for (const raw of String(source).split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line === "->") {
+      if (!stages.at(-1).length) throw new Error(`${context}: '->' must follow at least one node`);
+      if (stages.length >= STAGE_LIMITS.stages) throw new Error(`${context}: stage count exceeds ${STAGE_LIMITS.stages}`);
+      stages.push([]);
+      continue;
+    }
+    if (line.startsWith("caption:")) {
+      if (caption !== null) throw new Error(`${context}: only one caption is allowed`);
+      caption = line.slice("caption:".length).trim();
+      if (!caption || caption.length > STAGE_LIMITS.caption) throw new Error(`${context}: caption must be 1 to ${STAGE_LIMITS.caption} characters`);
+      continue;
+    }
+    const match = line.match(/^(.*?)(?:\|(.*?))?(?:@([a-z]+))?$/);
+    const name = match[1].trim();
+    const sublabel = (match[2] ?? "").trim();
+    const role = (match[3] ?? "neutral").trim();
+    if (!name || name.length > STAGE_LIMITS.name) throw new Error(`${context}: node name must be 1 to ${STAGE_LIMITS.name} characters`);
+    if (sublabel.length > STAGE_LIMITS.sublabel) throw new Error(`${context}: node sublabel exceeds ${STAGE_LIMITS.sublabel} characters`);
+    if (!STAGE_ROLES.has(role)) throw new Error(`${context}: unknown node role @${role}`);
+    if (stages.at(-1).length >= STAGE_LIMITS.nodesPerStage) throw new Error(`${context}: node count per stage exceeds ${STAGE_LIMITS.nodesPerStage}`);
+    stages.at(-1).push({ name, sublabel, role });
+  }
+  if (stages.length < 2) throw new Error(`${context}: a stage figure needs at least two '->'-separated stages`);
+  if (!stages.at(-1).length) throw new Error(`${context}: the final stage needs at least one node`);
+  return { stages, caption };
+}
+
+export function renderStageFigure({ stages, caption }) {
+  const groups = stages.map((nodes) => {
+    const items = nodes.map((node) => {
+      const sub = node.sublabel ? `<span class="s">${escapeGeneratedHtml(node.sublabel)}</span>` : "";
+      return `<li class="portal-stage-node" data-role="${node.role}"><span class="k">${escapeGeneratedHtml(node.name)}</span>${sub}</li>`;
+    }).join("");
+    return `<ul class="portal-stage-group">${items}</ul>`;
+  }).join(`<div class="portal-stage-arrow" aria-hidden="true"></div>`);
+  const figcaption = caption === null ? "" : `<figcaption>${escapeGeneratedHtml(caption)}</figcaption>`;
+  return `<figure class="portal-stage"><div class="portal-stage-flow">${groups}</div>${figcaption}</figure>`;
+}
+
+export function renderStageFences(markdown, context = "cf-stage") {
+  const tree = markdownTree(markdown);
+  let changed = false;
+  visitMarkdown(tree, (node, parent, index) => {
+    if (node.type !== "code" || node.lang !== "cf-stage") return;
+    parent.children[index] = { type: "html", value: renderStageFigure(parseStageFence(node.value, context)) };
+    changed = true;
+  });
+  return changed ? stringifyMarkdown(tree) : markdown;
+}
+
+const ALTITUDE_LAYERS = ["concept", "architecture", "technical"];
+
+// Utility presentation system altitude grammar (ADR-0053): when a source
+// authors the depth-2 sections Concept / Architecture / Technical, wrap each
+// section in a tabpanel and emit a real tablist — the portal runtime
+// (portal-tabs.js) shows exactly one panel at a time, keys the panel to the
+// URL hash, and drives arrow-key selection. Without JavaScript the panels
+// stack in document order. Sources that do not follow the grammar pass
+// through unchanged; the markup is generated, never author-controlled.
+export function decorateAltitude(markdown) {
+  const tree = markdownTree(markdown);
+  const slugger = new GithubSlugger();
+  const sections = [];
+  for (let index = 0; index < tree.children.length; index += 1) {
+    const node = tree.children[index];
+    if (node.type !== "heading") continue;
+    const slug = slugger.slug(visibleNodeText(node));
+    if (node.depth !== 2) continue;
+    const label = visibleNodeText(node).trim().toLowerCase();
+    if (ALTITUDE_LAYERS.includes(label)) sections.push({ index, label, slug });
+  }
+  if (sections.length < 2 || new Set(sections.map((section) => section.label)).size !== sections.length) return markdown;
+  for (const section of sections) {
+    section.end = tree.children.length;
+    for (let index = section.index + 1; index < tree.children.length; index += 1) {
+      const node = tree.children[index];
+      if (node.type === "heading" && node.depth === 2) { section.end = index; break; }
+    }
+  }
+  // Splice from the last boundary to the first so every position stays valid
+  // in the pristine index space computed above.
+  for (let cursor = sections.length - 1; cursor >= 0; cursor -= 1) {
+    const section = sections[cursor];
+    tree.children.splice(section.end, 0, { type: "html", value: "</section>" });
+    tree.children.splice(section.index, 0, {
+      type: "html",
+      value: `<section class="portal-altitude" role="tabpanel" id="portal-panel-${section.label}" aria-labelledby="portal-tab-${section.label}" data-altitude="${section.label}">`,
+    });
+  }
+  const tabs = sections.map((section, index) => {
+    const title = `${section.label[0].toUpperCase()}${section.label.slice(1)}`;
+    const selected = index === 0 ? ` aria-selected="true"` : ` aria-selected="false" tabindex="-1"`;
+    return `<button type="button" role="tab" id="portal-tab-${section.label}" aria-controls="portal-panel-${section.label}"${selected} data-anchor="${escapeGeneratedHtml(section.slug)}">${title}</button>`;
+  }).join("\n");
+  tree.children.splice(sections[0].index, 0, { type: "html", value: `<div class="portal-altitude-tabs" role="tablist" aria-label="Altitude">\n${tabs}\n</div>` });
+  return stringifyMarkdown(tree);
+}
+
 export function referencedIds(markdown) {
   const found = new Set();
   for (const node of markdownNodes(markdownTree(markdown), "text")) {
-    for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) found.add(match[0]);
+    for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
+      if (strictId(match[0])) found.add(match[0]);
+    }
   }
   return [...found];
 }
@@ -257,7 +409,7 @@ function sourceReferenceNode(node, sourcePath, commit) {
 }
 
 function strictIdPreview(id, target, suffix) {
-  const statusText = target.stale ? "stale — excluded from the current graph" : target.status;
+  const statusText = target.status;
   const status = typeof statusText === "string" && statusText ? `<span>Status: ${escapeGeneratedHtml(statusText)}</span>` : "";
   const previewId = `portal-preview-${suffix}`;
   return `<span class="portal-id-preview"><a href="${escapeGeneratedHtml(target.route)}" aria-describedby="${previewId}">${id}</a><span id="${previewId}" role="tooltip"><strong>${escapeGeneratedHtml(target.title)}</strong>${status}<span>Source: <code>${escapeGeneratedHtml(target.source_path)}</code></span></span></span>`;
@@ -274,7 +426,37 @@ export function amendmentHeadings(markdown) {
 }
 
 export function strictId(value) {
-  return /^(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?$/.test(value);
+  return /^(?:(?:ADR|EPC|SPC|CAP)-\d{3,}|TSK-\d{3,}(?:-\d{3,})?)$/.test(value);
+}
+
+export function recoverUnavailableIds(text, sourcePath) {
+  const normalized = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const recovered = [];
+  for (const line of normalized.split("\n")) {
+    const match = line.match(/^[ \t]*id:[ \t]*(.*)$/);
+    if (!match) continue;
+    const value = match[1].trimStart();
+    let candidate;
+    if (value.startsWith("\"") || value.startsWith("'")) {
+      const quote = value[0];
+      const end = value.indexOf(quote, 1);
+      if (end < 0) continue;
+      const trailing = value.slice(end + 1).trim();
+      if (trailing && !trailing.startsWith("#")) continue;
+      candidate = value.slice(1, end);
+    } else {
+      const token = value.match(/^(\S+)(.*)$/);
+      if (!token) continue;
+      const trailing = token[2].trim();
+      if (trailing && !trailing.startsWith("#")) continue;
+      candidate = token[1];
+    }
+    if (strictId(candidate) && !recovered.includes(candidate)) recovered.push(candidate);
+  }
+  if (sourcePath === "docs/capabilities.md") return [...recovered].sort(compareDeterministicText);
+  const filenameId = path.posix.basename(sourcePath, ".md").toUpperCase();
+  if (strictId(filenameId)) return [filenameId];
+  return recovered.length ? [recovered[0]] : [];
 }
 
 export function collectPageIds(frontmatter, text, sourcePath) {

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, collectPageIds, compareDeterministicText, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, referencedIds, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -37,15 +37,33 @@ test("safe paths reject traversal and platform separators", () => {
   assert.equal(safeRelative("docs/guide.md"), "docs/guide.md");
 });
 
+test("checkout byte comparison permits only reversible text newlines", () => {
+  assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\r\nbeta\r\n")), true);
+  assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\nbeta changed\n")), false);
+  assert.equal(checkoutEquivalentBytes(Buffer.from("alpha\nbeta\n"), Buffer.from("alpha\rbeta\n")), false);
+  assert.equal(checkoutEquivalentBytes(Buffer.from([0xff, 0x00]), Buffer.from([0xff, 0x00])), true);
+  assert.equal(checkoutEquivalentBytes(Buffer.from([0xff, 0x00]), Buffer.from([0xfe, 0x00])), false);
+});
+
+test("stale identity recovery matches the verifier grammar and ordering", () => {
+  assert.deepEqual(recoverUnavailableIds("\uFEFF---\r\nid: 'TSK-101' # note\r\n", "docs/guide.md"), ["TSK-101"]);
+  assert.deepEqual(recoverUnavailableIds('id: "TSK-101\'\n', "docs/guide.md"), []);
+  assert.deepEqual(recoverUnavailableIds("id: CAP-001-002\n", "docs/guide.md"), []);
+  assert.deepEqual(recoverUnavailableIds("id: TSK-200\nid: TSK-100\n", "docs/guide.md"), ["TSK-200"]);
+  assert.deepEqual(recoverUnavailableIds("id: CAP-002\nid: CAP-001\n", "docs/capabilities.md"), ["CAP-001", "CAP-002"]);
+  assert.deepEqual(recoverUnavailableIds("id: TSK-999\n", "tasks/TSK-123.md"), ["TSK-123"]);
+});
+
 test("producer evidence limits reject every verifier boundary at N plus one", () => {
   const page = {
     ids: Array(EVIDENCE_LIMITS.idsPerPage).fill("CAP-001"),
+    unavailable_ids: Array(EVIDENCE_LIMITS.idsPerPage).fill("CAP-002"),
     relationships: Array(EVIDENCE_LIMITS.relationshipsPerPage).fill({}),
     backlinks: Array(EVIDENCE_LIMITS.backlinksPerPage).fill({}),
     snippets: Array(EVIDENCE_LIMITS.snippetsPerPage).fill({}),
   };
   assert.doesNotThrow(() => assertEvidencePageLimits(page));
-  for (const field of ["ids", "relationships", "backlinks", "snippets"]) {
+  for (const field of ["ids", "unavailable_ids", "relationships", "backlinks", "snippets"]) {
     const over = { ...page, [field]: [...page[field], {}] };
     assert.throws(() => assertEvidencePageLimits(over), new RegExp(`${field} count exceeds`));
   }
@@ -79,7 +97,7 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     const pages = [];
     for (let index = 0; index < 70; index += 1) {
       const relative = `generated/page-${index}.md`;
-      const text = index === 68 ? "# Page\n\n## Deep target\n" : index === 69 ? "# Page\n\n<span class=\"portal-id-preview\">CAP-001</span>\n" : "# Page\n";
+      const text = index === 66 || index === 67 ? "# Page\n\n<div class=\"portal-altitude-tabs\" role=\"tablist\"></div>\n" : index === 68 ? "# Page\n\n## Deep target\n" : index === 69 ? "# Page\n\n<span class=\"portal-id-preview\">CAP-001</span>\n" : "# Page\n";
       await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
       await writeFile(path.join(root, relative), text);
       pages.push({ stale: false, route: `reference/page-${index}`, output_markdown: relative, output_markdown_sha256: sha256(text) });
@@ -87,6 +105,8 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     assert.deepEqual(await discoverSurfaceRoutes(pages, root), {
       deepLink: "reference/page-68",
       strictPreview: "reference/page-69",
+      altitudeTabs: ["reference/page-66", "reference/page-67"],
+      layerSamples: { reference: ["reference/page-0", "reference/page-69"] },
     });
     pages[69].output_markdown_sha256 = "0".repeat(64);
     await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
@@ -331,6 +351,60 @@ test("the AST rewrite escapes raw HTML while preserving code and GFM", () => {
   assert.match(rendered, /<div>example<\/div>/);
   assert.match(rendered, /\n\n## <span class="portal-id-preview">/);
   assert.match(rendered, /```\n\nAfter the fence\./);
+});
+
+test("cf-stage fences render token-driven figures and fail closed", () => {
+  const source = "```cf-stage\npolicy | one source @accent\n->\nhooks | five shims\nguards | in-session\n->\nprotected | human-merged @positive\ncaption: planes read one source\n```";
+  const rendered = renderStageFences(source, "docs/x.md");
+  assert.match(rendered, /<figure class="portal-stage"><div class="portal-stage-flow">/);
+  assert.match(rendered, /<li class="portal-stage-node" data-role="accent"><span class="k">policy<\/span><span class="s">one source<\/span><\/li>/);
+  assert.match(rendered, /<li class="portal-stage-node" data-role="neutral"><span class="k">hooks<\/span>/);
+  assert.equal(rendered.split("portal-stage-arrow").length - 1, 2);
+  assert.match(rendered, /<figcaption>planes read one source<\/figcaption>/);
+  const hostile = renderStageFences("```cf-stage\n<b>x</b> | <i onclick=\"y\">z</i>\n->\nB\n```");
+  assert.doesNotMatch(hostile, /<b>|<i onclick/);
+  assert.match(hostile, /&lt;b&gt;x&lt;\/b&gt;/);
+  const ascii = "```text\nA -> B\n```";
+  assert.equal(renderStageFences(ascii), ascii);
+  assert.throws(() => renderStageFences("```cf-stage\nonly one stage\n```"), /at least two/);
+  assert.throws(() => renderStageFences("```cf-stage\nA @nope\n->\nB\n```"), /unknown node role/);
+  assert.throws(() => renderStageFences("```cf-stage\nA\n->\n```"), /final stage/);
+  assert.throws(() => renderStageFences("```cf-stage\nA\n->\nB\ncaption: x\ncaption: y\n```"), /one caption/);
+  assert.throws(() => renderStageFences(`\`\`\`cf-stage\n${"N\n".repeat(6)}->\nB\n\`\`\``), /node count per stage/);
+});
+
+test("a leading H1 that repeats the page title renders once", () => {
+  assert.equal(stripLeadingTitleHeading("# Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# ADR-0053 — Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# TSK-002-001: Guide\n\nBody.", "Guide"), "Body.");
+  assert.equal(stripLeadingTitleHeading("# Introduction to Guide\n\nBody.", "Guide"), "# Introduction to Guide\n\nBody.");
+  assert.equal(stripLeadingTitleHeading("# Other\n\nBody.", "Guide"), "# Other\n\nBody.");
+  assert.equal(stripLeadingTitleHeading("Intro first.\n\n# Guide", "Guide"), "Intro first.\n\n# Guide");
+});
+
+test("altitude sections become a tablist with one panel per layer", () => {
+  const source = "Intro prose.\n\n## Concept\n\nClaim.\n\n## Architecture\n\n```text\nA -> B\n```\n\n## Technical\n\n| Claim | State |\n|---|---|\n| x | pass |\n\n## Appendix\n\nUnwrapped tail.";
+  const rendered = decorateAltitude(source);
+  assert.match(rendered, /<div class="portal-altitude-tabs" role="tablist" aria-label="Altitude">\n<button type="button" role="tab" id="portal-tab-concept" aria-controls="portal-panel-concept" aria-selected="true" data-anchor="concept">Concept<\/button>\n<button type="button" role="tab" id="portal-tab-architecture" aria-controls="portal-panel-architecture" aria-selected="false" tabindex="-1" data-anchor="architecture">Architecture<\/button>/);
+  assert.match(rendered, /<section class="portal-altitude" role="tabpanel" id="portal-panel-concept" aria-labelledby="portal-tab-concept" data-altitude="concept">\n\n## Concept/);
+  assert.match(rendered, /<\/section>\n\n<section class="portal-altitude" role="tabpanel" id="portal-panel-architecture" aria-labelledby="portal-tab-architecture" data-altitude="architecture">\n\n## Architecture/);
+  assert.match(rendered, /<\/section>\n\n## Appendix\n\nUnwrapped tail\./);
+  assert.equal(rendered.split("<section ").length - 1, rendered.split("</section>").length - 1);
+  assert.equal(rendered.split('role="tab"').length - 1, 3);
+  // A second, differently shaped source page becomes a tablist the same way —
+  // the grammar is corpus-wide, never a single hero page.
+  const second = decorateAltitude("# Subsystem\n\nLead.\n\n## Concept\n\nOne claim.\n\n```cf-stage\nA | in @accent\n->\nB | out\n```\n\n## Technical\n\n- evidence");
+  assert.match(second, /<div class="portal-altitude-tabs" role="tablist"/);
+  assert.equal(second.split('role="tabpanel"').length - 1, 2);
+  assert.match(second, /<section class="portal-altitude" role="tabpanel" id="portal-panel-technical"/);
+});
+
+test("altitude decoration passes non-conforming and ambiguous sources through", () => {
+  for (const source of ["## Concept\n\nOnly one layer.", "## Concept\n\nx\n\n## Concept\n\ny\n\n## Technical\n\nz", "Prose without layers.\n\n## Usage\n\nx"]) {
+    assert.equal(decorateAltitude(source), source);
+  }
+  const nested = decorateAltitude("# Concept\n\n### Concept\n\n## Concept\n\nx\n\n## Technical\n\ny");
+  assert.match(nested, /data-anchor="concept-2">Concept<\/button>/);
 });
 
 test("the AST rewrite permits external links but refuses remote images and ambiguous references", () => {
@@ -1343,12 +1417,12 @@ test("the adapter emits one bounded non-searchable current-source stub without a
   try {
     const source = path.join(root, "docs/guide.md");
     await writeFile(source, "---\nid: TSK-101\ntitle: Guide\ndepends_on: [TSK-102]\n---\n\n# Guide\n\nGrounded content references TSK-102.\n");
-    await writeFile(path.join(root, "docs/target.md"), "---\nid: TSK-102\ntitle: Current target\n---\n\n# Target\n\nThis current page references TSK-101.\n");
+    await writeFile(path.join(root, "docs/target.md"), "---\nid: TSK-102\ntitle: Current target\ndepends_on: [TSK-101]\n---\n\n# Target\n\nThis current page references TSK-101.\n");
     commitFixture(root, "add valid guide");
     runAdapter(root);
     const prior = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
     assert.match(prior, /Grounded content/);
-    await writeFile(source, "---\ntitle: broken\n");
+    await writeFile(source, "---\nid: TSK-101\ntitle: [broken\n");
     commitFixture(root, "break guide");
     runAdapter(root);
     const output = path.join(root, "src/content/docs/reference/guide.md");
@@ -1365,13 +1439,14 @@ test("the adapter emits one bounded non-searchable current-source stub without a
     assert.equal(stale.searchable, false);
     assert.deepEqual(stale.snippets, []);
     assert.deepEqual(stale.ids, []);
+    assert.deepEqual(stale.unavailable_ids, ["TSK-101"]);
     assert.deepEqual(stale.relationships, []);
     assert.equal(typeof stale.stale_reason, "string");
     assert.equal("last_good_commit" in stale, false);
     assert.equal("last_good_source_sha256" in stale, false);
     assert.deepEqual(target.backlinks, []);
     const targetOutput = await readFile(path.join(root, "src/content/docs/reference/target.md"), "utf8");
-    assert.doesNotMatch(targetOutput, /stale — excluded from the current graph/);
+    assert.match(targetOutput, /TSK-101 — stale/);
     assert.doesNotMatch(targetOutput, /### Inverse links/);
     const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
     assert.doesNotMatch(landing, /Guide/);
@@ -1509,6 +1584,9 @@ test("tracked public runtime bytes are authoritative and untracked active conten
   }
   const root = await selfContainedPortalFixture();
   try {
+    const nodeVersionPath = path.join(root, ".node-version");
+    const nodeVersion = await readFile(nodeVersionPath, "utf8");
+    await writeFile(nodeVersionPath, nodeVersion.replace(/\r?\n/g, "\r\n"));
     await writeFile(path.join(root, "public/rogue.html"), "<script>rogue()</script>");
     assert.match(runLocalAdapter(root, false).stderr, /must match HEAD exactly|refusing uncommitted portal file/);
   } finally { await rm(root, { recursive: true, force: true }); }

@@ -262,7 +262,7 @@ pub fn init(
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and medium default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
+            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
                 .to_string(),
         );
     }

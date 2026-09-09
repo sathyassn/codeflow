@@ -36,23 +36,12 @@ description: Land finished work — docs and capability updates, then a PR throu
 5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
    the PR narrative. It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.
-6. Open the PR. Commits stay conventional (`type(scope): description`,
-   ≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
-   ≤ 72 chars, optional `BREAKING CHANGE:` footer); one logical change each.
-   **Title** names the whole-branch outcome, not only the last commit.
-   **Body** follows the template (summary, changes, testing, linked IDs).
-   Tables for tabular data, fenced blocks for pasted output, one-line bullets
-   otherwise; Summary is plain language a zero-context reader understands.
-   Write Summary and Changes from `git log --oneline <base>..<head>` and
-   `git diff --stat <base>...<head>` on source-of-truth paths — every logical
-   change on the branch, not the last conversation, last review, or last
-   commit. For a code change, **Testing is evidence you already ran**: paste
-   `codeflow test --mode essential --strict` (use `full` when the change
-   touches a full-only target); run the coverage command CI uses and paste
-   the TOTAL numbers — do not defer to CI; name new tests, manual/e2e, and
-   what was NOT tested. Docs-only: one line plus the doc checks. Lint with
-   `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
-   <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
+6. Prepare the whole-branch PR using
+   [references/pr-evidence.md](references/pr-evidence.md). Follow the project
+   template and conventional-commit policy; attribute measured evidence to its
+   revision and scope. Missing required evidence keeps the PR draft. Lint the
+   body with `codeflow ci` before pushing and opening the PR. No AI attribution
+   or emoji.
 7. Land via a PR **merged by a human** when required *checks* are evidenced
    green (the same `codeflow test` / `validate` / coverage / security targets,
    locally or in completed CI jobs — a gate is the check, not the job name).

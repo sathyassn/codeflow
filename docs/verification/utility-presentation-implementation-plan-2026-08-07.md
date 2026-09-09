@@ -1,5 +1,11 @@
 # Utility presentation — implementation plan
 
+Historical record: unchecked items and pending verdicts below describe this
+dated candidate, not current merge status. See the
+[post-merge hardening record](post-merge-hardening-2026-09-07.md) for current
+work and evidence boundaries. A merge does not retroactively complete an
+unrun model trial.
+
 **Date:** 2026-08-07  
 **Branch:** `integration/EPC-005-presentation-system` (PR #433)  
 **Depends on:** DESIGN_INTENT 2026-08-07, ADR-0053

@@ -29,6 +29,9 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
     ))
     .expect("harness catalog JSON");
     assert_eq!(ensemble["schema_version"], 3);
+    assert!(ensemble["rules"].as_array().unwrap().iter().any(|rule| {
+        rule.as_str() == Some("High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.")
+    }), "high reasoning floor must not mandate redundant escalation");
     let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
         .as_array()
         .expect("harnesses")
@@ -179,6 +182,25 @@ fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
 }
 
 #[test]
+fn cross_family_entry_preserves_receiving_primary_ownership() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    for required in [
+        "The first line of every cross-family task declares `ROLE: peer`",
+        "qualified primary at its default effort",
+        "only for same-family work owned and dispatched by that family's primary",
+        "a caller never selects a foreign worker directly",
+        "Later primary-approval prose cannot repair an incorrect initial dispatch",
+    ] {
+        assert!(
+            routing.contains(required),
+            "primary-entry contract lost: {required}"
+        );
+    }
+}
+
+#[test]
 fn current_ensemble_and_routing_pin_grok_catalog() {
     let routing = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
@@ -207,7 +229,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "\"role\": \"grok-engineering-primary\"",
         "\"model_class\": \"latest-grok-coding\"",
         "\"grok-cli\": \"grok-4.6\"",
-        "\"default_effort\": \"medium\"",
+        "\"default_effort\": \"high\"",
         "\"escalation_effort\": \"xhigh\"",
         "Primary seats retain independent planning and approval duties.",
         "The standing pair is the usual quality floor; extra catalog families never vote silently.",
@@ -216,7 +238,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
         "Claude produces design in its native interactive session regardless of host.",
         "A changed concrete binding requires native-interactive qualification before promotion.",
-        "A medium primary that hits a high or xhigh trigger mid-session stays the orchestrator and spawns same-family workers at that effort.",
+        "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
         "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(
@@ -245,9 +267,13 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "Unknown remains unknown",
         "never infer quota, availability, or a worker route",
         "is reassignment: create Plan vN+1",
-        "same-seat medium→high or high→xhigh escalation",
+        "same-seat trigger-based effort escalation, including direct high→xhigh",
+        "Default effort is high for primary seats, not a ceiling",
+        "strongest qualified same-family reasoning seat",
+        "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
+        "Routine, well-specified work stays at the default",
+        "both families still plan independently and cross-lineage review remains mandatory",
         "A model cannot independently review its own authored unit",
-        "The first line of every cross-harness task declares",
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
         "never a silent third vote",
@@ -333,8 +359,10 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         "architecture must list the grok doctor check"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("same-family high/xhigh workers mid-session"),
-        "CAP-010 must pin mid-session worker spawn"
+        normalize_whitespace(&capabilities).contains(
+            "medium/high workers when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
+        ),
+        "CAP-010 must preserve proportionate workers and mid-session escalation without host restart"
     );
     assert!(
         normalize_whitespace(&capabilities).contains("named when a routing-policy trigger fires"),
@@ -467,7 +495,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "**Substantive documentation:**",
         "--model <selector> --effort <effort> --permission-mode bypassPermissions",
         "spawn workers at escalation effort",
-        "/codex:rescue --model <selector> --effort <effort>",
+        "/codex:rescue --model <primary-selector> --effort <primary-default>",
         "do not inherit an unobserved user default",
         "Make `autoMode.classifyAllShell` effective at user scope",
         "repeated `--settings` flags are not a supported merge contract",
@@ -483,7 +511,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         );
     }
     for required in [
-        "\"default_effort\": \"medium\"",
+        "\"default_effort\": \"high\"",
         "\"escalation_effort\": \"xhigh\"",
         "\"claude-code\": \"fable\"",
         "\"codex-cli\": \"gpt-6-astra\"",

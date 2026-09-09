@@ -4,6 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import axe from "axe-core";
 import { chromium } from "playwright-core";
+import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
+import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetsRoot = resolve(webRoot, "../assets");
@@ -15,7 +17,7 @@ const prepaint = manifest.service.inline["present.prepaint"].source;
 const sourceStyles = await readFile(join(webRoot, "src/styles.css"), "utf8");
 const exportFallback = await readFile(join(webRoot, "src/export-fallback.css"), "utf8");
 const projectUtilityCss = ":root[data-cf-theme]{--cf-reading-measure:68ch;}";
-const applicationCsp = `default-src 'none'; script-src 'self' '${manifest.service.inline["present.prepaint"].csp_sha256}'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+const applicationCsp = `default-src 'none'; script-src 'self' '${manifest.service.inline["present.prepaint"].csp_sha256}'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; font-src data:; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 const reviewPosts = [];
 const server = createServer(async (request, response) => {
   try {
@@ -98,6 +100,8 @@ const executablePath = await findBrowser();
 const browser = await chromium.launch({ executablePath, headless: true });
 
 try {
+  await checkSelectionOccurrences(browser);
+  await checkDocumentExcerpts(browser);
   await checkProseLazyPath(browser, origin);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
@@ -148,7 +152,9 @@ async function checkProseLazyPath(browser, origin) {
   const dynamicPaths = new Set(
     manifest.service.assets
       .find((asset) => asset.request_path === appPath)
-      .imports.filter((item) => item.kind === "dynamic-import")
+      // The small offline font module is intentionally available on prose
+      // pages; heavyweight syntax/diagram renderers must remain lazy.
+      .imports.filter((item) => item.kind === "dynamic-import" && !/\/chunk-fonts-[^/]+\.js$/u.test(item.request_path))
       .map((item) => item.request_path),
   );
   if (requests.some((request) => dynamicPaths.has(request.pathname))) {
@@ -186,6 +192,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   });
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
+  await assertBundledFonts(page);
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.getByTestId("feedback-history").waitFor();
   await page.getByTestId("feedback-history").locator("summary").click();
@@ -581,6 +588,25 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   }
   assertNetworkStayedLoopback(network);
   await context.close();
+}
+
+async function assertBundledFonts(page) {
+  const notices = page.locator("body > footer[data-cf-font-licenses]");
+  await notices.waitFor({ state: "visible" });
+  if (await page.locator("#cf-present-document footer[data-cf-font-licenses], #cf-present-chrome footer[data-cf-font-licenses]").count()) {
+    throw new Error("Font notices entered an annotation or chrome root");
+  }
+  const text = await notices.textContent();
+  for (const expected of ["Archivo", "Inter", "IBM Plex Sans", "SIL OPEN FONT LICENSE"]) {
+    if (!text.includes(expected)) throw new Error(`Missing bundled font notice: ${expected}`);
+  }
+  for (const family of ["Archivo", "Inter", "IBM Plex Sans"]) {
+    const loaded = await page.evaluate(async (name) => {
+      const faces = await document.fonts.load(`400 16px "${name}"`);
+      return faces.length > 0 && faces.every((face) => face.status === "loaded");
+    }, family);
+    if (!loaded) throw new Error(`Bundled font did not load: ${family}`);
+  }
 }
 
 async function selectFixtureText(page) {

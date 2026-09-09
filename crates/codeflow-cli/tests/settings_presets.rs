@@ -24,7 +24,23 @@ const HOOK_NAMES: [&str; 4] = [
 /// Hardcoded union of top-level keys actually used across the three presets.
 /// A typo'd or stray key in any preset fails here; a deliberate new key means
 /// updating this list in the same change.
-const TOP_LEVEL_KEYS: [&str; 5] = ["$schema", "hooks", "permissions", "sandbox", "statusLine"];
+const TOP_LEVEL_KEYS: [&str; 6] = [
+    "$schema",
+    "effortLevel",
+    "hooks",
+    "permissions",
+    "sandbox",
+    "statusLine",
+];
+
+#[test]
+fn primary_effort_settings_default_to_high() {
+    for name in preset_files() {
+        let bytes = std::fs::read(settings_dir().join(&name)).unwrap();
+        let preset: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(preset["effortLevel"], "high", "{name}");
+    }
+}
 
 /// Claude's private state must stay unreadable without hiding the official
 /// plugin runtime under `~/.claude/plugins` from Claude Code itself.

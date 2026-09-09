@@ -1,5 +1,11 @@
 # TSK-009 documentation portal verification
 
+Historical record: unchecked items and pending verdicts below describe this
+dated candidate, not current merge status. See the
+[post-merge hardening record](../post-merge-hardening-2026-09-07.md) for current
+work and evidence boundaries. A merge does not retroactively complete an
+unrun model trial.
+
 This record binds the corrected portal implementation to exact, reproducible
 evidence. The current cleanup candidate is
 `109cb2f50e5dea7ec95de5e9fc69c36a1de7d044`; its integration base is

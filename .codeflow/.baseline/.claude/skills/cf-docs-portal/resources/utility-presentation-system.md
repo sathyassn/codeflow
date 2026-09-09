@@ -89,8 +89,10 @@ a teaser dump.
   utility faces (Archivo / IBM Plex Sans; system fallbacks, no remote fonts).
 - Semantic colour roles: canvas, surface, text, line, accent, focus, pass /
   warn / danger. Colour is never the only carrier of state.
-- Motion is optional chrome only; **meaning holds at rest**. Honour reduced
-  motion.
+- Motion is optional and purposeful: it may explain a transition, sequence, or
+  causal relationship, or give interaction feedback. **Meaning holds at rest**;
+  honour reduced motion with an equivalent static explanation. Avoid decorative
+  loops or animation that delays access to information.
 
 ### Stage and diagram grammar
 
