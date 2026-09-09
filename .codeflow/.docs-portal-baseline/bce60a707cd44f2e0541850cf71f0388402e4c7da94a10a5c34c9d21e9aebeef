@@ -1131,8 +1131,9 @@ test("lifecycle drains a delayed acquisition before re-signalling", { skip: proc
           await appendFile(path.join(root, ".acquire-order"), "cleanup-" + id + "\\n");
           await writeFile(path.join(root, ".acquire-cleanup-count"), String(cleanupRuns) + "\\n");
         });
-        await writeFile(path.join(root, ".acquire-ready"), "ready\\n");
-        await acquisition;
+        // Attach the rejection handler before publishing readiness. SIGTERM
+        // can arrive while the ready-file write is still completing.
+        await Promise.all([acquisition, writeFile(path.join(root, ".acquire-ready"), "ready\\n")]);
       });
     `);
     const child = spawn(process.execPath, [runner], { cwd: root, stdio: "ignore" });

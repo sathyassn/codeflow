@@ -109,6 +109,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Portal dependency security updates.** The repository portal and distributed
+  starter use Astro 7.2.8, Sharp 0.35.4, js-yaml 4.3.2 and SVGO 4.1.0 to address
+  six reported advisories. Dependency lifecycle scripts remain disabled.
+  The portal build requires Node 22.19.0 or newer to match the updated transitive
+  HTTP library; the pinned Node 26.4.0 toolchain is unchanged.
+  Existing adopters receive the managed-file reconciliation through
+  `codeflow update` after installing the corrected CLI; resolve any reported
+  local customization conflicts and rerun the portal's locked install and checks.
+
 - **Presentation qualification now exercises the real owned runtime and offline
   export boundary.** A full-only gate drives the CLI, authenticated loopback
   service, isolated headless browser profiles, feedback/update/reopen flow,

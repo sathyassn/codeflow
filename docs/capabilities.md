@@ -782,7 +782,8 @@ adrs: [ADR-0048]
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-starter is absent from ordinary initialization, materializes offline once at
+portal build requires Node 22.19.0 or newer; the pinned toolchain is Node 26.4.0.
+The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 ordinary never-clobber updates through opaque content-addressed pristine
 baselines. The source-authority adapter generates disposable pages, Markdown
