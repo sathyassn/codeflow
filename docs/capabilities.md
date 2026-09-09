@@ -12,6 +12,24 @@
      docs/capabilities/CAP-*.md when navigation or merge costs materially
      outweigh a single overview. -->
 
+## CAP-017 — optional-agentic-estimation
+
+```yaml
+id: CAP-017
+name: optional-agentic-estimation
+area: engine
+status: planned
+verified_by: []
+epics: [EPC-006]
+adrs: [ADR-0057]
+```
+
+Planned in SPC-007: an actively offered, optional agentic operating and
+estimation method with a read-only check of explicit forecast allocations.
+Project-owned profiles and snapshots link existing work authority; they do not
+create a second tracker. Readiness and predictive usefulness remain separate
+claims, to be evidenced by EPC-006 rather than inferred from this registry.
+
 ## CAP-001 — scaffold-init
 
 ```yaml
