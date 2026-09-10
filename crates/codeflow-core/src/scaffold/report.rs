@@ -16,7 +16,8 @@ pub enum Action {
     Changed,
     /// 3-way merge applied cleanly, or structured JSON merge performed.
     Merged,
-    /// Merge conflict: `<path>.new` written, the file itself untouched.
+    /// Conflict: the existing file is untouched. General scaffold merging may
+    /// write a sidecar; portal conflicts stop their entire transaction instead.
     Conflicted,
     /// User-owned JSON gained new default keys.
     KeysAdded,

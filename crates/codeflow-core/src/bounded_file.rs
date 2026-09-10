@@ -7,7 +7,7 @@
 use std::io::Read;
 use std::path::Path;
 
-mod confined;
+pub(crate) mod confined;
 pub(crate) use confined::ConfinedRoot;
 
 pub(crate) fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {

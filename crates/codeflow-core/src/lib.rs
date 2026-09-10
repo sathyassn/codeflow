@@ -23,6 +23,7 @@ pub mod scaffold;
 pub mod security;
 pub mod settings;
 pub mod status;
+mod strict_json;
 pub mod testing;
 pub mod validate;
 pub mod workgraph;

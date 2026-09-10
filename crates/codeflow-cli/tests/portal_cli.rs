@@ -149,3 +149,115 @@ fn portal_validation_cli_reports_missing_evidence_without_running_project_code()
     );
     assert!(!marker.exists(), "portal validation executed project code");
 }
+
+#[test]
+fn portal_transfer_requires_confirmation_and_preserves_runtime_after_updates() {
+    let fixture = initialized_fixture();
+    let setup = codeflow(
+        &fixture.root,
+        &fixture.home,
+        &["portal", "setup", "--path", "guide"],
+    );
+    assert!(setup.status.success(), "{}", output_text(&setup));
+    let state = fixture.root.join(".codeflow/docs-portal.json");
+    let before = std::fs::read(&state).unwrap();
+    let unconfirmed = codeflow(&fixture.root, &fixture.home, &["portal", "transfer"]);
+    assert!(!unconfirmed.status.success());
+    assert_eq!(std::fs::read(&state).unwrap(), before);
+    std::fs::write(
+        fixture.root.join("guide/astro.config.mjs"),
+        "// project fork\n",
+    )
+    .unwrap();
+    std::fs::remove_file(fixture.root.join("guide/package-lock.json")).unwrap();
+    std::fs::remove_file(fixture.root.join("guide/portal.config.json")).unwrap();
+    let transferred = codeflow(
+        &fixture.root,
+        &fixture.home,
+        &["portal", "transfer", "--confirm"],
+    );
+    assert!(
+        transferred.status.success(),
+        "{}",
+        output_text(&transferred)
+    );
+    let frozen = std::fs::read(&state).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&frozen).unwrap();
+    assert_eq!(json["runtime_ownership"], "transferred");
+    assert_eq!(json["schema_version"], 2);
+    for args in [
+        vec!["portal", "transfer", "--confirm"],
+        vec!["portal", "setup", "--path", "guide"],
+        vec!["update"],
+    ] {
+        let output = codeflow(&fixture.root, &fixture.home, &args);
+        assert!(output.status.success(), "{}", output_text(&output));
+        assert!(output_text(&output).contains("project-owned"));
+        assert_eq!(std::fs::read(&state).unwrap(), frozen);
+        assert_eq!(
+            std::fs::read(fixture.root.join("guide/astro.config.mjs")).unwrap(),
+            b"// project fork\n"
+        );
+        assert!(!fixture.root.join("guide/package-lock.json").exists());
+        assert!(!fixture.root.join("guide/portal.config.json").exists());
+    }
+}
+
+#[test]
+fn portal_conflict_is_nonzero_without_state_advance_or_repair() {
+    let fixture = initialized_fixture();
+    assert!(codeflow(
+        &fixture.root,
+        &fixture.home,
+        &["portal", "setup", "--path", "guide"]
+    )
+    .status
+    .success());
+    std::fs::write(
+        fixture.root.join("guide/package-lock.json"),
+        "project lockfile\n",
+    )
+    .unwrap();
+    std::fs::remove_file(fixture.root.join("guide/.node-version")).unwrap();
+    let before = std::fs::read(fixture.root.join(".codeflow/docs-portal.json")).unwrap();
+    let conflict = codeflow(
+        &fixture.root,
+        &fixture.home,
+        &["portal", "setup", "--path", "guide"],
+    );
+    assert_eq!(
+        conflict.status.code(),
+        Some(2),
+        "{}",
+        output_text(&conflict)
+    );
+    assert!(output_text(&conflict).contains("transfer --confirm"));
+    assert_eq!(
+        std::fs::read(fixture.root.join(".codeflow/docs-portal.json")).unwrap(),
+        before
+    );
+    assert_eq!(
+        std::fs::read(fixture.root.join("guide/package-lock.json")).unwrap(),
+        b"project lockfile\n"
+    );
+    assert!(!fixture.root.join("guide/.node-version").exists());
+}
+
+#[test]
+fn portal_transfer_has_no_root_selection_or_implicit_adoption() {
+    let fixture = initialized_fixture();
+    let missing = codeflow(
+        &fixture.root,
+        &fixture.home,
+        &["portal", "transfer", "--confirm"],
+    );
+    assert!(!missing.status.success());
+    assert!(!fixture.root.join(".codeflow/docs-portal.json").exists());
+    let extra = codeflow(
+        &fixture.root,
+        &fixture.home,
+        &["portal", "transfer", "--confirm", "--path", "guide"],
+    );
+    assert!(!extra.status.success());
+    assert!(!fixture.root.join("guide").exists());
+}
