@@ -20,6 +20,23 @@ const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
 
+test("failed fixture initialization removes its owned root and preserves siblings", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "codeflow-fixture-cleanup-"));
+  let allocated;
+  try {
+    const sibling = path.join(parent, "keep.txt");
+    await writeFile(sibling, "unrelated evidence\n");
+    await assert.rejects(initializedFixture(path.join(parent, "owned-"), async (root) => {
+      allocated = root;
+      await writeFile(path.join(root, ".git"), "invalid git directory\n");
+      git(root, ["init", "-q"]);
+    }), /invalid gitfile format/);
+    assert(allocated);
+    await assert.rejects(lstat(allocated), { code: "ENOENT" });
+    assert.equal(await readFile(sibling, "utf8"), "unrelated evidence\n");
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
 test("actual generator identity is bounded, closed and release-pinned", async () => {
   const packageInfo = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.deepEqual(GENERATOR, { name: packageInfo.name, version: packageInfo.version });
@@ -1965,66 +1982,80 @@ test("the AST adapter fails broken documents and repository traversal", async ()
 });
 
 async function portalFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-adapter-"));
-  await mkdir(path.join(root, ".codeflow"));
-  await mkdir(path.join(root, "docs"));
-  await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-  await writeFile(path.join(root, "portal.config.json"), `${JSON.stringify({
-    schema_version: 1,
-    title: "Fixture",
-    description: "Adapter fixture",
-    theme: "signal",
-    repository_url: null,
-    repository_root: ".",
-    release_version: null,
-    primitive_tokens: null,
-    source_roots: ["docs"],
-    exclude: [],
-    layers: [
-      { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-      { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-      { id: "reference", label: "Reference", description: "Reference", fallback: true },
-    ],
-    base: "/",
-  }, null, 2)}\n`);
-  git(root, ["init", "-q"]);
-  git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-  git(root, ["config", "user.name", "CodeFlow portal tests"]);
-  commitFixture(root, "initialize fixture");
-  return root;
+  return initializedFixture(path.join(os.tmpdir(), "codeflow-portal-adapter-"), async (root) => {
+    await mkdir(path.join(root, ".codeflow"));
+    await mkdir(path.join(root, "docs"));
+    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
+    await writeFile(path.join(root, "portal.config.json"), `${JSON.stringify({
+      schema_version: 1,
+      title: "Fixture",
+      description: "Adapter fixture",
+      theme: "signal",
+      repository_url: null,
+      repository_root: ".",
+      release_version: null,
+      primitive_tokens: null,
+      source_roots: ["docs"],
+      exclude: [],
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      base: "/",
+    }, null, 2)}\n`);
+    git(root, ["init", "-q"]);
+    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+    git(root, ["config", "user.name", "CodeFlow portal tests"]);
+    commitFixture(root, "initialize fixture");
+  });
 }
 
 async function selfContainedPortalFixture() {
-  const root = await mkdtemp(path.join(starterRoot, ".portal-test-runtime-"));
-  for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
-    await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
-  }
-  await mkdir(path.join(root, ".codeflow"));
-  await mkdir(path.join(root, "docs"));
-  await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-  const configPath = path.join(root, "portal.config.json");
-  const config = JSON.parse(await readFile(configPath, "utf8"));
-  Object.assign(config, {
-    repository_root: ".",
-    source_roots: ["docs"],
-    exclude: [],
-    primitive_tokens: null,
-    repository_url: null,
-    release_version: null,
-    layers: [
-      { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-      { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-      { id: "reference", label: "Reference", description: "Reference", fallback: true },
-    ],
-    base: "/",
+  return initializedFixture(path.join(starterRoot, ".portal-test-runtime-"), async (root) => {
+    for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
+      await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
+    }
+    await mkdir(path.join(root, ".codeflow"));
+    await mkdir(path.join(root, "docs"));
+    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    Object.assign(config, {
+      repository_root: ".",
+      source_roots: ["docs"],
+      exclude: [],
+      primitive_tokens: null,
+      repository_url: null,
+      release_version: null,
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      base: "/",
+    });
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
+    git(root, ["init", "-q"]);
+    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+    git(root, ["config", "user.name", "CodeFlow portal tests"]);
+    commitFixture(root, "initialize self-contained fixture");
   });
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
-  git(root, ["init", "-q"]);
-  git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-  git(root, ["config", "user.name", "CodeFlow portal tests"]);
-  commitFixture(root, "initialize self-contained fixture");
-  return root;
+}
+
+async function initializedFixture(prefix, initialize) {
+  const root = await mkdtemp(prefix);
+  try {
+    await initialize(root);
+    return root;
+  } catch (error) {
+    try { await rm(root, { recursive: true, force: true }); }
+    catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Fixture initialization and owned-root cleanup failed");
+    }
+    throw error;
+  }
 }
 
 function commitFixture(root, message, allowEmpty = false) {
