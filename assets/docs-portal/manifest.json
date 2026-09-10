@@ -36,6 +36,7 @@
     { "path": "src/styles/portal.css", "ownership": "managed" },
     { "path": "src/styles/utility-tokens.css", "ownership": "managed" },
     { "path": "tests/adapter.test.mjs", "ownership": "managed" },
+    { "path": "tests/browser-keyboard.test.mjs", "ownership": "managed" },
     { "path": "tests/fixtures/authority-contract.json", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tsconfig.json", "ownership": "managed" }

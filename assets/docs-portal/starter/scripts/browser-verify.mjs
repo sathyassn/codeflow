@@ -474,15 +474,22 @@ async function keyboardSequence(page, key) {
   return sequence;
 }
 
-async function focusTargetByKeyboard(page, target, engine) {
+export async function focusTargetByKeyboard(page, target, engine) {
+  const skipLink = page.getByRole("link", { name: "Skip to content", exact: true });
   for (const key of ["Tab", "Alt+Tab"]) {
     await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
     for (let index = 0; index < 160; index += 1) {
       await page.keyboard.press(key);
       if (await target.evaluate((element) => document.activeElement === element)) return;
+      // Use the real keyboard bypass for long repository navigation. Do not
+      // focus the target directly or infer reachability from its tabindex.
+      if (await skipLink.count() === 1
+        && await skipLink.evaluate((element) => document.activeElement === element)) {
+        await page.keyboard.press("Enter");
+      }
     }
   }
-  throw new Error(`${engine}: strict-ID trigger is not keyboard reachable`);
+  throw new Error(`${engine}: strict-ID trigger was not reached within bounded keyboard traversal`);
 }
 
 async function activeGeometry(page) {

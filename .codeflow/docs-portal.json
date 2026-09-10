@@ -26,7 +26,7 @@
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "04efdf6300042c94d39c76d28df9dc97bdcae2f3aab56c019b56fbdaaf8b623e"
+      "pristine_sha256": "49b97a1e4582dea7005391132ac3c2bbe7385095e780fc3a0c28c4c092678c6b"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -54,7 +54,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9003c3207115aca86f40daacfc787e1cb68bd9c1b157b47921c36eb3d981363a"
+      "pristine_sha256": "b87e65ea1f27cc32ddef79df2b2beee648f7878b50469e53b1763abbc12a1d57"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -143,6 +143,10 @@
     "tests/adapter.test.mjs": {
       "ownership": "managed",
       "pristine_sha256": "34b7f30c6ada75b7fdfd6ae11565b2b657e35c5b8130934eded592f34bb07689"
+    },
+    "tests/browser-keyboard.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "e6a52c231aea61dd235ac69dfa8e42ad96f4bfc2deaeb67a6800ab29db01161f"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
