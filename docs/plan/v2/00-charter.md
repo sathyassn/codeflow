@@ -151,10 +151,13 @@ First remove true duplication, then move independently loadable detail into a
 linked resource. If neither preserves the full contract, use a narrow,
 evidence-backed exception naming the exact skill and durable rationale.
 
-The repository architecture-fitness test owns these ratchets. Measurements are
-from integration base `e9a872f2`; headroom is ratchet minus measured bytes.
+The repository architecture-fitness test owns these ratchets. The two tables
+below are a historical measurement at integration base `e9a872f2`, not current
+headroom. Historical headroom is that revision's ratchet minus measured bytes.
+Use `artifact_budget_contract.rs` and current file measurements for a new change;
+later justified adjustments are recorded below without rewriting old evidence.
 
-| Governed artifact | Current | Ratchet | Headroom | Why this boundary exists |
+| Governed artifact | Baseline bytes | Baseline ratchet | Baseline headroom | Why this boundary exists |
 |---|---:|---:|---:|---|
 | Dogfood root `AGENTS.md` | 32,595 B | 32 KiB hard | 173 B | Includes the shipped standard contract plus CodeFlow-owned operating detail while remaining within common harness instruction limits. |
 | Shipped standard/full `AGENTS.md` | 29,906 B | 30 KiB | 814 B | The always-loaded portable operating contract. |
@@ -172,7 +175,7 @@ routing/orchestration skills and 24 KiB for every other skill. A newly
 manifested `SKILL.md` fails until it receives one explicit ratchet; stale or
 duplicate ratchets also fail.
 
-| Manifest skill source | Current | Reviewed ratchet | Headroom | Absolute class ceiling |
+| Manifest skill source | Baseline bytes | Baseline ratchet | Baseline headroom | Absolute class ceiling |
 |---|---:|---:|---:|---:|
 | `agents/skills/cf-model-orchestrator/SKILL.md` | 26,321 B | 27 KiB | 1,327 B | 28 KiB |
 | `agents/skills/cf-customize/SKILL.md` | 20,903 B | 21 KiB | 601 B | 24 KiB |
@@ -199,6 +202,21 @@ this measurement. On-demand references, eval fixtures, and other resource data
 are not forced under one instruction-file cap; their schemas and runtime purpose
 own their proportional bounds. Stale historical line snapshots are not treated
 as current caps.
+
+TSK-016 adds the optional agentic operating/estimation method without changing
+these absolute class ceilings. The new cf-estimate entry has a 6 KiB
+ratchet; its detailed rubric, allocation format, operating procedure and worked
+example are on-demand resources. Active offer/preview/confirmation needs short
+routes in cf-customize (22 KiB ratchet), cf-plan (9 KiB) and the orchestrator
+(28 KiB, now equal to the routing class ceiling). Those increments preserve
+every existing duty; they do not move the
+whole method into always-loaded instructions. The root AGENTS route stays
+inside the existing 32 KiB full-tier and 30 KiB standard-tier caps; minimal
+receives no method machinery.
+TSK-016's dogfood root measures 32,762 bytes (6 bytes of full-tier headroom),
+so the historical root headroom above must not be used for further additions.
+Its portable template is 30,073 bytes (647 bytes below the standard cap);
+the rendered managed baseline is 29,539 bytes (1,181 bytes below that cap).
 
 ### 4.5 Responsibility split
 

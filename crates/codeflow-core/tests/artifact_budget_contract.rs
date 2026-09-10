@@ -28,7 +28,8 @@ const ROUTING_SKILLS: &[&str] = &["cf-delegate", "cf-model-orchestrator"];
 /// growth allowances.
 const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-consult/SKILL.md", 6 * KIB),
-    ("agents/skills/cf-customize/SKILL.md", 21 * KIB),
+    // TSK-016 adds active, consent-bound method discovery, not its full rubric.
+    ("agents/skills/cf-customize/SKILL.md", 22 * KIB),
     // Raised from 15 KiB by the TSK-014 design-method recovery. The nine added
     // obligations (idea survival across applicable contexts, comprehension
     // channel separation, pre-authoring qualification, carrier feasibility,
@@ -58,12 +59,14 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-develop/SKILL.md", 4 * KIB),
     ("agents/skills/cf-docs-portal/SKILL.md", 9 * KIB),
     ("agents/skills/cf-editorial-review/SKILL.md", 6 * KIB),
+    ("agents/skills/cf-estimate/SKILL.md", 6 * KIB),
     ("agents/skills/cf-evaluate-model/SKILL.md", 9 * KIB),
     // 8 KiB after cwd-resume, unattended TTY launch, and Herdr send-text
     // delivery; 6 KiB would clip those reviewed duties.
     ("agents/skills/cf-herdr/SKILL.md", 8 * KIB),
-    ("agents/skills/cf-model-orchestrator/SKILL.md", 27 * KIB),
-    ("agents/skills/cf-plan/SKILL.md", 8 * KIB),
+    // TSK-016: compact intake routes keep optional estimation discoverable.
+    ("agents/skills/cf-model-orchestrator/SKILL.md", 28 * KIB),
+    ("agents/skills/cf-plan/SKILL.md", 9 * KIB), // optional estimation offer/consent route
     ("agents/skills/cf-present/SKILL.md", 8 * KIB),
     ("agents/skills/cf-ship/SKILL.md", 6 * KIB),
     ("agents/skills/cf-stack/SKILL.md", 4 * KIB),

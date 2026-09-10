@@ -3,6 +3,19 @@
   "notes": "Organic prompts for description-trigger checks. Grade by whether the named skill description should match, not by agent self-report. Negatives must share non-scent description words and omit the skill's scent.",
   "skills": [
     {
+      "id": "cf-estimate",
+      "scent": ["agentic", "estimation", "estimates", "forecasts", "capacity", "deadlines"],
+      "should_trigger": [
+        "Estimate agentic delivery capacity and give scenario forecasts",
+        "Compare software deadlines using evidence and resource allocations",
+        "Revising estimates from software delivery outcomes"
+      ],
+      "should_not_trigger": [
+        "Implement this software contract using the existing method",
+        "Pick the model effort for this development task"
+      ]
+    },
+    {
       "id": "cf-herdr",
       "scent": ["herdr"],
       "should_trigger": [

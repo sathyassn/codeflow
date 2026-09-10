@@ -1059,3 +1059,102 @@ src = "pm/spec.md.tmpl"
 dest = "project-management/templates/spec.md"
 ownership = "managed"
 tiers = ["full"]
+
+# Optional agentic estimation guidance; project forecasts remain user-owned.
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/profile.md"
+dest = ".agents/skills/cf-estimate/examples/profile.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/brief.md"
+dest = ".agents/skills/cf-estimate/examples/brief.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/forecast.json"
+dest = ".agents/skills/cf-estimate/examples/forecast.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/profile.md"
+dest = ".claude/skills/cf-estimate/examples/profile.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/brief.md"
+dest = ".claude/skills/cf-estimate/examples/brief.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/forecast.json"
+dest = ".claude/skills/cf-estimate/examples/forecast.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+
+[[entry]]
+src = "agents/skills/cf-estimate/SKILL.md"
+dest = ".claude/skills/cf-estimate/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/rubric.md"
+dest = ".claude/skills/cf-estimate/references/rubric.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/operating-model.md"
+dest = ".claude/skills/cf-estimate/references/operating-model.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/records.md"
+dest = ".claude/skills/cf-estimate/references/records.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/worked-example.md"
+dest = ".claude/skills/cf-estimate/references/worked-example.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/SKILL.md"
+dest = ".agents/skills/cf-estimate/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/rubric.md"
+dest = ".agents/skills/cf-estimate/references/rubric.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/operating-model.md"
+dest = ".agents/skills/cf-estimate/references/operating-model.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/records.md"
+dest = ".agents/skills/cf-estimate/references/records.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/worked-example.md"
+dest = ".agents/skills/cf-estimate/references/worked-example.md"
+ownership = "managed"
+tiers = ["standard", "full"]

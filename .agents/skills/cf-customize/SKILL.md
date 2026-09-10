@@ -237,6 +237,12 @@ confirms the final content.
   links between authorities, never status mirroring or a host-local database as
   shared team truth. Existing project practice wins when it is coherent and
   durable—propose migration only for an evidenced failure.
+- **Agentic operating/estimation method** — when useful to this project's
+  delivery or capacity decisions, invoke `cf-estimate` for a concrete preview
+  against its existing planning authority. Confirm new adoption, reuse a
+  compatible profile or honor a recorded decline until its material re-offer
+  event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
+  automatically; a setup walkthrough does not authorize method adoption.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer

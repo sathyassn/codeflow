@@ -159,6 +159,10 @@ lane: solo fallback. Host is not duty; Claude produces design.
    facts autonomously, and ask only when a missing answer changes an
    operator-owned outcome, public behavior, authority, material security
    boundary, or irreversible action.
+   When the brief concerns agentic operating/development estimates, capacity or
+   deadlines, route to `cf-estimate` after context discovery: offer a useful
+   preview, reuse compatible adoption or respect decline. Do not turn an
+   estimate request into adoption, installation or implementation authority.
 2. Identify the active host and required lane from the matrix. Set the current
    session role to `host`; every cross-family entry uses `ROLE: peer` and the
    receiving primary's default effort. Only that primary dispatches its own

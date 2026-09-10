@@ -94,6 +94,12 @@ from dependencies, remaining discovery, implementation complexity, integration,
 and verification rather than translating a human staffing calendar. If the
 criteria list will not fit on one screen, split the epic.
 
+For agentic operating/estimation, capacity or deadline decisions, use
+`cf-estimate`: actively offer a context-specific preview, reuse compatible
+adoption, and honor decline or existing authority. Its anchored grades and
+evidence-based scenarios support this workflow; they do not replace its gates,
+reinterpret legacy size fields, or authorize adoption/implementation by themselves.
+
 ## Project organization and work authority
 
 The full tier writes flat, stable-ID records:

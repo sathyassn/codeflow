@@ -225,6 +225,18 @@ Plan/native-harness concerns (ADR-0040, ADR-0046).
 
 ### scaffold — `assets/`
 
+Optional agentic operating/estimation guidance (ADR-0057, CAP-017) is shipped as
+cf-estimate in the standard/full skill mirrors, with short discovery routes in
+the operating contract, planning, customization and orchestration. Detailed
+rubric, records, allocation procedure and examples load on demand. Confirmed
+adoption is project-owned .codeflow/estimate.json; profiles, immutable forecast
+revisions and actuals live under the chosen existing planning authority, with
+project-management/estimates as the full-tier default. None is scaffold-managed.
+The method reads canonical tasks/specs or pinned external authority rather than
+copying their status or dependency graph. Its narrow native allocation checker
+has a separate read-only data boundary; it neither runs the method nor schedules
+work. Minimal receives no method files or automatic planning upgrade.
+
 `cf-model-orchestrator` is the stage-aware harness-neutral default for every
 non-trivial repository task in standard/full scaffolds. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the

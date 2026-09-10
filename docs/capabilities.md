@@ -18,17 +18,19 @@
 id: CAP-017
 name: optional-agentic-estimation
 area: engine
-status: planned
+status: building
 verified_by: []
 epics: [EPC-006]
 adrs: [ADR-0057]
 ```
 
-Planned in SPC-007: an actively offered, optional agentic operating and
-estimation method with a read-only check of explicit forecast allocations.
-Project-owned profiles and snapshots link existing work authority; they do not
-create a second tracker. Readiness and predictive usefulness remain separate
-claims, to be evidenced by EPC-006 rather than inferred from this registry.
+SPC-007 defines the optional cf-estimate method: active project-specific offer,
+confirmed adoption or respected decline, evidence-anchored grades, full-delivery
+scenarios and resource-feasible allocations. Standard/full skills are managed;
+profiles, forecasts and outcomes stay project-owned and link existing authority.
+EPC-006 is delivering its read-only allocation checker and installed/native
+qualification; implementation readiness and predictive usefulness remain
+separate claims, never inferred from this registry.
 
 ## CAP-001 — scaffold-init
 
