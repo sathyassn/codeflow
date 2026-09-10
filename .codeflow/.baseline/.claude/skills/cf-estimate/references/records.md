@@ -124,7 +124,9 @@ A milestone is the latest finish of its named activities, not a release permit.
 
 Epoch/offset/duration and resource-product/sum arithmetic are checked for overflow.
 Resource-seconds mean units multiplied by working seconds; elapsed seconds are
-not their sum when work overlaps. Waiting is represented by offsets/boundaries.
+not their sum when work overlaps. `elapsed_seconds` runs from the forecast anchor
+to the latest activity finish, including initial delay and intervening waiting
+represented by offsets/boundaries; it is not a sum of active work durations.
 No optimizer, recurring-calendar assumption or percentile arithmetic is hidden
 inside a green check.
 
@@ -140,6 +142,8 @@ in diagnostic fields to work around file restrictions.
 Canonical work-record discovery is also bounded to 16,384 visited directory
 entries; exceeding the bound reports a finding rather than silently truncating
 the identity inventory or weakening source assurance.
+Exceeding a source-byte or inventory bound leaves the forecast unvalidated; it
+does not establish that delivery is infeasible.
 
 Pinned sources must be project-relative safe regular files. The explicitly
 selected forecast file may have an absolute path; its reads are bounded and

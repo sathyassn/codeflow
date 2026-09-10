@@ -2,6 +2,28 @@
   "schema_version": 1,
   "packs": [
     {
+      "id": "agentic-estimation",
+      "description": "Focused native behavioral diagnostics for project-specific preview/consent/reuse/decline, owned rubric boundaries, cold-start allocations, safe probes, current source evidence and all-started outcomes. Reuses existing orchestration/authority cases; registration or checker success is not a behavioral result, binding qualification or predictive calibration.",
+      "includes": [],
+      "cases": [
+        "estimate-offer-populates-cold-start",
+        "estimate-consent-persists-in-existing-home",
+        "estimate-reuses-adopted-external-profile",
+        "estimate-honors-decline-without-time-nag",
+        "estimate-reoffers-after-recorded-event",
+        "estimate-rubric-semantic-boundaries",
+        "estimate-capacity-and-boundary-evidence",
+        "estimate-does-not-execute-risky-probe",
+        "estimate-keeps-all-started-outcomes",
+        "estimate-stale-pins-do-not-rewrite-history",
+        "estimate-checker-green-is-not-delivery-evidence",
+        "model-independent-plans",
+        "peer-unavailable-degrades-legibly",
+        "external-method-keeps-work-authority",
+        "local-database-is-not-team-work-authority"
+      ]
+    },
+    {
       "id": "git-delivery",
       "description": "Behavioral PR drafting, evidence attribution, executable-doc classification, review freshness, and safe closeout diagnostics.",
       "includes": [],
