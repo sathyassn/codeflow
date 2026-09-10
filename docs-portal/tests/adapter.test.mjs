@@ -640,6 +640,17 @@ test("primitive-token influence is narrow, closed, and contrast checked", () => 
   }
 });
 
+test("documented public logo uses source-relative supported media", () => {
+  const mediaReferences = new Map();
+  const options = { sourcePath: "docs/product.md", sourceRoutes: new Map(), base: "/guide/", strictTargets: new Map(), mediaReferences };
+  const rendered = rewriteRepositoryMarkdown("![Repository logo](../guide/public/brand/logo.png)", options);
+  assert.match(rendered, /!\[Repository logo\]\(\/guide\/media\/[a-f0-9]{16}-logo\.png\)/);
+  assert.equal(mediaReferences.size, 1);
+  assert.ok(mediaReferences.has("guide/public/brand/logo.png"));
+  assert.throws(() => rewriteRepositoryMarkdown("![Repository logo](/brand/logo.png)", options), /unsupported Markdown URL/);
+  assert.throws(() => rewriteRepositoryMarkdown("![Repository logo](../guide/public/brand/logo.svg)", options), /unsupported local media type/);
+});
+
 test("source excerpts skip metadata, comments, headings, and example fences", () => {
   const excerpt = excerptFor("---\nid: TSK-101\n---\n# Title\n<!-- note -->\n~~~text\nnot evidence\n~~~\n\nFirst grounded line.\nSecond line.\n");
   assert.deepEqual(excerpt, { start: 10, end: 11, text: "First grounded line.\nSecond line." });
