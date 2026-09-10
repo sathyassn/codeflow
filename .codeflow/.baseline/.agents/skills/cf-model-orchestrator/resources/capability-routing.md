@@ -119,8 +119,8 @@ not author. A same-lineage worker that produces work remains same-lineage; a
 relay answering in the other vendor's name is evidence fabrication, and no
 seat may simulate a missing vendor.
 
-Both adapters — the official plugin lane forward, the schema-v2 delegate
-lifecycle reverse — satisfy one five-obligation evidence contract:
+Every qualified native route — preferred plugin, official client fallback,
+or schema-v2 delegate lifecycle — satisfies one five-obligation evidence contract:
 
 1. **Launch** — verify the delegated task started through a native session
    artifact: a Codex thread forward or a lifecycle ready record reverse;
@@ -179,8 +179,8 @@ For product, UX, UI, interaction, or visual design, that role owns intent and
 fidelity judgment under `cf-design`. Default UI assignment is Claude as
 producer (**implementer check**) and Codex as reviewer (**independent
 interactive QA**). Codex QAs through Computer Use on the official app-server
-(from a Claude host: plugin/app-server only; from a Grok host or Codex host:
-CLI via Herdr if the daemon is missing). If Codex produces a UI unit, Claude
+(preferred plugin or qualified official native client per `cf-delegate`,
+with actual Computer Use access verified). If Codex produces a UI unit, Claude
 is the independent reviewer and performs Computer Use QA in Claude Code;
 Codex producer verification is not independent QA. Playwright remains the
 deterministic web driver; Computer Use is not a default web driver and not

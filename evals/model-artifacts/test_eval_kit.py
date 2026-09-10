@@ -151,6 +151,28 @@ def strict_effort_pair() -> tuple[dict, dict]:
 
 
 class SuiteContractTests(unittest.TestCase):
+    def test_native_fallback_case_rejects_safety_and_evidence_shortcuts(self) -> None:
+        case = next(case for case in eval_kit.suite_documents()[1]["cases"]
+                    if case["id"] == "native-fallback-preserves-boundaries")
+        trial = next(trial for trial in valid_result()["trials"]
+                     if trial["case_id"] == case["id"])
+        self.assertEqual(eval_kit.computed_trial_status(trial, case), "pass")
+        for signal in case["expected"]["signals"]:
+            with self.subTest(missing=signal):
+                changed = copy.deepcopy(trial)
+                changed["observed"]["signals"].remove(signal)
+                self.assertEqual(eval_kit.computed_trial_status(changed, case), "fail")
+        for shortcut in case["expected"]["must_not"]:
+            with self.subTest(shortcut=shortcut):
+                changed = copy.deepcopy(trial)
+                changed["observed"]["signals"].append(shortcut)
+                self.assertEqual(eval_kit.computed_trial_status(changed, case), "fail")
+        for outcome in ["error", "not_run"]:
+            with self.subTest(outcome=outcome):
+                changed = copy.deepcopy(trial)
+                changed["outcome"] = outcome
+                self.assertEqual(eval_kit.computed_trial_status(changed, case), outcome)
+
     def test_portal_fixtures_hide_branch_cues_without_erasing_git_state(self) -> None:
         _, cases_doc, fixtures_doc = eval_kit.suite_documents()
         portal_cases = [case for case in cases_doc["cases"] if case["category"] == "documentation-portal"]

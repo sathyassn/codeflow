@@ -628,7 +628,7 @@ both sides; the release checklist
 ## Delegation quickstart (optional)
 
 Cross-vendor consult and delegation is opt-in (ADR-0005; transport refined by
-ADR-0023—interactive-only, one lane per direction). One-time setup: authenticate
+ADR-0059—interactive-only, preferred lanes with qualified native fallback). One-time setup: authenticate
 Codex manually, enable `codex@openai-codex` in Claude Code, and install the
 Claude CLI plus tmux for the reverse lane. Codeflow never automates auth.
 `codeflow doctor` reports inspectable prerequisites; retain a scoped
@@ -645,7 +645,9 @@ interactive canary in each direction.
   only inside a worktree on a feature branch, where the delegate's commits pass
   the same gates and independent review as yours — enforcement is
   author-agnostic.
-- A missing lane degrades legibly: do the work yourself and say so.
+- An incompatible plugin permits the qualified official native client fallback
+  in `cf-delegate`; verify its tools, boundaries and recheckable native result.
+  If no qualified peer route remains, degrade legibly and say so.
 
 ### Codex parity
 

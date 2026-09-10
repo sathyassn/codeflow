@@ -38,6 +38,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Qualified native transport fallback (ADR-0059).** Prefer the official Codex
+  plugin, but allow verified official native clients when it is incompatible.
+  Preserve safety, tools and independent-review evidence; distinguish product
+  behavior from optional transport qualification instead of blocking unrelated
+  delivery. No plugin fork, new broker or permission bypass is introduced.
+
 - **Breaking: explicit portal runtime ownership (ADR-0058).** Managed portal
   updates replace unchanged files, repair missing managed files, and stop all
   portal writes on drift or collisions. They no longer line-merge runtime

@@ -72,6 +72,7 @@
       "includes": [],
       "cases": [
         "model-independent-plans",
+        "native-fallback-preserves-boundaries",
         "managed-default-resolves-both-primary-roles",
         "capability-route-producer-and-reviewer",
         "cross-harness-dispatch-declares-bounded-role",
