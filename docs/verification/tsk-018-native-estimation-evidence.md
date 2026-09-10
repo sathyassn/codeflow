@@ -7,8 +7,8 @@ families. A separate four-trial continuation tests the repaired consent boundary
 in both families and completes two Claude cases after the weekly limit reset.
 Original errors and incorrect answers remain unchanged. This is diagnostic
 coverage, not a full-suite qualification, binding promotion or calibrated
-forecasting claim. TSK-018 remains in progress until the integrated-head review
-and final PR evidence are complete.
+forecasting claim. Task-local native coverage and the final integrated-coherence review are
+complete; the final PR retains the diagnostic and predictive limitations.
 
 The material method defect was a consent ambiguity: one Claude subject wrote
 project-owned “proposed” profile and forecast records before adoption. Commit
@@ -254,8 +254,18 @@ classified as active work.
 
 The original twenty-two v3 trials and four focused continuations are all closed
 at their recorded endpoints. The historical errors and reasoning failures remain
-visible. Final report review, guarded aggregate integration checks and the
-exact integrated-head verdict are required before PR readiness is claimed.
+visible. At source/report commit `d737ad51d9d11766e3db3d69c46d6e1aed9c2a8e`,
+the guarded integration passed eleven targets but refused to land because the
+presentation reproducible-assets check rejected Homebrew Node's zlib 1.2.12.
+The official Node 26.4.0 distribution supplies the required zlib
+1.3.2.1-motley-3246f1b; rerunning the exact presentation target with that runtime
+passes, without a source change. The eleven same-head passes remain applicable.
+The task lands through the normal non-protected PR path, not a gate override. The final
+metadata-only closeout is independently reviewed as an exact proposed tree on
+that head, then checked against the applied tree; it changes no tested product
+or subject artifact. Exact gate, final review and tree-comparison receipts live
+under `tsk018-evaluator/final-closeout-proposal/`. PR 445 is the final human-review
+surface; no protected merge or publication is performed.
 Agent OS diagnostics and its separate PR 47 dependency do not count as extra
 CodeFlow passes; the four existing orchestration/authority cases are coverage
 references, not new observations in this denominator.

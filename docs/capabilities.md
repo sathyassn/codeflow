@@ -18,8 +18,8 @@
 id: CAP-017
 name: optional-agentic-estimation
 area: engine
-status: building
-verified_by: []
+status: shipped
+verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
 epics: [EPC-006]
 adrs: [ADR-0057]
 ```
@@ -28,9 +28,10 @@ SPC-007 defines the optional cf-estimate method: active project-specific offer,
 confirmed adoption or respected decline, evidence-anchored grades, full-delivery
 scenarios and resource-feasible allocations. Standard/full skills are managed;
 profiles, forecasts and outcomes stay project-owned and link existing authority.
-EPC-006 is delivering its read-only allocation checker and installed/native
-qualification; implementation readiness and predictive usefulness remain
-separate claims, never inferred from this registry.
+EPC-006 supplies the read-only allocation checker, installed-path tests and
+native diagnostic evidence, including retained failures and a focused consent
+repair. Implementation readiness and predictive usefulness remain separate;
+this registry does not establish calibrated delivery predictions.
 
 ## CAP-001 — scaffold-init
 
