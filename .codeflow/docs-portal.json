@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "30dd1ed8a0633a313f330a4fecb12422887ed218c298a4dd84898229c4884122"
+      "pristine_sha256": "3f5b3b539ca545c3a842d0620b7ebe71db47286030fe66f77b5f807783f4dd95"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "69015ad52d4b4e09f0cadc9194d6f4e47bcc180c86b2738898ea6421d461074f"
+      "pristine_sha256": "34b7f30c6ada75b7fdfd6ae11565b2b657e35c5b8130934eded592f34bb07689"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

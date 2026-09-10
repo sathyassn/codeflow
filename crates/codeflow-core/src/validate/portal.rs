@@ -2638,7 +2638,9 @@ fn verify_rendered_claims(
         "<!-- codeflow-page-provenance source_sha256={} built_from_commit={} portal_version={} release_version={} -->",
         page.source_sha256,
         evidence.repository.commit,
-        evidence.generator.version,
+        escape_html_attribute(&evidence.generator.version)
+            .replace('\r', "&#13;")
+            .replace('\n', "&#10;"),
         release
     );
     if !output.lines().any(|line| line == marker) {
@@ -3999,6 +4001,45 @@ mod tests {
         .unwrap();
         let forked = validate_portal(temp.path(), Path::new("portal"));
         assert!(forked.is_clean(), "{:?}", forked.issues);
+        for (version, escaped) in [
+            ("2.0.0", "2.0.0"),
+            ("7.0.0", "7.0.0"),
+            (
+                "7--><img src=x>&\"\r\n",
+                "7--&gt;&lt;img src=x&gt;&amp;&quot;&#13;&#10;",
+            ),
+        ] {
+            let mut versioned: Evidence = serde_json::from_value(forked_evidence.clone()).unwrap();
+            versioned.generator.version = version.into();
+            let output =
+                rendered.replace("portal_version=1.0.0", &format!("portal_version={escaped}"));
+            let mut report = PortalValidationReport::default();
+            verify_rendered_claims(&versioned, &versioned.pages[0], Some(&output), &mut report);
+            assert!(report.is_clean(), "{:?}", report.issues);
+            let mut mismatched = PortalValidationReport::default();
+            verify_rendered_claims(
+                &versioned,
+                &versioned.pages[0],
+                Some(&rendered),
+                &mut mismatched,
+            );
+            assert!(mismatched
+                .issues
+                .iter()
+                .any(|issue| issue.contains("exact rendered provenance")));
+            if version != escaped {
+                let unsafe_output =
+                    rendered.replace("portal_version=1.0.0", &format!("portal_version={version}"));
+                let mut unsafe_report = PortalValidationReport::default();
+                verify_rendered_claims(
+                    &versioned,
+                    &versioned.pages[0],
+                    Some(&unsafe_output),
+                    &mut unsafe_report,
+                );
+                assert!(!unsafe_report.is_clean());
+            }
+        }
         forked_evidence["pages"][0]["source_sha256"] = "0".repeat(64).into();
         std::fs::write(
             temp.path().join("portal/.portal/generated/evidence.json"),

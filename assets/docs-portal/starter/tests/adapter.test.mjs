@@ -92,6 +92,40 @@ test("a renamed runtime emits its own identity and rejects substituted evidence"
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("managed and forked runtimes render their version in pages, stale stubs and the landing", async () => {
+  for (const [version, renderedVersion] of [
+    ["2.0.0", "2.0.0"],
+    ["7.0.0", "7.0.0"],
+    ['7--><img src=x>&"\r\n', '7--&gt;&lt;img src=x&gt;&amp;&quot;&#13;&#10;'],
+  ]) {
+    const root = await selfContainedPortalFixture();
+    try {
+      const generatorPath = path.join(root, "scripts/generator.mjs");
+      const source = await readFile(generatorPath, "utf8");
+      const currentVersion = `version: ${JSON.stringify(GENERATOR.version)}`;
+      assert(source.includes(currentVersion));
+      await writeFile(generatorPath, source.replace(currentVersion, `version: ${JSON.stringify(version)}`));
+      await writeFile(path.join(root, "docs/broken.md"), "---\ntitle: [broken\n---\n");
+      commitFixture(root, "exercise rendered generator provenance");
+      runLocalAdapter(root);
+      const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+      assert.equal(evidence.generator.version, version);
+      assert.equal(evidence.pages.length, 2);
+      assert.equal(evidence.pages.filter((page) => page.stale).length, 1);
+      for (const page of evidence.pages) {
+        const rendered = await readFile(path.join(root, "src/content/docs", `${page.route}.md`), "utf8");
+        const marker = `<!-- codeflow-page-provenance source_sha256=${page.source_sha256} built_from_commit=${evidence.repository.commit} portal_version=${renderedVersion} release_version=none -->`;
+        assert(rendered.split("\n").includes(marker), rendered);
+        assert(rendered.includes(` · portal <code>${renderedVersion}</code>`), rendered);
+        assert(!rendered.includes("<img"), rendered);
+      }
+      const landing = await readFile(path.join(root, "src/content/docs/index.md"), "utf8");
+      assert(landing.includes(` · portal <code>${renderedVersion}</code>`), landing);
+      assert(!landing.includes("<img"), landing);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test("semantic route fixtures stay in parity with the Rust validator", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/route-contract.json", import.meta.url), "utf8"));
   for (const item of fixture.accepted) {
