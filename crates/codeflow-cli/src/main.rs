@@ -88,6 +88,8 @@ enum Command {
     Task(cmd::new::TaskArgs),
     /// Durable-work lifecycle checks.
     Work(cmd::work::WorkArgs),
+    /// Check explicit forecast allocations and pinned evidence without writes.
+    Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),
 }
@@ -96,16 +98,19 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
-    // Version-skew check on every invocation (charter §10): cheap, one line.
-    // Update itself is the cure, so it skips the nag.
-    if !matches!(cli.command, Command::Update { .. }) {
+    // Update itself is the cure, so it skips the nag. Forecast checking also
+    // skips this unrelated, unbounded project-state read to remain isolated.
+    if !matches!(cli.command, Command::Update { .. } | Command::Estimate(_)) {
         if let Some(warning) = scaffold::version_skew_warning(&cwd, BINARY_VERSION) {
             eprintln!("{warning}");
         }
     }
 
-    // Cross-repo registry upkeep is a side effect of every command (charter §7).
-    cmd::touch_registry_best_effort();
+    // Forecast checking is strictly read-only, including the user registry.
+    // Other commands retain their existing best-effort upkeep (charter §7).
+    if !matches!(cli.command, Command::Estimate(_)) {
+        cmd::touch_registry_best_effort();
+    }
 
     let assets = embedded::EmbeddedAssets;
     match cli.command {
@@ -174,6 +179,7 @@ fn main() -> anyhow::Result<()> {
         Command::Spec(args) => std::process::exit(cmd::new::run_spec(&args)),
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
+        Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),
     }
     Ok(())
