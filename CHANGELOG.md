@@ -38,6 +38,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Qualified native transport fallback (ADR-0059).** Prefer the official Codex
+  plugin, but allow verified official native clients when it is incompatible.
+  Preserve safety, tools and independent-review evidence; distinguish product
+  behavior from optional transport qualification instead of blocking unrelated
+  delivery. No plugin fork, new broker or permission bypass is introduced.
 - **High default for development primaries (ADR-0056).** Claude, Codex, and
   catalog Grok primaries now start at high; bounded routine workers may use
   medium, while xhigh remains trigger-driven and owned by the receiving family.

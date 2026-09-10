@@ -431,8 +431,8 @@ the **implementer check** against `DESIGN_INTENT` (design-system fit, states,
 Playwright or the platform driver). The named other-lineage reviewer
 independently **QAs** the changed surface and affected journeys through
 Computer Use. When that reviewer is Codex, use official app-server Computer
-Use (Claude host: plugin/app-server only; Grok or Codex host: CLI via Herdr
-if the daemon is missing). When Claude reviews a Codex-authored UI unit,
+Use through a qualified official native client (`cf-delegate`); verify that
+the chosen route actually exposes it. When Claude reviews a Codex-authored UI unit,
 Claude performs Computer Use QA in Claude Code; Codex does not QA its own
 unit. The sentence above about Computer Use as a *driver of last resort*
 still holds for deterministic E2E. Playwright remains the deterministic web

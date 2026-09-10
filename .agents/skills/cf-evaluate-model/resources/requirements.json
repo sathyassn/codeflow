@@ -1,7 +1,22 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-09-estimation-v1",
+  "requirements_version": "2026-09-10-estimation-native-fallback-v3",
   "requirements": [
+    {
+      "id": "CF-MM-016",
+      "level": "hard",
+      "statement": "An incompatible preferred integration permits a qualified official native fallback with the same authority, required tools and five evidence obligations; a safety denial cannot be evaded. Independent product trials are distinct from transport qualification; changed cohorts preserve historical records and required behavior.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-delegate/resources/native-fallback.md",
+          "markers": [
+            "## One practical qualification",
+            "## Preserve the security goal",
+            "## Separate the claims"
+          ]
+        }
+      ]
+    },
     {
       "id": "CF-EST-001",
       "level": "hard",

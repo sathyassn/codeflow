@@ -298,14 +298,15 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002]
-adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054]
+adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth, with CodeFlow's gates
 judging the output author-agnostically (ADR-0005). Transport is
-interactive-only per ADR-0023, one lane per direction: from Claude Code the
-official `codex-plugin-cc` plugin (wrapping the codex app-server); from codex
+interactive-only: from Claude Code prefer the official `codex-plugin-cc` plugin
+(wrapping the codex app-server), with a qualified official native client
+fallback under ADR-0059; from codex
 the interactive `claude` CLI through the schema-v2 lifecycle. When
 `HERDR_ENV=1`, `cf-herdr` hosts that TTY in a named tab (cwd-matched resume,
 no hijack of other panes); tmux is the degraded host. Herdr `idle`/`done` is

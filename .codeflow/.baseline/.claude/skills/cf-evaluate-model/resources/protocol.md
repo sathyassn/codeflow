@@ -7,6 +7,15 @@ revision and resource budget. It supports a regression, capability, safeguard,
 or comparison claim only to the extent its fixtures and graders represent that
 claim. It does not prove universal model quality.
 
+Separate product-behavior acceptance from transport qualification. Independent
+native subjects may exercise product tasks while the outer host supplies the
+cross-lineage review; do not start nested orchestration unless the case tests
+that behavior. A changed launch envelope requires a declared new cohort with
+source, task and envelope digests, unchanged applicable oracles, and retained
+historical failures/unrun records. It never retroactively passes the old route
+or qualifies a new model binding. Required peer/tool behavior still needs live
+evidence. See `cf-delegate/resources/native-fallback.md` for alternate clients.
+
 Use regression cases for behavior that must remain nearly perfect. Use
 capability cases to learn what a model can do and where it fails. Report both
 per-trial pass rate and consistency across repeated trials; never hide variance

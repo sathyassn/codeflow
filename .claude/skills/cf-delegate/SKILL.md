@@ -1,14 +1,13 @@
 ---
 name: cf-delegate
-description: Consult or delegate to the other vendor's native coding harness under its own subscription auth. Covers full task handoffs, the two interactive-only transport lanes, the durable reverse-lane turn lifecycle, edit-access doctrine, and guardrails. Use for a specialty pass or genuinely parallel edit handoff (CodeFlow ADR-0023). Do not use for a read-only second opinion (cf-consult).
+description: Delegate to the other vendor's native coding harness under its own subscription auth, with qualified transport, lifecycle evidence and scoped edit access. Use for a specialty pass or genuinely parallel edit handoff. Use cf-consult for a read-only second opinion.
 ---
 
 # cf-delegate — cross-vendor consult and delegate
 
-One line: **compose harnesses at the process boundary, each under its own
-subscription auth; CodeFlow's gates judge the output, never the author.** A
-second harness is a colleague you can call, not a dependency you take on — you
-still own the result, verify it, and answer for it.
+Compose native harnesses at the process boundary, each under its own subscription
+auth. CodeFlow's gates judge the output, not the author. You own and verify
+every returned result.
 
 The delegate is a vendor you are **not**: from Claude Code that is codex; from
 codex that is claude. Consulting or delegating to your own vendor is
@@ -16,37 +15,34 @@ self-review with extra steps — never label it independent.
 
 ## Consult, delegate, or neither
 
-Match the tool to the work; most work is *neither*.
+The orchestrator owns required cross-lineage planning/review. Within that flow,
+choose the authority this assignment needs:
 
-- **Neither (the default).** You have the context and the skill — do it
-  yourself. A second harness costs a round-trip, quota, and a synthesis step;
-  spend that only when it buys something you cannot get alone.
-- **Consult — read-only second opinion.** A critique, a design review, a
-  correctness pass, an "am I missing something" on code *you* wrote. The
-  delegate reads and reasons; it never edits. Value is the *independent*
-  vantage: a different model, trained differently, catching what you pattern
-  past. Use it exactly where self-review is weakest.
-- **Delegate — full task handoff with edit access.** A whole unit of work
-  handed off, code included. Reserve for genuinely **parallel** work (you are
-  busy on the critical path and this is independent) or **specialty** work
-  another harness does better. Not for work you could just do — a handoff you
-  have to review line-by-line is slower than doing it yourself.
+- **Consult:** an independent critique of a design, diff or question. The peer
+  reads, tests and reasons; it edits no source. Use `cf-consult`.
+- **Delegate:** an explicitly scoped implementation unit in its own worktree.
+  Reserve additional handoffs for independent parallel work or specialty value;
+  coordination must earn its cost.
+- **Neither:** ordinary local steps need no separate handoff. This does not
+  waive the orchestrator's required independent planning or review.
 
-When unsure, consult before you delegate: a read-only opinion is cheap and
-reversible; an edit handoff is neither.
+When uncertain about edit authority, consult first; never turn a read-only
+assignment into an implicit write grant.
 
-## Transport — interactive-only, one lane per direction (CodeFlow ADR-0023)
+## Transport — preferred lanes, qualified native fallback
 
 ```text
-Claude Code ──codex-plugin-cc plugin──▶ codex
+Claude Code ──official plugin (preferred) or qualified native client──▶ codex
 codex ──durable delegate lifecycle over interactive claude CLI──▶ claude
 ```
 
-- **Claude Code → codex: the official `codex-plugin-cc` plugin, only.** It
+- **Claude Code → codex: prefer the official `codex-plugin-cc` plugin.** It
   wraps the codex app-server — the same interactive engine as the TUI — so a
   delegated task gets codex's full MCP toolset (Playwright verified with 24
   browser tools on codex-cli 0.144.1, 2026-07-11), a resumable thread, and
-  in-band approvals.
+  in-band approvals. When unavailable or incompatible, use a qualified official
+  Codex App/interactive CLI route under the fallback contract below. A missing
+  plugin is not proof that Codex itself is unavailable.
 - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
   schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036; pattern below). The
   lifecycle owns startup, acceptance, and terminal correlation. When
@@ -58,18 +54,23 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
-`--print`), driving the codex app-server directly (hand-rolled JSON-RPC), and
-Claude → codex via tmux. Why: a headless session fires no in-session guards,
-carries no full MCP toolset, and resumes nothing; a hand-rolled driver chases
-an experimental API the vendor already wraps; one lane per direction is
-simpler to verify and harder to misuse. Status commands are not work sessions
+`--print`), and driving the codex app-server through hand-rolled JSON-RPC.
+CodeFlow requires verified native sessions with the task's tools and guards;
+it does not infer those capabilities from a process label or terminal host.
+Use vendor-supported clients instead of maintaining a competing broker.
+Status commands are not work sessions
 — `codex login status`, `codex --version`, `codex mcp list`, and the plugin
 install/setup steps stay fine.
 
+For an incompatible or unavailable preferred lane, read
+[qualified native fallback](resources/native-fallback.md) before choosing
+another client. It preserves all five evidence obligations and the effective
+safety boundary; it is not permission to route around a security denial.
+
 ## Preflight — is the delegate even available
 
-Delegation is **optional**. Never assume the lane is wired; check your seat's
-lane, and degrade legibly when it is not.
+Check the preferred lane, then any qualified native fallback. Additional edit
+handoffs are optional; the orchestrator's required independent review is not.
 
 - **From Claude Code:** the plugin surface exists (the `/codex:*` commands
   respond; install once from a Claude Code session: `/plugin marketplace add
@@ -85,8 +86,9 @@ lane, and degrade legibly when it is not.
   from a status subcommand when it conflicts with a working interactive
   session.
 
-If the other vendor's CLI is missing, do the work yourself and **say so** —
-loudly, never as a silent substitution of your own vendor. If it is present
+If no qualified native route remains, record the unavailable seat and reduced
+assurance; never silently substitute your own vendor or claim duo completion.
+A missing CLI alone does not rule out a qualified App route. If a route is present
 but unauthenticated (or 401s mid-run), stop and tell the user to run
 `codex login` (or log in to `claude`) — **never automate the auth**. One
 vendor account per side, the user's own.
