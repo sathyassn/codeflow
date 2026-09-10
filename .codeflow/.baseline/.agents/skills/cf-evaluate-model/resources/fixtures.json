@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-09-estimation-v1",
+  "fixtures_version": "2026-09-10-estimation-v2",
   "fixtures": [
     {
       "id": "estimate-reoffers-after-recorded-event",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-reoffers-after-recorded-event",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -20,7 +20,7 @@
       "id": "estimate-offer-populates-cold-start",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-offer-populates-cold-start",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -32,7 +32,7 @@
       "id": "estimate-consent-persists-in-existing-home",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-consent-persists-in-existing-home",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -45,7 +45,7 @@
       "id": "estimate-reuses-adopted-external-profile",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-reuses-adopted-external-profile",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -60,7 +60,7 @@
       "id": "estimate-honors-decline-without-time-nag",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-honors-decline-without-time-nag",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -74,7 +74,7 @@
       "id": "estimate-rubric-semantic-boundaries",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-rubric-semantic-boundaries",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -85,7 +85,7 @@
       "id": "estimate-capacity-and-boundary-evidence",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-capacity-and-boundary-evidence",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -97,7 +97,7 @@
       "id": "estimate-does-not-execute-risky-probe",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-does-not-execute-risky-probe",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -109,7 +109,7 @@
       "id": "estimate-keeps-all-started-outcomes",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-keeps-all-started-outcomes",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -120,7 +120,7 @@
       "id": "estimate-stale-pins-do-not-rewrite-history",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-stale-pins-do-not-rewrite-history",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
@@ -133,7 +133,7 @@
       "id": "estimate-checker-green-is-not-delivery-evidence",
       "tier": "standard",
       "state": {
-        "branch": "fixture/estimate-checker-green-is-not-delivery-evidence",
+        "branch": "fixture/base",
         "peer": "available"
       },
       "files": {
