@@ -10,9 +10,11 @@ runtime code. Subsequent customization corrections below change the portal's
 accent rendering and contrast validation. The ownership task was guarded-integrated
 at `e0d7c6763c617bfde72538e8aba46fcff6ea4dea`; the final logo example correction is
 `4f0159022f7882baaee9971eee06fe6470cad8dc`. Both-family behavioral diagnostics
-are complete, with failures and partial results retained below. Final combined
-branch review remains separate from these product checks. This report does not
-claim full model qualification.
+are complete, with failures and partial results retained below. Combined source
+`eeb90f103c7fd2575ff7530884805220d09a696e` passed all twelve configured strict
+targets in one invocation and received exact native Claude review. The final
+completion records change no executable code or distributed instructions.
+This report does not claim full model qualification.
 
 The delivered contract replaces the portal-specific pristine-source cache with
 explicit managed or project-owned runtime status. Managed updates preflight
@@ -195,7 +197,8 @@ is possible, and tracked-file listing alone does not prove no untracked public
 directory exists. The source already describes the correct paths and restoration;
 these isolated reasoning limits are retained, not treated as a further source
 defect or a reason to rerun until perfect. The final Codex answer is included in
-the integrated Claude review packet; its independent grade is recorded at closeout.
+the integrated Claude review packet; its independent grade was five of five,
+with no observed prohibited behavior.
 
 The optional Claude read observer emitted capture errors and was removed from
 later launches without changing the core native lifecycle. A complete command
@@ -286,8 +289,58 @@ into a single unavailable-lane claim:
 
 The later completed cohort is reported separately above; it does not erase
 these earlier failures. No universal score, model promotion or predictive
-calibration is claimed. Final combined integration still requires its own
-exact-head review, rather than treating individual source approvals as that review.
+calibration is claimed. The final combined-source review and verification are
+recorded below, separately from individual source approvals.
+
+## Final combined delivery
+
+The normal task-branch merge at `eeb90f103` preserves both reviewed parents,
+including estimation consent guidance. All changed records survive the semantic
+merge: 145 cases, 112 fixtures, 88 requirements and 11 packs. The actual CLI
+update regenerated mirrors and manifest entries; all 130 installed skill hashes
+match. Existing project-owned regions and the private CI installation remain
+unchanged, not overwritten to force every broad manifest comparison to match.
+
+`codeflow test --mode full --strict` passed all twelve targets at that exact
+source, including actual presentation/browser qualification and portal build/
+validation. Whole-workspace line coverage is 50,821 / 56,145 (90.52%), measured
+from this run with `cargo llvm-cov report --summary-only`; the unchanged floor is
+90%. The combined evaluation kit passed 49 tests. The changed-range secret scan
+found no leaks; commit/PR policy checks passed with the reviewed nonbreaking
+watch-path warnings. Official Node 26.4.0, not a same-version alternate
+compression-library build, was used with the original budgets.
+
+The release binary built from `eeb90f103` has SHA-256
+`1f58ebddfd44ae5c9e1221144507e9212feea0a459e383415d041b1fe51001b1`.
+Actual fresh and existing-project full initialization, portal setup and two
+updates succeeded. Both fixtures installed exact current canonical skill bytes,
+recorded managed adoption v2 and retained no pristine directory; the existing
+README was byte-identical. An initial smoke assertion looked for a particular
+word rather than the actual canonical content and failed; the final check
+compares exact bytes. No product change or schema relaxation was made for it.
+
+Native Claude approved the exact combined source, report and preliminary PR
+narrative in session `9f007a9d-486a-4e0e-80bd-19cecc8f44a5`, prompt
+`232a2420-5825-417d-8f28-b38a4c9427a0`. Its terminal receipt SHA-256 is
+`1d5f88f26af900528c506e67fcf7136cee8220a83ac05f27451efa96aa35b192`.
+It independently checked parent preservation, concrete customization advice and
+claim scope; it did not rerun the producer's full test suite. The final
+completion-record/PR review is an evidence-accuracy closeout, not another model
+trial or a claim that every prior response was correct.
+
+The integration command's plain rebase attempted to flatten already-reconciled
+side history and conflicted; it aborted cleanly without moving the task or
+target. Delivery therefore uses the normal reviewed task PR merge into the
+operator-authorized nonprotected integration after the same configured checks.
+No Git configuration override, gate token, administrative bypass or protected
+merge is used. Preserving an already-descendant merge in the CLI is a separate
+focused follow-up, not a prerequisite for this ordinary PR workflow.
+
+PR446 is the final portal integration-to-main proposal, following estimation
+PR445; Agent OS PR47 carries the runtime-neutral companion guidance. GitHub
+Actions could not start because of account billing, so these are local results,
+not hosted green checks. Native Windows/Linux behavior, deployed Hermes and
+universal transport/model qualification remain outside this evidence.
 
 Detailed producer receipts are retained in the task worktree's `.state/`
 (`tsk-020-browser-qualification-run5`, `tsk-020-full-strict-v2.log`, affected
