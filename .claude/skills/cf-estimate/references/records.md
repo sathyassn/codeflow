@@ -7,6 +7,13 @@ An estimate answer need not create any files.
 
 ## Adopt only after confirmation
 
+Before adoption, keep previews in the response or task-owned temporary scratch.
+Project-owned profiles, forecasts and adoption records require confirmation even
+when untracked or labelled draft/proposed. A checker needing pinned bytes does
+not grant permission to create an estimate home: use existing project sources
+with a temporary forecast, or disclose what cannot yet be checked. A material
+re-offer event permits a new offer, not persistent records or automatic adoption.
+
 The project-owned `.codeflow/estimate.json` records the decision:
 
 ```json
