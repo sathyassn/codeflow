@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-10-portal-native-fallback-v2",
+  "cases_version": "2026-09-10-portal-customization-v3",
   "full_trials": 3,
   "cases": [
     {
@@ -35,6 +35,7 @@
         ],
         "signals": [
           "supported_config_and_token_seams",
+          "portal_tokens_use_repository_relative_string_and_accent_only_modes",
           "unclaimed_assets_remain_project_owned",
           "bundled_public_files_remain_managed",
           "no_transfer_without_need_or_confirmation"
@@ -45,6 +46,7 @@
         ],
         "must_not": [
           "managed_runtime_edited_for_simple_theme",
+          "present_token_schema_invented_for_portal",
           "bundled_public_asset_assumed_project_owned",
           "implicit_runtime_transfer"
         ]

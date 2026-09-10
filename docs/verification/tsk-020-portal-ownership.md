@@ -2,11 +2,14 @@
 
 ## Status and scope
 
-The runtime ownership implementation and producer verification are complete at
-`ad0eec9bb090ac2f7fd19dc1396c1cb124c1e13f`, based on
-`aa9388b1a91252543dfd120fb28290ee10c815e1`. TSK-020 remains in progress:
-native behavioral diagnostics and final integrated review are not yet complete.
-This report does not authorize a merge or claim full model qualification.
+Runtime implementation was verified at `ad0eec9bb090ac2f7fd19dc1396c1cb124c1e13f`,
+based on `aa9388b1a91252543dfd120fb28290ee10c815e1`. The subsequent candidate
+`48457417f9e4646f7a41631cc806572288c55c25` adds the reviewed native-transport
+fallback doctrine and regression cases; it changes no portal or presentation
+runtime code. Subsequent customization corrections below change the portal's
+accent rendering and contrast validation. TSK-020 remains in progress while
+fresh native behavioral trials and final integrated review finish. This report
+does not claim full model qualification.
 
 The delivered contract replaces the portal-specific pristine-source cache with
 explicit managed or project-owned runtime status. Managed updates preflight
@@ -66,6 +69,52 @@ came from selecting a different compression-library build of Node 26.4.0. The
 passing rerun uses the verified official runtime and unchanged asset budgets,
 not relaxed assertions or regenerated limits.
 
+At `48457417f`, the complete nine-target essential strict gate passed again,
+including the workspace, formatting, Clippy, rustdoc and documentation checks.
+The evaluation kit passed 48 tests, skill triggers passed five, and the
+delegation contract passed 13. Locked portal checks and build passed; 116 HTML
+pages were built and 110 source pages validated. The seven-commit task range
+passed Git policy and Gitleaks checks (274,212 bytes scanned, no leaks).
+Fresh dependency checks reported no Rust advisory among 233 dependencies and
+zero production npm vulnerabilities. These checks do not replace the separately attributed
+coverage and browser evidence above or prove absence of every vulnerability.
+
+## Customization regression and repair
+
+The fresh native customization diagnostic exposed a genuine usability gap:
+Claude proposed an object-valued token path and the presentation utility's color
+schema, neither accepted by the portal. Codex declined to invent the missing
+precise schema. The operations reference now gives the actual repository-relative
+string and accent-only light/dark schema. The original trial remains a failed
+precise-edit recommendation; a new explicitly versioned case checks the repair.
+
+An actual Chromium reproduction then found a runtime defect: valid green tokens
+still rendered blue because the generated stylesheet changed a Starlight token
+instead of the utility tokens consumed by the portal. The repair connects those
+tokens across all three reader skins and both appearances. Contrast validation
+now covers the real surface, raised, subtle and selected backgrounds. Independent
+adversarial review caught the subtle-background omission before commit; the
+regression includes its `#636363` counterexample.
+
+The corrected runtime passed all 104 Node tests, including real-browser keyboard
+tests in Chromium, Firefox and WebKit. The new Chromium regression binds the
+validator's four backgrounds to the actual stylesheet in six skin/appearance
+combinations and checks both rendered accent consumers. It does not claim a
+fresh full-site visual qualification in every engine. Rejected object, absolute
+and traversing token paths, the wrong utility schema, and insufficient contrast
+are covered alongside accepted configuration. Existing browser sessions and
+their resources are closed by the tests.
+
+All nine configured essential targets also passed after this correction, as
+did the 7 artifact-budget, 17 manifest and 32 model-contract tests. Native Claude
+approved the exact seven-file source delta SHA-256
+`1559c57834d637bc845208147f9a4dd9b43b8573272456e791c7dd550f30d00c`
+in session `747e2e0a-71aa-4f93-a7a4-09d5bc88fc7c`, prompt
+`a41af4db` (full identity retained in the review receipt). It independently ran
+the two focused Node units and inspected the CSS cascade, background parity and
+browser regression source. The 104-test and browser execution above are producer
+results, not tests rerun by Claude.
+
 ## Independent Claude review
 
 Native Opus 5 was used after the recorded Fable availability failure; high
@@ -83,6 +132,16 @@ five retained screenshots from the successful producer journey for rendered
 conformance. Source review, screenshot review and native execution remain
 distinct evidence categories.
 
+Native Opus/high subsequently approved ADR-0059's practical transport plan,
+the exact CodeFlow and Agent OS source changes, and the final CodeFlow wording
+delta (diff SHA-256 `37dfd084a9083b2dddd4849836b6cb3e46d965adc1628e8b615106532d5f363a`).
+That review independently ran the 48-test evaluation kit and documentation
+validation. It did not claim a new Rust or browser execution. The optional
+fallback cannot bypass a safety rejection; qualification remains specific to
+the native client, version, direction and launching host. Product diagnostics
+may run under independently hosted native subjects without pretending each
+subject has qualified a nested delegation route.
+
 ## Release measurement
 
 Fresh isolated release builds on macOS arm64, with the same Rust/Cargo 1.94.0
@@ -99,6 +158,12 @@ unpacked and 283,753 bytes as a gzip archive-equivalent, within the existing
 2 MiB / 1 MiB budgets. Windows and Linux runtime behavior is not inferred from
 this macOS measurement.
 
+The later `48457417f` release candidate built successfully and is 17,947,776
+bytes, SHA-256
+`642cfbb52609396af00aa8492df187a0dc28df2f9a7db030e1a89209f24a10f2`.
+This is the binary used for the fresh product trials; it does not replace or
+relabel the earlier isolated comparison.
+
 ## Retained failures and remaining evidence
 
 Failed preparation runs, the real hard-coded generator-version defect, the
@@ -108,7 +173,7 @@ because it reused the wrong release fingerprints; it supplies no size claim.
 Fourteen leaked test trees were preserved with matching before/after inventories,
 not silently deleted or excluded from asset checks.
 
-Native diagnostics have three distinct dispositions; they must not be collapsed
+Earlier native diagnostics have three distinct dispositions; they must not be collapsed
 into a single unavailable-lane claim:
 
 - Four fresh Agent OS diagnostics used its current `c7de06bf` candidate.

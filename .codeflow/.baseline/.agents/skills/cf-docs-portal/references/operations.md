@@ -40,6 +40,42 @@ edits. No future setup/update resets ownership. A reviewed restoration of the
 complete earlier runtime and state from Git is a separate operation, with
 current work preserved; transfer is durable, not cryptographically irreversible.
 
+## Supported customization
+
+The portal and `cf-present` share design principles, not interchangeable import
+schemas. In the adopted portal's project-owned `portal.config.json`,
+`primitive_tokens` is either `null` or a **repository-relative path string**,
+not an object with a `path` field. For a portal adopted at `guide/`, merge this
+field into the existing configuration:
+
+```json
+{"primitive_tokens": "guide/primitive-tokens.json"}
+```
+
+The referenced project-owned file supplies only an accent for each appearance:
+
+```json
+{
+  "schema_version": 1,
+  "light": {"accent": "#005f56"},
+  "dark": {"accent": "#72e2cf"}
+}
+```
+
+These illustrative colors pass both current utility themes; choose the actual
+accent for the repository and verify both modes. Each opaque six-digit color
+must meet 4.5:1 contrast against every reader-selectable skin's surface and
+selected background. The portal import does not
+accept `cf-present`'s `colors`, typography or identity fields. Do not infer a
+configuration shape from another utility or from a partial installation.
+
+For an additional logo, use an unclaimed path such as
+`guide/public/brand/logo.svg` and reference it from repository-owned sources.
+Do not replace a bundled favicon or use the generated `public/media/`,
+`public/markdown/` or `public/llms.txt` namespaces. Commit the configuration,
+token file and public asset before building; publication verifies their Git
+bytes. These changes need neither managed runtime edits nor ownership transfer.
+
 ## Legacy recovery and migration
 
 Run recovery through the normal portal command before interpreting or repairing

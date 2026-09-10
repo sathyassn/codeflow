@@ -38,6 +38,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Portal customization examples.** Document the portal's repository-relative
+  token path and accent-only light/dark format; do not borrow `cf-present`'s
+  different import schema. Connect custom accents to the actual utility tokens
+  and validate contrast against all reader-selectable skins. Regression checks
+  reject schema mix-ups and verify rendered colors in light/dark appearances.
+
 - **Qualified native transport fallback (ADR-0059).** Prefer the official Codex
   plugin, but allow verified official native clients when it is incompatible.
   Preserve safety, tools and independent-review evidence; distinguish product

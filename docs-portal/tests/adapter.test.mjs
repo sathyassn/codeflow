@@ -615,6 +615,11 @@ test("portal configuration is closed, bounded, and deeply typed", () => {
     { id: "reference", label: "Reference", description: "Other", fallback: true },
   ], base: "/" };
   assert.equal(validatePortalConfig(valid), valid);
+  const withTokens = { ...valid, primitive_tokens: "guide/primitive-tokens.json" };
+  assert.equal(validatePortalConfig(withTokens), withTokens);
+  for (const primitive_tokens of [{ path: "guide/primitive-tokens.json" }, "/tokens.json", "../tokens.json"]) {
+    assert.throws(() => validatePortalConfig({ ...valid, primitive_tokens }), /primitive_tokens/);
+  }
   assert.throws(() => validatePortalConfig({ ...valid, allow_html: true }), /unknown key/);
   assert.throws(() => validatePortalConfig({ ...valid, source_roots: "docs" }), /source_roots/);
   assert.throws(() => validatePortalConfig({ ...valid, repository_url: "https://user:secret@example.com/repo" }), /credentials/);
@@ -625,6 +630,14 @@ test("primitive-token influence is narrow, closed, and contrast checked", () => 
   assert.deepEqual(validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "signal"), { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } });
   assert.throws(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#ffffff" }, dark: { accent: "#72e2cf" } }, "signal"), /contrast/);
   assert.throws(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56", font: "Product" }, dark: { accent: "#72e2cf" } }, "signal"), /exactly one/);
+  assert.throws(() => validatePrimitiveTokens({ schema_version: 1, colors: { light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } } }, "signal"), /exactly schema_version, light, and dark/);
+  assert.doesNotThrow(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "folio"));
+  // These passed the old approximate theme surfaces, but not the actual
+  // reader-selectable surface/selected-background combinations.
+  for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#636363"]]) {
+    const tokens = { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" }, [mode]: { accent } };
+    assert.throws(() => validatePrimitiveTokens(tokens, "signal"), /contrast/);
+  }
 });
 
 test("source excerpts skip metadata, comments, headings, and example fences", () => {

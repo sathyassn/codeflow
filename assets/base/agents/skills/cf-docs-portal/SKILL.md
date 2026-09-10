@@ -64,7 +64,9 @@ content under `.portal/generated/`, generated Starlight content, search data,
 and build output are disposable.
 
 Use the supported configuration/token seams and additional assets at unclaimed
-paths. Bundled files remain managed even under `public/`. After adoption,
+paths; [supported customization](references/operations.md#supported-customization)
+specifies the portal's own token schema and path resolution. Bundled files
+remain managed even under `public/`. After adoption,
 missing project-owned configuration stays absent and is reported, not reseeded.
 For bespoke runtime or layout changes, explain the ongoing maintenance cost and
 confirm whole-runtime ownership before `codeflow portal transfer --confirm`.

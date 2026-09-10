@@ -71,7 +71,7 @@
     ".agents/skills/cf-docs-portal/SKILL.md": {
       "src": "agents/skills/cf-docs-portal/SKILL.md",
       "ownership": "managed",
-      "sha256": "4fad58f81154f5c82ea9f1378535f3cad56ec8c7a8683991a9cb026e4e714872",
+      "sha256": "1409be29dc710eb391d22522aeb0fc386259190cfb2fc8cb918172901206330e",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/agents/openai.yaml": {
@@ -95,7 +95,7 @@
     ".agents/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "0e10e1d0866ef6dd67eb3a35b3154ff856c32c5bb6715376456937dbaeffb3e9",
+      "sha256": "a0aae0e8f3b9f2f7ce8ef110dc58b85df9ae849eae360f02671eea977fee496f",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/visual-craft.md": {
@@ -191,7 +191,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "12ccb592a4a02f34dbf08411371514f227ccb665934196127d63b7f398c99962",
+      "sha256": "7aa91d49b23c568dd6e3dfe31cc2a009ee0c6e4f8ec06e6d046b153668a35b8f",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
@@ -479,7 +479,7 @@
     ".claude/skills/cf-docs-portal/SKILL.md": {
       "src": "agents/skills/cf-docs-portal/SKILL.md",
       "ownership": "managed",
-      "sha256": "4fad58f81154f5c82ea9f1378535f3cad56ec8c7a8683991a9cb026e4e714872",
+      "sha256": "1409be29dc710eb391d22522aeb0fc386259190cfb2fc8cb918172901206330e",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/agents/openai.yaml": {
@@ -503,7 +503,7 @@
     ".claude/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "0e10e1d0866ef6dd67eb3a35b3154ff856c32c5bb6715376456937dbaeffb3e9",
+      "sha256": "a0aae0e8f3b9f2f7ce8ef110dc58b85df9ae849eae360f02671eea977fee496f",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/visual-craft.md": {
@@ -599,7 +599,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "12ccb592a4a02f34dbf08411371514f227ccb665934196127d63b7f398c99962",
+      "sha256": "7aa91d49b23c568dd6e3dfe31cc2a009ee0c6e4f8ec06e6d046b153668a35b8f",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
