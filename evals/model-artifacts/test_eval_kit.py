@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -279,6 +280,60 @@ class SuiteContractTests(unittest.TestCase):
             self.assertEqual("main", branch)
             with self.assertRaises(eval_kit.EvalError):
                 eval_kit.reset_fixture_history(root, "../escape")
+
+    def test_estimation_materializations_keep_case_identity_out_of_git(self) -> None:
+        _, cases_doc, _ = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        selected = [
+            case_id
+            for case_id in eval_kit.resolve_pack("agentic-estimation")
+            if case_id.startswith("estimate-")
+        ]
+        self.assertTrue(selected)
+        self.assertEqual(
+            {case_id for case_id in cases if case_id.startswith("estimate-")},
+            set(selected),
+        )
+        real_run_command = eval_kit.run_command
+        codeflow = Path(sys.executable).resolve()
+
+        def scaffold_or_run(command: list[str], root: Path) -> None:
+            # Only scaffold installation is doubled; overlay, history and Git
+            # inspection use the production materializer and real repositories.
+            if command == [str(codeflow), "init", "--yes", "--standard"]:
+                (root / "README.md").write_text("Project\n", encoding="utf-8")
+                return
+            real_run_command(command, root)
+
+        with tempfile.TemporaryDirectory() as temp:
+            run_root = Path(temp) / "run"
+            with patch.object(eval_kit, "run_command", side_effect=scaffold_or_run):
+                for case_id in selected:
+                    with self.subTest(case=case_id):
+                        record = eval_kit.materialize(case_id, 1, run_root, codeflow)
+                        root = Path(record["path"])
+                        refs = subprocess.run(
+                            ["git", "for-each-ref", "--format=%(refname)"],
+                            cwd=root,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        ).stdout.splitlines()
+                        self.assertEqual(["refs/heads/fixture/base"], refs)
+                        subject = subprocess.run(
+                            ["git", "log", "-1", "--format=%s"],
+                            cwd=root,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        ).stdout.strip()
+                        self.assertEqual("chore: materialize evaluation fixture", subject)
+                        self.assertEqual("repository", root.name)
+                        self.assertNotIn(case_id, str(root))
+                        self.assertEqual(
+                            cases[case_id]["prompt"].rstrip() + "\n",
+                            (root / "TASK.md").read_text(encoding="utf-8"),
+                        )
 
     def test_target_before_fixture_creates_a_real_unmerged_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

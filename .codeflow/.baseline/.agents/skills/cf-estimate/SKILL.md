@@ -30,6 +30,9 @@ capacity option, revise a forecast, or assess actual outcomes.
   populated scenarios and what constrains delivery. Explain the benefit and
   cost relative to existing practice. Do not leave the method hidden behind a
   skill name. Ask before adopting it or creating durable project records.
+  This includes project-owned drafts labelled proposed. Keep an unadopted
+  preview in the response or task-owned temporary scratch; a re-offer event
+  does not grant adoption.
 - **Adopted:** reuse the compatible profile, rubric version, authority and
   record home. Ask only for consequential missing facts or changed constraints,
   not the same setup questions on every request.

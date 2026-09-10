@@ -70,11 +70,21 @@ accept `cf-present`'s `colors`, typography or identity fields. Do not infer a
 configuration shape from another utility or from a partial installation.
 
 For an additional logo, use an unclaimed path such as
-`guide/public/brand/logo.svg` and reference it from repository-owned sources.
+`guide/public/brand/logo.png`. To display it in `docs/product.md`, use a path
+relative to that source document:
+
+```markdown
+![Repository logo](../guide/public/brand/logo.png)
+```
+
+The adapter imports committed PNG/JPEG/GIF/WebP images into derived media routes.
+Root-relative Markdown URLs such as `/brand/logo.png` and inline SVG image imports
+are not supported. Adding a public asset does not insert it into portal chrome.
 Do not replace a bundled favicon or use the generated `public/media/`,
-`public/markdown/` or `public/llms.txt` namespaces. Commit the configuration,
-token file and public asset before building; publication verifies their Git
-bytes. These changes need neither managed runtime edits nor ownership transfer.
+`public/markdown/` or `public/llms.txt` namespaces. Commit the source edit,
+configuration, token file and public asset before building; publication verifies
+their Git bytes. These changes need neither managed runtime edits nor ownership
+transfer.
 
 ## Legacy recovery and migration
 
