@@ -423,7 +423,29 @@ mod platform {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     fn name(name: &OsStr) -> io::Result<std::ffi::CString> {
-        std::ffi::CString::new(name.as_bytes()).map_err(|_| invalid())
+        let bytes = name.as_bytes();
+        if bytes.is_empty()
+            || bytes.len() > 255
+            || matches!(bytes, b"." | b"..")
+            || bytes.contains(&b'/')
+        {
+            return Err(invalid());
+        }
+        std::ffi::CString::new(bytes).map_err(|_| invalid())
+    }
+
+    #[test]
+    fn basename_rejects_nonlocal_and_unbounded_names() {
+        for bad in ["", ".", "..", "/absolute", "nested/leaf", "nul\0byte"] {
+            assert!(name(OsStr::new(bad)).is_err(), "accepted {bad:?}");
+        }
+        assert!(name(OsStr::new(&"a".repeat(256))).is_err());
+        for valid in ["leaf", ".hidden", "a\\b:c", &"a".repeat(255)] {
+            assert_eq!(
+                name(OsStr::new(valid)).unwrap().as_bytes(),
+                valid.as_bytes()
+            );
+        }
     }
 
     fn result(value: libc::c_int) -> io::Result<()> {
