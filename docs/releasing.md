@@ -83,6 +83,50 @@ using the procedure captured for the release. Enforce the per-payload and
 combined limits in `codeflow_present::limits`; a debug binary, cross-build, or
 compressed archive size is not equivalent evidence.
 
+### Portal ownership migration
+
+The bundled portal's ownership lifecycle is defined by ADR-0058 and SPC-008.
+Starter 2.0.0 and adoption schema v2 do not change evidence schema v1. This is a
+breaking change to managed portal update behavior, not to general scaffold
+merging or Markdown authority. No publishing is implied by a successful build.
+
+| Existing state | Safe next step |
+|---|---|
+| No adoption | Remain unchanged; adopt explicitly only when useful |
+| Managed, unchanged runtime | Setup/update installs the coherent release and migrates state |
+| Missing managed runtime file | Managed setup/update repairs it |
+| Local runtime edits or incoming collision | Preserve work; choose supported customization, reviewed restoration or explicit transfer |
+| Unknown or changed legacy baseline content | Stop and preserve; resolve journal recovery and inspect before manual recovery |
+| Transferred runtime | Project owns maintenance; setup/update preserves edits and intentional deletions |
+
+`codeflow portal transfer --confirm` operates on the whole adopted runtime. It
+does not install the new embedded release, repair missing runtime/configuration,
+or waive integrity checks. It freezes the release actually adopted, not the
+release in the current binary. After transfer, update the actual generator and
+its state declaration together for a genuine fork; evidence still must pass
+`codeflow validate --portal <dir>`. A green verifier is not visual, security,
+accessibility or runtime-provenance attestation.
+
+Legacy journals are recovered by the normal portal command under its lease
+before full adoption parsing and migration. Never delete journal, stage or
+lease data to make an error disappear. If a baseline-integrity failure remains,
+the new migration/transfer did not publish; previously journaled recovery may
+have completed and must be reported separately. Preserve and inspect the
+questionable content and repository history. Once
+pending recovery is settled, an explicit reviewed operation may relocate a
+verified preserved copy outside the reserved baseline directory or restore
+exact reviewed bytes. Retain a restore path; do not normalize line endings or
+delete unknown files as a shortcut. Retry the intended command afterwards.
+Absent baselines are benign; they do not waive managed runtime-drift checks.
+
+Release evidence includes fresh minimal/standard/full consumers, brownfield and
+repeated updates, project-owned byte preservation, generator/state agreement,
+before/after-transfer locked builds and real browser journeys, current dependency
+and secret scans, and measured unpacked/archive/release-binary size changes.
+Keep native macOS, Linux and Windows execution claims separate from cross-target
+type checking. Missing native platform or installer evidence remains explicit
+and blocks claiming that platform's release qualification.
+
 ### The runbook
 
 Prerequisite: install the release-pinned git-cliff version

@@ -223,11 +223,22 @@ inventory, keeps those scripts disabled, and passes only a small non-secret
 environment to npm. Do not substitute plain `npm ci`; a required future
 lifecycle exception belongs in the reviewed managed installer with an
 executable canary. The setup itself is offline and repository-relative. It
-records one adopted root;
-repeated setup and ordinary `codeflow update` reconcile the managed starter
-without replacing `portal.config.json`. Configure source roots there rather
+records one adopted root. Repeated setup and ordinary `codeflow update` replace
+unchanged managed files and repair missing managed files, but stop all portal
+writes on local runtime edits or unknown collisions. There is no source merge,
+sidecar or pristine runtime directory. `portal.config.json` is project-owned:
+after first adoption, even its absence is preserved and reported. Configure source roots there rather
 than copying authoritative prose into the portal. Generated content and search
 output remain disposable, and local generation never publishes a site.
+
+Use supported config/token settings and unclaimed asset paths for ordinary
+customization. Bundled public assets remain managed. For a bespoke runtime,
+explicitly choose `codeflow portal transfer --confirm`: current edits/deletions
+survive and future setup/update does not reconcile that runtime. The project
+then owns runtime upgrades, dependencies and compatible generator evidence.
+Never transfer automatically to clear a conflict. See the installed skill's
+operations reference and [release migration guidance](releasing.md#portal-ownership-migration)
+for journal-first legacy recovery and baseline-integrity failures.
 
 The portal applies the same utility presentation craft as `cf-present`
 (tokens, altitude, stage grammar) over durable source-linked docs for this

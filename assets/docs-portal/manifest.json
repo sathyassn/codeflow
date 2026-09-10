@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "files": [
     { "path": ".gitignore", "ownership": "managed" },
     { "path": ".node-version", "ownership": "managed" },
@@ -16,6 +16,7 @@
     { "path": "scripts/browser-verify.mjs", "ownership": "managed" },
     { "path": "scripts/child-lifecycle.mjs", "ownership": "managed" },
     { "path": "scripts/evidence.mjs", "ownership": "managed" },
+    { "path": "scripts/generator.mjs", "ownership": "managed" },
     { "path": "scripts/git-snapshot.mjs", "ownership": "managed" },
     { "path": "scripts/install-dependencies.mjs", "ownership": "managed" },
     { "path": "scripts/lib.mjs", "ownership": "managed" },

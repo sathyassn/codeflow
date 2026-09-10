@@ -9,6 +9,7 @@ import {
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
 } from "./lib.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
+import { GENERATOR } from "./generator.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
 import { isReservedPublicPath, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
 
@@ -197,7 +198,7 @@ if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while
 const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route.split("/").map(strictUrlSegment).join("/")}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
 const evidence = {
   schema_version: 1,
-  generator: { name: "@codeflow/docs-portal", version: "1.0.0" },
+  generator: GENERATOR,
   repository: { root: repoRelative, commit, release_version: config.release_version },
   config_sha256: sha256(configBytes),
   primitive_tokens: primitiveTokenEvidence,

@@ -100,6 +100,11 @@ adoption, and honor decline or existing authority. Its anchored grades and
 evidence-based scenarios support this workflow; they do not replace its gates,
 reinterpret legacy size fields, or authorize adoption/implementation by themselves.
 
+For a durable repository guide, `cf-docs-portal` owns the opt-in lifecycle.
+Markdown stays authoritative. Configure supported seams while CodeFlow owns
+the runtime, or explicitly transfer the whole runtime for project maintenance;
+never turn local drift into an automatic merge, transfer or validation waiver.
+
 ## Project organization and work authority
 
 The full tier writes flat, stable-ID records:

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
+import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
@@ -33,6 +34,7 @@ async function verifyPortal(lifecycle) {
   await assertNoSymlink(root, ".portal/generated/evidence.json");
   const evidenceBytes = await readBoundedRegularFile(path.join(root, ".portal/generated/evidence.json"), 8 * 1024 * 1024, "portal evidence manifest");
   const generated = JSON.parse(evidenceBytes);
+  assertGeneratorIdentity(generated?.generator);
   const repository = path.resolve(root, config.repository_root);
   const head = new GitSnapshot(repository).resolveHead();
   const configSha256 = digest(configBytes);

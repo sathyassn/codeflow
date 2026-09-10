@@ -151,6 +151,33 @@ def strict_effort_pair() -> tuple[dict, dict]:
 
 
 class SuiteContractTests(unittest.TestCase):
+    def test_portal_fixtures_hide_branch_cues_without_erasing_git_state(self) -> None:
+        _, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        portal_cases = [case for case in cases_doc["cases"] if case["category"] == "documentation-portal"]
+        fixtures = {item["id"]: item for item in fixtures_doc["fixtures"]}
+        self.assertGreaterEqual(len(portal_cases), 13)
+        for case in portal_cases:
+            fixture = fixtures[case["fixture"]]
+            self.assertEqual(fixture["state"]["branch"], "fixture/work", case["id"])
+            serialized = fixture["files"].get(".codeflow/docs-portal.json")
+            if serialized is not None:
+                state = json.loads(serialized)
+                self.assertTrue(state["files"], case["id"])
+                self.assertIn(state["schema_version"], (1, 2))
+                for claim in state["files"].values():
+                    self.assertRegex(claim["pristine_sha256"], r"^[a-f0-9]{64}$")
+        dirty = fixtures["docs-portal-dirty-snapshot"]
+        self.assertEqual(dirty["state"]["untracked_files"], ["docs/uncommitted.md"])
+        self.assertIn("docs/uncommitted.md", dirty["files"])
+        self.assertNotIn("These bytes must never be labelled with HEAD", dirty["files"]["docs/uncommitted.md"])
+        transfer = fixtures["docs-portal-explicit-runtime-transfer"]
+        self.assertNotIn("guide/removed.txt", transfer["files"])
+        self.assertNotIn("guide/portal.config.json", transfer["files"])
+        legacy = fixtures["docs-portal-legacy-integrity-recovery"]
+        baseline, content = next((key, value) for key, value in legacy["files"].items()
+                                 if key.startswith(".codeflow/.docs-portal-baseline/"))
+        self.assertNotEqual(baseline.rsplit("/", 1)[1], hashlib.sha256(content.encode()).hexdigest())
+
     def test_import_does_not_pollute_shipped_assets(self) -> None:
         self.assertFalse((MODULE_PATH.parent / "__pycache__").exists())
 

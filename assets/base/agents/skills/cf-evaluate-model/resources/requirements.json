@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-08-high-primary-v1",
+  "requirements_version": "2026-09-10-portal-ownership-v1",
   "requirements": [
     {
       "id": "CF-GIT-004",
@@ -1340,8 +1340,7 @@
             "same utility design system as `cf-present`",
             "Do not clone the",
             "Apply `cf-design`",
-            "Apply `cf-editorial-review`",
-            "strict-ID previews"
+            "Apply `cf-editorial-review`"
           ]
         },
         {
@@ -1349,6 +1348,13 @@
           "markers": [
             "source-to-route graph",
             "normal links with source-grounded contextual previews"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/operations.md",
+          "markers": [
+            "Experience qualification",
+            "strict-ID previews"
           ]
         }
       ]
@@ -1410,6 +1416,25 @@
             "before choosing source roots, layers, or more than one portal",
             "global orientation and shared concepts above area or surface drill-down"
           ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-006",
+      "level": "hard",
+      "statement": "Portal updates preserve local runtime edits through replace-only reconciliation, never source merges or implicit ownership changes. Supported configuration and unclaimed assets remain project-owned; explicit whole-runtime transfer preserves current edits/deletions and freezes adopted provenance without relaxing strict generator evidence, journal-first recovery or legacy-baseline integrity.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/SKILL.md",
+          "markers": ["confirm whole-runtime ownership", "Never transfer merely to clear a failed"]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/operations.md",
+          "markers": ["no automatic source merge", "Legacy recovery and migration", "Repeating transfer is a no-op", "do not prescribe deletion or line-ending normalization"]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/content-contract.md",
+          "markers": ["Adoption state and emitted evidence are separate formats", "not frozen provenance"]
         }
       ]
     },

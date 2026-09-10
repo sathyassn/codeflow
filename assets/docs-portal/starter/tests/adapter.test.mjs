@@ -14,10 +14,83 @@ import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnosti
 import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from "../scripts/install-dependencies.mjs";
 import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
+import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
+
+test("actual generator identity is bounded, closed and release-pinned", async () => {
+  const packageInfo = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.deepEqual(GENERATOR, { name: packageInfo.name, version: packageInfo.version });
+  const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+  for (const entry of [lock, lock.packages[""]]) {
+    assert.deepEqual(GENERATOR, { name: entry.name, version: entry.version });
+  }
+  assert.doesNotThrow(() => assertGeneratorIdentity({ ...GENERATOR }));
+  for (const value of [null, [], {}, { ...GENERATOR, extra: true },
+    { ...GENERATOR, name: "@project/fork" }, { ...GENERATOR, version: "0.0.0" },
+    { ...GENERATOR, name: " " }, { ...GENERATOR, version: 2 },
+    { ...GENERATOR, name: "é".repeat(65) }]) {
+    assert.throws(() => assertGeneratorIdentity(value), /generator does not match/);
+  }
+});
+
+test("an actual fork identity validates its own UTF-8 bounds before module use", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-generator-identity-"));
+  try {
+    const source = await readFile(new URL("../scripts/generator.mjs", import.meta.url), "utf8");
+    const original = `Object.freeze({ name: "${GENERATOR.name}", version: "${GENERATOR.version}" })`;
+    for (const [index, [identity, accepted]] of [
+      [{ name: " ", version: "2" }, false],
+      [{ name: "é".repeat(65), version: "2" }, false],
+      [{ name: "fork", version: "x".repeat(129) }, false],
+      [{ name: "é".repeat(64), version: "x".repeat(128) }, true],
+    ].entries()) {
+      const changed = source.replace(original, `Object.freeze(${JSON.stringify(identity)})`);
+      assert.notEqual(changed, source);
+      const modulePath = path.join(root, `generator-${index}.mjs`);
+      await writeFile(modulePath, changed);
+      const result = spawnSync(process.execPath, [modulePath], { encoding: "utf8" });
+      assert.equal(result.status === 0, accepted, result.stderr);
+      if (!accepted) assert.match(result.stderr, /generator does not match this runtime/);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a renamed runtime emits its own identity and rejects substituted evidence", async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const identity = {
+      name: GENERATOR.name === "@example/project-guide" ? "@example/alternate-guide" : "@example/project-guide",
+      version: "7.0.0",
+    };
+    assert.notDeepEqual(identity, GENERATOR);
+    const generatorPath = path.join(root, "scripts/generator.mjs");
+    const generatorSource = await readFile(generatorPath, "utf8");
+    await writeFile(generatorPath, generatorSource.replace(
+      `name: "${GENERATOR.name}", version: "${GENERATOR.version}"`,
+      `name: "${identity.name}", version: "${identity.version}"`,
+    ));
+    const packagePath = path.join(root, "package.json");
+    const packageInfo = JSON.parse(await readFile(packagePath, "utf8"));
+    Object.assign(packageInfo, identity);
+    await writeFile(packagePath, `${JSON.stringify(packageInfo, null, 2)}\n`);
+    commitFixture(root, "version project generator");
+    runLocalAdapter(root);
+    const evidencePath = path.join(root, ".portal/generated/evidence.json");
+    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    assert.equal(evidence.schema_version, 1);
+    assert.deepEqual(evidence.generator, identity);
+    evidence.generator = { ...GENERATOR };
+    const forged = `${JSON.stringify(evidence, null, 2)}\n`;
+    await writeFile(evidencePath, forged);
+    const result = spawnSync(process.execPath, [path.join(root, "scripts/evidence.mjs")], { cwd: root, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /generator does not match this runtime/);
+    assert.equal(await readFile(evidencePath, "utf8"), forged);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("semantic route fixtures stay in parity with the Rust validator", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/route-contract.json", import.meta.url), "utf8"));

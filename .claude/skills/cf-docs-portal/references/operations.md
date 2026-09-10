@@ -2,17 +2,80 @@
 
 ## Ownership
 
-`portal.config.json` is user-owned and written once. Starter implementation,
-lockfile, tests, and styles are managed with Git-tracked, opaque,
-content-addressed pristine baselines. On an
-upstream change, an untouched file is replaced; an edited file receives a
-three-way merge; a conflict keeps the original and writes a collision-safe,
-content-addressed `<path>.codeflow-<hash>.new` sidecar without overwriting an
-existing path.
-Commit `.codeflow/docs-portal.json` and its opaque
-`.codeflow/.docs-portal-baseline/` blobs with the adopted starter. They are
-team-portable reconciliation state, not a private runtime cache; their
-content-addressed names prevent a second browsable lockfile/dependency surface.
+Commit `.codeflow/docs-portal.json` with the adopted runtime. Schema v2 records
+the root, release, file hashes, whole-runtime ownership and declared generator
+identity. Fresh setup and successful legacy migration keep no pristine runtime
+copies. General scaffold reconciliation is unchanged.
+
+| Path or state | Setup/update behavior |
+|---|---|
+| Unchanged managed file | Replace with the incoming release |
+| Missing managed file | Repair while managed |
+| Bytes already equal to incoming | Accept without treating them as drift |
+| Edited managed file, unknown incoming collision, edited retirement | Stop all portal writes and state advancement; preserve edits |
+| Unchanged retiring managed file | Remove in the coherent update transaction |
+| Project-owned configuration | Seed only at first adoption; preserve thereafter, including absence |
+| Additional assets at unclaimed paths | Remain project-owned |
+| Transferred runtime | Preserve all files and intentional deletions; no upstream reconciliation |
+
+Bundled scripts, styles, fonts, licenses and favicon remain managed regardless
+of directory name. There is no automatic source merge, lockfile merge or new
+conflict sidecar. A portal conflict does not roll back unrelated changes already
+made by the enclosing `codeflow update`.
+
+Use supported config/token settings or rehome assets at unclaimed paths when
+those seams fit. Otherwise preserve the current work and choose explicitly:
+restore reviewed managed bytes, or take responsibility for the whole runtime:
+
+```sh
+codeflow portal transfer --confirm
+```
+
+Transfer operates only on the adopted root; it has no per-file or path selector.
+On v1 or v2 it changes ownership/state, not runtime bytes: it accepts existing
+edits and deletions without installing a newer embedded release or repairing
+missing configuration. It freezes the previously adopted version/hashes as
+transferred-from provenance. Repeating transfer is a no-op even after further
+edits. No future setup/update resets ownership. A reviewed restoration of the
+complete earlier runtime and state from Git is a separate operation, with
+current work preserved; transfer is durable, not cryptographically irreversible.
+
+## Legacy recovery and migration
+
+Run recovery through the normal portal command before interpreting or repairing
+legacy state. The engine holds its lease and recovers a legitimate pending
+journal before full adoption-state parsing and migration. Do not delete or edit
+journals, staged output or lease records to force progress. If recovery cannot
+authenticate its inputs, preserve the repository and report the actual failure.
+
+Distinguish runtime drift from baseline integrity:
+
+- **Runtime drift:** ordinary setup/update stops before portal writes. Review
+  the supported customization, explicit restoration or confirmed-transfer
+  choices above. Transfer preserves the changed runtime.
+- **Legacy baseline integrity:** an unknown, changed, oversized, non-regular or
+  unsafe entry stops the new migration or transfer before publication. Legitimate
+  previously journaled recovery may already have completed; report that
+  separately from the failed new operation. Inspect preserved content and
+  repository history first.
+  After journal recovery is settled, an operator may explicitly preserve and
+  relocate the questionable baseline directory outside its reserved location,
+  or restore exact reviewed bytes. Retain a verified copy and a restore path;
+  do not prescribe deletion or line-ending normalization as a repair.
+
+Then retry the intended operation. An absent baseline directory or expected blob
+is benign because nothing remains there to authenticate or delete; it does not
+waive ordinary migration's runtime-drift checks. Existing blobs are removed only
+when bounded regular-file bytes match a recorded managed content hash, within
+the successful transaction. Empty reserved directories are removed without
+recursive traversal. Failed commit rolls back or retains valid recovery
+evidence; unknown content is never recursively cleaned.
+
+Filesystem safety rejects symlink/reparse traversal and ancestor redirection
+through held directories. It is not inode compare-and-swap, hard-link/Unix-mount
+byte-origin isolation or isolation from a hostile same-user process. Windows
+directory handles temporarily deny delete sharing; native platform behavior
+needs native execution evidence, not an inference from cross-target lint.
 
 ## Dependency discipline
 
@@ -31,6 +94,34 @@ directory, inspect transitive and runtime changes, and change exact pins,
 lockfile, reviewed inventory, and evidence together.
 
 ## Release evidence
+
+### Experience qualification
+
+Map checks to accepted intent and affected journeys. At minimum for a material
+portal change, verify:
+
+- locked build, deterministic adapter tests and the Rust evidence verifier;
+- navigation, search, source links, Markdown twins, `llms.txt`, error handling,
+  strict-ID previews (hover, focus, touch, keyboard, Escape and ordinary link
+  navigation), and empty/tiny/monorepo fixtures as applicable;
+- keyboard order, focus visibility, semantics, contrast, target size, zoom,
+  reduced motion and responsive behavior against WCAG 2.2 AA;
+- both fallback themes in light/dark, persisted preferences and no incorrect-mode
+  flash; Chromium, Firefox and WebKit journeys when available;
+- task-owned browser state, ports, test data, traces and screenshots, followed
+  by verified resource cleanup. Unavailable platform evidence is not inferred.
+
+`npm run browser:verify` uses a task-owned loopback preview under the workflow
+lease. Routes, journeys and search terms come from validated configuration and
+generated evidence. Chromium, Firefox and WebKit run sequentially with separate
+temporary profiles; WCAG 2.2 AA axe rules supplement the journeys, console and
+remote-request checks. Bounded hashed screenshots/traces and server/profile
+teardown are recorded. Set a unique `PORTAL_BROWSER_RUN` for concurrent tasks.
+Use a headed task-owned browser only for a finding the headless run cannot
+settle, never the operator's profile or view. Review before and after a material
+ownership migration; successful transfer alone says nothing about rendering.
+
+### Recorded results
 
 Record:
 

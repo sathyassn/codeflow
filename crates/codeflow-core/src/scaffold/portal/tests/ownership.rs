@@ -155,30 +155,87 @@ fn managed_release_identity_agrees_across_installed_state_and_generators() {
         serde_json::from_slice(&source.read(MANIFEST_ASSET).unwrap()).unwrap();
     assert_eq!(state.starter_version, manifest["version"].as_str().unwrap());
     assert_eq!(state.generator, Generator::managed(&state.starter_version));
-    let adapter = String::from_utf8(
+    let generator = String::from_utf8(
         source
-            .read(&format!("{ASSET_PREFIX}scripts/adapter.mjs"))
+            .read(&format!("{ASSET_PREFIX}scripts/generator.mjs"))
             .unwrap(),
     )
     .unwrap();
-    let verifier = String::from_utf8(
-        source
-            .read(&format!("{ASSET_PREFIX}scripts/evidence.mjs"))
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(adapter.contains(&format!(
-        "generator: {{ name: \"{}\", version: \"{}\" }}",
+    assert!(generator.contains(&format!(
+        "Object.freeze({{ name: \"{}\", version: \"{}\" }})",
         state.generator.name, state.generator.version
     )));
-    assert!(verifier.contains(&format!(
-        "evidence.generator.name !== \"{}\"",
-        state.generator.name
-    )));
-    assert!(verifier.contains(&format!(
-        "evidence.generator.version !== \"{}\"",
-        state.generator.version
-    )));
+    let package: serde_json::Value =
+        serde_json::from_slice(&source.read(&format!("{ASSET_PREFIX}package.json")).unwrap())
+            .unwrap();
+    assert_eq!(package["name"], state.generator.name);
+    assert_eq!(package["version"], state.generator.version);
+    let lock: serde_json::Value = serde_json::from_slice(
+        &source
+            .read(&format!("{ASSET_PREFIX}package-lock.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    for entry in [&lock, &lock["packages"][""]] {
+        assert_eq!(entry["name"], state.generator.name);
+        assert_eq!(entry["version"], state.generator.version);
+    }
+    for consumer in ["adapter.mjs", "evidence.mjs", "browser-verify.mjs"] {
+        let code = String::from_utf8(
+            source
+                .read(&format!("{ASSET_PREFIX}scripts/{consumer}"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(code.contains("from \"./generator.mjs\""));
+    }
+}
+
+#[test]
+fn absent_legacy_baselines_allow_transfer_without_repairing_runtime() {
+    for preserve_directory in [false, true] {
+        let temp = initialized_root();
+        let source = bundle(
+            "1",
+            &[
+                ("kept.txt", "managed", "before"),
+                ("removed.txt", "managed", "remove me"),
+                ("portal.config.json", "user-owned", "{}"),
+            ],
+        );
+        setup_portal(&source, temp.path(), Path::new("guide")).unwrap();
+        make_legacy(temp.path());
+        let preserved = temp.path().join("reviewed-baseline-copy");
+        std::fs::rename(temp.path().join(BASELINE_ROOT), &preserved).unwrap();
+        if preserve_directory {
+            std::fs::create_dir(temp.path().join(BASELINE_ROOT)).unwrap();
+        }
+        std::fs::write(temp.path().join("guide/kept.txt"), b"project edit").unwrap();
+        std::fs::remove_file(temp.path().join("guide/removed.txt")).unwrap();
+        std::fs::remove_file(temp.path().join("guide/portal.config.json")).unwrap();
+        let preserved_before: Vec<_> = std::fs::read_dir(&preserved)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), std::fs::read(entry.path()).unwrap())
+            })
+            .collect();
+        transfer_portal(temp.path(), true).unwrap();
+        assert_eq!(
+            std::fs::read(temp.path().join("guide/kept.txt")).unwrap(),
+            b"project edit"
+        );
+        assert!(!temp.path().join("guide/removed.txt").exists());
+        assert!(!temp.path().join("guide/portal.config.json").exists());
+        let state = load_state(&PortalIo::open(temp.path()).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.runtime_ownership, RuntimeOwnership::Transferred);
+        assert_eq!(state.starter_version, "1");
+        for (name, bytes) in preserved_before {
+            assert_eq!(std::fs::read(preserved.join(name)).unwrap(), bytes);
+        }
+    }
 }
 
 fn bundle(version: &str, files: &[(&str, &str, &str)]) -> MapSource {

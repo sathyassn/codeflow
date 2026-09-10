@@ -1,6 +1,7 @@
 import path from "node:path";
 import { assertExpectedPageArtifacts, assertNoSymlink, collectBuiltArtifacts, readBoundedRegularFile, withPublicationLease, writeText } from "./publication.mjs";
 import { assertEvidenceEnvelope } from "./limits.mjs";
+import { assertGeneratorIdentity } from "./generator.mjs";
 
 const root = process.cwd();
 await withPublicationLease(root, async ({ refresh }) => {
@@ -21,9 +22,9 @@ await withPublicationLease(root, async ({ refresh }) => {
 });
 
 function validateEvidenceEnvelope(evidence) {
+  assertGeneratorIdentity(evidence?.generator);
   const keys = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? Object.keys(evidence).sort().join(",") : "";
   if (keys !== "artifacts,config_sha256,generator,llms,media,pages,primitive_tokens,repository,schema_version" || evidence.schema_version !== 1
-    || Object.keys(evidence.generator ?? {}).sort().join(",") !== "name,version" || evidence.generator.name !== "@codeflow/docs-portal" || evidence.generator.version !== "1.0.0"
     || Object.keys(evidence.repository ?? {}).sort().join(",") !== "commit,release_version,root" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.repository.commit ?? "")
     || !Array.isArray(evidence.pages) || evidence.pages.length > 10_000 || !Array.isArray(evidence.media) || evidence.media.length > 1_000
     || !evidence.llms || typeof evidence.llms !== "object" || Array.isArray(evidence.llms) || !Array.isArray(evidence.artifacts) || evidence.artifacts.length !== 0) {
