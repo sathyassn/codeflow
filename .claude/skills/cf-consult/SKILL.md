@@ -7,12 +7,11 @@ description: Get an independent second opinion from another vendor's CLI (read-o
 
 You are getting a second opinion, not handing off work. Load the `cf-delegate`
 skill for the consult doctrine and lane details. Consult is read-only: the
-delegate reads and reasons, never edits. Transport is interactive-only, one
-lane per direction (CodeFlow ADR-0023)—never headless (`codex exec`, `claude -p`).
+delegate reads and reasons, never edits. Use `cf-delegate`'s preferred lanes or
+qualified native fallback—never headless (`codex exec`, `claude -p`).
 
-The delegate is a vendor you are **not**. Consulting your own vendor is
-self-review with extra steps, not an outside opinion — never label it
-independent.
+The peer must be another vendor. Same-vendor scrutiny is useful, but never
+counts as independent cross-lineage review.
 
 1. Frame the ask: state exactly what to review (paths, diff, or question) and
    the criteria to judge against, and ask for an explicit closing verdict line
@@ -31,7 +30,8 @@ independent.
    - **From Claude Code → codex**, through the official `codex-plugin-cc`
      plugin: `/codex:review` is the diff/design read (read-only;
      `/codex:adversarial-review` for the security lens). Preflight: the
-     `/codex:*` commands exist and `codex login status` exits 0.
+     `/codex:*` commands exist and `codex login status` exits 0. If incompatible,
+     use `cf-delegate`'s qualified native fallback with the same review scope.
    - **From codex → claude**, through CodeFlow's schema-v2 delegate lifecycle
      (`delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF
      exact-byte delivery → wait-accepted → wait-terminal, with bounded cleanup;

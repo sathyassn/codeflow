@@ -339,8 +339,8 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     assert_contains(
         AGENTS_TMPL,
         &[
-            "durable delegate lifecycle over the interactive Claude CLI",
-            "launch, provenance, return, failure, recheck",
+            "durable lifecycle over interactive Claude",
+            "launch, provenance, return, failure and recheck",
         ],
     );
     // Both templates carry the identical tier-neutral provenance sentence.
@@ -348,6 +348,36 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
                       recheckable provenance";
     for template in [AGENTS_TMPL, AGENTS_MINIMAL_TMPL] {
         assert_contains(template, &[provenance]);
+    }
+}
+
+#[test]
+fn native_fallback_keeps_authority_and_claim_boundaries() {
+    let fallback = "assets/base/claude/skills/cf-delegate/resources/native-fallback.md";
+    assert_contains(DELEGATE_SKILL, &["resources/native-fallback.md"]);
+    assert_contains(
+        fallback,
+        &[
+            "five obligations",
+            "the child's sandbox does not protect its launcher",
+            "an alternate route must preserve the rejected action's underlying boundary",
+            "Cases whose expected behavior includes delegation still require a real peer",
+            "retain old failures/unrun records, never relabel them as passes",
+            "summaries that omit required actions are insufficient evidence",
+        ],
+    );
+    for asset in [DELEGATE_SKILL, ORCHESTRATOR, CUSTOMIZE, CONSULT] {
+        assert_contains(asset, &["native fallback", "cf-delegate"]);
+        for stale in [
+            "plugin, only",
+            "no Herdr CLI third lane",
+            "one lane per direction",
+        ] {
+            assert!(
+                !normalized(&read(asset)).contains(stale),
+                "{asset}: stale exclusive transport rule"
+            );
+        }
     }
 }
 

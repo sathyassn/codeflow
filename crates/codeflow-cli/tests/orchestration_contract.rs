@@ -282,7 +282,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "implementer check",
         "Default UI assignment is Claude as",
         "Playwright remains the deterministic web driver",
-        "plugin/app-server only",
+        "preferred plugin or qualified official native client",
         "spawns same-family workers at that",
     ] {
         assert!(

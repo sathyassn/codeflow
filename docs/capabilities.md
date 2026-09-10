@@ -18,8 +18,8 @@
 id: CAP-017
 name: optional-agentic-estimation
 area: engine
-status: building
-verified_by: []
+status: shipped
+verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
 epics: [EPC-006]
 adrs: [ADR-0057]
 ```
@@ -28,9 +28,10 @@ SPC-007 defines the optional cf-estimate method: active project-specific offer,
 confirmed adoption or respected decline, evidence-anchored grades, full-delivery
 scenarios and resource-feasible allocations. Standard/full skills are managed;
 profiles, forecasts and outcomes stay project-owned and link existing authority.
-EPC-006 is delivering its read-only allocation checker and installed/native
-qualification; implementation readiness and predictive usefulness remain
-separate claims, never inferred from this registry.
+EPC-006 supplies the read-only allocation checker, installed-path tests and
+native diagnostic evidence, including retained failures and a focused consent
+repair. Implementation readiness and predictive usefulness remain separate;
+this registry does not establish calibrated delivery predictions.
 
 ## CAP-001 — scaffold-init
 
@@ -298,14 +299,15 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002]
-adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054]
+adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth, with CodeFlow's gates
 judging the output author-agnostically (ADR-0005). Transport is
-interactive-only per ADR-0023, one lane per direction: from Claude Code the
-official `codex-plugin-cc` plugin (wrapping the codex app-server); from codex
+interactive-only: from Claude Code prefer the official `codex-plugin-cc` plugin
+(wrapping the codex app-server), with a qualified official native client
+fallback under ADR-0059; from codex
 the interactive `claude` CLI through the schema-v2 lifecycle. When
 `HERDR_ENV=1`, `cf-herdr` hosts that TTY in a named tab (cwd-matched resume,
 no hijack of other panes); tmux is the degraded host. Herdr `idle`/`done` is
