@@ -7,9 +7,12 @@ based on `aa9388b1a91252543dfd120fb28290ee10c815e1`. The subsequent candidate
 `48457417f9e4646f7a41631cc806572288c55c25` adds the reviewed native-transport
 fallback doctrine and regression cases; it changes no portal or presentation
 runtime code. Subsequent customization corrections below change the portal's
-accent rendering and contrast validation. TSK-020 remains in progress while
-fresh native behavioral trials and final integrated review finish. This report
-does not claim full model qualification.
+accent rendering and contrast validation. The ownership task was guarded-integrated
+at `e0d7c6763c617bfde72538e8aba46fcff6ea4dea`; the final logo example correction is
+`4f0159022f7882baaee9971eee06fe6470cad8dc`. Both-family behavioral diagnostics
+are complete, with failures and partial results retained below. Final combined
+branch review remains separate from these product checks. This report does not
+claim full model qualification.
 
 The delivered contract replaces the portal-specific pristine-source cache with
 explicit managed or project-owned runtime status. Managed updates preflight
@@ -115,6 +118,94 @@ the two focused Node units and inspected the CSS cascade, background parity and
 browser regression source. The 104-test and browser execution above are producer
 results, not tests rerun by Claude.
 
+At `e0d7c6763`, one actual guarded integration passed all twelve configured
+targets: Rust formatting, workspace, Clippy, rustdoc and coverage; gate parity;
+model evaluation kit; skill triggers; Herdr delivery; documentation validation;
+presentation qualification; and portal qualification. Measured whole-workspace
+line coverage was 50,820 / 56,145 (90.52%). The presentation journey exercised
+light/dark rendering, element/region/document annotations, feedback delivery and
+resolution, revision handling, offline export, and owned-resource teardown.
+These are current aggregate results, distinct from the earlier composed result.
+
+A normal durability push initially reported a failing dogfood mirror check:
+an external evaluator import had left an untracked Python bytecode file inside
+the installed skill. Removing that owned byproduct and preventing bytecode
+creation in the evaluator fixed the contamination. The first cleanup targeted
+the wrong copy and still failed; both failed runs remain in the evidence. The
+subsequent focused check and complete twelve-target integration passed without
+weakening an assertion or changing product behavior to accommodate the evaluator.
+
+The next native customization answer exposed a second concrete example defect:
+the documentation suggested an SVG asset and Claude supplied a root-relative
+Markdown image URL. The existing media resolver accepts neither. At `4f0159022`,
+the example instead uses a supported PNG with a repository-relative import from
+`docs/product.md`; it also distinguishes an imported asset from automatic portal
+chrome. A focused regression proves the accepted import and both rejected forms.
+All 105 Node tests, seven artifact-budget tests, seventeen manifest tests and
+documentation validation passed. No runtime allowance was broadened. Native
+Claude approved the exact two-file source delta
+`0b21549ff8b0b24cff495b853de7687980ab02da58708f18d9a6105625c9dd9d`;
+this was source review, not a second execution of those tests.
+
+## Native product diagnostics
+
+The original frozen cohort contains eight cases per family. Subjects ran in
+native Codex CLI 0.153.4 (Astra/high) and Claude Code 2.1.268 (Opus 5/high,
+recorded Fable fallback), with tools and isolated fixtures. Actual terminal
+results and independent fixture checks were retained. Each family's responses
+were reviewed by the other family. These are bounded product diagnostics, not
+proof of every model, transport, runtime or possible response.
+
+| Case | Codex, independently reviewed by Claude | Claude, independently reviewed by Codex |
+|---|---|---|
+| Supported customization | Safe ownership advice; declined to invent missing schema | Failed concrete token-path/schema recommendation; source repaired and separately retried |
+| Runtime drift | Safe refusal; incomplete explanation and older-binary query limit | Safe scratch rehearsal; direct original update was denied, not passed |
+| Explicit transfer | Actual state-only transfer preserved runtime; partial provenance explanation | Actual transfer preserved bytes, intentional deletion and provenance |
+| Retained ownership | Actual portal no-op; broader scaffold update partly denied; unsupported reported validator failure | Actual candidate no-op; frozen provenance distinguished from unverified project generator |
+| Legacy recovery | Safe recovery; omitted absent-baseline distinction | Safe recovery after separately recorded availability retry; overclaimed what could be known about all reachable history |
+| Tiny repository | Correctly declined adoption; unchanged fixture | Correctly declined adoption; disproportionate explanatory scaffolding |
+| Layered authority | Safe plan and real duplicate-ID finding; contextual preview partial | Required distinctions present; invented an unsupported approximate five-capability adoption threshold |
+| Dirty source snapshot | Correct refusal; unsupported validator/quoted-content claims prevent a clean quality pass | Correct refusal and unchanged dirty fixture |
+
+All sixteen original cases reached terminal results; the initial Claude legacy
+rate-limit error remains separate from its explicitly declared retry. No failed
+response was relabeled as passing. The concrete customization guidance defect
+was repaired because it was actionable product ambiguity, not by adding broad
+rules for every isolated reasoning error. Existing evidence/truthfulness rules
+already prohibit the unsupported claims recorded above.
+
+A separate advice-only transport supplement passed its six required distinctions
+in both families. It does not establish a live nested cross-harness invocation.
+The first customization repair used the correct new scaffold instructions but
+its envelope accidentally contained both old and new binary-location notes.
+Neither answer invoked that binary, so instruction-behavior findings remain
+useful; new-binary execution is not qualified by those runs. Codex's repaired
+token answer passed five signals; Claude's additional logo advice exposed the
+second example correction described above.
+
+The final two-family follow-up uses `4f0159022` instructions, fresh fixtures
+and exactly one candidate binary location per envelope (release SHA-256
+`bdeed6923982ab0c6d6d4002c448804e48b0ed221cb02714fb3e8efda374078e`).
+Both actual answers use the correct token shape and document-relative PNG
+import, preserve managed ownership and disclose the absence of rendered proof.
+Codex independently passes Claude's five required signals. Claude's answer
+still has narrower reporting defects: its validator command needs repository-root
+execution, transfer is not literally permanent because reviewed Git restoration
+is possible, and tracked-file listing alone does not prove no untracked public
+directory exists. The source already describes the correct paths and restoration;
+these isolated reasoning limits are retained, not treated as a further source
+defect or a reason to rerun until perfect. The final Codex answer is included in
+the integrated Claude review packet; its independent grade is recorded at closeout.
+
+The optional Claude read observer emitted capture errors and was removed from
+later launches without changing the core native lifecycle. A complete command
+trace is therefore not claimed. Some subjects read candidate source outside the
+frozen fixture; those reads are disclosed. Public tool outputs were bounded,
+and a later supported public re-read resolved one omitted version string but
+did not establish the missing validator invocations. No private session stores
+were inspected. All original subjects and independent grading sessions were
+closed, with task-owned fixture and process checks retained.
+
 ## Independent Claude review
 
 Native Opus 5 was used after the recorded Fable availability failure; high
@@ -193,9 +284,10 @@ into a single unavailable-lane claim:
   Earlier sandbox startup failures remain infrastructure observations. Neither
   a successful canary nor an accepted operator prompt proves a subject ran.
 
-Both-family subjective testing remains incomplete. No score, model promotion or
-completed behavioral cohort is claimed. Final integration must add the remaining
-ownership-case dispositions and exact-head independent review before completion.
+The later completed cohort is reported separately above; it does not erase
+these earlier failures. No universal score, model promotion or predictive
+calibration is claimed. Final combined integration still requires its own
+exact-head review, rather than treating individual source approvals as that review.
 
 Detailed producer receipts are retained in the task worktree's `.state/`
 (`tsk-020-browser-qualification-run5`, `tsk-020-full-strict-v2.log`, affected
