@@ -908,8 +908,8 @@
             "\"role\": \"claude-judgment-primary\"",
             "\"model_class\": \"latest-fable\"",
             "\"model_class\": \"latest-opus\"",
-            "\"effort\": \"medium\"",
-            "\"effort\": \"high\"",
+            "\"default_effort\": \"medium\"",
+            "\"default_effort\": \"high\"",
             "without transferring judgment"
           ]
         }
@@ -968,7 +968,7 @@
           "markers": [
             "\"default_effort\": \"high\"",
             "\"escalation_effort\": \"xhigh\"",
-            "\"model_class\": \"qualified-terra-worker\"",
+            "\"model_class\": \"latest-terra\"",
             "Claude-side internal routing belongs to the Claude primary",
             "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"

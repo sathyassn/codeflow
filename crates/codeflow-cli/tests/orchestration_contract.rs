@@ -18,6 +18,40 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn assert_internal_routes(
+    role: &str,
+    binding: &serde_json::Value,
+    selectors: &serde_json::Map<String, serde_json::Value>,
+) {
+    let mut route_ids = BTreeSet::new();
+    for route in binding["internal_routes"]
+        .as_array()
+        .expect("internal routes")
+    {
+        let route_id = route["route_id"].as_str().expect("route id");
+        assert!(
+            route_ids.insert(route_id),
+            "duplicate route {role}/{route_id}"
+        );
+        assert_eq!(route["status"], "candidate");
+        assert!(route["evidence"].as_array().expect("evidence").is_empty());
+        let efforts = route["efforts"].as_array().expect("efforts");
+        assert!(!efforts.is_empty());
+        assert!(efforts.contains(&route["default_effort"]));
+        assert!(!route["workloads"].as_array().expect("workloads").is_empty());
+        for harness in route["native_selectors"]
+            .as_object()
+            .expect("route native selectors")
+            .keys()
+        {
+            assert!(
+                selectors.contains_key(harness),
+                "route {role}/{route_id} escapes its parent harnesses"
+            );
+        }
+    }
+}
+
 #[test]
 fn current_ensemble_uses_only_capability_supported_harnesses() {
     let ensemble: serde_json::Value = serde_json::from_str(&read(
@@ -28,7 +62,11 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
         "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
     ))
     .expect("harness catalog JSON");
-    assert_eq!(ensemble["schema_version"], 3);
+    assert_eq!(ensemble["schema_version"], 4);
+    assert_eq!(
+        ensemble["design_execution_owner"],
+        "claude-judgment-primary"
+    );
     assert!(ensemble["rules"].as_array().unwrap().iter().any(|rule| {
         rule.as_str() == Some("High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.")
     }), "high reasoning floor must not mandate redundant escalation");
@@ -98,6 +136,7 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
                 "{seat} selects an unsupported or mismatched harness {harness}"
             );
         }
+        assert_internal_routes(role, binding, selectors);
     }
     assert!(lineages.contains("claude") && lineages.contains("codex"));
     assert!(lineages.contains("grok"), "catalog family grok is missing");
@@ -223,8 +262,8 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "\"seat\": \"codex-primary\"",
         "\"role\": \"codex-engineering-primary\"",
         "\"model_class\": \"latest-astra-coding\"",
-        "\"model_class\": \"qualified-sol-worker\"",
-        "\"model_class\": \"qualified-terra-worker\"",
+        "\"model_class\": \"latest-sol\"",
+        "\"model_class\": \"latest-terra\"",
         "\"seat\": \"grok-primary\"",
         "\"role\": \"grok-engineering-primary\"",
         "\"model_class\": \"latest-grok-coding\"",
