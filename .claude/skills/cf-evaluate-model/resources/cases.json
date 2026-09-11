@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-11-accountable-worker-routing-v2",
+  "cases_version": "2026-09-11-accountable-worker-routing-v3",
   "full_trials": 3,
   "cases": [
     {
@@ -4839,6 +4839,7 @@
       "requirements": [
         "CF-MM-005",
         "CF-MM-006",
+        "CF-MM-012",
         "CF-MM-017",
         "CF-MM-018"
       ],
@@ -4847,14 +4848,20 @@
         "routes": ["cf-model-orchestrator", "cf-develop"],
         "signals": [
           "responsible_primary_recorded",
+          "current_native_readiness_allows_first_bounded_assignment",
+          "prior_completed_workload_canary_not_required",
           "candidate_worker_executes_bounded_unit",
-          "observed_route_and_effort_recorded",
+          "requested_route_and_effort_recorded_before_launch",
+          "applied_values_observed_only_from_native_surface",
           "primary_inspects_integrates_accepts",
           "actual_authored_lineage_reviewed"
         ],
         "references": ["WORK.md", "PLAN.md"],
         "must_not": [
           "candidate_treated_unlaunchable",
+          "executable_presence_treated_as_native_readiness",
+          "prior_completed_workload_outcome_required_before_first_assignment",
+          "requested_values_called_observed_before_launch",
           "candidate_called_qualified",
           "economy_claim",
           "worker_approves_own_return"

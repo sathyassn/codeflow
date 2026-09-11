@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-11-accountable-worker-routing-v2",
+  "requirements_version": "2026-09-11-accountable-worker-routing-v3",
   "requirements": [
     {
       "id": "CF-MM-016",
@@ -1115,7 +1115,7 @@
     {
       "id": "CF-MM-012",
       "level": "hard",
-      "statement": "Routing records fresh native usage and route evidence without inference; unknown usage remains advisory unless an explicit hard limit depends on it, while unknown availability or applied worker routing is never treated as proven.",
+      "statement": "Routing records fresh native usage and route evidence without inference. Predispatch requires current native route readiness plus compatible permissions and sandbox, not a prior completed workload canary or executable presence alone. The first bounded candidate assignment may supply start, return, and applied provenance under primary inspection and acceptance; requested values remain requested until the public native surface exposes what applied. Unknown usage remains advisory unless an explicit hard limit depends on it.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -1131,7 +1131,9 @@
             "Admissible usage evidence",
             "Never combine apparently separate limits",
             "Unknown usage is advisory",
-            "explicit hard limit"
+            "explicit hard limit",
+            "no prior completed workload canary is required",
+            "first bounded assignment may itself supply start, return"
           ]
         }
       ]

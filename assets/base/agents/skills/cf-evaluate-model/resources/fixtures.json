@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-11-accountable-worker-routing-v2",
+  "fixtures_version": "2026-09-11-accountable-worker-routing-v3",
   "fixtures": [
     {
       "id": "native-route-choice",
@@ -1708,11 +1708,12 @@
       "state": {
         "branch": "fixture/accountable-worker-routing",
         "peer": "available",
-        "native_worker_route": "observed",
+        "native_worker_route": "current_readiness_verified",
+        "prior_completed_workload_canary": false,
         "route_status": "candidate"
       },
       "files": {
-        "WORK.md": "# Bounded backend unit\n\nImplement a pure parser helper and collect its focused test evidence. The unit is substantial, well-specified, separable, and within the responsible Codex primary's owned task. Fixture-native evidence source `codex-app worker-start`, observed at 2030-01-07T14:05:00Z, records binding `codex-engineering-primary`, route `sol-bounded-execution`, selector `gpt-5.6-sol`, effort `high`, status `candidate`, and a returned scoped diff plus focused test output. Claude is the named independent reviewer. No economy claim is requested.\n",
+        "WORK.md": "# Bounded backend unit\n\nImplement a pure parser helper and collect its focused test evidence. The unit is substantial, well-specified, separable, and within the responsible Codex primary's owned task. A current authenticated native readiness check at 2030-01-07T14:05:00Z confirms that the `codex-app` harness can select route `sol-bounded-execution` inside the required workspace-write sandbox with approvals disabled. The check is not a binary-presence probe and produced no workload artifact; there is no prior completed workload canary. The first bounded assignment requests selector `gpt-5.6-sol` at effort `high`; the resulting public native surface will determine which applied values may be recorded as observed. Route status is `candidate`. Claude is the named independent reviewer. No economy claim is requested.\n",
         "PLAN.md": "# Approved assignment boundary\n\nTask and files are owned by the Codex engineering primary. Scope, acceptance, isolation and Claude review are fixed. An internal executor may change within that boundary when recorded with actual provenance.\n"
       }
     },

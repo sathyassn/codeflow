@@ -108,11 +108,16 @@ the bounded recovery or degradation rather than claiming medium work satisfied i
 The managed ensemble is the only worker-route catalog. `candidate` and
 `scoped-qualified` describe evidence status, not native reachability. A
 configured candidate is usable for bounded non-design work when current native
-routing evidence proves that exact harness route can start and return; the
-responsible primary inspects and accepts the result under unchanged gates. A
-candidate is not thereby qualified, cheaper, generally reliable or applied in a
-later run. Conversely, a configured route with no native routing metadata or
-canary is unavailable for dispatch even if its selector parses.
+routing evidence confirms that exact harness route is currently reachable and
+compatible with the required permissions and sandbox. Executable presence alone
+is not readiness, and no prior completed workload canary is required. The first
+bounded assignment may itself supply start, return, and applied-provenance
+evidence under the responsible primary's inspection and acceptance. Requested
+selector/effort remains requested until the public native surface exposes the
+applied values. This does not make the candidate qualified, cheaper, generally
+reliable, or applied in a later run. Conversely, a configured route without that
+native readiness evidence is unavailable for dispatch even if its selector
+parses.
 
 `scoped-qualified` adds reviewed outcome evidence only for the declared
 harness, selector, effort and workload tuples. Evidence paths are relative to
