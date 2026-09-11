@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-11-accountable-worker-routing-v1",
+  "requirements_version": "2026-09-11-accountable-worker-routing-v2",
   "requirements": [
     {
       "id": "CF-MM-016",
@@ -43,13 +43,14 @@
     {
       "id": "CF-MM-018",
       "level": "hard",
-      "statement": "Candidate status, native reachability/application, scoped workload qualification, full primary promotion, and economical-default evidence are separate claims. Scoped qualification covers only exact evidenced tuples and requires three fresh accepted trials per case and arm with complete provenance, primary integration, cross-family review, and no unresolved validity threat.",
+      "statement": "Candidate status, native reachability/application, scoped workload qualification, full primary promotion, and economical-default evidence are separate claims. Scoped qualification pre-registers qualifying versus comparison arms without post-hoc reclassification. Only the qualifying route/tuple must pass three fresh trials per case and qualifying arm; comparison outcomes inform claims, while invalid controls or fixtures and unresolved validity threats still block.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "Route status and actual execution",
             "three fresh accepted trials",
+            "Comparison outcomes inform claim scope",
             "Full primary-binding promotion",
             "economical-default"
           ]
@@ -58,7 +59,8 @@
           "path": ".agents/skills/cf-evaluate-model/resources/protocol.md",
           "markers": [
             "scoped internal-route qualification",
-            "three fresh trials per case/arm",
+            "label each arm qualifying or comparison before launch",
+            "Comparison outcomes inform claims",
             "not a full primary-binding promotion"
           ]
         }

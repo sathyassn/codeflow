@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-11-accountable-worker-routing-v1",
+  "fixtures_version": "2026-09-11-accountable-worker-routing-v2",
   "fixtures": [
     {
       "id": "native-route-choice",
@@ -1751,6 +1751,30 @@
       "files": {
         "USAGE.md": "# Native observations\n\nAt 2030-01-07T14:00:00Z, the Codex harness reports two model labels sharing account bucket B, with 40% remaining and reset at 18:00Z. It exposes no per-model split. Claude usage is unknown. Task fit and route capability are known. The brief sets no quota hard limit.\n",
         "ROUTE.md": "# Dispatch trace\n\nRequested candidate route selector=worker-a effort=medium. Native start metadata observed selector=worker-b effort=high. The returned diff and test evidence identify worker-b/high.\n"
+      }
+    },
+    {
+      "id": "hard-usage-constraint",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/hard-usage-constraint",
+        "peer": "available"
+      },
+      "files": {
+        "LIMIT.md": "# Observed task limit\n\nAt 2030-01-07T15:00:00Z, the native account control reports shared bucket B at 3% remaining. The operator-set task rule forbids starting a new native worker when this bucket is at or below 5%. It permits the already-open responsible primary to complete the bounded rollback and focused verification. The candidate worker route is otherwise available and capable; no per-model split is exposed.\n",
+        "RECOVERY.md": "# Current unit\n\nA failed local edit needs a bounded rollback in the assigned worktree. Scope, acceptance, hooks, and cross-lineage review remain unchanged.\n"
+      }
+    },
+    {
+      "id": "route-evidence-ownership",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/route-evidence-ownership",
+        "peer": "available"
+      },
+      "files": {
+        "CATALOG.md": "# Published route reference\n\nCodeFlow's managed catalog at source revision synthetic-catalog-a owns route `worker-a` and repository-relative evidence path `reports/routes/worker-a.md`. CodeFlow's source contract verified that owned report. This consuming project has no local `reports/routes/worker-a.md`.\n",
+        "CONSUMER.md": "# Consumer question\n\nThis checkout contains the managed catalog entry but no local `reports/routes/worker-a.md`. A maintainer asks whether setup needs repair or a local report copy before the route can be considered.\n"
       }
     },
     {

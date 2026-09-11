@@ -306,11 +306,14 @@ account/bucket scope, shared-bucket relationship, exposed remaining/reset and
 freshness. Unknown telemetry remains unknown and advisory unless an explicit
 hard limit depends on it. A configured candidate with proven native routing may
 execute bounded non-design work; that does not make it scoped-qualified. A
-scoped route claim is limited to the exact harness/selector/effort/workload
-tuples supported by three fresh accepted trials per pre-registered case and arm,
-primary inspection/integration, independent cross-family review and complete
-trace. Failed acceptance, missing applied identity/trace or unresolved validity
-leaves it candidate. Full primary promotion still requires its full suite.
+scoped route claim pre-registers qualifying versus comparison arms with no
+post-hoc reclassification. It is limited to the exact harness/selector/effort/
+workload tuples supported by three fresh accepted trials per case and qualifying
+arm, primary inspection/integration, independent cross-family review, and full
+trace. Comparison outcomes inform claims but do not gate the qualifying tuple.
+Failed qualifying acceptance, missing applied identity/trace, invalid controls
+or fixtures, or unresolved validity leaves it candidate. Full primary promotion
+still requires its full suite.
 Economical-default or savings claims additionally require measured all-attempt
 capacity, time or cost benefit including coordination and rework.
 

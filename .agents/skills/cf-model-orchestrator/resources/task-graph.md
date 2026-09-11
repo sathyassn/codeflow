@@ -7,10 +7,11 @@ metadata.
 
 ## Nodes and edges
 
-Every assignment row is one outcome-bearing node:
+Every assignment row is one outcome-bearing node and uses the canonical
+responsibility/execution fields from `capability-routing.md`:
 
 ```text
-TASK_ID | OUTCOME | PRODUCER | CROSS_LINEAGE_REVIEWER | WRITE_SCOPE | ACCEPTANCE_EVIDENCE
+TASK_ID | OUTCOME | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | AUTHORSHIP | CROSS_LINEAGE_REVIEWER seat@effort | WRITE_SCOPE | ACCEPTANCE_EVIDENCE
 ```
 
 Use one directed edge per dependency:

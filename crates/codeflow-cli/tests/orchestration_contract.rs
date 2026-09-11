@@ -172,14 +172,14 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "**Review is author-relative.**",
         "**The Claude judgment primary owns integrated Claude judgment.**",
         "task fit",
-        "observed native usage signals only",
+        "resources, and observed usage",
         "Codex supplies independent review",
         "owns the final quality verdict",
         "**Accountable route use.**",
         "Use the concrete selectors",
         "invoke each primary directly",
-        "retain its planning, integration and approval duties",
-        "never let a worker replace a primary",
+        "retain its planning, integration, and approval duties",
+        "workers replace no primary",
         "**One orchestration owner.**",
         "never starts a nested duo",
         "**Evidence outranks agreement.**",
@@ -365,7 +365,8 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
         "RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION",
         "`candidate` and `scoped-qualified` describe evidence status, not native reachability",
         "A configured candidate is usable for bounded non-design work",
-        "three fresh accepted trials for every pre-registered case and arm",
+        "three fresh accepted trials for every pre-registered case and qualifying arm",
+        "Comparison outcomes inform claim scope but do not themselves gate qualification",
         "Full primary-binding promotion still requires the existing complete suite",
         "Savings or economical-default recommendations separately require measured all-attempt",
         "review lineage is opposite the session that authored the work",
@@ -388,10 +389,10 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
     }
 
     for required in [
-        "same Claude design owner owns real design implementation/execution",
-        "candidate design route is usable only in controlled disposable qualification fixtures",
-        "Translating a settled product, UX or UI design into components, layout, styles or interactions is `design-implementation`",
-        "Claude absence alone is not an override",
+        "same Claude owner authors and implements real design and retains fidelity judgment",
+        "candidates run only disposable fixtures",
+        "Turning settled product/UX/UI into components, layout, styles, or interactions is design implementation",
+        "Claude absence is not one",
     ] {
         assert!(
             design.contains(required),
@@ -405,6 +406,8 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
         "candidate-design-route-cannot-implement-product",
         "explicit-design-family-override-is-valid",
         "unknown-usage-is-advisory-without-hard-limit",
+        "observed-hard-usage-limit-allows-bounded-recovery",
+        "catalog-owner-resolves-route-evidence",
         "observed-route-overrides-requested-label",
         "mixed-authorship-reassigns-independent-review",
         "mixed-lineage-contributions-use-per-unit-review",
@@ -742,6 +745,7 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
     }
 
     for required in [
+        "TASK_ID | OUTCOME | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | AUTHORSHIP",
         "Every active bare edge means B cannot start or be accepted until A has landed",
         "A guard that merely restates a standard quality",
         "Every unselected alternative records `not_selected`",

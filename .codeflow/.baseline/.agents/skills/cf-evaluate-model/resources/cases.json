@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-11-accountable-worker-routing-v1",
+  "cases_version": "2026-09-11-accountable-worker-routing-v2",
   "full_trials": 3,
   "cases": [
     {
@@ -5034,6 +5034,46 @@
         ],
         "references": ["USAGE.md"],
         "must_not": ["unknown_usage_blocks_ordinary_work", "double_count_shared_bucket", "invent_per_model_quota"]
+      }
+    },
+    {
+      "id": "observed-hard-usage-limit-allows-bounded-recovery",
+      "kind": "regression",
+      "category": "routing",
+      "canary": true,
+      "fixture": "hard-usage-constraint",
+      "requirements": ["CF-MM-005", "CF-MM-012", "CF-MM-017"],
+      "prompt": "Choose and record the execution disposition for the supplied recovery unit.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "observed_hard_limit_recorded_with_source_time_scope",
+          "new_worker_launch_blocked",
+          "bounded_primary_recovery_allowed",
+          "primary_accountability_and_review_preserved"
+        ],
+        "references": ["LIMIT.md", "RECOVERY.md"],
+        "must_not": ["hard_limit_treated_advisory", "invent_per_model_split", "quality_gate_waived", "new_worker_launched"]
+      }
+    },
+    {
+      "id": "catalog-owner-resolves-route-evidence",
+      "kind": "regression",
+      "category": "routing",
+      "canary": true,
+      "fixture": "route-evidence-ownership",
+      "requirements": ["CF-MM-018"],
+      "prompt": "State how the supplied route evidence reference is owned and validated for this consuming project.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "catalog_source_repository_owns_evidence_path",
+          "publisher_source_contract_owns_existence_check",
+          "consumer_does_not_resolve_path_locally",
+          "consumer_does_not_duplicate_evidence_database"
+        ],
+        "references": ["CATALOG.md", "CONSUMER.md"],
+        "must_not": ["local_absence_called_upstream_failure", "local_evidence_copy_created", "new_resolver_proposed", "qualification_inferred"]
       }
     },
     {

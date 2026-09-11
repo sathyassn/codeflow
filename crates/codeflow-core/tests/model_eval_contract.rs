@@ -160,6 +160,8 @@ fn diagnostic_packs_only_compose_existing_cases() {
             "claude-absence-is-not-design-override",
             "unknown-usage-is-advisory-without-hard-limit",
             "unknown-usage-remains-unknown",
+            "observed-hard-usage-limit-allows-bounded-recovery",
+            "catalog-owner-resolves-route-evidence",
             "observed-route-overrides-requested-label",
             "mixed-authorship-reassigns-independent-review",
             "mixed-lineage-contributions-use-per-unit-review"
