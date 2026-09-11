@@ -72,10 +72,10 @@
         {
           "path": ".agents/skills/cf-design/SKILL.md",
           "markers": [
-            "same Claude design owner owns real design implementation/execution",
-            "controlled disposable qualification fixtures",
-            "explicit operator instruction names that task override",
-            "Translating a settled product"
+        "same Claude owner authors and implements real design and retains fidelity judgment",
+        "candidates run only disposable fixtures",
+        "explicit task-specific operator override recorded in Plan vN",
+        "Turning settled product/UX/UI"
           ]
         },
         {
@@ -924,8 +924,8 @@
           "markers": [
             "**Host routes execution.**",
             "task fit",
-            "observed native usage signals only",
-            "responsible primary, actual execution mode and route"
+        "observed usage",
+        "responsible primary, actual execution mode/route"
           ]
         },
         {
@@ -979,8 +979,8 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "The Claude judgment primary owns integrated Claude judgment",
-            "retain its planning, integration and approval duties",
-            "never let a worker replace a primary"
+        "retain its planning, integration, and approval duties",
+        "workers replace no primary"
           ]
         },
         {
@@ -1036,10 +1036,10 @@
           "markers": [
             "Use the concrete selectors",
             "invoke each primary directly",
-            "retain its planning, integration and approval duties",
-            "never let a worker replace a primary",
-            "strongest capable permitted reasoning route",
-            "select each worker's effort for its unit"
+        "retain its planning, integration, and approval duties",
+        "workers replace no primary",
+        "strongest capable permitted reasoning route",
+        "select effort per unit"
           ]
         },
         {
@@ -1118,8 +1118,8 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
-            "observed native usage signal",
-            "unknown stays advisory",
+        "Usage evidence carries source/time",
+        "unknown is advisory",
             "Never infer quota"
           ]
         },

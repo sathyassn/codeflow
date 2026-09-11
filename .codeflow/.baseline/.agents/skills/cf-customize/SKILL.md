@@ -271,15 +271,12 @@ confirms the final content.
   stable role. Run `codeflow doctor --check model-bindings` before proposing an
   override. A failure blocks the selection—never write a raw selector, partially
   apply entries, or silently fall back. Invoke each effective primary directly,
-  leave internal routing to that primary, and apply the candidate versus
-  scoped-qualified contract in `cf-model-orchestrator`'s capability-routing
-  resource. A configured candidate with proven native routing may execute
-  bounded non-design work; configuration, availability, application and scoped
-  qualification remain separate facts. Keep planning, integration, approval,
-  interpretation, and judgment with the responsible primaries. When resource
-  signals affect a route, capture their source, time, harness/account or bucket
-  scope, shared-bucket relationship, exposed remaining/reset and freshness;
-  unknown is advisory unless an explicit hard limit depends on it.
+  leave internal routing to that primary, and follow `cf-model-orchestrator`'s
+  candidate/scoped-qualified contract. Keep configuration, native availability,
+  applied route, and qualification separate; keep planning, integration,
+  approval, interpretation, and judgment with the responsible primaries.
+  Record resource signals per that canonical contract; unknown is advisory
+  unless an explicit hard limit depends on it.
   Configure the research,
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;

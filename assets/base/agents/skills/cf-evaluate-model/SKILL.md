@@ -62,14 +62,11 @@ limits of catalog support in consuming scaffolds.
    canary evidence as a full qualification. For a focused diagnostic, resolve
    `list-cases --pack <pack-id>` and run those cases explicitly. Packs may
    compose other packs, but even `release-smoke` is not a promotion suite.
-   A focused internal-route qualification is a different narrow claim: before
-   launch, register the exact route, harness, selector, effort, workload, cases
-   and comparison arms; run three fresh trials per case/arm and retain every
-   attempt, primary integration, cross-family review, trace, rework and
-   coordination overhead. Any failed acceptance, missing observed application
-   or trace, or unresolved validity threat leaves the route candidate. This may
-   support only the evidenced tuples and never creates a primary binding record,
-   a universal reliability claim, or an economical default.
+   Internal-route qualification pre-registers route/harness/selector/effort/
+   workload tuples and cases/arms; runs three fresh trials each; and retains all
+   attempts, integration, cross-family review, trace, and overhead. Any failure,
+   absent observed route/trace, or validity threat leaves it candidate. It covers
+   evidenced tuples only—not primary binding, universal reliability, or economy.
 4. **Materialize each trial.** Use an explicit temporary run root and the exact
    CodeFlow binary under test:
 

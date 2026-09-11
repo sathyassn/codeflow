@@ -58,22 +58,18 @@ implementation stage for an analysis-only request.
   the primary solution design in its own native interactive session and,
   unless the brief already fixes a clear direction, compares 2–3 viable
   options. For material product, UX, UI, interaction, or visual design, it
-  also applies `cf-design`, settles `DESIGN_INTENT`, and owns real design
-  implementation/execution and fidelity. A candidate design route may run only
-  disposable qualification fixtures; a scoped-qualified Claude route may
-  execute only settled evidenced tuples without changing direction or approving
-  fidelity. The ensemble's recorded same-Claude primary fallback retains Claude
-  authority after native preflight when the preferred primary is unavailable.
-  A Grok or Codex host may pass options and review; it designs a
-  named task only when the operator explicitly records that override in Plan
-  vN—Claude absence alone is not an override. Codex challenges feasibility,
-  operability, security, proportionality, and implementation detail.
+  applies `cf-design`, settles `DESIGN_INTENT`, and owns real design execution
+  and fidelity under capability-routing. Candidates run only disposable
+  fixtures; scoped-qualified routes run evidenced tuples without direction/
+  fidelity authority. Use recorded same-Claude fallback after preflight.
+  Another family designs only with an explicit task-specific operator override
+  recorded in Plan vN—Claude absence is not one. Codex challenges
+  feasibility, operability, security, proportionality, and implementation.
 - **Host routes execution.** Once both approve the same versioned plan, the host
-  assigns every task a responsible primary, actual execution mode and route,
-  and cross-lineage reviewer by task fit, tools/context, independence, verified
-  availability/routing, resources, and observed native usage signals only.
-  Seat/lineage reassignment invalidates approvals; permitted primary-owned
-  internal routing does not.
+  records responsible primary, actual execution mode/route, and cross-lineage
+  reviewer by task fit, tools/context, independence, verified native routing,
+  resources, and observed usage. Seat/lineage reassignment invalidates
+  approvals; permitted primary-owned routing does not.
 - **Review is author-relative.** The actual executor first-verifies its unit;
   the responsible primary inspects and accepts it, and a lineage different from
   the actual author's reviews it independently. Self-review is never independent.
@@ -85,14 +81,12 @@ implementation stage for an analysis-only request.
   primary; its integrated pass is not independent review of its own unit.
 - **Accountable route use.** Use the concrete selectors, default effort and
   typed routes from the ensemble; invoke each primary directly and retain its
-  planning, integration and approval duties. A natively proven candidate may
-  execute bounded non-design work without becoming qualified. Delegate
-  substantial separable routine work when a capable permitted route is
-  available; retain it on the primary only for a concrete exception named in
-  capability-routing. Never infer availability, applied routing, economy or
-  usage, and never let a worker replace a primary or named reviewer. Use the
-  strongest capable permitted reasoning route and direct xhigh when triggered; select
-  each worker's effort for its unit rather than inflating every worker.
+  planning, integration, and approval duties. A natively proven candidate may
+  execute bounded non-design work without qualification. Delegate substantial
+  separable routine work unless capability-routing names a retention exception.
+  Never infer availability, applied route, economy, or usage; workers replace
+  no primary or named reviewer. Use the strongest capable permitted
+  reasoning route, direct xhigh on trigger, and select effort per unit.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -238,14 +232,12 @@ lane: solo fallback. Host is not duty; Claude produces design.
    any design, issue-tracker, database, cloud, or private-doc MCP the task needs.
    Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
    tokens never enter prompts, logs, repository files, or arbitrary commands.
-6. Record models, effort/escalation, permissions, tools, live canaries, and any
-   observed native usage signal used. For usage, retain source, observation
-   time, harness, account/bucket scope, shared-bucket relationship,
-   remaining/reset only when exposed, and freshness. Native status, routing
-   metadata/canaries, and explicit harness errors are admissible; unknown stays
+6. Record models, effort/escalation, permissions, tools, live canaries, and
+   actual versions. Usage evidence carries source/time, harness/account/bucket
+   and shared-bucket scope, exposed remaining/reset, and freshness. Native
+   status, routing canaries, and harness errors are admissible; unknown is
    advisory unless an explicit hard limit depends on it. Never infer quota,
-   availability, applied selection or savings. Record actual versions at run
-   time.
+   availability, applied selection, or savings.
 
 An absent seat at preflight degrades legibly to the harness-native solo
 `/cf-develop` flow with a separate read-only review pass. A mid-run failure
@@ -293,13 +285,12 @@ evidence and do not manufacture replanning ceremony.
 
 ### 3. Detailed tasking
 
-After dual approval, the host expands the agreed plan into ordered tasks using
-the assignment record in `resources/capability-routing.md`, with:
+After dual approval, expand the agreed plan using capability-routing's
+assignment row:
 
 - task id, responsible primary/reviewer seat@effort, execution mode, actual
-  binding-or-route@effort, routing reason, requested-versus-observed routing
-  evidence, available usage evidence with freshness or explicitly `unknown`,
-  and dependencies;
+  binding-or-route@effort, routing reason, requested-versus-observed evidence,
+  available usage evidence with freshness or `unknown`, and dependencies;
 - for multi-step work, the current critical dependency or blocker, resource
   focus, and the evidence event that causes reassessment;
 - files/interfaces expected to change;
@@ -365,17 +356,12 @@ validation is bounded rather than reflexively deferring it. Only uncertain
 secondary observations enter the consolidated deferral batch; work does not
 switch to cosmetic bait while actionable material work remains.
 
-The plan's responsible primary need not author every byte. It delegates
-substantial, well-specified, separable routine implementation, evidence and
-review-support units to a capable permitted route when native routing is proven,
-then inspects, integrates and accepts the return without secretly duplicating
-it. Candidate status permits this bounded non-design execution but proves
-neither qualification nor economy. A tiny warm-context change, inseparable
-unresolved reasoning, material risk, route unavailability or bounded recovery
-may stay on the primary; substantial retention records which exception applies.
-Same-family workers stay owned by their primary. Approved cross-family
-production enters the receiving primary, never its worker directly, and the
-actual authored lineage determines independent review.
+The responsible primary delegates eligible work under capability-routing, then
+inspects, integrates, and accepts it without secretly duplicating it. Candidate
+status permits bounded non-design execution but proves neither qualification
+nor economy. Same-family workers stay primary-owned; cross-family production
+enters the receiving primary, not its worker. Actual authorship determines
+independent review.
 
 For a Claude host, prefer the official plugin for Codex-produced or Codex-reviewed
 units; its qualified native fallback follows `cf-delegate`:
@@ -394,13 +380,10 @@ actual values; otherwise label them requested — a project-level high default i
 a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 
-For any host, each unit stays in its assigned worktree, but execution may occur
-in the host primary, its native worker, or an approved cross-family primary as
-recorded by the assignment contract. Do not infer authorship from the host or
-worktree. The approved reviewer from a lineage different from the actual author's
-independently inspects the unit and its evidence before integration. Workers
-return to their primary seat; workers never approve plans or replace the named
-reviewer.
+Each unit stays in its assigned worktree and uses its recorded primary, worker,
+or approved cross-family primary. Do not infer authorship from host/worktree.
+A lineage different from the actual author's reviews before integration.
+Workers return to their primary and never approve plans or replace reviewers.
 
 ### 5. Cross-lineage review and integrated Claude judgment
 

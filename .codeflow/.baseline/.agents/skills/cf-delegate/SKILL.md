@@ -121,7 +121,7 @@ scoped-qualified and actual-execution contract in
 `../cf-model-orchestrator/resources/capability-routing.md`: a candidate with
 proven native routing may perform bounded non-design work without gaining a
 qualification claim. The responsible primary retains scope, integration,
-acceptance and the final accountable verdict; record the actual executor and
+acceptance and the accountable verdict; record the actual executor and
 authored lineage for review. If `.codeflow/model-selection.json` is nonempty, first require
 `codeflow doctor --check model-bindings` to pass and use only its effective
 qualified override for the active harness.
