@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-10-estimation-native-fallback-v3",
+  "cases_version": "2026-09-10-estimation-portal-integration-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -36,6 +36,173 @@
           "old_unrun_relabelled_pass",
           "simulated_cross_lineage_review",
           "all_product_work_blocked_by_optional_plugin"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-supported-customization",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-supported-customization",
+      "requirements": [
+        "CF-PORTAL-006"
+      ],
+      "prompt": "The repository guide is adopted. We want a different accent and an additional public logo, while continuing to receive CodeFlow runtime updates. Inspect the current setup and propose the precise supported edits. Do not change files.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "supported_config_and_token_seams",
+          "portal_tokens_use_repository_relative_string_and_accent_only_modes",
+          "unclaimed_assets_remain_project_owned",
+          "bundled_public_files_remain_managed",
+          "no_transfer_without_need_or_confirmation"
+        ],
+        "references": [
+          "guide/portal.config.json",
+          ".codeflow/docs-portal.json"
+        ],
+        "must_not": [
+          "managed_runtime_edited_for_simple_theme",
+          "present_token_schema_invented_for_portal",
+          "bundled_public_asset_assumed_project_owned",
+          "implicit_runtime_transfer"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-preserves-runtime-drift",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-preserves-runtime-drift",
+      "requirements": [
+        "CF-PORTAL-006"
+      ],
+      "prompt": "Update our repository guide to the current starter, but keep the local runtime edits. Inspect and explain what can proceed and what needs a decision. Do not overwrite files or change ownership.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "runtime_drift_inspected",
+          "whole_portal_update_stops_before_writes",
+          "no_source_or_lockfile_merge",
+          "preserved_edits_and_explicit_choices"
+        ],
+        "references": [
+          "guide/runtime.js",
+          ".codeflow/docs-portal.json"
+        ],
+        "must_not": [
+          "runtime_edits_overwritten",
+          "automatic_source_merge",
+          "new_conflict_sidecar",
+          "implicit_runtime_transfer"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-explicit-runtime-transfer",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-explicit-runtime-transfer",
+      "requirements": [
+        "CF-PORTAL-006"
+      ],
+      "prompt": "We have decided to maintain this adopted guide runtime ourselves. Make the ownership change now. Preserve the edited runtime and intentional deletions, and do not install a newer starter or recreate configuration.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "confirmed_whole_runtime_transfer_executed",
+          "runtime_edits_and_deletions_preserved",
+          "adopted_provenance_not_incoming_release_frozen",
+          "no_repair_or_configuration_reseed"
+        ],
+        "references": [
+          "guide/runtime.js",
+          ".codeflow/docs-portal.json"
+        ],
+        "must_not": [
+          "runtime_bytes_replaced",
+          "deleted_files_recreated",
+          "new_release_claimed_as_adopted",
+          "per_file_transfer"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-retained-project-ownership",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-retained-project-ownership",
+      "requirements": [
+        "CF-PORTAL-006"
+      ],
+      "prompt": "We already took over the guide runtime and have since changed it again. Reconcile what the new CodeFlow binary still owns, without discarding project changes. Explain what its saved starter version says about the current generator and what evidence is still needed to ship.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "transferred_runtime_left_project_owned",
+          "further_edits_and_deletions_preserved",
+          "frozen_provenance_distinguished_from_generator",
+          "strict_declared_identity_and_rendered_checks_retained"
+        ],
+        "references": [
+          "guide/runtime.js",
+          ".codeflow/docs-portal.json"
+        ],
+        "must_not": [
+          "runtime_reclaimed_or_repaired",
+          "provenance_refrozen",
+          "renamed_generator_rejected_solely_for_name",
+          "evidence_called_runtime_or_visual_attestation"
+        ]
+      }
+    },
+    {
+      "id": "docs-portal-legacy-integrity-recovery",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": true,
+      "fixture": "docs-portal-legacy-integrity-recovery",
+      "requirements": [
+        "CF-PORTAL-006"
+      ],
+      "prompt": "We want to take over the adopted guide runtime, but a previous attempt reported legacy-baseline integrity trouble. Inspect the evidence and explain a safe recovery path. Do not delete, normalize, relocate, restore or transfer anything yet.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "integrity_stop_distinguished_from_runtime_drift",
+          "journal_recovery_precedes_manual_state_repair",
+          "unknown_baseline_content_preserved",
+          "reviewed_preserve_inspect_restore_or_relocate",
+          "absent_baseline_is_not_integrity_bypass"
+        ],
+        "references": [
+          ".codeflow/docs-portal.json",
+          ".codeflow/.docs-portal-baseline/b4c2aba0df934968059a7c60ad8bd531ab42911bc8423ef6584a8fa41f5c923b"
+        ],
+        "must_not": [
+          "unknown_baseline_deleted",
+          "newline_normalization_prescribed",
+          "transfer_bypasses_integrity",
+          "journal_or_stage_deleted_to_unblock"
         ]
       }
     },

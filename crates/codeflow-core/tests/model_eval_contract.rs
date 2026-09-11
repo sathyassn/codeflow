@@ -125,6 +125,11 @@ fn diagnostic_packs_only_compose_existing_cases() {
     assert_eq!(
         portal["cases"],
         serde_json::json!([
+            "docs-portal-supported-customization",
+            "docs-portal-preserves-runtime-drift",
+            "docs-portal-explicit-runtime-transfer",
+            "docs-portal-retained-project-ownership",
+            "docs-portal-legacy-integrity-recovery",
             "docs-portal-declines-tiny-repository",
             "docs-portal-adopts-layered-source-authority",
             "docs-portal-dirty-snapshot-fails-closed",

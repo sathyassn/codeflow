@@ -25,12 +25,19 @@ enum PortalCommand {
         #[arg(long, value_name = "DIR")]
         path: PathBuf,
     },
+    /// Take project ownership, preserving runtime files and intentional deletions.
+    Transfer {
+        /// Confirm responsibility for future runtime reconciliation.
+        #[arg(long, required = true)]
+        confirm: bool,
+    },
 }
 
 pub fn run(args: &PortalArgs, assets: &dyn AssetSource) -> i32 {
     let root = super::repo_root();
     let result = match &args.command {
         PortalCommand::Setup { path } => scaffold::portal::setup_portal(assets, &root, path),
+        PortalCommand::Transfer { confirm } => scaffold::portal::transfer_portal(&root, *confirm),
     };
     match result {
         Ok(report) => {

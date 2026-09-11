@@ -38,11 +38,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Portal customization examples.** Document the portal's repository-relative
+  token path and accent-only light/dark format; do not borrow `cf-present`'s
+  different import schema. Connect custom accents to the actual utility tokens
+  and validate contrast against all reader-selectable skins. Regression checks
+  reject schema mix-ups and verify rendered colors in light/dark appearances.
+
 - **Qualified native transport fallback (ADR-0059).** Prefer the official Codex
   plugin, but allow verified official native clients when it is incompatible.
   Preserve safety, tools and independent-review evidence; distinguish product
   behavior from optional transport qualification instead of blocking unrelated
   delivery. No plugin fork, new broker or permission bypass is introduced.
+
+- **Breaking: explicit portal runtime ownership (ADR-0058).** Managed portal
+  updates replace unchanged files, repair missing managed files, and stop all
+  portal writes on drift or collisions. They no longer line-merge runtime
+  source/lockfiles, create conflict sidecars or retain pristine copies. Use
+  supported configuration, restore reviewed managed bytes, or explicitly run
+  `codeflow portal transfer --confirm` to preserve edits and intentional
+  deletions under project maintenance. Adoption v2 records ownership and
+  generator identity; transferred-from provenance stays frozen. Evidence v1
+  remains strict, including legitimate renamed forks. Legacy journals recover
+  first; unknown or altered baseline content blocks migration and transfer
+  without deletion. See `docs/releasing.md` for safe manual recovery. General
+  scaffold behavior and the portal's visual design are unchanged.
+
 - **High default for development primaries (ADR-0056).** Claude, Codex, and
   catalog Grok primaries now start at high; bounded routine workers may use
   medium, while xhigh remains trigger-driven and owned by the receiving family.

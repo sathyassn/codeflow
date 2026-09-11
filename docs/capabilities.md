@@ -801,10 +801,10 @@ support.
 id: CAP-015
 name: opt-in-documentation-portal
 area: scaffold
-status: building
-verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/"]
-epics: [EPC-005]
-adrs: [ADR-0048]
+status: shipped
+verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
+epics: [EPC-005, EPC-007]
+adrs: [ADR-0048, ADR-0058]
 ```
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
@@ -812,8 +812,14 @@ adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
 portal build requires Node 22.19.0 or newer; the pinned toolchain is Node 26.4.0.
 The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
-ordinary never-clobber updates through opaque content-addressed pristine
-baselines. The source-authority adapter generates disposable pages, Markdown
+replace-only updates without pristine runtime copies or source merges. Runtime
+drift and collisions stop all portal writes; missing project-owned configuration
+remains absent. `codeflow portal transfer --confirm` preserves edits and
+intentional deletions while handing ongoing runtime maintenance to the project.
+V2 adoption state freezes transferred-from provenance and declares the current
+generator identity; v1 evidence stays strict in both ownership modes. Legacy
+journals recover before migration, and unknown or changed baseline content
+blocks both migration and transfer without deletion. The source-authority adapter generates disposable pages, Markdown
 twins, `llms.txt`, search output, and a versioned evidence manifest from one
 clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
 literal bounded Git pathspec batches, committed-blob authority,
@@ -834,6 +840,9 @@ nothing; it independently checks bounded path, hash, complete configured-source
 coverage, exact source-derived identity/relationship, error-page, provenance, version, raster-dimension,
 output-coverage, twin, and
 `llms.txt` claims.
+It compares generator evidence with the declared identity, retaining managed
+release pins but accepting a genuinely renamed transferred generator. Matching
+evidence is not runtime attestation or a substitute for rendered qualification.
 
 The repository-owned full gate runs the complete locked JavaScript authority
 suite, a real Starlight build, and the Rust verifier locally and on Ubuntu; the

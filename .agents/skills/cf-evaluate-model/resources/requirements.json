@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-10-estimation-native-fallback-v3",
+  "requirements_version": "2026-09-10-estimation-portal-integration-v1",
   "requirements": [
     {
       "id": "CF-MM-016",
@@ -13,6 +13,36 @@
             "## One practical qualification",
             "## Preserve the security goal",
             "## Separate the claims"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PORTAL-006",
+      "level": "hard",
+      "statement": "Portal updates preserve local runtime edits through replace-only reconciliation, never source merges or implicit ownership changes. Supported configuration and unclaimed assets remain project-owned; explicit whole-runtime transfer preserves current edits/deletions and freezes adopted provenance without relaxing strict generator evidence, journal-first recovery or legacy-baseline integrity.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/SKILL.md",
+          "markers": [
+            "confirm whole-runtime ownership",
+            "Never transfer merely to clear a failed"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/operations.md",
+          "markers": [
+            "no automatic source merge",
+            "Legacy recovery and migration",
+            "Repeating transfer is a no-op",
+            "do not prescribe deletion or line-ending normalization"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/content-contract.md",
+          "markers": [
+            "Adoption state and emitted evidence are separate formats",
+            "not frozen provenance"
           ]
         }
       ]
@@ -285,7 +315,7 @@
         {
           "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
           "markers": [
-            "the governing idea \u2014 not the fact inventory \u2014 as the thing that must survive",
+            "the governing idea — not the fact inventory — as the thing that must survive",
             "A declared alternate composition is a design decision"
           ]
         },
@@ -593,11 +623,11 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "**IDENTITY** \u2014 establish where you actually are",
-            "**INTENT-MATCH** \u2014 confirm this is the worktree and branch *this task* was assigned",
-            "stop and surface it \u2014 never silently adapt",
+            "**IDENTITY** — establish where you actually are",
+            "**INTENT-MATCH** — confirm this is the worktree and branch *this task* was assigned",
+            "stop and surface it — never silently adapt",
             "never accept name resemblance as a match",
-            "**CURRENCY** \u2014 fetch, then check the base against the repository's configured target branch",
+            "**CURRENCY** — fetch, then check the base against the repository's configured target branch",
             "assignment explicitly calls for creating a worktree",
             "Absence alone never authorizes repair",
             "rerun all three assertions inside the new worktree"
@@ -729,7 +759,7 @@
           "markers": [
             "Never set override envs",
             "never stage credentials",
-            "fix the cause \u2014 never bypass"
+            "fix the cause — never bypass"
           ]
         },
         {
@@ -785,7 +815,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "brief already fixes a clear direction",
-            "2\u20133 viable options",
+            "2–3 viable options",
             "failure modes, security, testing, and maintainability"
           ]
         }
@@ -1422,8 +1452,7 @@
             "same utility design system as `cf-present`",
             "Do not clone the",
             "Apply `cf-design`",
-            "Apply `cf-editorial-review`",
-            "strict-ID previews"
+            "Apply `cf-editorial-review`"
           ]
         },
         {
@@ -1431,6 +1460,13 @@
           "markers": [
             "source-to-route graph",
             "normal links with source-grounded contextual previews"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/operations.md",
+          "markers": [
+            "Experience qualification",
+            "strict-ID previews"
           ]
         }
       ]
@@ -1602,7 +1638,7 @@
           "markers": [
             "JSON is only the handoff format",
             "order of `blocks[]` = order of attention",
-            "5\u2011second picture",
+            "5‑second picture",
             "Choose one primary carrier",
             "Mentally walk the page"
           ]
@@ -1950,8 +1986,8 @@
         {
           "path": ".claude/agents/cf-security-reviewer.md",
           "markers": [
-            "Defender lens \u2014 Claude",
-            "Attacker lens \u2014 a second vendor",
+            "Defender lens — Claude",
+            "Attacker lens — a second vendor",
             "Cross-vendor divergence escalates",
             "severity high / confidence confirmed"
           ]

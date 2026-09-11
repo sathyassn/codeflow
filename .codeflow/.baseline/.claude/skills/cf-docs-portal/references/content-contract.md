@@ -35,6 +35,18 @@
 
 ## Identity and links
 
+Adoption state and emitted evidence are separate formats. Evidence remains
+schema v1. While managed, its generator name is `@codeflow/docs-portal` and its
+version equals both the declared generator version and installed starter
+version. After transfer, the declared generator identity describes the current
+project generator; the starter version and file hashes describe only the
+transferred-from release. A genuinely renamed/versioned fork updates its actual
+generator identity and the declaration together. Evidence must match that
+declaration, not frozen provenance. Names/versions are nonempty and bounded to
+128 UTF-8 bytes; unknown fields and unsupported schemas still fail closed.
+Passing the read-only verifier proves checked claims match bytes, not generator
+attestation, visual quality, security, accessibility or browser behavior.
+
 Accept only project-supported strict IDs such as `CAP-001`, `ADR-001`,
 `EPC-001`, `SPC-001`, and `TSK-001`. Derive each route from its semantic layer
 plus its NFC, portable path relative to the most-specific configured source

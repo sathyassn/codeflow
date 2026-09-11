@@ -1,7 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "root": "docs-portal",
-  "starter_version": "1.0.0",
+  "starter_version": "2.0.0",
+  "runtime_ownership": "managed",
+  "generator": {
+    "name": "@codeflow/docs-portal",
+    "version": "2.0.0"
+  },
   "files": {
     ".gitignore": {
       "ownership": "managed",
@@ -17,11 +22,11 @@
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "8f03a8ea8e12e62f19546a3f54e892c6bb5c1bc8c2113ac7abfa89c3111c44b2"
+      "pristine_sha256": "d51e60df092d1da2bbd6b84c25827e9cea20a636a4d064b6e56be7d05020f339"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "a065ed086bf65cfc49700cb57c6c4e84989e1194eb677dc7b2da6c930e6478ef"
+      "pristine_sha256": "49b97a1e4582dea7005391132ac3c2bbe7385095e780fc3a0c28c4c092678c6b"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -45,11 +50,11 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "fea1d0a8d2c2794a47e4e30cbd66c88363ad5056eb89c61ee04da5b92cd27c28"
+      "pristine_sha256": "3f5b3b539ca545c3a842d0620b7ebe71db47286030fe66f77b5f807783f4dd95"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "90563f6f84642e53aca07b8190332a14027b3f79e3c769ab4de25e93f20627ca"
+      "pristine_sha256": "b87e65ea1f27cc32ddef79df2b2beee648f7878b50469e53b1763abbc12a1d57"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -57,7 +62,11 @@
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "156c4395a250e05c6f0f28d8548248ae518f068f4faaacef70a1507b88d5bf19"
+      "pristine_sha256": "da327049e08b900d1bcbcbe136258eae24b61b7c75edf471bbb43d1fdbec5a99"
+    },
+    "scripts/generator.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "6563479e1d2a792b67ade573e0b189bb15734cb4419864a1caf0c5af861b9942"
     },
     "scripts/git-snapshot.mjs": {
       "ownership": "managed",
@@ -69,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "3f4a68021b5ed9e6fdc1f612973b32e4176ef7700ec1926ab60edf95de2a2fd5"
+      "pristine_sha256": "32d5ca46e3a3fdd5bae355d09fd21838034562d5d42148b5204cdcd883bb2df7"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -133,7 +142,11 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "3aefff6675db0ef229d34f2daf09d4398c58c935dd12573e303023002926c332"
+      "pristine_sha256": "f5cce507a5f914853f11066438a505e0ba9c092972fdf1039355abd3b31ca16d"
+    },
+    "tests/browser-keyboard.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "a3a6d9816c9887c712c86f1392e7b1eb5d1673961a80425d2aa2751a0ff1e4e1"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

@@ -14,10 +14,134 @@ import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnosti
 import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from "../scripts/install-dependencies.mjs";
 import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
+import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
 
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
+
+test("failed fixture initialization removes its owned root and preserves siblings", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "codeflow-fixture-cleanup-"));
+  let allocated;
+  try {
+    const sibling = path.join(parent, "keep.txt");
+    await writeFile(sibling, "unrelated evidence\n");
+    await assert.rejects(initializedFixture(path.join(parent, "owned-"), async (root) => {
+      allocated = root;
+      await writeFile(path.join(root, ".git"), "invalid git directory\n");
+      git(root, ["init", "-q"]);
+    }), /invalid gitfile format/);
+    assert(allocated);
+    await assert.rejects(lstat(allocated), { code: "ENOENT" });
+    assert.equal(await readFile(sibling, "utf8"), "unrelated evidence\n");
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
+test("actual generator identity is bounded, closed and release-pinned", async () => {
+  const packageInfo = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.deepEqual(GENERATOR, { name: packageInfo.name, version: packageInfo.version });
+  const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+  for (const entry of [lock, lock.packages[""]]) {
+    assert.deepEqual(GENERATOR, { name: entry.name, version: entry.version });
+  }
+  assert.doesNotThrow(() => assertGeneratorIdentity({ ...GENERATOR }));
+  for (const value of [null, [], {}, { ...GENERATOR, extra: true },
+    { ...GENERATOR, name: "@project/fork" }, { ...GENERATOR, version: "0.0.0" },
+    { ...GENERATOR, name: " " }, { ...GENERATOR, version: 2 },
+    { ...GENERATOR, name: "é".repeat(65) }]) {
+    assert.throws(() => assertGeneratorIdentity(value), /generator does not match/);
+  }
+});
+
+test("an actual fork identity validates its own UTF-8 bounds before module use", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-generator-identity-"));
+  try {
+    const source = await readFile(new URL("../scripts/generator.mjs", import.meta.url), "utf8");
+    const original = `Object.freeze({ name: "${GENERATOR.name}", version: "${GENERATOR.version}" })`;
+    for (const [index, [identity, accepted]] of [
+      [{ name: " ", version: "2" }, false],
+      [{ name: "é".repeat(65), version: "2" }, false],
+      [{ name: "fork", version: "x".repeat(129) }, false],
+      [{ name: "é".repeat(64), version: "x".repeat(128) }, true],
+    ].entries()) {
+      const changed = source.replace(original, `Object.freeze(${JSON.stringify(identity)})`);
+      assert.notEqual(changed, source);
+      const modulePath = path.join(root, `generator-${index}.mjs`);
+      await writeFile(modulePath, changed);
+      const result = spawnSync(process.execPath, [modulePath], { encoding: "utf8" });
+      assert.equal(result.status === 0, accepted, result.stderr);
+      if (!accepted) assert.match(result.stderr, /generator does not match this runtime/);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a renamed runtime emits its own identity and rejects substituted evidence", async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const identity = {
+      name: GENERATOR.name === "@example/project-guide" ? "@example/alternate-guide" : "@example/project-guide",
+      version: "7.0.0",
+    };
+    assert.notDeepEqual(identity, GENERATOR);
+    const generatorPath = path.join(root, "scripts/generator.mjs");
+    const generatorSource = await readFile(generatorPath, "utf8");
+    await writeFile(generatorPath, generatorSource.replace(
+      `name: "${GENERATOR.name}", version: "${GENERATOR.version}"`,
+      `name: "${identity.name}", version: "${identity.version}"`,
+    ));
+    const packagePath = path.join(root, "package.json");
+    const packageInfo = JSON.parse(await readFile(packagePath, "utf8"));
+    Object.assign(packageInfo, identity);
+    await writeFile(packagePath, `${JSON.stringify(packageInfo, null, 2)}\n`);
+    commitFixture(root, "version project generator");
+    runLocalAdapter(root);
+    const evidencePath = path.join(root, ".portal/generated/evidence.json");
+    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    assert.equal(evidence.schema_version, 1);
+    assert.deepEqual(evidence.generator, identity);
+    evidence.generator = { ...GENERATOR };
+    const forged = `${JSON.stringify(evidence, null, 2)}\n`;
+    await writeFile(evidencePath, forged);
+    const result = spawnSync(process.execPath, [path.join(root, "scripts/evidence.mjs")], { cwd: root, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /generator does not match this runtime/);
+    assert.equal(await readFile(evidencePath, "utf8"), forged);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("managed and forked runtimes render their version in pages, stale stubs and the landing", async () => {
+  for (const [version, renderedVersion] of [
+    ["2.0.0", "2.0.0"],
+    ["7.0.0", "7.0.0"],
+    ['7--><img src=x>&"\r\n', '7--&gt;&lt;img src=x&gt;&amp;&quot;&#13;&#10;'],
+  ]) {
+    const root = await selfContainedPortalFixture();
+    try {
+      const generatorPath = path.join(root, "scripts/generator.mjs");
+      const source = await readFile(generatorPath, "utf8");
+      const currentVersion = `version: ${JSON.stringify(GENERATOR.version)}`;
+      assert(source.includes(currentVersion));
+      await writeFile(generatorPath, source.replace(currentVersion, `version: ${JSON.stringify(version)}`));
+      await writeFile(path.join(root, "docs/broken.md"), "---\ntitle: [broken\n---\n");
+      commitFixture(root, "exercise rendered generator provenance");
+      runLocalAdapter(root);
+      const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+      assert.equal(evidence.generator.version, version);
+      assert.equal(evidence.pages.length, 2);
+      assert.equal(evidence.pages.filter((page) => page.stale).length, 1);
+      for (const page of evidence.pages) {
+        const rendered = await readFile(path.join(root, "src/content/docs", `${page.route}.md`), "utf8");
+        const marker = `<!-- codeflow-page-provenance source_sha256=${page.source_sha256} built_from_commit=${evidence.repository.commit} portal_version=${renderedVersion} release_version=none -->`;
+        assert(rendered.split("\n").includes(marker), rendered);
+        assert(rendered.includes(` · portal <code>${renderedVersion}</code>`), rendered);
+        assert(!rendered.includes("<img"), rendered);
+      }
+      const landing = await readFile(path.join(root, "src/content/docs/index.md"), "utf8");
+      assert(landing.includes(` · portal <code>${renderedVersion}</code>`), landing);
+      assert(!landing.includes("<img"), landing);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
 
 test("semantic route fixtures stay in parity with the Rust validator", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/route-contract.json", import.meta.url), "utf8"));
@@ -491,6 +615,11 @@ test("portal configuration is closed, bounded, and deeply typed", () => {
     { id: "reference", label: "Reference", description: "Other", fallback: true },
   ], base: "/" };
   assert.equal(validatePortalConfig(valid), valid);
+  const withTokens = { ...valid, primitive_tokens: "guide/primitive-tokens.json" };
+  assert.equal(validatePortalConfig(withTokens), withTokens);
+  for (const primitive_tokens of [{ path: "guide/primitive-tokens.json" }, "/tokens.json", "../tokens.json"]) {
+    assert.throws(() => validatePortalConfig({ ...valid, primitive_tokens }), /primitive_tokens/);
+  }
   assert.throws(() => validatePortalConfig({ ...valid, allow_html: true }), /unknown key/);
   assert.throws(() => validatePortalConfig({ ...valid, source_roots: "docs" }), /source_roots/);
   assert.throws(() => validatePortalConfig({ ...valid, repository_url: "https://user:secret@example.com/repo" }), /credentials/);
@@ -501,6 +630,25 @@ test("primitive-token influence is narrow, closed, and contrast checked", () => 
   assert.deepEqual(validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "signal"), { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } });
   assert.throws(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#ffffff" }, dark: { accent: "#72e2cf" } }, "signal"), /contrast/);
   assert.throws(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56", font: "Product" }, dark: { accent: "#72e2cf" } }, "signal"), /exactly one/);
+  assert.throws(() => validatePrimitiveTokens({ schema_version: 1, colors: { light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } } }, "signal"), /exactly schema_version, light, and dark/);
+  assert.doesNotThrow(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "folio"));
+  // These passed the old approximate theme surfaces, but not the actual
+  // reader-selectable surface/selected-background combinations.
+  for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#636363"]]) {
+    const tokens = { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" }, [mode]: { accent } };
+    assert.throws(() => validatePrimitiveTokens(tokens, "signal"), /contrast/);
+  }
+});
+
+test("documented public logo uses source-relative supported media", () => {
+  const mediaReferences = new Map();
+  const options = { sourcePath: "docs/product.md", sourceRoutes: new Map(), base: "/guide/", strictTargets: new Map(), mediaReferences };
+  const rendered = rewriteRepositoryMarkdown("![Repository logo](../guide/public/brand/logo.png)", options);
+  assert.match(rendered, /!\[Repository logo\]\(\/guide\/media\/[a-f0-9]{16}-logo\.png\)/);
+  assert.equal(mediaReferences.size, 1);
+  assert.ok(mediaReferences.has("guide/public/brand/logo.png"));
+  assert.throws(() => rewriteRepositoryMarkdown("![Repository logo](/brand/logo.png)", options), /unsupported Markdown URL/);
+  assert.throws(() => rewriteRepositoryMarkdown("![Repository logo](../guide/public/brand/logo.svg)", options), /unsupported local media type/);
 });
 
 test("source excerpts skip metadata, comments, headings, and example fences", () => {
@@ -1858,66 +2006,80 @@ test("the AST adapter fails broken documents and repository traversal", async ()
 });
 
 async function portalFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-adapter-"));
-  await mkdir(path.join(root, ".codeflow"));
-  await mkdir(path.join(root, "docs"));
-  await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-  await writeFile(path.join(root, "portal.config.json"), `${JSON.stringify({
-    schema_version: 1,
-    title: "Fixture",
-    description: "Adapter fixture",
-    theme: "signal",
-    repository_url: null,
-    repository_root: ".",
-    release_version: null,
-    primitive_tokens: null,
-    source_roots: ["docs"],
-    exclude: [],
-    layers: [
-      { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-      { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-      { id: "reference", label: "Reference", description: "Reference", fallback: true },
-    ],
-    base: "/",
-  }, null, 2)}\n`);
-  git(root, ["init", "-q"]);
-  git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-  git(root, ["config", "user.name", "CodeFlow portal tests"]);
-  commitFixture(root, "initialize fixture");
-  return root;
+  return initializedFixture(path.join(os.tmpdir(), "codeflow-portal-adapter-"), async (root) => {
+    await mkdir(path.join(root, ".codeflow"));
+    await mkdir(path.join(root, "docs"));
+    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
+    await writeFile(path.join(root, "portal.config.json"), `${JSON.stringify({
+      schema_version: 1,
+      title: "Fixture",
+      description: "Adapter fixture",
+      theme: "signal",
+      repository_url: null,
+      repository_root: ".",
+      release_version: null,
+      primitive_tokens: null,
+      source_roots: ["docs"],
+      exclude: [],
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      base: "/",
+    }, null, 2)}\n`);
+    git(root, ["init", "-q"]);
+    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+    git(root, ["config", "user.name", "CodeFlow portal tests"]);
+    commitFixture(root, "initialize fixture");
+  });
 }
 
 async function selfContainedPortalFixture() {
-  const root = await mkdtemp(path.join(starterRoot, ".portal-test-runtime-"));
-  for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
-    await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
-  }
-  await mkdir(path.join(root, ".codeflow"));
-  await mkdir(path.join(root, "docs"));
-  await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-  const configPath = path.join(root, "portal.config.json");
-  const config = JSON.parse(await readFile(configPath, "utf8"));
-  Object.assign(config, {
-    repository_root: ".",
-    source_roots: ["docs"],
-    exclude: [],
-    primitive_tokens: null,
-    repository_url: null,
-    release_version: null,
-    layers: [
-      { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-      { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-      { id: "reference", label: "Reference", description: "Reference", fallback: true },
-    ],
-    base: "/",
+  return initializedFixture(path.join(starterRoot, ".portal-test-runtime-"), async (root) => {
+    for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
+      await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
+    }
+    await mkdir(path.join(root, ".codeflow"));
+    await mkdir(path.join(root, "docs"));
+    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    Object.assign(config, {
+      repository_root: ".",
+      source_roots: ["docs"],
+      exclude: [],
+      primitive_tokens: null,
+      repository_url: null,
+      release_version: null,
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      base: "/",
+    });
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
+    git(root, ["init", "-q"]);
+    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
+    git(root, ["config", "user.name", "CodeFlow portal tests"]);
+    commitFixture(root, "initialize self-contained fixture");
   });
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
-  git(root, ["init", "-q"]);
-  git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-  git(root, ["config", "user.name", "CodeFlow portal tests"]);
-  commitFixture(root, "initialize self-contained fixture");
-  return root;
+}
+
+async function initializedFixture(prefix, initialize) {
+  const root = await mkdtemp(prefix);
+  try {
+    await initialize(root);
+    return root;
+  } catch (error) {
+    try { await rm(root, { recursive: true, force: true }); }
+    catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Fixture initialization and owned-root cleanup failed");
+    }
+    throw error;
+  }
 }
 
 function commitFixture(root, message, allowEmpty = false) {

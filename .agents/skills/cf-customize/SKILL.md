@@ -285,6 +285,13 @@ confirms the final content.
   project-owned content, and run one light/dark accessibility canary. Never
   import product CSS, components, classes, frameworks, font files, paths, or
   runtime dependencies; never make the utility's defaults product authority.
+- **Repository guide** — use `cf-docs-portal` when durable sources justify a
+  layered guide. Confirm adoption separately from customization. Use supported
+  config/token seams; preserve managed-runtime edits and missing project files.
+  Bespoke runtime changes require explicit whole-runtime transfer, not a source
+  merge or automatic abandonment of updates. Read the skill's operations
+  reference before legacy migration or recovery; no portal is installed merely
+  because setup or customization was requested.
 - **Product and design direction** — for projects with user-facing surfaces,
   locate the product brief, audience/user research, operator-approved
   references, brand guidance, design-system source, platform conventions, and

@@ -1,4 +1,4 @@
-//! Pin reads anchored by directory handles, without changing portal semantics.
+//! Pin reads and shared directory traversal anchored by held handles.
 //!
 //! The root must already be canonical and absolute. Traversal rejects symlinks
 //! and Windows reparse points (including mounted-folder reparse points), and
@@ -10,13 +10,56 @@ use std::fs::File;
 use std::io;
 use std::path::{Component, Path};
 
+#[cfg(windows)]
+pub(crate) mod windows;
+
 pub(crate) struct ConfinedRoot {
     #[cfg(unix)]
     directory: File,
     #[cfg(windows)]
-    root: std::path::PathBuf,
+    ancestors: Vec<File>,
+}
+
+/// A directory selected by no-follow traversal. Portal transaction mutations
+/// reuse this anchor; they do not reopen reconstructed Unix ancestor paths.
+pub(crate) struct ConfinedDirectory {
+    #[cfg(unix)]
+    pub(crate) file: File,
     #[cfg(windows)]
-    _ancestors: Vec<File>,
+    pub(crate) ancestors: Vec<File>,
+}
+
+impl ConfinedDirectory {
+    pub(crate) fn enter(&mut self, name: &std::ffi::OsStr) -> io::Result<()> {
+        if Path::new(name).components().count() != 1
+            || !matches!(
+                Path::new(name).components().next(),
+                Some(Component::Normal(_))
+            )
+        {
+            return Err(invalid());
+        }
+        #[cfg(unix)]
+        {
+            self.file = open_at(&self.file, name, true)?;
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
+            };
+            let file = windows::open_relative(
+                self.ancestors.last().ok_or_else(invalid)?,
+                name,
+                FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
+                FILE_OPEN,
+                Some(true),
+            )?;
+            self.ancestors.push(file);
+        }
+        Ok(())
+    }
 }
 
 fn invalid() -> io::Error {
@@ -24,6 +67,36 @@ fn invalid() -> io::Error {
 }
 
 impl ConfinedRoot {
+    pub(crate) fn directory(&self, relative: &Path) -> io::Result<ConfinedDirectory> {
+        #[cfg(unix)]
+        let mut directory = ConfinedDirectory {
+            file: self.directory.try_clone()?,
+        };
+        #[cfg(windows)]
+        let mut directory = ConfinedDirectory {
+            ancestors: self
+                .ancestors
+                .iter()
+                .map(File::try_clone)
+                .collect::<io::Result<_>>()?,
+        };
+        #[cfg(any(unix, windows))]
+        {
+            for component in relative.components() {
+                let Component::Normal(name) = component else {
+                    return Err(invalid());
+                };
+                directory.enter(name)?;
+            }
+            Ok(directory)
+        }
+        #[cfg(not(any(unix, windows)))]
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confined directories unsupported",
+        ))
+    }
+
     pub(crate) fn open(root: &Path) -> io::Result<Self> {
         if !root.is_absolute()
             || root
@@ -51,16 +124,25 @@ impl ConfinedRoot {
         #[cfg(windows)]
         {
             let mut path = std::path::PathBuf::new();
-            let mut ancestors = Vec::new();
+            let mut directory = ConfinedDirectory {
+                ancestors: Vec::new(),
+            };
             for component in root.components() {
-                path.push(component);
-                if matches!(component, Component::RootDir | Component::Normal(_)) {
-                    ancestors.push(open_locked(&path, true)?);
+                match component {
+                    Component::Prefix(_) => path.push(component),
+                    Component::RootDir => {
+                        path.push(component);
+                        directory.ancestors.push(open_locked(&path, true)?);
+                    }
+                    Component::Normal(name) => directory.enter(name)?,
+                    _ => return Err(invalid()),
                 }
             }
+            if directory.ancestors.is_empty() {
+                return Err(invalid());
+            }
             Ok(Self {
-                root: root.to_path_buf(),
-                _ancestors: ancestors,
+                ancestors: directory.ancestors,
             })
         }
         #[cfg(not(any(unix, windows)))]
@@ -90,32 +172,29 @@ impl ConfinedRoot {
         }
         #[cfg(unix)]
         {
-            let mut parent = self.directory.try_clone()?;
-            for component in &components[..components.len() - 1] {
-                parent = open_at(&parent, component.as_os_str(), true)?;
-            }
+            let parent = self.directory(relative.parent().ok_or_else(invalid)?)?;
             let leaf = components.last().ok_or_else(invalid)?.as_os_str();
-            let file = open_at(&parent, leaf, false)?;
+            let file = open_at(&parent.file, leaf, false)?;
             super::read_opened_regular(file, maximum_bytes, after_open, || {
-                let linked = open_at(&parent, leaf, false)?;
+                let linked = open_at(&parent.file, leaf, false)?;
                 Ok((linked.metadata()?, same_file::Handle::from_file(linked)?))
             })
         }
         #[cfg(windows)]
         {
-            let mut path = self.root.clone();
-            let mut ancestors = Vec::new();
-            for component in &components[..components.len() - 1] {
-                path.push(component);
-                ancestors.push(open_locked(&path, true)?);
-            }
-            path.push(components.last().ok_or_else(invalid)?);
-            let file = open_locked(&path, false)?;
+            use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN;
+            use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+            let parent = self.directory(relative.parent().ok_or_else(invalid)?)?;
+            let handle = parent.ancestors.last().ok_or_else(invalid)?;
+            let leaf = components.last().ok_or_else(invalid)?.as_os_str();
+            let open =
+                || windows::open_relative(handle, leaf, FILE_GENERIC_READ, FILE_OPEN, Some(false));
+            let file = open()?;
             let result = super::read_opened_regular(file, maximum_bytes, after_open, || {
-                let linked = open_locked(&path, false)?;
+                let linked = open()?;
                 Ok((linked.metadata()?, same_file::Handle::from_file(linked)?))
             });
-            drop(ancestors);
+            drop(parent);
             result
         }
         #[cfg(not(any(unix, windows)))]

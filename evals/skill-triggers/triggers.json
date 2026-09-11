@@ -3,6 +3,19 @@
   "notes": "Organic prompts for description-trigger checks. Grade by whether the named skill description should match, not by agent self-report. Negatives must share non-scent description words and omit the skill's scent.",
   "skills": [
     {
+      "id": "cf-docs-portal",
+      "scent": ["portal", "guide", "documentation"],
+      "should_trigger": [
+        "Transfer ownership of the adopted documentation portal",
+        "Build source-linked documentation views for our repository guide",
+        "Update and verify the optional repository portal"
+      ],
+      "should_not_trigger": [
+        "Design product UI for a consuming repository",
+        "Edit an ordinary Markdown file with no layered views"
+      ]
+    },
+    {
       "id": "cf-estimate",
       "scent": ["agentic", "estimation", "estimates", "forecasts", "capacity", "deadlines"],
       "should_trigger": [

@@ -382,7 +382,21 @@ fn portal_dogfood_runtime_matches_the_shipped_starter() {
     let starter = root.join("assets/docs-portal/starter");
     let dogfood = root.join("docs-portal");
     let mut problems = Vec::new();
-    for source in walk_files(&starter) {
+    // Match the exact dependency-tree exclusion in EmbeddedAssets without
+    // excluding any authored starter file or weakening the parity inventory.
+    let sources: Vec<PathBuf> = std::fs::read_dir(&starter)
+        .expect("starter directory is readable")
+        .map(|entry| entry.expect("starter entry is readable").path())
+        .filter(|path| path.file_name().is_none_or(|name| name != "node_modules"))
+        .flat_map(|path| {
+            if path.is_dir() {
+                walk_files(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect();
+    for source in sources {
         let relative = rel(&starter, &source);
         if relative == "portal.config.json" {
             continue;
@@ -406,18 +420,37 @@ fn portal_dogfood_runtime_matches_the_shipped_starter() {
 }
 
 #[test]
-fn portal_skill_names_collision_safe_conflict_sidecars() {
+fn portal_skill_preserves_explicit_ownership_and_integrity_contracts() {
     let skill = std::fs::read_to_string(
         repo_root().join("assets/base/agents/skills/cf-docs-portal/SKILL.md"),
     )
     .expect("canonical portal skill is readable");
+    let operations = std::fs::read_to_string(
+        repo_root().join("assets/base/agents/skills/cf-docs-portal/references/operations.md"),
+    )
+    .expect("portal operations are readable");
+    for marker in [
+        "there is no source merge",
+        "confirm whole-runtime ownership",
+        "Never transfer merely",
+    ] {
+        assert!(skill.contains(marker), "portal skill lost duty: {marker}");
+    }
+    for marker in [
+        "journal before full adoption-state parsing",
+        "stops the new migration or transfer before publication",
+        "restore exact reviewed bytes",
+        "Empty reserved directories are removed without",
+        "Chromium, Firefox and WebKit",
+    ] {
+        assert!(
+            operations.contains(marker),
+            "portal operations lost duty: {marker}"
+        );
+    }
     assert!(
-        skill.contains("<path>.codeflow-<hash>.new"),
-        "portal skill must name the collision-safe conflict-sidecar contract"
-    );
-    assert!(
-        !skill.contains("reported `.new` conflict"),
-        "portal skill must not regress to the ambiguous legacy sidecar name"
+        !skill.contains("<path>.codeflow-<hash>.new"),
+        "portal skill must not prescribe retired sidecars"
     );
 }
 

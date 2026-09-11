@@ -416,10 +416,20 @@ design-exploration board.
 The optional documentation portal is a separate managed bundle, not part of
 that default scaffold. One starter source lives under `assets/docs-portal/`
 and is embedded in the binary. `codeflow portal setup --path <dir>` explicitly
-adopts it and records its root, version, ownership, pristine hashes, and opaque
-content-addressed baselines in `.codeflow/`; ordinary `codeflow update` then
-reconciles it by the same never-clobber semantics. A non-adopter receives no
-portal directory, Node workspace, lockfile, or baseline. The project-owned
+adopts it and records its root, release, hashes, whole-runtime ownership and
+declared generator identity in `.codeflow/docs-portal.json`. Managed setup/update
+replaces unchanged files and repairs missing managed files in one planned
+transaction; drift, collisions and edited retirement stop every portal write.
+Project-owned configuration is never reseeded after adoption. There are no
+pristine runtime copies, source merges or new sidecars. Explicit confirmed
+whole-runtime transfer preserves current edits/deletions and freezes adopted
+release/hash provenance; subsequent updates leave that runtime project-owned.
+The shared strict v1/v2 state parser and held-parent transaction I/O are reused
+by setup, transfer and recovery. Legacy journals recover before full state
+parsing; only authenticated legacy blobs are transactionally removed. Unknown
+or changed baseline content stops both migration and transfer. General scaffold
+merging remains separate (ADR-0058). A non-adopter receives no portal directory,
+Node workspace, lockfile or baseline. The project-owned
 configuration names authoritative source Markdown; the exact-pinned Node adapter
 is the sole author of disposable Starlight content, Pagefind output, Markdown
 twins, `llms.txt`, and a bounded evidence manifest. It accepts only one clean
@@ -449,7 +459,12 @@ graph, search, previews, and current-content indexes; history is never walked
 or republished. `codeflow validate --portal <dir>` is a read-only Rust verifier
 over those byte claims—including portable paths, configured-tree coverage,
 exact source-derived graph edges, bounded raster dimensions, and error-page exclusion—and never executes
-or rewrites installed project code (ADR-0048).
+or rewrites installed project code. Evidence remains schema v1: the shared
+Node generator identity is compared against the v2 declaration by Rust, with
+managed release pins and legitimate transferred-fork identities treated
+distinctly. Frozen starter provenance is never confused with current fork
+identity. ADR-0048's unaffected authority/rendering/budget decisions remain in
+force under ADR-0058.
 
 ### docs — `docs/`
 

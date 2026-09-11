@@ -65,6 +65,11 @@
       "description": "Focused diagnostics for proportional adoption, source authority, snapshot provenance, contextual previews, utility isolation, and adopted-portal lifecycle gates.",
       "includes": [],
       "cases": [
+        "docs-portal-supported-customization",
+        "docs-portal-preserves-runtime-drift",
+        "docs-portal-explicit-runtime-transfer",
+        "docs-portal-retained-project-ownership",
+        "docs-portal-legacy-integrity-recovery",
         "docs-portal-declines-tiny-repository",
         "docs-portal-adopts-layered-source-authority",
         "docs-portal-dirty-snapshot-fails-closed",

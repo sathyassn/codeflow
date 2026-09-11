@@ -1,6 +1,6 @@
 ---
 name: cf-docs-portal
-description: Adopt, configure, build, update, or verify the optional CodeFlow documentation portal for a consuming repository. Use when a project asks for a layered repository guide, browsable technical documentation, source-linked conceptual and implementation views, machine-readable Markdown twins or llms.txt, or maintenance of an already adopted portal. Do not use for product UI design, a transient response surface, or ordinary Markdown-only documentation.
+description: Adopt, configure, build, update, transfer, or verify the optional CodeFlow documentation portal for a consuming repository. Use when a project asks for a layered repository guide, browsable technical documentation, source-linked views, Markdown twins or llms.txt, or maintenance and ownership of an adopted portal. Do not use for product UI design, a transient response surface, or ordinary Markdown-only documentation.
 ---
 
 # cf-docs-portal — repository guide utility
@@ -48,10 +48,12 @@ codeflow portal setup --path <repository-relative-directory>
 
 The command works offline from the CodeFlow binary, writes the starter only at
 the chosen path, and records adoption in `.codeflow/docs-portal.json`.
-Non-adopters receive no Node workspace or lockfile. Repeated setup and ordinary
-`codeflow update` reconcile managed starter files without clobbering project
-changes; resolve any reported `<path>.codeflow-<hash>.new` conflict sidecar
-deliberately.
+Non-adopters receive no Node workspace or lockfile; dependency installation is a
+separate operation. Repeated setup and ordinary `codeflow update` replace only
+unchanged managed files. Local runtime edits stop the entire portal update;
+there is no source merge, conflict sidecar or implicit transfer. Other scaffold
+changes may still proceed. Read [references/operations.md](references/operations.md)
+before resolving drift, migrating legacy state or changing ownership.
 
 ## 2. Configure source-in-place
 
@@ -60,6 +62,18 @@ source roots, exclusions, title, description, base path, and utility theme.
 Do not copy prose into a portal-only content authority. Generated
 content under `.portal/generated/`, generated Starlight content, search data,
 and build output are disposable.
+
+Use the supported configuration/token seams and additional assets at unclaimed
+paths; [supported customization](references/operations.md#supported-customization)
+specifies the portal's own token schema and path resolution. Bundled files
+remain managed even under `public/`. After adoption,
+missing project-owned configuration stays absent and is reported, not reseeded.
+For bespoke runtime or layout changes, explain the ongoing maintenance cost and
+confirm whole-runtime ownership before `codeflow portal transfer --confirm`.
+Transfer preserves current edits and intentional deletions; later setup/update
+does not upgrade or repair that runtime. Never transfer merely to clear a failed
+update. Keep valid evidence, dependency review and rendered-quality checks after
+transfer; ownership is not a validation exemption.
 
 Read
 [references/information-architecture.md](references/information-architecture.md)
@@ -143,32 +157,11 @@ design fidelity, or Pagefind behavior from the manifest alone.
 
 ## 5. Verify the experience
 
-Map checks to the accepted intent and affected journeys. At minimum for a
-material portal change, verify:
-
-- locked build, deterministic adapter tests, and the Rust evidence verifier;
-- navigation, search, source links, Markdown twins, `llms.txt`, error handling,
-  strict-ID previews (hover, focus, touch, keyboard, Escape, and ordinary link
-  navigation), and empty/tiny/monorepo fixtures as applicable;
-- keyboard order, focus visibility, semantics, contrast, target size, zoom,
-  reduced motion, and responsive behavior against WCAG 2.2 AA;
-- both fallback themes in light and dark mode, including persisted preference
-  with no incorrect-mode flash;
-- Chromium, Firefox, and WebKit journeys when available, with unavailable
-  platform evidence reported rather than inferred;
-- task-owned browser state, ports, test data, traces, and screenshots, followed
-  by verified resource cleanup.
-
-`npm run browser:verify` is the reusable headless default: a task-owned
-loopback preview under the workflow lease; journeys, routes, and search terms
-derived from validated configuration and generated evidence; Chromium,
-Firefox, and WebKit in sequence with separate temporary profiles; WCAG 2.2 AA axe
-rules plus the §5 journeys, console failures, and remote requests; bounded
-hashed screenshot/trace evidence and verified server and profile teardown
-(mechanics and identity binding: `references/operations.md`). Set a unique
-`PORTAL_BROWSER_RUN` for concurrent tasks. Use a headed task-owned browser only
-for a finding the headless run cannot settle, never the operator's profile or
-view.
+Map checks to accepted intent and affected journeys. Before acceptance, read
+[operations: experience qualification](references/operations.md#experience-qualification)
+for the required browser, accessibility, theme, navigation and cleanup matrix.
+`npm run browser:verify` is the reusable isolated headless default, not an
+excuse to skip rendered judgment. Missing platform evidence stays unverified.
 
 The directly invoked Claude judgment primary reviews the rendered experience,
 content hierarchy, and source fidelity. Codex verifies implementation,

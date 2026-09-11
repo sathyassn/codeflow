@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "files": [
     { "path": ".gitignore", "ownership": "managed" },
     { "path": ".node-version", "ownership": "managed" },
@@ -16,6 +16,7 @@
     { "path": "scripts/browser-verify.mjs", "ownership": "managed" },
     { "path": "scripts/child-lifecycle.mjs", "ownership": "managed" },
     { "path": "scripts/evidence.mjs", "ownership": "managed" },
+    { "path": "scripts/generator.mjs", "ownership": "managed" },
     { "path": "scripts/git-snapshot.mjs", "ownership": "managed" },
     { "path": "scripts/install-dependencies.mjs", "ownership": "managed" },
     { "path": "scripts/lib.mjs", "ownership": "managed" },
@@ -35,6 +36,7 @@
     { "path": "src/styles/portal.css", "ownership": "managed" },
     { "path": "src/styles/utility-tokens.css", "ownership": "managed" },
     { "path": "tests/adapter.test.mjs", "ownership": "managed" },
+    { "path": "tests/browser-keyboard.test.mjs", "ownership": "managed" },
     { "path": "tests/fixtures/authority-contract.json", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tsconfig.json", "ownership": "managed" }
