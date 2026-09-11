@@ -1,10 +1,11 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "policy_id": "claude-codex-duo",
   "standing_roles": [
     "claude-judgment-primary",
     "codex-engineering-primary"
   ],
+  "design_execution_owner": "claude-judgment-primary",
   "bindings": [
     {
       "role": "claude-judgment-primary",
@@ -27,29 +28,95 @@
       ],
       "internal_routes": [
         {
+          "route_id": "fable-high-reasoning",
           "model_class": "latest-fable",
-          "effort": "high",
+          "native_selectors": {
+            "claude-code": "fable"
+          },
+          "efforts": ["high"],
+          "default_effort": "high",
+          "workloads": ["reasoning"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: Fable at high for complex in-family worker work; the high primary stays the orchestrator"
         },
         {
+          "route_id": "fable-xhigh-reasoning",
           "model_class": "latest-fable",
-          "effort": "xhigh",
+          "native_selectors": {
+            "claude-code": "fable"
+          },
+          "efforts": ["xhigh"],
+          "default_effort": "xhigh",
+          "workloads": ["reasoning"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: Fable at xhigh when high stalls or an xhigh_trigger applies; judgment stays with the primary"
         },
         {
+          "route_id": "opus-medium-evidence",
           "model_class": "latest-opus",
-          "effort": "medium",
+          "native_selectors": {
+            "claude-code": "opus"
+          },
+          "efforts": ["medium"],
+          "default_effort": "medium",
+          "workloads": ["evidence"],
+          "status": "candidate",
+          "evidence": [],
           "use": "bounded deterministic tool or UI evidence collection"
         },
         {
+          "route_id": "opus-high-tool-work",
           "model_class": "latest-opus",
-          "effort": "high",
+          "native_selectors": {
+            "claude-code": "opus"
+          },
+          "efforts": ["high"],
+          "default_effort": "high",
+          "workloads": ["evidence", "review-support"],
+          "status": "candidate",
+          "evidence": [],
           "use": "ambiguous or multi-step tool operation without transferring judgment"
         },
         {
+          "route_id": "opus-high-implementation",
           "model_class": "latest-opus",
-          "effort": "xhigh",
-          "use": "recorded Claude fallback if Fable is unavailable (credits/rate-limit), without transferring primary judgment; not the high-effort substitute for Fable"
+          "native_selectors": {
+            "claude-code": "opus"
+          },
+          "efforts": ["high"],
+          "default_effort": "high",
+          "workloads": ["implementation"],
+          "status": "candidate",
+          "evidence": [],
+          "use": "bounded non-design implementation under Fable primary review and acceptance"
+        },
+        {
+          "route_id": "opus-design-implementation-pilot",
+          "model_class": "latest-opus",
+          "native_selectors": {
+            "claude-code": "opus"
+          },
+          "efforts": ["high"],
+          "default_effort": "high",
+          "workloads": ["design-implementation"],
+          "status": "candidate",
+          "evidence": [],
+          "use": "controlled disposable design-implementation qualification fixtures only; real product design stays with the Fable primary until this route is scoped-qualified"
+        },
+        {
+          "route_id": "opus-xhigh-reasoning",
+          "model_class": "latest-opus",
+          "native_selectors": {
+            "claude-code": "opus"
+          },
+          "efforts": ["xhigh"],
+          "default_effort": "xhigh",
+          "workloads": ["reasoning"],
+          "status": "candidate",
+          "evidence": [],
+          "use": "candidate in-family reasoning route; the documented explicit Opus degraded primary fallback remains separate from worker qualification"
         }
       ]
     },
@@ -74,24 +141,60 @@
       ],
       "internal_routes": [
         {
+          "route_id": "astra-high-reasoning",
           "model_class": "latest-astra-coding",
-          "effort": "high",
+          "native_selectors": {
+            "codex-app": "gpt-6-astra",
+            "codex-cli": "gpt-6-astra"
+          },
+          "efforts": ["high"],
+          "default_effort": "high",
+          "workloads": ["reasoning", "implementation"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: Astra at high for complex in-family worker work; the high primary stays the orchestrator"
         },
         {
+          "route_id": "astra-xhigh-reasoning",
           "model_class": "latest-astra-coding",
-          "effort": "xhigh",
+          "native_selectors": {
+            "codex-app": "gpt-6-astra",
+            "codex-cli": "gpt-6-astra"
+          },
+          "efforts": ["xhigh"],
+          "default_effort": "xhigh",
+          "workloads": ["reasoning", "implementation"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: Astra at xhigh when high stalls or an xhigh_trigger applies; judgment stays with the primary"
         },
         {
-          "model_class": "qualified-sol-worker",
-          "effort": "medium-or-high",
-          "use": "bounded work through observed native routing; also the recorded fallback primary selector if Astra cannot run"
+          "route_id": "sol-bounded-execution",
+          "model_class": "latest-sol",
+          "native_selectors": {
+            "codex-app": "gpt-5.6-sol",
+            "codex-cli": "gpt-5.6-sol"
+          },
+          "efforts": ["medium", "high"],
+          "default_effort": "high",
+          "workloads": ["reasoning", "implementation", "evidence", "review-support"],
+          "status": "candidate",
+          "evidence": [],
+          "use": "bounded candidate work through explicit native routing; the documented explicit Sol degraded primary fallback remains separate from worker qualification"
         },
         {
-          "model_class": "qualified-terra-worker",
-          "effort": "medium-or-high",
-          "use": "simple bounded work through observed native routing"
+          "route_id": "terra-simple-execution",
+          "model_class": "latest-terra",
+          "native_selectors": {
+            "codex-app": "gpt-5.6-terra",
+            "codex-cli": "gpt-5.6-terra"
+          },
+          "efforts": ["medium", "high"],
+          "default_effort": "medium",
+          "workloads": ["implementation", "evidence"],
+          "status": "candidate",
+          "evidence": [],
+          "use": "simple bounded candidate work through explicit native routing"
         }
       ]
     },
@@ -115,18 +218,42 @@
       ],
       "internal_routes": [
         {
+          "route_id": "grok-medium-execution",
           "model_class": "latest-grok-coding",
-          "effort": "medium",
+          "native_selectors": {
+            "grok-cli": "grok-4.6"
+          },
+          "efforts": ["medium"],
+          "default_effort": "medium",
+          "workloads": ["reasoning", "implementation", "review-support"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: grok-4.6 at medium for ordinary in-family sub-agent work; vendor-internal routers are not this policy"
         },
         {
+          "route_id": "grok-high-execution",
           "model_class": "latest-grok-coding",
-          "effort": "high",
+          "native_selectors": {
+            "grok-cli": "grok-4.6"
+          },
+          "efforts": ["high"],
+          "default_effort": "high",
+          "workloads": ["reasoning", "implementation", "review-support"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; the high primary stays the orchestrator"
         },
         {
+          "route_id": "grok-xhigh-reasoning",
           "model_class": "latest-grok-coding",
-          "effort": "xhigh",
+          "native_selectors": {
+            "grok-cli": "grok-4.6"
+          },
+          "efforts": ["xhigh"],
+          "default_effort": "xhigh",
+          "workloads": ["reasoning"],
+          "status": "candidate",
+          "evidence": [],
           "use": "CodeFlow instruction: grok-4.6 at xhigh when high stalls or an xhigh_trigger applies"
         }
       ]
@@ -153,9 +280,9 @@
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
-    "Default effort is high, not a ceiling: complex architecture, technical planning, and design use the strongest qualified same-family reasoning seat suited to the task at high or xhigh through the binding's permitted routes.",
+    "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the separate Claude owner and route-status contract.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
-    "If Fable is unavailable, record Opus as the Claude fallback at the same effort (Opus xhigh is that fallback, not a Fable-high substitute). If Astra is unavailable, record gpt-5.6-sol as the Codex fallback at the same effort.",
+    "If Fable is unavailable, the Claude primary may use the documented explicit Opus degraded fallback at the same effort after native preflight, with actual scope and reduced assurance recorded. If Astra is unavailable, the Codex primary may use the documented explicit gpt-5.6-sol degraded fallback under the same conditions. These fallback paths preserve graceful operation but do not qualify or promote an internal worker route.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",
     "A changed concrete binding requires native-interactive qualification before promotion."
   ]

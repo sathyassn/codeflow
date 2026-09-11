@@ -18,6 +18,40 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn assert_internal_routes(
+    role: &str,
+    binding: &serde_json::Value,
+    selectors: &serde_json::Map<String, serde_json::Value>,
+) {
+    let mut route_ids = BTreeSet::new();
+    for route in binding["internal_routes"]
+        .as_array()
+        .expect("internal routes")
+    {
+        let route_id = route["route_id"].as_str().expect("route id");
+        assert!(
+            route_ids.insert(route_id),
+            "duplicate route {role}/{route_id}"
+        );
+        assert_eq!(route["status"], "candidate");
+        assert!(route["evidence"].as_array().expect("evidence").is_empty());
+        let efforts = route["efforts"].as_array().expect("efforts");
+        assert!(!efforts.is_empty());
+        assert!(efforts.contains(&route["default_effort"]));
+        assert!(!route["workloads"].as_array().expect("workloads").is_empty());
+        for harness in route["native_selectors"]
+            .as_object()
+            .expect("route native selectors")
+            .keys()
+        {
+            assert!(
+                selectors.contains_key(harness),
+                "route {role}/{route_id} escapes its parent harnesses"
+            );
+        }
+    }
+}
+
 #[test]
 fn current_ensemble_uses_only_capability_supported_harnesses() {
     let ensemble: serde_json::Value = serde_json::from_str(&read(
@@ -28,7 +62,11 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
         "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
     ))
     .expect("harness catalog JSON");
-    assert_eq!(ensemble["schema_version"], 3);
+    assert_eq!(ensemble["schema_version"], 4);
+    assert_eq!(
+        ensemble["design_execution_owner"],
+        "claude-judgment-primary"
+    );
     assert!(ensemble["rules"].as_array().unwrap().iter().any(|rule| {
         rule.as_str() == Some("High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.")
     }), "high reasoning floor must not mandate redundant escalation");
@@ -98,6 +136,7 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
                 "{seat} selects an unsupported or mismatched harness {harness}"
             );
         }
+        assert_internal_routes(role, binding, selectors);
     }
     assert!(lineages.contains("claude") && lineages.contains("codex"));
     assert!(lineages.contains("grok"), "catalog family grok is missing");
@@ -122,25 +161,25 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Codex App or interactive Codex CLI",
         "Grok Build (interactive `grok` CLI)",
         "Other harness, including Hermes",
-        "Claude produces design",
+        "Claude design owner produces direction and real design execution",
         "never a silent third vote",
         "Name extra families on trigger if available",
-        "Spawn same-family high/xhigh workers",
+        "strongest capable permitted reasoning route",
         "Consult canaries in grok-host.md",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
-        "**Review is producer-relative.**",
+        "**Review is author-relative.**",
         "**The Claude judgment primary owns integrated Claude judgment.**",
         "task fit",
-        "observed native usage signals only",
+        "resources, and observed usage",
         "Codex supplies independent review",
         "owns the final quality verdict",
-        "**Qualified reasoning seats.**",
+        "**Accountable route use.**",
         "Use the concrete selectors",
         "invoke each primary directly",
-        "retain primary planning/approval duties",
-        "never let a worker replace a primary",
+        "retain its planning, integration, and approval duties",
+        "workers replace no primary",
         "**One orchestration owner.**",
         "never starts a nested duo",
         "**Evidence outranks agreement.**",
@@ -211,10 +250,6 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     let policy = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
     ));
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
-
     for required in [
         "\"seat\": \"claude-primary\"",
         "\"role\": \"claude-judgment-primary\"",
@@ -223,8 +258,8 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "\"seat\": \"codex-primary\"",
         "\"role\": \"codex-engineering-primary\"",
         "\"model_class\": \"latest-astra-coding\"",
-        "\"model_class\": \"qualified-sol-worker\"",
-        "\"model_class\": \"qualified-terra-worker\"",
+        "\"model_class\": \"latest-sol\"",
+        "\"model_class\": \"latest-terra\"",
         "\"seat\": \"grok-primary\"",
         "\"role\": \"grok-engineering-primary\"",
         "\"model_class\": \"latest-grok-coding\"",
@@ -262,17 +297,21 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     }
 
     for required in [
-        "TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort",
-        "verified native availability and routing",
-        "Unknown remains unknown",
-        "never infer quota, availability, or a worker route",
+        "TASK_ID | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION",
+        "requested from observed",
+        "Unknown usage is advisory",
+        "Never combine apparently separate limits",
         "is reassignment: create Plan vN+1",
-        "same-seat trigger-based effort escalation, including direct high→xhigh",
+        "permitted worker change",
         "Default effort is high for primary seats, not a ceiling",
-        "strongest qualified same-family reasoning seat",
+        "strongest capable permitted same-family reasoning route",
         "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
-        "Routine, well-specified work stays at the default",
+        "Delegate substantial, well-specified routine implementation",
         "both families still plan independently and cross-lineage review remains mandatory",
+        "`candidate` and `scoped-qualified` describe evidence status",
+        "three fresh accepted trials",
+        "Full primary-binding promotion",
+        "economical-default",
         "A model cannot independently review its own authored unit",
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
@@ -280,7 +319,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "available-and-named or unavailable-with-limitation",
         "A Grok Build host coordinates the standing pair through Herdr",
         "implementer check",
-        "Default UI assignment is Claude as",
+        "Default UI assignment is Claude as responsible primary and executor",
         "Playwright remains the deterministic web driver",
         "preferred plugin or qualified official native client",
         "spawns same-family workers at that",
@@ -290,19 +329,98 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
             "capability-routing contract lost marker: {required}"
         );
     }
+}
 
+#[test]
+fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
     for superseded in ["**Codex implements.**", "Fixed role binding"] {
         assert!(
             !skill.contains(superseded),
             "orchestrator retained superseded fixed-role marker: {superseded}"
         );
     }
-
     for stale_pin in ["Fable 5", "gpt-5.6-sol"] {
         assert!(
             !skill.contains(stale_pin),
             "orchestrator must not hard-code model pin {stale_pin}"
         );
+    }
+}
+
+#[test]
+fn accountable_execution_preserves_design_and_evidence_boundaries() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let quality = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    ));
+    let design = normalize_whitespace(&read("assets/base/agents/skills/cf-design/SKILL.md"));
+    let cases = read("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let packs = read("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+
+    for required in [
+        "RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION",
+        "`candidate` and `scoped-qualified` describe evidence status, not native reachability",
+        "A configured candidate is usable for bounded non-design work",
+        "no prior completed workload canary is required",
+        "first bounded assignment may itself supply start, return",
+        "Executable presence alone is not readiness",
+        "three fresh accepted trials for every pre-registered case and qualifying arm",
+        "Comparison outcomes inform claim scope but do not themselves gate qualification",
+        "Full primary-binding promotion still requires the existing complete suite",
+        "Savings or economical-default recommendations separately require measured all-attempt",
+        "review lineage is opposite the session that authored the work",
+    ] {
+        assert!(
+            routing.contains(required),
+            "accountable routing contract lost marker: {required}"
+        );
+    }
+
+    for required in [
+        "Primary responsibility and actual execution are separate",
+        "does not become its author",
+        "unknown and advisory unless an explicit hard limit depends on it",
+    ] {
+        assert!(
+            quality.contains(required),
+            "quality contract lost accountable-execution marker: {required}"
+        );
+    }
+
+    for required in [
+        "same Claude owner authors and implements real design and retains fidelity judgment",
+        "candidates run only disposable fixtures",
+        "Turning settled product/UX/UI into components, layout, styles, or interactions is design implementation",
+        "Claude absence is not one",
+    ] {
+        assert!(
+            design.contains(required),
+            "design execution contract lost marker: {required}"
+        );
+    }
+
+    for case in [
+        "unverified-worker-route-is-unavailable",
+        "proven-candidate-route-is-bounded-executor",
+        "candidate-design-route-cannot-implement-product",
+        "explicit-design-family-override-is-valid",
+        "unknown-usage-is-advisory-without-hard-limit",
+        "observed-hard-usage-limit-allows-bounded-recovery",
+        "catalog-owner-resolves-route-evidence",
+        "observed-route-overrides-requested-label",
+        "mixed-authorship-reassigns-independent-review",
+        "mixed-lineage-contributions-use-per-unit-review",
+    ] {
+        assert!(
+            cases.contains(case),
+            "missing accountable routing case: {case}"
+        );
+        assert!(packs.contains(case), "focused pack omits case: {case}");
     }
 }
 
@@ -360,7 +478,7 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
     );
     assert!(
         normalize_whitespace(&capabilities).contains(
-            "medium/high workers when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
+            "use proportionate worker effort when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
         ),
         "CAP-010 must preserve proportionate workers and mid-session escalation without host restart"
     );
@@ -631,6 +749,7 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
     }
 
     for required in [
+        "TASK_ID | OUTCOME | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | AUTHORSHIP",
         "Every active bare edge means B cannot start or be accepted until A has landed",
         "A guard that merely restates a standard quality",
         "Every unselected alternative records `not_selected`",
@@ -784,7 +903,7 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
 
 #[test]
 fn reverse_lane_uses_hook_completion_not_pane_stability() {
-    let delegate = read("assets/base/claude/skills/cf-delegate/SKILL.md");
+    let delegate = normalize_whitespace(&read("assets/base/claude/skills/cf-delegate/SKILL.md"));
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");
 
     assert!(delegate.contains("codeflow delegate init"));
@@ -793,7 +912,8 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(
         delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
     );
-    assert!(delegate.contains("default effort; workers take escalation"));
+    assert!(delegate.contains("Launch with default effort"));
+    assert!(delegate.contains("workers take escalation"));
     assert!(delegate.contains("current-ensemble.json"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));

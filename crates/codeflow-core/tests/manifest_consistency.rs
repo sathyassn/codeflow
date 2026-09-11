@@ -600,6 +600,13 @@ fn model_eval_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-evaluate-model");
 }
 
+/// Model routing is consumed directly by both harnesses. Keep its managed
+/// catalog and policy copies identical through dogfood updates.
+#[test]
+fn model_orchestrator_source_live_and_baseline_copies_are_byte_identical() {
+    assert_skill_source_live_and_baseline_copies("cf-model-orchestrator");
+}
+
 /// The contextual editorial skill is managed in the same five source/live/
 /// baseline locations. Pin the baseline too: active mirror parity alone cannot
 /// detect a stale three-way merge base.

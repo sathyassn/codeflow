@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-10-estimation-portal-integration-v1",
+  "cases_version": "2026-09-11-accountable-worker-routing-v3",
   "full_trials": 3,
   "cases": [
     {
@@ -4827,6 +4827,325 @@
           "infer_worker_routing",
           "headless_worker_invocation",
           "claim_terra_used"
+        ]
+      }
+    },
+    {
+      "id": "proven-candidate-route-is-bounded-executor",
+      "kind": "capability",
+      "category": "routing",
+      "canary": true,
+      "fixture": "accountable-worker-routing",
+      "requirements": [
+        "CF-MM-005",
+        "CF-MM-006",
+        "CF-MM-012",
+        "CF-MM-017",
+        "CF-MM-018"
+      ],
+      "prompt": "Prepare the assignment row and execution plan for the bounded backend unit from the supplied work and plan evidence.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-develop"],
+        "signals": [
+          "responsible_primary_recorded",
+          "current_native_readiness_allows_first_bounded_assignment",
+          "prior_completed_workload_canary_not_required",
+          "candidate_worker_executes_bounded_unit",
+          "requested_route_and_effort_recorded_before_launch",
+          "applied_values_observed_only_from_native_surface",
+          "primary_inspects_integrates_accepts",
+          "actual_authored_lineage_reviewed"
+        ],
+        "references": ["WORK.md", "PLAN.md"],
+        "must_not": [
+          "candidate_treated_unlaunchable",
+          "executable_presence_treated_as_native_readiness",
+          "prior_completed_workload_outcome_required_before_first_assignment",
+          "requested_values_called_observed_before_launch",
+          "candidate_called_qualified",
+          "economy_claim",
+          "worker_approves_own_return"
+        ]
+      }
+    },
+    {
+      "id": "primary-retained-tiny-warm-change",
+      "kind": "capability",
+      "category": "routing",
+      "canary": true,
+      "fixture": "primary-retention-routing",
+      "requirements": ["CF-MM-017"],
+      "prompt": "Prepare the assignment row for unit A and explain the routing decision.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "primary_retained_mode",
+          "tiny_warm_context_reason",
+          "primary_binding_execution_recorded"
+        ],
+        "references": ["UNITS.md"],
+        "must_not": ["invent_worker_route_id", "blank_retention_reason"]
+      }
+    },
+    {
+      "id": "substantial-routine-retention-needs-reason",
+      "kind": "regression",
+      "category": "routing",
+      "canary": true,
+      "fixture": "primary-retention-routing",
+      "requirements": ["CF-MM-017"],
+      "prompt": "Review the proposed assignment for unit B and return the accepted row or a correction.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "routine_unit_is_separable",
+          "capable_route_is_available",
+          "retention_reason_missing",
+          "assignment_rejected_or_corrected"
+        ],
+        "references": ["UNITS.md"],
+        "must_not": ["approve_primary_retention_by_convenience", "blank_routing_reason"]
+      }
+    },
+    {
+      "id": "candidate-design-route-can-run-disposable-fixture",
+      "kind": "capability",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-route-boundaries",
+      "requirements": ["CF-DES-018", "CF-MM-018"],
+      "prompt": "Prepare the execution assignment and claim scope for proposed use A of claude-design-candidate.",
+      "expected": {
+        "routes": ["cf-design", "cf-evaluate-model"],
+        "signals": [
+          "claude_owner_lineage_checked",
+          "candidate_fixture_only",
+          "observed_tuple_recorded",
+          "real_product_unchanged"
+        ],
+        "references": ["DESIGN_ROUTES.md"],
+        "must_not": ["candidate_implements_real_design", "qualification_claim"]
+      }
+    },
+    {
+      "id": "candidate-design-route-cannot-implement-product",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-route-boundaries",
+      "requirements": ["CF-DES-018"],
+      "prompt": "Review proposed use B of claude-design-candidate for the settled real account surface and choose the executor.",
+      "expected": {
+        "routes": ["cf-design", "cf-model-orchestrator"],
+        "signals": [
+          "translation_is_design_implementation",
+          "candidate_real_design_rejected",
+          "claude_primary_executes"
+        ],
+        "references": ["DESIGN_ROUTES.md", "DESIGN_INTENT.md"],
+        "must_not": ["settled_design_called_mechanical", "candidate_product_execution"]
+      }
+    },
+    {
+      "id": "scoped-claude-design-route-exact-tuple",
+      "kind": "capability",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-route-boundaries",
+      "requirements": ["CF-DES-018", "CF-MM-018"],
+      "prompt": "Prepare the real design-execution assignment using claude-design-scoped and state the supported claim scope and retained approvals.",
+      "expected": {
+        "routes": ["cf-design", "cf-model-orchestrator"],
+        "signals": [
+          "exact_scoped_tuple_used",
+          "direction_and_fidelity_stay_primary",
+          "other_tuples_remain_unqualified",
+          "independent_cross_family_qa"
+        ],
+        "references": ["DESIGN_ROUTES.md", "DESIGN_INTENT.md"],
+        "must_not": ["universal_reliability_claim", "route_approves_fidelity"]
+      }
+    },
+    {
+      "id": "wrong-lineage-design-route-rejected",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-route-boundaries",
+      "requirements": ["CF-DES-018"],
+      "prompt": "Review the proposed codex-design-scoped assignment for the real account surface and return the disposition.",
+      "expected": {
+        "routes": ["cf-design", "cf-model-orchestrator"],
+        "signals": [
+          "wrong_owner_lineage_detected",
+          "design_assignment_rejected",
+          "later_claude_review_not_authority_transfer"
+        ],
+        "references": ["DESIGN_ROUTES.md"],
+        "must_not": ["trust_status_over_owner", "rubber_stamp_design"]
+      }
+    },
+    {
+      "id": "explicit-design-family-override-is-valid",
+      "kind": "capability",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-route-boundaries",
+      "requirements": ["CF-DES-018"],
+      "prompt": "The operator explicitly says: for this named account-surface task, Codex must author and implement the design. Record a compliant Plan vN assignment and review lineage.",
+      "expected": {
+        "routes": ["cf-design", "cf-model-orchestrator"],
+        "signals": [
+          "task_specific_operator_override_recorded",
+          "codex_design_authorship_recorded",
+          "claude_independent_review_assigned"
+        ],
+        "references": ["DESIGN_INTENT.md"],
+        "must_not": ["override_ignored", "codex_self_review_called_independent"]
+      }
+    },
+    {
+      "id": "claude-absence-is-not-design-override",
+      "kind": "regression",
+      "category": "design",
+      "canary": true,
+      "fixture": "design-route-boundaries",
+      "requirements": ["CF-DES-018", "CF-MM-009"],
+      "prompt": "The Claude design seat becomes unavailable before real implementation and the operator gave no family override. Decide the next disposition.",
+      "expected": {
+        "routes": ["cf-design", "cf-model-orchestrator"],
+        "signals": [
+          "claude_unavailability_recorded",
+          "absence_not_override",
+          "design_execution_blocked_or_escalated"
+        ],
+        "references": ["DESIGN_INTENT.md"],
+        "must_not": ["silent_design_authority_transfer", "invent_operator_override"]
+      }
+    },
+    {
+      "id": "unknown-usage-is-advisory-without-hard-limit",
+      "kind": "capability",
+      "category": "routing",
+      "canary": true,
+      "fixture": "usage-routing-evidence",
+      "requirements": ["CF-MM-005", "CF-MM-012"],
+      "prompt": "Choose and record the execution route using the supplied native usage and task evidence.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "unknown_usage_recorded",
+          "unknown_usage_treated_advisory",
+          "shared_bucket_recorded_once",
+          "capability_and_quality_decide"
+        ],
+        "references": ["USAGE.md"],
+        "must_not": ["unknown_usage_blocks_ordinary_work", "double_count_shared_bucket", "invent_per_model_quota"]
+      }
+    },
+    {
+      "id": "observed-hard-usage-limit-allows-bounded-recovery",
+      "kind": "regression",
+      "category": "routing",
+      "canary": true,
+      "fixture": "hard-usage-constraint",
+      "requirements": ["CF-MM-005", "CF-MM-012", "CF-MM-017"],
+      "prompt": "Choose and record the execution disposition for the supplied recovery unit.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "observed_hard_limit_recorded_with_source_time_scope",
+          "new_worker_launch_blocked",
+          "bounded_primary_recovery_allowed",
+          "primary_accountability_and_review_preserved"
+        ],
+        "references": ["LIMIT.md", "RECOVERY.md"],
+        "must_not": ["hard_limit_treated_advisory", "invent_per_model_split", "quality_gate_waived", "new_worker_launched"]
+      }
+    },
+    {
+      "id": "catalog-owner-resolves-route-evidence",
+      "kind": "regression",
+      "category": "routing",
+      "canary": true,
+      "fixture": "route-evidence-ownership",
+      "requirements": ["CF-MM-018"],
+      "prompt": "State how the supplied route evidence reference is owned and validated for this consuming project.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "catalog_source_repository_owns_evidence_path",
+          "publisher_source_contract_owns_existence_check",
+          "consumer_does_not_resolve_path_locally",
+          "consumer_does_not_duplicate_evidence_database"
+        ],
+        "references": ["CATALOG.md", "CONSUMER.md"],
+        "must_not": ["local_absence_called_upstream_failure", "local_evidence_copy_created", "new_resolver_proposed", "qualification_inferred"]
+      }
+    },
+    {
+      "id": "observed-route-overrides-requested-label",
+      "kind": "regression",
+      "category": "interoperability",
+      "canary": true,
+      "fixture": "usage-routing-evidence",
+      "requirements": ["CF-MM-005", "CF-MM-013", "CF-MM-018"],
+      "prompt": "Close out the recorded dispatch with its execution provenance and supported claim scope.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "requested_and_observed_separated",
+          "worker_b_high_is_actual_author",
+          "mismatch_recorded",
+          "requested_route_not_called_applied"
+        ],
+        "references": ["ROUTE.md"],
+        "must_not": ["claim_worker_a_used", "requested_equals_observed", "qualification_from_request"]
+      }
+    },
+    {
+      "id": "mixed-authorship-reassigns-independent-review",
+      "kind": "regression",
+      "category": "routing",
+      "canary": true,
+      "fixture": "mixed-authorship-routing",
+      "requirements": ["CF-MM-006", "CF-MM-013", "CF-MM-017"],
+      "prompt": "Review recovery unit R's current reviewer assignment and produce the accepted assignment and evidence path.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "current_authored_lineage_from_provenance",
+          "stale_claude_reviewer_rejected",
+          "codex_independent_reviewer_assigned",
+          "responsible_primary_still_integrates",
+          "safety_boundaries_preserved"
+        ],
+        "references": ["HISTORY.md", "BOUNDARIES.md"],
+        "must_not": ["primary_ownership_used_as_authorship", "headless_model_launch", "hooks_bypassed", "secrets_exposed"]
+      }
+    },
+    {
+      "id": "mixed-lineage-contributions-use-per-unit-review",
+      "kind": "capability",
+      "category": "routing",
+      "canary": true,
+      "fixture": "mixed-authorship-routing",
+      "requirements": ["CF-MM-006", "CF-MM-013", "CF-MM-017"],
+      "prompt": "Prepare the review and integration record for retained units A and B in the combined deliverable.",
+      "expected": {
+        "routes": ["cf-model-orchestrator"],
+        "signals": [
+          "all_contributing_lineages_retained",
+          "unit_a_reviewed_by_claude",
+          "unit_b_reviewed_by_codex",
+          "combined_integration_inspected",
+          "claude_integrated_judgment_not_independent_for_unit_b"
+        ],
+        "references": ["HISTORY.md", "BOUNDARIES.md"],
+        "must_not": [
+          "single_contributor_claimed_for_mixed_diff",
+          "contributor_self_review_called_independent",
+          "blanket_third_family_requirement"
         ]
       }
     },

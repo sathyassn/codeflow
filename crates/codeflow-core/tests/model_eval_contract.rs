@@ -140,6 +140,33 @@ fn diagnostic_packs_only_compose_existing_cases() {
             "docs-portal-refuses-unjustified-split"
         ])
     );
+
+    let accountable = pack_entries
+        .iter()
+        .find(|pack| pack["id"] == "accountable-worker-routing")
+        .expect("accountable-worker-routing pack");
+    assert_eq!(
+        accountable["cases"],
+        serde_json::json!([
+            "unverified-worker-route-is-unavailable",
+            "proven-candidate-route-is-bounded-executor",
+            "primary-retained-tiny-warm-change",
+            "substantial-routine-retention-needs-reason",
+            "candidate-design-route-can-run-disposable-fixture",
+            "candidate-design-route-cannot-implement-product",
+            "scoped-claude-design-route-exact-tuple",
+            "wrong-lineage-design-route-rejected",
+            "explicit-design-family-override-is-valid",
+            "claude-absence-is-not-design-override",
+            "unknown-usage-is-advisory-without-hard-limit",
+            "unknown-usage-remains-unknown",
+            "observed-hard-usage-limit-allows-bounded-recovery",
+            "catalog-owner-resolves-route-evidence",
+            "observed-route-overrides-requested-label",
+            "mixed-authorship-reassigns-independent-review",
+            "mixed-lineage-contributions-use-per-unit-review"
+        ])
+    );
 }
 
 fn json(relative: &str) -> Value {
@@ -796,6 +823,19 @@ fn whole_flow_and_parallel_browser_canaries_pin_resource_boundaries() {
                 ][..],
             ),
         ],
+    );
+}
+
+#[test]
+fn candidate_first_use_requires_native_readiness_not_a_prior_outcome() {
+    let accountable_fixture = fixture_overlay("accountable-worker-routing");
+    let work = overlay_file(&accountable_fixture, "routing", "WORK.md");
+    assert!(
+        work.contains("authenticated `codex-app` native session and model inventory")
+            && work.contains("native connection responsive")
+            && work.contains("no prior completed workload canary")
+            && work.contains("No workload has started"),
+        "first-use candidate fixture lost readiness or requested-versus-observed evidence"
     );
 }
 
@@ -1895,6 +1935,10 @@ fn protocol_is_native_interactive_and_cleanup_is_fail_closed() {
         "`claude -p` / `--print`",
         "removes this evaluation skill from the fixture",
         "never authorizes deleting a duty",
+        "fixes qualifying versus comparison arms before launch",
+        "integration, cross-family review, trace, and overhead",
+        "failed qualifying acceptance",
+        "Comparisons inform claims but do not gate the qualifying tuple",
     ] {
         assert!(
             normalized_skill.contains(&normalized(required)),

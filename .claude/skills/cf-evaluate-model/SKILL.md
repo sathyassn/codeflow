@@ -62,6 +62,14 @@ limits of catalog support in consuming scaffolds.
    canary evidence as a full qualification. For a focused diagnostic, resolve
    `list-cases --pack <pack-id>` and run those cases explicitly. Packs may
    compose other packs, but even `release-smoke` is not a promotion suite.
+   Internal-route qualification pre-registers cases and fixes qualifying versus
+   comparison arms before launch. Require three fresh accepted trials per case
+   and qualifying route/harness/selector/effort/workload tuple; retain attempts,
+   integration, cross-family review, trace, and overhead. A failed qualifying
+   acceptance, absent observed route/trace, invalid
+   control/fixture, or unresolved validity threat leaves it candidate.
+   Comparisons inform claims but do not gate the qualifying tuple. It covers
+   evidenced tuples—not primary binding, universal reliability, or economy.
 4. **Materialize each trial.** Use an explicit temporary run root and the exact
    CodeFlow binary under test:
 

@@ -229,7 +229,8 @@ For a multi-task body, integrate through `integration/<epic>` and serialize each
 landing with `codeflow integrate`; rerun the affected and aggregate gates after
 every merge. Rebase task branches, never a shared integration branch. Parallel
 output is not complete until the integration worktree is green and the combined
-diff has received the same producer verification, cross-lineage unit review, and
+diff has received the same executor verification, primary acceptance,
+cross-lineage unit review, and
 integrated Claude-judgment-primary review as a serial change.
 
 ## Session flow
@@ -324,9 +325,12 @@ to reason from, not a rote checklist.
   parallel, and over time — then decide against short- and long-term priorities,
   both stated. Prefer the robust, durable solution that stands the test of time;
   when expedience wins, it wins deliberately and says so.
-- **Guard your context.** Long context degrades quality. Orchestrate here:
-  keep thinking, planning, and synthesis; delegate breadth, long passes, and
-  independent checks to a subagent or workflow at the effort the unit needs.
+- **Guard your context.** Keep thinking, planning, and synthesis here; delegate
+  breadth, long passes, independent checks, and substantial bounded routine
+  implementation at matched effort. Under
+  `cf-model-orchestrator/resources/capability-routing.md`, the responsible
+  primary inspects, integrates, and accepts while retaining every judgment and
+  safety duty.
 - **Write only what earns its keep.** Make the smallest clear, idiomatic, durable
   change that fully satisfies approved behavior—not minimum LOC. Add no
   speculative feature, abstraction, configuration, dependency, compatibility

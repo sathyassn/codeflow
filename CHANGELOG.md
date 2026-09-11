@@ -38,6 +38,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Accountable worker execution (ADR-0060).** Plans now distinguish the
+  responsible primary from the actual binding-or-route executor and record
+  requested-versus-observed provenance plus scoped usage evidence. Natively
+  proven candidates may perform bounded non-design work under primary
+  inspection without a qualification or economy claim; scoped-qualified status
+  remains limited to exact reviewed workload tuples and separate from full
+  primary promotion. Claude owns design direction, real design execution, and
+  fidelity unless an explicit task-specific operator override applies. This is
+  portable orchestration policy, not a scheduler or runtime routing engine.
+
 - **Portal customization examples.** Document the portal's repository-relative
   token path and accent-only light/dark format; do not borrow `cf-present`'s
   different import schema. Connect custom accents to the actual utility tokens

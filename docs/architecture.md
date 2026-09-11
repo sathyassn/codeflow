@@ -242,17 +242,18 @@ non-trivial repository task in standard/full scaffolds. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the
 official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
 reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
-to high effort, use proportionate medium/high workers, and obtain xhigh reasoning
+to high effort, use proportionate worker effort, and obtain xhigh reasoning
 on trigger without restarting the primary (ADR-0056). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
 implementation, review/verification, and substantive-doc modes select only the
-stages the requested outcome needs. Claude-led design, capability-routed
-producer/cross-lineage-review assignments, evidence-routed effort, explicit
+stages the requested outcome needs. Claude-led design, accountable-primary/
+actual-executor/cross-lineage-review assignments, evidence-routed effort, explicit
 host/peer/worker roles, the versioned plan/evidence contract, bounded
 worktree/resource/integration rules, and quality gates live in shared skill
 resources; harness-specific reviewer agents only
 deepen that contract. Quality includes proportionate design and implementation:
 every material new surface maps to a current requirement or evidenced risk,
-each producer first-verifies its unit, the other lineage reviews it independently,
+each actual executor first-verifies its unit, the responsible primary inspects
+and accepts it, and a lineage different from the actual author's reviews it independently,
 and the directly invoked Claude judgment primary owns the integrated
 design/code quality verdict without claiming independent review of its own
 work (ADR-0030, ADR-0035, ADR-0041). Substantial prose loads the
@@ -266,10 +267,18 @@ mirrored `cf-design` skill. It records a proportionate `DESIGN_INTENT` inside
 Plan vN: cosmetic work may be inapplicable, established-system work may conform,
 new surfaces settle one direction, and materially open novel surfaces compare
 two or three viable directions before settlement. The qualified Claude
-judgment role leads intent; default UI assignment is Claude implementer
-check and Codex Computer Use QA on the app-server (Playwright stays the web
-driver). If Codex produced the UI, Claude QAs independently. Both approve the
-same plan. Language/voice and appearance modes are contextual,
+judgment role leads intent and owns real design implementation and fidelity.
+Until a matching Claude design route is scoped-qualified, the Claude primary
+executes; candidate design routes are only for controlled disposable
+qualification fixtures. A scoped-qualified route may execute only exact
+evidenced tuples, and another family designs only under an explicit task-
+specific operator override. Translating settled product/UX/UI direction into
+components, layout, styles, or interactions is design implementation;
+non-design build plumbing, asset transfer, and evidence collection are ordinary
+routed work. Default UI review is Codex Computer Use QA on the app-server
+(Playwright stays the web driver). If another lineage authors the UI under an
+override, Claude QAs independently. Both approve the same plan.
+Language/voice and appearance modes are contextual,
 collapsible intent dimensions governed by project evidence; utility defaults
 cannot become consuming-product authority. Rendered review grades
 evidence-backed drift from the brief, intent, accessibility target, or observed
@@ -330,10 +339,15 @@ model and effort explicitly and retain the observed binding.
 `cf-customize` verifies the effective modes, tools, authentication paths, and
 live canaries; the binary neither mutates global settings nor authenticates
 services. Cross-model callers invoke both primaries directly using the concrete
-selectors, default/escalation efforts, and permitted worker classes in the
-current ensemble record. Native internal workers may reduce mechanical cost,
-but cannot replace the primary seats' judgments, implementation, verification,
-or approvals (ADR-0025, ADR-0026, ADR-0028, ADR-0039).
+selectors, default/escalation efforts, and typed internal routes in the current
+ensemble record. The plan records the responsible primary separately from the
+actual binding-or-route executor and observed provenance. A natively proven
+candidate may perform bounded non-design work under primary inspection without
+becoming qualified or economical; scoped-qualified claims cover only their
+evidenced harness/selector/effort/workload tuples. Primaries retain judgment,
+integration, verification, and approvals, and actual authored lineage
+determines independent review (ADR-0025, ADR-0026, ADR-0028, ADR-0039,
+ADR-0060).
 
 `cf-evaluate-model` is the deliberate maintenance path for a new model, harness,
 permission profile, or material instruction revision (ADR-0027). Stable hard
@@ -365,7 +379,11 @@ partially applying the remainder.
 configuration: every entry must prove the universal native-session,
 provenance/tool, scoped-work, bounded-failure, permission, recheck, and git
 capabilities. `packs.json` composes existing eval cases for diagnosis only.
-Approved full results can produce compact user-owned records under
+Scoped internal-route evidence belongs to the repository that owns its catalog;
+consuming projects neither resolve those paths locally nor duplicate an
+evidence database. Route status remains separate from native reachability and
+application and from full binding promotion. Approved full results can produce
+compact user-owned records under
 `~/.codeflow/qualified-bindings/`; doctor checks their structure and observable
 harness/settings drift without launching models or routing work.
 

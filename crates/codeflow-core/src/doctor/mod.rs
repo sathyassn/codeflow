@@ -528,6 +528,37 @@ fn check_config(opts: &Options) -> CheckResult {
 /// Those values remain native-interactive evaluation evidence.
 fn check_model_bindings(opts: &Options) -> CheckResult {
     let start = Instant::now();
+    let ensemble = match model_qualification::current_ensemble() {
+        Ok(ensemble) => ensemble,
+        Err(error) => {
+            return model_binding_result(
+                start,
+                Status::Fail,
+                format!("embedded current ensemble invalid: {error}"),
+            )
+        }
+    };
+    let catalog = match model_qualification::harness_catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return model_binding_result(
+                start,
+                Status::Fail,
+                format!("embedded harness catalog invalid: {error}"),
+            )
+        }
+    };
+    let route_report = managed_worker_route_report(opts, &ensemble, &catalog);
+    let mut result = check_promoted_model_bindings(opts, start, &catalog);
+    result.message = format!("{}; {route_report}", result.message);
+    result
+}
+
+fn check_promoted_model_bindings(
+    opts: &Options,
+    start: Instant,
+    catalog: &BTreeMap<String, model_qualification::HarnessMetadata>,
+) -> CheckResult {
     let Some(directory) = opts.qualification_dir.as_deref() else {
         return model_binding_result(
             start,
@@ -549,17 +580,7 @@ fn check_model_bindings(opts: &Options) -> CheckResult {
             ),
         );
     }
-    let catalog = match model_qualification::harness_catalog() {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            return model_binding_result(
-                start,
-                Status::Fail,
-                format!("embedded harness catalog invalid: {error}"),
-            )
-        }
-    };
-    let (drift, unobservable) = observe_binding_drift(opts, &records, &catalog);
+    let (drift, unobservable) = observe_binding_drift(opts, &records, catalog);
     let active_ids: BTreeSet<&str> = selected
         .iter()
         .map(|binding| binding.binding_id.as_str())
@@ -606,6 +627,58 @@ fn check_model_bindings(opts: &Options) -> CheckResult {
     }
     let message = effective_selection_message(records.len(), &selected);
     model_binding_result(start, Status::Pass, message)
+}
+
+fn managed_worker_route_report(
+    opts: &Options,
+    ensemble: &BTreeMap<String, model_qualification::EnsembleBinding>,
+    catalog: &BTreeMap<String, model_qualification::HarnessMetadata>,
+) -> String {
+    let routes = ensemble
+        .values()
+        .flat_map(|binding| {
+            binding.internal_routes.iter().map(move |route| {
+                let selectors = route
+                    .native_selectors
+                    .iter()
+                    .map(|(harness_id, selector)| {
+                        let probe = catalog
+                            .get(harness_id)
+                            .and_then(|harness| harness.version_probe.as_deref())
+                            .and_then(model_qualification::trusted_version_probe);
+                        let probe_state = match probe {
+                            Some(probe) if opts.do_look_path(probe.command).is_ok() => {
+                                "probe-command-present"
+                            }
+                            Some(_) => "probe-command-missing",
+                            None => "probe-not-exposed",
+                        };
+                        format!("{harness_id}:{selector}:{probe_state}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|");
+                let workloads = route
+                    .workloads
+                    .iter()
+                    .map(|workload| workload.as_str())
+                    .collect::<Vec<_>>()
+                    .join("|");
+                format!(
+                    "{}/{}[status={},default={},workloads={},selectors={}]",
+                    binding.role,
+                    route.route_id,
+                    route.status.as_str(),
+                    route.default_effort.as_str(),
+                    workloads,
+                    selectors
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "managed worker routes: {routes}; candidate status and probe-command presence do not establish qualification, model availability, or applied selection; doctor did not launch a model"
+    )
 }
 
 fn effective_selection_message(
@@ -1717,6 +1790,40 @@ mod tests {
         assert!(result
             .message
             .contains("shipped ensemble remains effective"));
+        assert!(result.message.contains("managed worker routes:"));
+        assert!(result.message.contains("status=candidate"));
+    }
+
+    #[test]
+    fn model_bindings_reports_managed_route_probes_without_launching_models() {
+        let opts = Options {
+            qualification_dir: None,
+            look_path: Some(|name| {
+                (name == "claude")
+                    .then(|| "/usr/local/bin/claude".into())
+                    .ok_or_else(|| "not found".into())
+            }),
+            exec_command: Some(|_, _| panic!("managed route reporting must not launch a model")),
+            ..Options::default()
+        };
+        let result = check_model_bindings(&opts);
+        assert_eq!(result.status, Status::Pass);
+        assert!(result
+            .message
+            .contains("claude-judgment-primary/fable-high-reasoning"));
+        assert!(result
+            .message
+            .contains("claude-code:fable:probe-command-present"));
+        assert!(result
+            .message
+            .contains("codex-cli:gpt-5.6-sol:probe-command-missing"));
+        assert!(result
+            .message
+            .contains("codex-app:gpt-5.6-sol:probe-not-exposed"));
+        assert!(result.message.contains(
+            "candidate status and probe-command presence do not establish qualification, model availability, or applied selection"
+        ));
+        assert!(result.message.contains("doctor did not launch a model"));
     }
 
     #[test]

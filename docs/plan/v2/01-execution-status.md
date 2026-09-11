@@ -169,9 +169,15 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   Source, active Claude/Codex mirrors, managed baselines, manifest-selected
   tiers, and reviewer-agent role contracts are checked together. Every skill
   has one explicit source ratchet (the complete table is in §4.4); the 24 KiB
-  ordinary and 28 KiB routing/orchestration limits are absolute class ceilings,
+  ordinary and 28 KiB routing/orchestration limits were the measured-base class ceilings,
   not default growth allowances. There are no skill budget exceptions. Crossing
   a class ceiling requires an exact manifest source, matching reviewed ratchet,
   and an existing durable evidence file. On-demand references, eval fixtures,
   and resource data retain purpose-specific bounds rather than one blunt
   instruction-file ceiling.
+
+  TSK-022 / ADR-0060 later raised only the reviewed surfaces needed for
+  accountable execution routing after duplicate mechanics were factored out:
+  root `AGENTS.md` to 32 KiB + 256 B, the routing class and orchestrator to
+  29 KiB, `cf-design` to 19 KiB + 512 B, `cf-evaluate-model` to 9 KiB + 256 B,
+  and `cf-delegate` to 20 KiB + 512 B.

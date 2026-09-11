@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-10-estimation-portal-integration-v1",
+  "requirements_version": "2026-09-11-accountable-worker-routing-v3",
   "requirements": [
     {
       "id": "CF-MM-016",
@@ -13,6 +13,78 @@
             "## One practical qualification",
             "## Preserve the security goal",
             "## Separate the claims"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-017",
+      "level": "hard",
+      "statement": "Plan vN separates responsible-primary accountability from actual execution. Substantial separable routine work uses a capable permitted route when available, while direct primary execution requires a concrete bounded exception; actual authored lineage controls independent review.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "TASK_ID | RESPONSIBLE_PRIMARY seat@effort",
+            "Delegate substantial, well-specified routine implementation",
+            "Record the concrete reason",
+            "review lineage is opposite the session that authored the work"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "Primary responsibility and actual execution are separate",
+            "does not become its author"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-MM-018",
+      "level": "hard",
+      "statement": "Candidate status, native reachability/application, scoped workload qualification, full primary promotion, and economical-default evidence are separate claims. Scoped qualification pre-registers qualifying versus comparison arms without post-hoc reclassification. Only the qualifying route/tuple must pass three fresh trials per case and qualifying arm; comparison outcomes inform claims, while invalid controls or fixtures and unresolved validity threats still block.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "Route status and actual execution",
+            "three fresh accepted trials",
+            "Comparison outcomes inform claim scope",
+            "Full primary-binding promotion",
+            "economical-default"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-evaluate-model/resources/protocol.md",
+          "markers": [
+            "scoped internal-route qualification",
+            "label each arm qualifying or comparison before launch",
+            "Comparison outcomes inform claims",
+            "not a full primary-binding promotion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-DES-018",
+      "level": "hard",
+      "statement": "The Claude design owner controls direction, real design implementation and fidelity. Candidate Claude design routes are limited to disposable qualification fixtures; scoped-qualified routes execute only exact evidenced tuples. Another family designs only under an explicit task-specific operator override, and translating settled product design into components, layout, styles, or interactions remains design implementation.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-design/SKILL.md",
+          "markers": [
+        "same Claude owner authors and implements real design and retains fidelity judgment",
+        "candidates run only disposable fixtures",
+        "explicit task-specific operator override recorded in Plan vN",
+        "Turning settled product/UX/UI"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "Claude design owner produces direction and real design implementation",
+            "Claude absence alone is not an override"
           ]
         }
       ]
@@ -175,21 +247,21 @@
     {
       "id": "CF-DES-003",
       "level": "hard",
-      "statement": "The qualified Claude judgment primary owns design-intent and fidelity judgment; default UI assignment is Claude producer (implementer check) and Codex reviewer (independent Computer Use QA via app-server); if Codex produces the UI, Claude independently QAs via Computer Use in Claude Code; Playwright remains the deterministic web driver; bounded tool collection never transfers judgment to a worker.",
+      "statement": "The qualified Claude judgment primary owns design intent, real design execution and fidelity judgment; default UI assignment is Claude responsible primary/executor (implementer check) and Codex reviewer (independent Computer Use QA via app-server). Another lineage authors design only under an explicit task-specific operator override and then Claude independently QAs; Playwright remains the deterministic web driver and bounded tool collection transfers no design authority.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
-            "applies `cf-design` and settles",
+            "applies `cf-design`, settles",
             "Codex challenges feasibility"
           ]
         },
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
-            "owns intent and fidelity judgment under `cf-design`",
-            "Default UI assignment is Claude as",
-            "never settles the direction or interprets it in place of the primary"
+            "owns intent, direction, implementation/execution and fidelity judgment under `cf-design`",
+            "Default UI assignment is Claude as responsible primary and executor",
+            "never settles the direction, authors the design"
           ]
         }
       ]
@@ -197,7 +269,7 @@
     {
       "id": "CF-DES-004",
       "level": "hard",
-      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, never treats automated accessibility evidence as complete conformance, and on interactive changes requires the producer's implementer check plus independent other-lineage Computer Use QA of the changed journeys unless Computer Use is a declared limitation.",
+      "statement": "Design review compares rendered behavior and appearance with settled intent, treats WCAG 2.2 AA as the default web target unless another explicit target governs, distinguishes evidence-backed drift from personal taste, never treats automated accessibility evidence as complete conformance, and on interactive changes requires the executor's implementer check plus independent cross-lineage Computer Use QA of the changed journeys unless Computer Use is a declared limitation.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
@@ -824,7 +896,7 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve the exact plan and task assignments; a changed plan or named producer/reviewer seat or lineage invalidates both approvals, while a same-seat trigger-based effort escalation is evidence rather than reassignment.",
+      "statement": "Both seats approve the exact plan and task assignments; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
@@ -839,7 +911,7 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "is reassignment: create Plan vN+1",
-            "same-seat trigger-based effort escalation"
+            "permitted worker change"
           ]
         }
       ]
@@ -847,21 +919,22 @@
     {
       "id": "CF-MM-005",
       "level": "hard",
-      "statement": "The host assigns every task a producer and cross-lineage reviewer by task fit, tools/context, independence, verified availability/routing, resources, and observed native usage signals only.",
+      "statement": "The host assigns every task a responsible primary, actual execution mode and binding-or-route, and cross-lineage reviewer by task fit, independence, verified native routing, resources, and honest requested-versus-observed provenance and usage evidence.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "**Host routes execution.**",
             "task fit",
-            "observed native usage signals only"
+        "observed usage",
+        "responsible primary, actual execution mode/route"
           ]
         },
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
-            "TASK_ID | PRODUCER seat@effort",
-            "verified native availability and routing"
+            "TASK_ID | RESPONSIBLE_PRIMARY seat@effort",
+            "requested from observed"
           ]
         }
       ]
@@ -869,12 +942,12 @@
     {
       "id": "CF-MM-006",
       "level": "hard",
-      "statement": "Each producer first-verifies its unit, the named other-lineage seat reviews it independently, and the directly invoked Claude judgment primary owns the integrated design/code judgment without claiming independent review of its own authored unit; a fallback is recorded without claiming the selected primary reviewed.",
+      "statement": "Each actual executor first-verifies its unit, the responsible primary inspects and accepts it, a lineage different from the actual author's reviews independently, and the directly invoked Claude judgment primary owns integrated judgment without claiming independent review of its own authored unit. Mixed diffs retain every contributing lineage and per-unit opposite-lineage review; a fully discarded attempt does not remain authorship. A fallback is recorded honestly.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
-            "**Review is producer-relative.**",
+            "**Review is author-relative.**",
             "**The Claude judgment primary owns integrated Claude judgment.**",
             "Codex supplies independent review",
             "never report that the selected Claude judgment primary reviewed the work"
@@ -883,8 +956,18 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
+            "Each actual executor first-verifies its unit",
+            "responsible primary inspects",
             "A model cannot independently review its own authored unit",
             "do not label the primary's integrated judgment"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "retain every contributing lineage in provenance",
+            "Neither contributor's pass is independent review of its own contribution",
+            "fully discards an earlier attempt"
           ]
         }
       ]
@@ -892,14 +975,14 @@
     {
       "id": "CF-MM-007",
       "level": "hard",
-      "statement": "The directly invoked qualified Claude judgment primary owns Claude judgment; only the owning primary may use qualified internal routes from the current ensemble, and workers never settle the judgment.",
+      "statement": "The directly invoked qualified Claude judgment primary owns Claude judgment; each owning primary controls its permitted internal routes, and workers never settle plans, acceptance, independent review approval, or integrated judgment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "The Claude judgment primary owns integrated Claude judgment",
-            "retain primary planning/approval duties and internal routing",
-            "never let a worker replace a primary"
+        "retain its planning, integration, and approval duties",
+        "workers replace no primary"
           ]
         },
         {
@@ -908,8 +991,8 @@
             "\"role\": \"claude-judgment-primary\"",
             "\"model_class\": \"latest-fable\"",
             "\"model_class\": \"latest-opus\"",
-            "\"effort\": \"medium\"",
-            "\"effort\": \"high\"",
+            "\"default_effort\": \"medium\"",
+            "\"default_effort\": \"high\"",
             "without transferring judgment"
           ]
         }
@@ -948,19 +1031,17 @@
     {
       "id": "CF-MM-010",
       "level": "hard",
-      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's high default; the primary retains orchestration and approval, may perform suitable high reasoning directly, and uses strongest-qualified same-family workers when delegation adds value or a trigger requires xhigh. Bounded routine workers may use medium; do not inflate effort or add a redundant high worker merely to satisfy a label. Extra catalog families are named when routing-policy triggers fire and they are available. Preserve independent plans, primary approval, owning-family internal routing, and verified native evidence.",
+      "statement": "Cross-model callers invoke both qualified primary seats directly at the current ensemble's high default; the primary retains orchestration and approval and uses capable permitted same-family reasoning routes when delegation adds value or a trigger requires xhigh. Worker effort is selected for its unit without blanket inflation. Extra catalog families are named on trigger when available. Preserve independent plans, primary approval, owning-family routing, and verified native evidence.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "Use the concrete selectors",
             "invoke each primary directly",
-            "retain primary planning/approval duties",
-            "never let a worker replace a primary",
-            "Spawn same-family high/xhigh workers",
-            "the high primary stays the orchestrator",
-            "direct xhigh when triggered",
-            "Routine work does not automatically escalate"
+        "retain its planning, integration, and approval duties",
+        "workers replace no primary",
+        "strongest capable permitted reasoning route",
+        "select effort per unit"
           ]
         },
         {
@@ -968,7 +1049,7 @@
           "markers": [
             "\"default_effort\": \"high\"",
             "\"escalation_effort\": \"xhigh\"",
-            "\"model_class\": \"qualified-terra-worker\"",
+            "\"model_class\": \"latest-terra\"",
             "Claude-side internal routing belongs to the Claude primary",
             "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
@@ -1034,23 +1115,25 @@
     {
       "id": "CF-MM-012",
       "level": "hard",
-      "statement": "Routing may use only observed native usage/route evidence; unknown state remains unknown and quota, availability, or worker routing is never inferred.",
+      "statement": "Routing records fresh native usage and route evidence without inference. Predispatch requires current native route readiness plus compatible permissions and sandbox, not a prior completed workload canary or executable presence alone. The first bounded candidate assignment may supply start, return, and applied provenance under primary inspection and acceptance; requested values remain requested until the public native surface exposes what applied. Unknown usage remains advisory unless an explicit hard limit depends on it.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
-            "observed native usage signal",
-            "unknown remains unknown",
-            "Never infer quota or availability"
+        "Usage evidence carries source/time",
+        "unknown is advisory",
+            "Never infer quota"
           ]
         },
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
           "markers": [
             "Admissible usage evidence",
-            "never infer quota, availability, or a worker route",
-            "missing signal blocks assignment",
-            "Do not silently substitute another criterion"
+            "Never combine apparently separate limits",
+            "Unknown usage is advisory",
+            "explicit hard limit",
+            "no prior completed workload canary is required",
+            "first bounded assignment may itself supply start, return"
           ]
         }
       ]
@@ -1382,7 +1465,7 @@
     {
       "id": "CF-PM-007",
       "level": "hard",
-      "statement": "A supplied task set is first partitioned by coherent durable outcome and direct dependencies rather than treated as one automatic epic boundary. Once outcome, acceptance boundaries, and the dependency graph establish one coherent multi-task epic, the orchestrating agent selects one shared non-protected integration branch from the intended protected target before allocation without asking the operator to choose a routine landing mechanism; an explicit operator request is respected only within the same clarity, safety, review, and protected-branch boundaries, never as a holding branch for unrelated work; every epic task declares that target, independent tasks branch from its current tip while a dependent task branches from the updated tip only after its predecessors land, work-start preflight follows branching, and each task completes producer verification and cross-lineage review before serialized graph-order landing; aggregate gates and both-family review then run on the exact combined diff as an additional integration layer, and only one final human-reviewed PR reaches the protected target; a different landing shape requires a recorded Plan vN rationale and approval from both primary seats, never mere convenience.",
+      "statement": "A supplied task set is first partitioned by coherent durable outcome and direct dependencies rather than treated as one automatic epic boundary. Once outcome, acceptance boundaries, and the dependency graph establish one coherent multi-task epic, the orchestrating agent selects one shared non-protected integration branch from the intended protected target before allocation without asking the operator to choose a routine landing mechanism; an explicit operator request is respected only within the same clarity, safety, review, and protected-branch boundaries, never as a holding branch for unrelated work; every epic task declares that target, independent tasks branch from its current tip while a dependent task branches from the updated tip only after its predecessors land, work-start preflight follows branching, and each task completes executor verification, responsible-primary acceptance, and cross-lineage review before serialized graph-order landing; aggregate gates and both-family review then run on the exact combined diff as an additional integration layer, and only one final human-reviewed PR reaches the protected target; a different landing shape requires a recorded Plan vN rationale and approval from both primary seats, never mere convenience.",
       "sources": [
         {
           "path": ".agents/skills/cf-plan/SKILL.md",
