@@ -831,9 +831,10 @@ fn candidate_first_use_requires_native_readiness_not_a_prior_outcome() {
     let accountable_fixture = fixture_overlay("accountable-worker-routing");
     let work = overlay_file(&accountable_fixture, "routing", "WORK.md");
     assert!(
-        work.contains("current authenticated native readiness check")
+        work.contains("authenticated `codex-app` native session and model inventory")
+            && work.contains("native connection responsive")
             && work.contains("no prior completed workload canary")
-            && work.contains("public native surface will determine"),
+            && work.contains("No workload has started"),
         "first-use candidate fixture lost readiness or requested-versus-observed evidence"
     );
 }
