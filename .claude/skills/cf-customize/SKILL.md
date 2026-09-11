@@ -69,8 +69,9 @@ Then verify and **offer** remediation — never install silently.
     UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal with
     bounded cleanup — including the `cf-delegate` sibling Stop-hook preflight.
     Never use `claude -p`, bare `tmux wait-for`, or pane
-    stability as the work protocol. If Fable is unavailable, record Opus as
-    the fallback; never claim the fallback was the selected primary.
+    stability as the work protocol. If the preferred Claude primary is
+    unavailable, use the ensemble's recorded same-Claude primary fallback;
+    never claim the fallback was the selected primary.
   - **Autonomy settings** — parse and inspect the effective files rather than
     trusting their comments:
     - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
@@ -270,9 +271,15 @@ confirms the final content.
   stable role. Run `codeflow doctor --check model-bindings` before proposing an
   override. A failure blocks the selection—never write a raw selector, partially
   apply entries, or silently fall back. Invoke each effective primary directly,
-  leave internal routing to that primary, require observed native routing for
-  any worker, and keep planning, approval, interpretation, and judgment with the
-  primaries.
+  leave internal routing to that primary, and apply the candidate versus
+  scoped-qualified contract in `cf-model-orchestrator`'s capability-routing
+  resource. A configured candidate with proven native routing may execute
+  bounded non-design work; configuration, availability, application and scoped
+  qualification remain separate facts. Keep planning, integration, approval,
+  interpretation, and judgment with the responsible primaries. When resource
+  signals affect a route, capture their source, time, harness/account or bucket
+  scope, shared-bucket relationship, exposed remaining/reset and freshness;
+  unknown is advisory unless an explicit hard limit depends on it.
   Configure the research,
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;

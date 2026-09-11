@@ -339,8 +339,8 @@ name: duo-model-orchestration
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md"]
-epics: [EPC-002, EPC-003, EPC-004, EPC-005]
-adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055]
+epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008]
+adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060]
 ```
 
 `/cf-model-orchestrator` is the host-neutral default for every non-trivial
@@ -353,12 +353,16 @@ the same immutable brief before either sees the other's conclusions. This is an
 anti-anchoring requirement: Codex must not be reduced to critiquing a plan
 Claude has already supplied. After both drafts exist,
 Claude leads design. The host reconciles a versioned plan whose task rows name
-the producer and cross-lineage reviewer from verified capability, context,
-resources, and observed native usage evidence. Both seats approve those
-assignments before implementation; changing a named seat or lineage invalidates
-the approvals. Each producer first-verifies its unit, the other lineage reviews
-it independently, and the selected `claude-judgment-primary` owns integrated
-Claude quality judgment without claiming independent review of its own unit.
+the responsible primary, actual binding-or-route executor, execution mode,
+routing reason and provenance, available usage evidence with freshness or an
+explicitly unknown value, and cross-lineage reviewer.
+Both seats approve those assignments before implementation; changing ownership,
+scope, lineage, isolation, or a named reviewer invalidates the approvals, while
+a permitted primary-owned executor change inside that boundary does not. Each
+actual executor first-verifies its unit, the responsible primary inspects and
+accepts it, and a lineage different from the actual author's reviews it
+independently. The selected `claude-judgment-primary` owns integrated Claude quality judgment
+without claiming independent review of its own unit.
 For material product, UX, interaction, or visual-direction work, the
 orchestrator loads `cf-design` and records a proportionate `DESIGN_INTENT`
 inside that same plan. Cosmetic changes may collapse as not applicable,
@@ -372,8 +376,14 @@ one named unresolved material choice and stop when it is settled. Material
 references and assets retain proportionate authority, rights/privacy,
 transformation, and product-use provenance, while material feedback names the
 exact reviewed version in Plan vN+1 rather than a parallel design database.
-The Claude judgment role leads intent, Codex challenges feasibility and
-fidelity, and both approve the exact plan. Review anchors blocking design
+The Claude judgment role leads intent, owns real design implementation and
+fidelity, and directly executes until a matching Claude design route is
+scoped-qualified. Candidate design routes are limited to controlled disposable
+qualification fixtures; scoped-qualified routes execute only exact evidenced
+tuples and never acquire direction or fidelity-approval authority. Another
+family designs only under an explicit task-specific operator override—Claude
+absence alone is not one. Codex challenges feasibility and fidelity, and both
+approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
 behavior rather than taste. The design-direction eval pack covers this
 selection, operator precedence, evidence-grounded design-choice review,
@@ -391,9 +401,9 @@ qualified binding. The standing pair remains the quality floor. Extra
 catalog families (today Grok) are named when a routing-policy trigger fires
 and the family is available; unavailable is an evidenced limitation, never a
 silent third vote (ADR-0054). Primaries default to high, use proportionate
-medium/high workers when useful, and obtain same-family xhigh reasoning on trigger
+worker effort when useful, and obtain same-family xhigh reasoning on trigger
 mid-session rather than restarting the host
-(ADR-0056). Default UI assignment is Claude implementer check plus Codex
+(ADR-0056). Default UI assignment is Claude execution and implementer check plus Codex
 Computer Use QA on the app-server; if Codex produced the UI, Claude QAs
 independently. Another harness, including Hermes, normally delegates the
 repository task to one native CodeFlow host; direct coordination requires both
@@ -402,8 +412,9 @@ shared quality and routing resources require reproducible
 evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
 coverage floor where measurable (90% normal target), security review, and
 bounded rework. It also blocks material avoidable complexity: both seats review
-design proportionality, every producer first-verifies the smallest coherent
-implementation, the other lineage independently reviews it, and the directly
+design proportionality, every executor first-verifies the smallest coherent
+implementation, the accountable primary inspects it, a lineage different from
+the actual author's independently reviews it, and the directly
 invoked Claude judgment primary reviews the settled design and actual
 integrated diff for the final quality verdict. Substantial prose additionally
 loads `cf-editorial-review`: both seats protect technical meaning and evidence,
@@ -411,11 +422,15 @@ while the Claude judgment primary owns the final contextual voice and editorial
 verdict. Cross-model
 callers invoke both primary seats directly using the selectors, default and
 escalation effort, triggers, and permitted internal routes in the current
-ensemble record. Primary seats retain their plan and approval duties, each
-owning primary controls internal routing, and the selected Claude primary owns
-Claude-side judgment.
-Each run records actual model versions, effort, routing evidence, and escalation
-rationale rather than inferring usage state.
+ensemble record. Primary seats retain their plan, integration and approval
+duties; each owning primary controls its internal routes, and the selected
+Claude primary owns Claude-side judgment. A natively proven candidate may
+execute bounded non-design work under primary review without becoming
+qualified. A scoped-qualified claim is limited to its evidenced tuples and
+remains distinct from full primary promotion or an economy/default claim. Each
+run records actual model versions, applied effort and route,
+requested-versus-observed provenance, and scoped usage evidence rather than
+inferring availability, application, quota, or savings.
 
 For a material changed journey, the end-to-end plan maps the affected entry,
 in-project components, persistence/queue, external seam, infrastructure/runtime
@@ -542,8 +557,8 @@ name: model-binding-evaluation
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005]
-adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055]
+epics: [EPC-003, EPC-004, EPC-005, EPC-008]
+adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060]
 ```
 
 `/cf-evaluate-model` qualifies a new model/version, native harness release,
@@ -559,11 +574,11 @@ source-controlled harness catalog marks a harness `capability-supported` only
 after evidence of native-interactive execution, runtime provenance, configured
 tools, scoped work, bounded failure, recheckable results, an effective
 permission boundary, and the git backstop. Catalog status does not qualify a
-concrete model binding. One current
-ensemble record owns concrete primary selectors, effort policy, worker classes,
-and escalation triggers. A new harness or model name is not usable merely
-because it parses; the harness needs catalog evidence and the concrete binding
-needs approved native full qualification.
+concrete model binding. One current ensemble record owns concrete primary
+selectors, effort policy, typed internal routes, route status, and escalation
+triggers. A new harness or model name is not usable as a standing primary merely
+because it parses; the harness needs catalog evidence and a concrete primary
+binding needs approved native full qualification.
 Standard/full projects may then reference an approved binding ID for an exact
 stable role in `.codeflow/model-selection.json`. The file is reference-only;
 doctor resolves it atomically and fails closed on malformed, ineligible,
@@ -573,6 +588,18 @@ Composable diagnostic packs select existing cases without changing graders or
 promotion. Approved full results can emit non-secret local binding records;
 doctor detects record contradictions and observable harness/settings drift
 without launching, inferring, promoting, or routing a model (ADR-0039).
+
+A configured candidate is distinct from native availability and applied
+selection: current routing evidence may permit bounded non-design execution
+under owning-primary inspection without establishing scoped quality. A
+scoped-qualified claim covers only exact evidenced harness/selector/effort/
+workload tuples and requires three fresh accepted trials per pre-registered
+case and arm, complete applied provenance, primary integration, cross-family
+review, and no unresolved validity threat. The evidence path belongs to the
+catalog's source repository. This focused status never substitutes for full
+primary-binding promotion; an economical-default recommendation separately
+requires measured all-attempt benefit including coordination and rework
+(ADR-0060).
 
 The hard `CF-OUT-002` contract evaluates contextual editorial quality without
 surface-cue policing. Its cases cover technical semantic preservation,

@@ -161,24 +161,24 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Codex App or interactive Codex CLI",
         "Grok Build (interactive `grok` CLI)",
         "Other harness, including Hermes",
-        "Claude produces design",
+        "Claude design owner produces direction and real design execution",
         "never a silent third vote",
         "Name extra families on trigger if available",
-        "Spawn same-family high/xhigh workers",
+        "strongest capable permitted reasoning route",
         "Consult canaries in grok-host.md",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
-        "**Review is producer-relative.**",
+        "**Review is author-relative.**",
         "**The Claude judgment primary owns integrated Claude judgment.**",
         "task fit",
         "observed native usage signals only",
         "Codex supplies independent review",
         "owns the final quality verdict",
-        "**Qualified reasoning seats.**",
+        "**Accountable route use.**",
         "Use the concrete selectors",
         "invoke each primary directly",
-        "retain primary planning/approval duties",
+        "retain its planning, integration and approval duties",
         "never let a worker replace a primary",
         "**One orchestration owner.**",
         "never starts a nested duo",
@@ -301,17 +301,21 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     }
 
     for required in [
-        "TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort",
-        "verified native availability and routing",
-        "Unknown remains unknown",
-        "never infer quota, availability, or a worker route",
+        "TASK_ID | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION",
+        "requested from observed",
+        "Unknown usage is advisory",
+        "Never combine apparently separate limits",
         "is reassignment: create Plan vN+1",
-        "same-seat trigger-based effort escalation, including direct high→xhigh",
+        "permitted worker change",
         "Default effort is high for primary seats, not a ceiling",
-        "strongest qualified same-family reasoning seat",
+        "strongest capable permitted same-family reasoning route",
         "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
-        "Routine, well-specified work stays at the default",
+        "Delegate substantial, well-specified routine implementation",
         "both families still plan independently and cross-lineage review remains mandatory",
+        "`candidate` and `scoped-qualified` describe evidence status",
+        "three fresh accepted trials",
+        "Full primary-binding promotion",
+        "economical-default",
         "A model cannot independently review its own authored unit",
         "delegating back to the host lineage",
         "generic same-lineage subagent cannot satisfy",
@@ -319,7 +323,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "available-and-named or unavailable-with-limitation",
         "A Grok Build host coordinates the standing pair through Herdr",
         "implementer check",
-        "Default UI assignment is Claude as",
+        "Default UI assignment is Claude as responsible primary and executor",
         "Playwright remains the deterministic web driver",
         "preferred plugin or qualified official native client",
         "spawns same-family workers at that",
@@ -342,6 +346,74 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
             !skill.contains(stale_pin),
             "orchestrator must not hard-code model pin {stale_pin}"
         );
+    }
+}
+
+#[test]
+fn accountable_execution_preserves_design_and_evidence_boundaries() {
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let quality = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    ));
+    let design = normalize_whitespace(&read("assets/base/agents/skills/cf-design/SKILL.md"));
+    let cases = read("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let packs = read("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+
+    for required in [
+        "RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION",
+        "`candidate` and `scoped-qualified` describe evidence status, not native reachability",
+        "A configured candidate is usable for bounded non-design work",
+        "three fresh accepted trials for every pre-registered case and arm",
+        "Full primary-binding promotion still requires the existing complete suite",
+        "Savings or economical-default recommendations separately require measured all-attempt",
+        "review lineage is opposite the session that authored the work",
+    ] {
+        assert!(
+            routing.contains(required),
+            "accountable routing contract lost marker: {required}"
+        );
+    }
+
+    for required in [
+        "Primary responsibility and actual execution are separate",
+        "does not become its author",
+        "unknown and advisory unless an explicit hard limit depends on it",
+    ] {
+        assert!(
+            quality.contains(required),
+            "quality contract lost accountable-execution marker: {required}"
+        );
+    }
+
+    for required in [
+        "same Claude design owner owns real design implementation/execution",
+        "candidate design route is usable only in controlled disposable qualification fixtures",
+        "Translating a settled product, UX or UI design into components, layout, styles or interactions is `design-implementation`",
+        "Claude absence alone is not an override",
+    ] {
+        assert!(
+            design.contains(required),
+            "design execution contract lost marker: {required}"
+        );
+    }
+
+    for case in [
+        "unverified-worker-route-is-unavailable",
+        "proven-candidate-route-is-bounded-executor",
+        "candidate-design-route-cannot-implement-product",
+        "explicit-design-family-override-is-valid",
+        "unknown-usage-is-advisory-without-hard-limit",
+        "observed-route-overrides-requested-label",
+        "mixed-authorship-reassigns-independent-review",
+        "mixed-lineage-contributions-use-per-unit-review",
+    ] {
+        assert!(
+            cases.contains(case),
+            "missing accountable routing case: {case}"
+        );
+        assert!(packs.contains(case), "focused pack omits case: {case}");
     }
 }
 
@@ -399,7 +471,7 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
     );
     assert!(
         normalize_whitespace(&capabilities).contains(
-            "medium/high workers when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
+            "use proportionate worker effort when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
         ),
         "CAP-010 must preserve proportionate workers and mid-session escalation without host restart"
     );
@@ -823,7 +895,7 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
 
 #[test]
 fn reverse_lane_uses_hook_completion_not_pane_stability() {
-    let delegate = read("assets/base/claude/skills/cf-delegate/SKILL.md");
+    let delegate = normalize_whitespace(&read("assets/base/claude/skills/cf-delegate/SKILL.md"));
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");
 
     assert!(delegate.contains("codeflow delegate init"));
@@ -832,7 +904,8 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(
         delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
     );
-    assert!(delegate.contains("default effort; workers take escalation"));
+    assert!(delegate.contains("Launch with default effort"));
+    assert!(delegate.contains("workers take escalation"));
     assert!(delegate.contains("current-ensemble.json"));
     assert!(delegate.contains("autoMode.classifyAllShell"));
     assert!(delegate.contains("sandbox.failIfUnavailable"));

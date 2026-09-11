@@ -112,19 +112,26 @@ entry always targets the primary at default effort. Only that primary may
 dispatch same-family `ROLE: worker` escalation; never call a foreign worker
 directly. Claude subagents are not Codex; nested duos violate scope.
 
-Read the current Codex primary selector, default effort, and permitted
-worker classes from
+Read the current Codex primary selector, default effort, and typed internal
+routes from
 `../cf-model-orchestrator/resources/current-ensemble.json`. Invoke the primary
-directly with that selector and default effort; workers take escalation. Any worker requires observed native
-routing; the invoked primary retains the task, implementation, verification,
-and verdict. If `.codeflow/model-selection.json` is nonempty, first require
+directly with that selector and default effort; the receiving primary alone
+selects its permitted internal route. Follow the canonical candidate versus
+scoped-qualified and actual-execution contract in
+`../cf-model-orchestrator/resources/capability-routing.md`: a candidate with
+proven native routing may perform bounded non-design work without gaining a
+qualification claim. The responsible primary retains scope, integration,
+acceptance and the final accountable verdict; record the actual executor and
+authored lineage for review. If `.codeflow/model-selection.json` is nonempty, first require
 `codeflow doctor --check model-bindings` to pass and use only its effective
 qualified override for the active harness.
 
-Include difficulty/triggers. The primary applies capability-routing:
-default effort is not a ceiling; demanding work gets qualified high/xhigh
-workers, direct xhigh when warranted. Preserve proportionate routine work,
-primary approval, and cross-lineage review.
+Include difficulty/triggers. The primary applies capability-routing: default
+effort is not a ceiling; demanding work gets the strongest capable permitted
+reasoning route and direct xhigh when warranted, while substantial bounded routine work
+uses a capable permitted route when available. Select worker effort for the
+unit. Preserve primary accountability and actual-authored-lineage review; do
+not infer economy, qualification, availability or applied selection.
 
 **Output counts as Codex only with a native Codex thread behind it.** Every
 plugin exchange must yield the native thread ID, recheckable afterward
@@ -241,7 +248,7 @@ completion signal.
 - **Test-running review:** use a separate auto-mode interactive session with
   the same fail-closed sandbox. Instruct Claude to edit no source files and
   require a clean before/after worktree-diff comparison. If a fix is needed,
-  return it to the task's approved producer.
+  return it to the task's responsible primary and designated executor.
 - **Interactive prompts:** classifier escalations, ambiguity, and other user
   questions are handled in the same dedicated session. They never authorize a
   write silently, and a visible dialog never substitutes for the terminal

@@ -140,6 +140,31 @@ fn diagnostic_packs_only_compose_existing_cases() {
             "docs-portal-refuses-unjustified-split"
         ])
     );
+
+    let accountable = pack_entries
+        .iter()
+        .find(|pack| pack["id"] == "accountable-worker-routing")
+        .expect("accountable-worker-routing pack");
+    assert_eq!(
+        accountable["cases"],
+        serde_json::json!([
+            "unverified-worker-route-is-unavailable",
+            "proven-candidate-route-is-bounded-executor",
+            "primary-retained-tiny-warm-change",
+            "substantial-routine-retention-needs-reason",
+            "candidate-design-route-can-run-disposable-fixture",
+            "candidate-design-route-cannot-implement-product",
+            "scoped-claude-design-route-exact-tuple",
+            "wrong-lineage-design-route-rejected",
+            "explicit-design-family-override-is-valid",
+            "claude-absence-is-not-design-override",
+            "unknown-usage-is-advisory-without-hard-limit",
+            "unknown-usage-remains-unknown",
+            "observed-route-overrides-requested-label",
+            "mixed-authorship-reassigns-independent-review",
+            "mixed-lineage-contributions-use-per-unit-review"
+        ])
+    );
 }
 
 fn json(relative: &str) -> Value {

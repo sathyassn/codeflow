@@ -26,6 +26,18 @@ qualifies a role; they never encode the current model name. Requested and
 observed system identity proves the concrete binding separately. Recording a
 stable primary role requires its tagged cases to pass.
 
+A scoped internal-route qualification is not a full primary-binding promotion.
+Pre-register the exact catalog route, harness, selector, effort, workload,
+cases and arms, then retain three fresh trials per case/arm with every attempt,
+observed application, trace, primary inspection/integration, cross-family review,
+rework and coordination overhead. Any failed acceptance, missing applied
+identity/trace or unresolved validity threat leaves the route candidate. A
+successful small cohort supports only those exact tuples; an evidence path is
+relative to the repository that owns the catalog and report, not each consuming
+project. Full primary roles still require the complete suite and approved local
+binding record. Savings or economical-default claims separately require
+measured all-attempt capacity, time or cost benefit.
+
 ## Result record
 
 Store JSON with this logical shape. The validator rejects missing or extra full

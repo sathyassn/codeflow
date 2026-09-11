@@ -252,6 +252,21 @@ native session. Codex challenges the choice. Both standing primaries approve
 the exact Plan vN before implementation. Extra-family review, when a trigger
 fires and it is available, is evidence — never a silent third vote.
 
+The same Claude design owner owns real design implementation/execution and
+fidelity. While no matching Claude route is scoped-qualified for
+`design-implementation`, the Claude primary executes directly; a candidate
+design route is usable only in controlled disposable qualification fixtures.
+A scoped-qualified Claude route may execute only its settled evidenced tuples
+and never acquires direction or fidelity-approval authority. The ensemble's
+recorded same-Claude primary fallback retains Claude authority after native
+preflight when the preferred primary is unavailable. Another family may
+design only when an explicit operator instruction names that task override in
+Plan vN; Claude absence alone is not an override. Translating a settled product,
+UX or UI design into components, layout, styles or interactions is
+`design-implementation`, even when direction is already fixed. Non-design build
+plumbing, asset transfer and evidence collection remain normal routed work when
+they do not author or realize those design decisions.
+
 ## 8. Critique before build
 
 Before viewing final renders, register the applicable gates, their questions,
@@ -296,8 +311,11 @@ the reasoning behind choices; it supplies no formats, bans, or house style.
 Implementation follows the established repository architecture and the
 orchestrator's quality contract, reusing the existing design system and adding
 reusable foundations or components only where recurrence is evidenced.
-Implementer check and other-lineage Computer Use QA follow the quality
-contract; Playwright stays the web driver.
+The Claude design owner executes real design work through its primary or a
+matching scoped-qualified Claude route, and performs the implementer check.
+Other-lineage Computer Use QA follows the quality contract; Playwright stays
+the web driver. An explicit task-specific operator override records the actual
+design-author lineage so independent QA remains genuinely cross-lineage.
 
 For web surfaces, WCAG 2.2 AA is the default minimum unless the project records
 a stronger or different surface-appropriate target with its rationale.

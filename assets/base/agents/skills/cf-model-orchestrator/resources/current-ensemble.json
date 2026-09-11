@@ -280,7 +280,7 @@
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
-    "Default effort is high, not a ceiling: complex architecture, technical planning, and design use the strongest qualified same-family reasoning seat suited to the task at high or xhigh through the binding's permitted routes.",
+    "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the separate Claude owner and route-status contract.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
     "If Fable is unavailable, the Claude primary may use the documented explicit Opus degraded fallback at the same effort after native preflight, with actual scope and reduced assurance recorded. If Astra is unavailable, the Codex primary may use the documented explicit gpt-5.6-sol degraded fallback under the same conditions. These fallback paths preserve graceful operation but do not qualify or promote an internal worker route.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",

@@ -35,7 +35,7 @@ or one obvious local check.
   non-trivial repository task, including research, analysis, planning, design,
   review, substantive docs, implementation, and verification. In this Claude
   host, use the official Codex plugin; Claude leads design, while the host
-  routes each task to an approved producer and cross-lineage reviewer. The
+  records each responsible primary, actual executor, and cross-lineage reviewer. The
   qualified Claude judgment primary owns the integrated Claude verdict. A
   missing seat degrades legibly only
   after preflight. The unattended pipeline is
@@ -44,12 +44,17 @@ or one obvious local check.
   permitted worker classes from
   `.claude/skills/cf-model-orchestrator/resources/current-ensemble.json`.
   Invoke each primary directly; the Claude primary owns Claude-side internal
-  routing and judgment. Workers require verified native routing and never
-  replace either primary seat, its approval, or a named cross-lineage reviewer.
+  routing and judgment. Apply the responsibility, candidate/scoped-qualified,
+  native-evidence and actual-authorship rules in the adjacent
+  `capability-routing.md`; workers never replace either primary seat, its
+  approval, or a named cross-lineage reviewer. The Claude design owner authors
+  and executes real design work through its primary until a matching Claude
+  route is scoped-qualified; candidate design routes are disposable fixtures,
+  and another family needs an explicit task-specific operator override.
 - Match stages and process weight to the outcome: trivial → just do it;
   otherwise begin `/cf-model-orchestrator`. Research/planning-only work exits
-  after joint settlement; implementation continues through routed production,
-  producer verification, cross-lineage review, and integrated
+  after joint settlement; implementation continues through routed execution,
+  executor verification, primary acceptance, cross-lineage review, and integrated
   Claude-judgment-primary review.
   `/cf-plan` and `/cf-develop` are supporting/solo flows,
   not alternate entry points. Full ladder in the `cf-method` skill.
@@ -58,7 +63,9 @@ or one obvious local check.
   touches it.
 - **Stay lean by delegating** — the Claude mechanism for AGENTS.md's "Guard your
   context." Wide search → the `Explore` subagent; independent review → the
-  `cf-reviewer` subagent; hard in-family work → a Fable high/xhigh worker;
+  `cf-reviewer` subagent; hard in-family reasoning → the strongest capable
+  permitted same-Claude route at the effort the unit needs;
+  substantial bounded routine non-design work → a capable permitted worker;
   batch/parallel or novel orchestration → a workflow. This session stays the
   orchestrator. Parallel branches use separate worktrees, bounded fan-out based on host
   memory/CPU, explicit file ownership, and serialized integration; do not trade

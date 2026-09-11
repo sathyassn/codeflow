@@ -20,7 +20,12 @@ Drive the planned work to done.
    record does not add ceremony.
 3. Work on a correctly prefixed branch in a worktree — never on the root
    protected-branch checkout.
-4. Run the loop:
+4. Follow the approved assignment from `cf-model-orchestrator`'s canonical
+   capability-routing resource. The responsible primary may use a permitted
+   candidate for bounded non-design execution when native routing is proven;
+   it still inspects, integrates and accepts the return. Record actual execution
+   and authored lineage rather than assuming the host or primary wrote it.
+5. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
       with tests through the plan's named interfaces first, and internal unit
       tests where they carry the risk; preserve
@@ -56,5 +61,5 @@ Drive the planned work to done.
       the orchestrator's verification-selection resource: run any property,
       mutation, or architecture fitness check earned by the plan's trigger
       evidence, and report `none selected` rather than inventing ceremony.
-5. Report completion with evidence (test output, review verdict, file:line for
+6. Report completion with evidence (test output, review verdict, file:line for
    each criterion). Hand off to `cf-ship` to land it.

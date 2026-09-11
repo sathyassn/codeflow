@@ -49,8 +49,12 @@ not claim the lanes.
 
 ## Duties
 
-Host is not duty. Claude produces design in its native session. A Grok
-high host stays the orchestrator and may spawn grok-4.6 high/xhigh
-workers. Catalog Grok may produce or take named extra-family review when
-a documented trigger fires and it is available; that assignment is never a
-silent third vote.
+Host is not duty. Apply the canonical responsibility-versus-execution and route
+status rules in `capability-routing.md`; this adapter does not redefine them.
+The Claude design owner produces direction and real design execution in its
+native session unless Plan vN records an explicit task-specific operator
+override—Claude absence alone is not one. A Grok high host stays the
+orchestrator and may use its own permitted routes. Catalog Grok may execute or
+take named extra-family review when a documented trigger fires and it is
+available; actual authored lineage determines independent review, and the
+assignment is never a silent third vote.

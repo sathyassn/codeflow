@@ -67,9 +67,10 @@ counts as independent cross-lineage review.
      write grant. Verify the worktree diff. Preflight:
      `claude` is present; `herdr` when `HERDR_ENV=1`, else `tmux`; `claude mcp
      list` succeeds; a scoped interactive canary returns an authenticated
-     response. The selected Claude judgment primary
-     owns any qualified internal worker delegation and the resulting judgment;
-     the caller never invokes a worker as the Claude reasoning seat. See
+     response. The selected Claude judgment primary owns internal routing and
+     the resulting judgment under the candidate/scoped-qualified contract in
+     `../cf-model-orchestrator/resources/capability-routing.md`; the caller
+     never invokes a foreign worker as the Claude reasoning seat. See
      <https://code.claude.com/docs/en/permission-modes>.
 3. The named vendor's CLI missing, the plugin surface absent, or auth failing
    → tell the user the remedy (`codex login`; install the plugin from a Claude

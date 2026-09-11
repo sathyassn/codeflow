@@ -19,7 +19,7 @@ CHOSEN_DESIGN_AND_RATIONALE:
 DESIGN_INTENT: <N/A with reason | conform to named system | settled cf-design record>
 COMPLEXITY_JUSTIFICATION:
 TASK_ASSIGNMENTS:
-  TASK_ID | PRODUCER seat@effort | CROSS_LINEAGE_REVIEWER seat@effort | ROUTING_EVIDENCE | DEPENDENCIES
+  TASK_ID | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | ROUTING_REASON | ROUTING_EVIDENCE | USAGE | CROSS_LINEAGE_REVIEWER seat@effort | DEPENDENCIES
 TASK_GRAPH:
 ACCEPTANCE_CRITERIA:
 EDGE_AND_ERROR_CASES:
@@ -101,10 +101,11 @@ settled design, clarify it before approval; if clarification is unavailable,
 state the assumption and prefer established safe practices with reversible
 boundaries, without speculative generality.
 
-Both seats grade design proportionality before approval. Each producer
+Both seats grade design proportionality before approval. Each actual executor
 first-verifies its implementation for necessity, clarity, idiomatic structure,
-maintainability, failure behavior, and security; the named other-lineage seat
-reviews that unit independently. The directly invoked model qualified for the
+maintainability, failure behavior, and security; the responsible primary
+inspects and accepts it, then the independent cross-lineage reviewer reviews that
+unit independently. The directly invoked model qualified for the
 `claude-judgment-primary` role reviews the settled design and actual integrated
 diff and owns the final quality verdict; helpers may collect evidence but cannot
 replace that judgment. Its integrated judgment is not independent review of a
@@ -112,6 +113,27 @@ unit it authored.
 Material avoidable complexity is `changes_requested`, even when tests pass.
 A fallback records reduced assurance and never claims that the selected Claude
 judgment primary reviewed the work.
+
+Primary responsibility and actual execution are separate. The responsible
+primary owns scope, integration, acceptance and the final accountable verdict; the
+recorded executor first-verifies the unit, and independent review is opposite
+the lineage that actually authored it. A primary inspecting a worker return
+does not become its author and must not secretly duplicate the implementation.
+Substantial, well-specified, separable routine work uses a capable permitted
+route when available. Direct primary execution is valid for a tiny warm-context
+change, inseparable unresolved reasoning, material risk, route unavailability
+or bounded recovery; substantial retention records the concrete exception.
+Neither delegation nor same-model isolation establishes an economy claim.
+
+Design direction and real design implementation/execution belong to the Claude
+design owner. While no matching Claude route is scoped-qualified, the primary
+executes directly; candidate design routes are limited to controlled disposable
+qualification fixtures. A scoped-qualified Claude route may execute only its
+settled evidenced tuples and cannot change direction or approve fidelity. The
+ensemble's recorded same-Claude primary fallback retains Claude authority after
+native preflight when the preferred primary is unavailable. Another family may
+design only under an explicit task-specific operator override in
+Plan vN; absence of Claude alone is not that override.
 
 ## Materiality and prioritization
 
@@ -277,6 +299,21 @@ the command/tool/source used, the observed result, and the responsible seat.
 Prefer exact commands with exit codes, file:line references, test summaries,
 coverage output, screenshots/snapshots, or links to authoritative documentation.
 
+Execution evidence names the mode and exact binding-or-route@effort, separates
+requested selector/effort from observed application, and preserves native
+session provenance. Usage evidence includes its source, time, harness,
+account/bucket scope, shared-bucket relationship, exposed remaining/reset and
+freshness. Unknown telemetry remains unknown and advisory unless an explicit
+hard limit depends on it. A configured candidate with proven native routing may
+execute bounded non-design work; that does not make it scoped-qualified. A
+scoped route claim is limited to the exact harness/selector/effort/workload
+tuples supported by three fresh accepted trials per pre-registered case and arm,
+primary inspection/integration, independent cross-family review and complete
+trace. Failed acceptance, missing applied identity/trace or unresolved validity
+leaves it candidate. Full primary promotion still requires its full suite.
+Economical-default or savings claims additionally require measured all-attempt
+capacity, time or cost benefit including coordination and rework.
+
 Model agreement is not evidence. “Tests pass” without the executed command and
 result is not evidence. An assumption becomes verified only after a source,
 tool, or direct observation supports it. Conflicting evidence remains visible
@@ -426,9 +463,10 @@ controlled page/context, prefer a surface-specific driver and use Computer Use
 only when no narrower driver reaches the surface.
 
 On an interactive user-facing change, split verification by seat. Default UI
-assignment is Claude as producer and Codex as reviewer. The producer performs
-the **implementer check** against `DESIGN_INTENT` (design-system fit, states,
-Playwright or the platform driver). The named other-lineage reviewer
+assignment is Claude as responsible primary and executor and Codex as reviewer.
+The executor performs the **implementer check** against `DESIGN_INTENT`
+(design-system fit, states, Playwright or the platform driver). The named
+independent cross-lineage reviewer
 independently **QAs** the changed surface and affected journeys through
 Computer Use. When that reviewer is Codex, use official app-server Computer
 Use through a qualified official native client (`cf-delegate`); verify that
@@ -520,13 +558,20 @@ reviewer's unsupported taste does not.
 
 ## Independent review
 
-Each producer first-verifies its unit. The approved cross-lineage reviewer then
-reviews the actual unit, reruns relevant gates, and checks conformance with the
-chosen design. The Claude judgment primary separately reviews the integrated
+Each actual executor first-verifies its unit. The responsible primary inspects,
+integrates and accepts it. The approved reviewer from a lineage different from
+the actual author's
+then reviews the actual unit, reruns relevant gates, and checks conformance with
+the chosen design. The Claude judgment primary separately reviews the integrated
 diff and owns the Claude quality verdict. For a unit it authored, Codex is the
 independent reviewer; the primary's integrated pass is not described as
 independent review of that unit.
 Every reviewer challenges the evidence rather than accepting a summary.
+For a mixed-authorship diff, retain every contributing lineage in provenance,
+review each authored unit from a different lineage, and then inspect the
+integration. Neither contributor's pass is independent review of its own
+contribution. When recovery fully discards an earlier attempt, current
+authorship alone governs review; do not add a blanket third-family ceremony.
 
 Classify findings by severity, order them by the materiality contract above,
 and support each with a concrete trigger or reproduction plus its priority

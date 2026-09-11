@@ -86,9 +86,13 @@ You are clarifying and materializing planned work, not building it.
    status or duplicate its work tree.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
    every non-trivial repository task: both seats plan independently, Claude leads
-   design, and each implementation task records its approved producer and
-   cross-lineage reviewer. That per-task review occurs before integration and
-   is not replaced by the combined integration review. The qualified Claude
+   design, and each implementation task uses the canonical assignment record in
+   `cf-model-orchestrator/resources/capability-routing.md` to separate its
+   responsible primary from actual execution and cross-lineage review. A
+   permitted executor change within unchanged primary/task/file ownership,
+   scope, lineage-review and isolation remains execution evidence rather than a
+   Plan vN+1 mutation. That per-task review occurs before integration and is not
+   replaced by the combined integration review. The qualified Claude
    judgment primary owns the
    integrated Claude verdict regardless of the host. Solo `/cf-develop` appears
    only as the noted fallback

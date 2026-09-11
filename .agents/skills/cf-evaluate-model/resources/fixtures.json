@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-10-estimation-portal-integration-v1",
+  "fixtures_version": "2026-09-11-accountable-worker-routing-v1",
   "fixtures": [
     {
       "id": "native-route-choice",
@@ -1700,6 +1700,69 @@
       "files": {
         "WORKTREE_INVENTORY.md": "# Worktree inventory\n\nA: feat/export-ui — clean; PR 41 MERGED; recorded head equals branch tip; owner inactive.\nB: fix/retry-race — dirty and untracked; active owner: worker-b; no PR.\nC: spike/cache — clean; PR 39 CLOSED without merge; no patch-identity proof; owner unavailable; recheck trigger: owner disposition or superseding tracked task.\n\n`git worktree prune --dry-run` reports one unrelated stale administrative record whose directory no longer exists.\n",
         "CODEFLOW_STATUS.txt": "cleanup: 3 candidate(s) against origin/main\n  removable worktree feat/export-ui -> /tmp/export-ui (landed by ancestry in origin/main)\n  preserve-dirty worktree fix/retry-race -> /tmp/retry-race (local changes present)\n  retain-unproven worktree spike/cache -> /tmp/cache (not proven landed in origin/main)\n"
+      }
+    },
+    {
+      "id": "accountable-worker-routing",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/accountable-worker-routing",
+        "peer": "available",
+        "native_worker_route": "observed",
+        "route_status": "candidate"
+      },
+      "files": {
+        "WORK.md": "# Bounded backend unit\n\nImplement a pure parser helper and collect its focused test evidence. The unit is substantial, well-specified, separable, and within the responsible Codex primary's owned task. Fixture-native evidence source `codex-app worker-start`, observed at 2030-01-07T14:05:00Z, records binding `codex-engineering-primary`, route `sol-bounded-execution`, selector `gpt-5.6-sol`, effort `high`, status `candidate`, and a returned scoped diff plus focused test output. Claude is the named independent reviewer. No economy claim is requested.\n",
+        "PLAN.md": "# Approved assignment boundary\n\nTask and files are owned by the Codex engineering primary. Scope, acceptance, isolation and Claude review are fixed. An internal executor may change within that boundary when recorded with actual provenance.\n"
+      }
+    },
+    {
+      "id": "primary-retention-routing",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/primary-retention-routing",
+        "peer": "available",
+        "native_worker_route": "observed"
+      },
+      "files": {
+        "UNITS.md": "# Two implementation units\n\nA. Correct one punctuation mark in the already-open line the primary is editing; validation is one focused docs check.\nB. Implement six independent serializer cases across three files. The contract and acceptance examples are settled, the candidate route is natively proven, and no risk, unavailable dependency, unresolved reasoning or recovery condition is recorded. The proposed assignment keeps B on the already-open primary without another routing reason.\n"
+      }
+    },
+    {
+      "id": "design-route-boundaries",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/design-route-boundaries",
+        "peer": "available",
+        "claude_design_primary": "available"
+      },
+      "files": {
+        "DESIGN_ROUTES.md": "# Design route evidence and proposals\n\n- claude-design-candidate: owner lineage Claude; candidate; native selector/effort observed. Proposed use A is a disposable qualification fixture; proposed use B is the real account surface.\n- claude-design-scoped: owner lineage Claude; scoped-qualified only for harness=claude-code, selector=claude-scoped, effort=high, workload=design-implementation; reviewed evidence covers that exact tuple.\n- codex-design-scoped: owner lineage Codex; claims scoped-qualified design-implementation and is proposed for the real account surface without an operator override.\n",
+        "DESIGN_INTENT.md": "# Settled product direction\n\nFor the real account surface, translate the approved hierarchy into components, layout, styles, responsive behavior and interactions. Claude retains direction and fidelity approval.\n"
+      }
+    },
+    {
+      "id": "usage-routing-evidence",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/usage-routing-evidence",
+        "peer": "available"
+      },
+      "files": {
+        "USAGE.md": "# Native observations\n\nAt 2030-01-07T14:00:00Z, the Codex harness reports two model labels sharing account bucket B, with 40% remaining and reset at 18:00Z. It exposes no per-model split. Claude usage is unknown. Task fit and route capability are known. The brief sets no quota hard limit.\n",
+        "ROUTE.md": "# Dispatch trace\n\nRequested candidate route selector=worker-a effort=medium. Native start metadata observed selector=worker-b effort=high. The returned diff and test evidence identify worker-b/high.\n"
+      }
+    },
+    {
+      "id": "mixed-authorship-routing",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/mixed-authorship-routing",
+        "peer": "available"
+      },
+      "files": {
+        "HISTORY.md": "# Unit history\n\nThe Codex primary owns and integrates the task. Recovery unit R was authored by a Claude worker after an earlier Codex attempt was discarded; the plan still names Claude as R's reviewer from before recovery. Native provenance and R's current diff identify only Claude authorship.\n\nThe combined deliverable also retains two independent contributions: unit A's parser implementation was authored by a Codex worker and reviewed by Claude; unit B's migration adapter was produced through the Claude primary and reviewed by Codex. Both remain in the integrated diff. The Claude judgment primary will review the combined diff, but its review is not independent review of its own unit B.\n",
+        "BOUNDARIES.md": "# Safety\n\nUse native interactive sessions only. Preserve repository hooks, secret boundaries, the assigned worktree and the standing primaries' approval duties.\n"
       }
     },
     {

@@ -1,6 +1,6 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; Claude produces design in its native session; the host routes each approved task to a capable producer and cross-lineage reviewer; extra catalog families review on trigger if available, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex standing pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both models independently research, analyze, and plan; the Claude design owner produces direction and real design execution in its native session; the host records responsible primaries separately from capable execution routes and cross-lineage review; extra catalog families review on trigger if available, never as a silent third vote; the qualified Claude judgment primary owns the integrated Claude verdict; and the host reconciles a versioned dual-approved result and evidence ledger. Use for material research, analysis, planning, design, feature, fix, refactor, review, security, documentation, or verification work. Requires native interactive sessions and degrades legibly when a required seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
@@ -42,7 +42,7 @@ implementation stage for an analysis-only request.
 
 - **Research / analysis:** independent discovery → evidence comparison → joint settled findings → closeout.
 - **Plan / design:** independent discovery → Claude-led options → versioned dual-approved plan/tasks → closeout without edits.
-- **Implementation:** routed production/verification → cross-lineage unit review → Claude-judgment-primary integrated judgment → closeout.
+- **Implementation:** routed execution/verification → responsible-primary acceptance → cross-lineage unit review → Claude-judgment-primary integrated judgment → closeout.
 - **Review / verification:** independent inspection without self-review → Claude-judgment-primary integrated verdict; review grants no edit authority.
 - **Substantive documentation:** use research/plan mode when only the proposed
   content is requested; use implementation mode when repository docs will be
@@ -58,30 +58,41 @@ implementation stage for an analysis-only request.
   the primary solution design in its own native interactive session and,
   unless the brief already fixes a clear direction, compares 2–3 viable
   options. For material product, UX, UI, interaction, or visual design, it
-  also applies `cf-design` and settles `DESIGN_INTENT`. A Grok or Codex host
-  may pass options and review; it never drafts design for Claude to
-  rubber-stamp. Codex challenges feasibility, operability, security,
-  proportionality, and implementation detail.
+  also applies `cf-design`, settles `DESIGN_INTENT`, and owns real design
+  implementation/execution and fidelity. A candidate design route may run only
+  disposable qualification fixtures; a scoped-qualified Claude route may
+  execute only settled evidenced tuples without changing direction or approving
+  fidelity. The ensemble's recorded same-Claude primary fallback retains Claude
+  authority after native preflight when the preferred primary is unavailable.
+  A Grok or Codex host may pass options and review; it designs a
+  named task only when the operator explicitly records that override in Plan
+  vN—Claude absence alone is not an override. Codex challenges feasibility,
+  operability, security, proportionality, and implementation detail.
 - **Host routes execution.** Once both approve the same versioned plan, the host
-  assigns every task a producer and cross-lineage reviewer by task fit, tools/
-  context, independence, verified availability/routing, resources, and observed
-  native usage signals only. Seat/lineage reassignment invalidates approvals.
-- **Review is producer-relative.** The producer first-verifies its own unit; the
-  other lineage reviews it independently. Self-review is never independent.
+  assigns every task a responsible primary, actual execution mode and route,
+  and cross-lineage reviewer by task fit, tools/context, independence, verified
+  availability/routing, resources, and observed native usage signals only.
+  Seat/lineage reassignment invalidates approvals; permitted primary-owned
+  internal routing does not.
+- **Review is author-relative.** The actual executor first-verifies its unit;
+  the responsible primary inspects and accepts it, and a lineage different from
+  the actual author's reviews it independently. Self-review is never independent.
   Name extra families on trigger if available; never a silent third vote.
 - **The Claude judgment primary owns integrated Claude judgment.** The directly
   invoked model qualified for `claude-judgment-primary` reviews the settled
   design and integrated diff, reruns relevant tests, and owns the final quality
   verdict. Codex supplies independent review for a unit authored by that
   primary; its integrated pass is not independent review of its own unit.
-- **Qualified reasoning seats.** Use the concrete selectors, default effort,
-  triggers/workers from the ensemble: invoke each primary directly;
-  retain primary planning/approval duties and internal routing. Never infer
-  usage or routing, and never let a worker replace a primary or named
-  cross-lineage reviewer. Spawn same-family high/xhigh workers on trigger;
-  the high primary stays the orchestrator. Apply capability-routing as demand
-  changes: strongest qualified reasoning,
-  direct xhigh when triggered. Routine work does not automatically escalate.
+- **Accountable route use.** Use the concrete selectors, default effort and
+  typed routes from the ensemble; invoke each primary directly and retain its
+  planning, integration and approval duties. A natively proven candidate may
+  execute bounded non-design work without becoming qualified. Delegate
+  substantial separable routine work when a capable permitted route is
+  available; retain it on the primary only for a concrete exception named in
+  capability-routing. Never infer availability, applied routing, economy or
+  usage, and never let a worker replace a primary or named reviewer. Use the
+  strongest capable permitted reasoning route and direct xhigh when triggered; select
+  each worker's effort for its unit rather than inflating every worker.
 - **One orchestration owner.** Every invoked session declares `host`, `peer`, or
   `worker`. Only the host runs this top-level flow. A peer or worker completes
   its bounded assignment and returns evidence; it never starts a nested duo.
@@ -138,9 +149,9 @@ Detect capabilities, not model identity.
 
 | Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|
-| Claude Code | Official `codex-plugin-cc` preferred; qualified native Codex client fallback (`cf-delegate`) | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
-| Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
-| Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. Claude produces design natively. Catalog Grok may produce or take named extra-family review |
+| Claude Code | Official `codex-plugin-cc` preferred; qualified native Codex client fallback (`cf-delegate`) | Claude host | Per-task responsible-primary/executor/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task responsible-primary/executor/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. The Claude design owner authors real design natively. Catalog Grok may execute or take named extra-family review |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
 Herdr/tmux cwd is the project being worked. Same topic reuses the tab; a new
@@ -195,8 +206,9 @@ lane: solo fallback. Host is not duty; Claude produces design.
      canary. Make `autoMode.classifyAllShell` effective at user scope; Claude
      ignores it from repository settings, and repeated `--settings` flags are
      not a supported merge contract. Delegated work uses schema-v2 — `delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal
-     with bounded cleanup — and the `cf-delegate` sibling Stop-hook preflight. If Fable is
-     unavailable, record Opus as the fallback plus the same fail-closed
+     with bounded cleanup — and the `cf-delegate` sibling Stop-hook preflight.
+     When the preferred Claude primary is unavailable, use the ensemble's
+     recorded same-Claude primary fallback and retain the same fail-closed
      sandbox; spawn workers at escalation effort and keep the primary at
      default.
      Consult and no-edit review stay on `--permission-mode auto`. Never claim
@@ -227,9 +239,13 @@ lane: solo fallback. Host is not duty; Claude produces design.
    Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
    tokens never enter prompts, logs, repository files, or arbitrary commands.
 6. Record models, effort/escalation, permissions, tools, live canaries, and any
-   observed native usage signal used. Native status, routing metadata/canaries,
-   and explicit harness errors are admissible; unknown remains unknown. Never
-   infer quota or availability. Record actual versions at run time.
+   observed native usage signal used. For usage, retain source, observation
+   time, harness, account/bucket scope, shared-bucket relationship,
+   remaining/reset only when exposed, and freshness. Native status, routing
+   metadata/canaries, and explicit harness errors are admissible; unknown stays
+   advisory unless an explicit hard limit depends on it. Never infer quota,
+   availability, applied selection or savings. Record actual versions at run
+   time.
 
 An absent seat at preflight degrades legibly to the harness-native solo
 `/cf-develop` flow with a separate read-only review pass. A mid-run failure
@@ -277,9 +293,13 @@ evidence and do not manufacture replanning ceremony.
 
 ### 3. Detailed tasking
 
-After dual approval, the host expands the agreed plan into ordered tasks with:
+After dual approval, the host expands the agreed plan into ordered tasks using
+the assignment record in `resources/capability-routing.md`, with:
 
-- task id, producer/reviewer seat@effort, routing evidence, and dependencies;
+- task id, responsible primary/reviewer seat@effort, execution mode, actual
+  binding-or-route@effort, routing reason, requested-versus-observed routing
+  evidence, available usage evidence with freshness or explicitly `unknown`,
+  and dependencies;
 - for multi-step work, the current critical dependency or blocker, resource
   focus, and the evidence event that causes reassessment;
 - files/interfaces expected to change;
@@ -300,9 +320,10 @@ trigger evidence for any property/generative, mutation, or architecture
 fitness check—or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
-and assignments. A producer/reviewer seat or lineage change creates Plan vN+1
-and requires both approvals; trigger-based same-seat escalation (including
-high→xhigh) is ledger evidence, not reassignment.
+and assignments. A responsible-primary/reviewer seat or lineage change creates
+Plan vN+1 and requires both approvals; trigger-based same-seat escalation and a
+permitted executor change within unchanged ownership/scope/isolation are ledger
+evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
@@ -327,22 +348,34 @@ anchor check. The orchestrator owns independent discovery and settlement;
 `cf-plan` owns clarification discipline and durable materialization. Neither
 silently replaces the other.
 
-### 4. Routed production and producer verification
+### 4. Routed execution and verification
 
 Skip this stage when implementation is outside the selected outcome mode.
-Otherwise each approved producer works in its scoped feature worktree and
-implements the smallest clear, idiomatic, durable diff that satisfies the task
-without speculative scope, preserves justified reuse and modular boundaries,
-and handles accepted failure and edge cases. The producer keeps the evidence
-ledger current and runs formatting, static checks, unit and
+Otherwise each approved executor works in the task's scoped feature worktree
+and implements the smallest clear, idiomatic, durable diff that satisfies the
+task without speculative scope, preserves justified reuse and modular
+boundaries, and handles accepted failure and edge cases. The executor keeps the
+evidence ledger current and runs formatting, static checks, unit and
 integration tests, relevant end-to-end tests, coverage, dependency/security
 checks, and UI-driven checks required by the quality contract. Task branches
 are not final evidence: integrate them in the approved order, rerun affected
 checks after each landing, and run the aggregate suite on the combined diff.
-The producer fixes and verifies a clear, safe, local, in-scope improvement when
+The executor fixes and verifies a clear, safe, local, in-scope improvement when
 validation is bounded rather than reflexively deferring it. Only uncertain
 secondary observations enter the consolidated deferral batch; work does not
 switch to cosmetic bait while actionable material work remains.
+
+The plan's responsible primary need not author every byte. It delegates
+substantial, well-specified, separable routine implementation, evidence and
+review-support units to a capable permitted route when native routing is proven,
+then inspects, integrates and accepts the return without secretly duplicating
+it. Candidate status permits this bounded non-design execution but proves
+neither qualification nor economy. A tiny warm-context change, inseparable
+unresolved reasoning, material risk, route unavailability or bounded recovery
+may stay on the primary; substantial retention records which exception applies.
+Same-family workers stay owned by their primary. Approved cross-family
+production enters the receiving primary, never its worker directly, and the
+actual authored lineage determines independent review.
 
 For a Claude host, prefer the official plugin for Codex-produced or Codex-reviewed
 units; its qualified native fallback follows `cf-delegate`:
@@ -361,16 +394,19 @@ actual values; otherwise label them requested — a project-level high default i
 a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 
-For a Codex host, Codex-produced work stays in the current worktree and session;
-Claude-primary- or Claude-worker-produced units stay in their native Claude
-session. In either direction, the approved other-lineage reviewer independently
-inspects the unit and its evidence before integration. Workers return to their
-primary seat; workers never approve plans or replace the named reviewer.
+For any host, each unit stays in its assigned worktree, but execution may occur
+in the host primary, its native worker, or an approved cross-family primary as
+recorded by the assignment contract. Do not infer authorship from the host or
+worktree. The approved reviewer from a lineage different from the actual author's
+independently inspects the unit and its evidence before integration. Workers
+return to their primary seat; workers never approve plans or replace the named
+reviewer.
 
 ### 5. Cross-lineage review and integrated Claude judgment
 
-For implementation/review modes, each unit carries the named other-lineage
-review and any finding returns to that unit's producer. Then the directly
+For implementation/review modes, each unit carries review by the lineage other
+than its actual executor, and any finding returns to the responsible primary
+and executor. Then the directly
 invoked `claude-judgment-primary` reviews the actual integrated diff rather than
 task summaries. It reruns relevant tests, grades every acceptance criterion
 with evidence, rejects unnecessary or non-idiomatic complexity and brittle
@@ -393,8 +429,9 @@ inspection actions, explicitly prohibit source edits, and require the worktree
 diff to remain unchanged after review. This is verification authority, not an
 implementation handoff.
 
-Any confirmed issue returns to its designated producer. Rework is bounded to two rounds and
-requires fresh evidence. A deterministic failure or unverified criterion blocks
+Any confirmed issue returns to its responsible primary and designated executor.
+Rework is bounded to two rounds and requires fresh evidence. A deterministic
+failure or unverified criterion blocks
 completion. If the selected Claude judgment primary is unavailable, record the
 fallback and reduced assurance;
 never report that the selected Claude judgment primary reviewed the work.
@@ -402,8 +439,8 @@ never report that the selected Claude judgment primary reviewed the work.
 Before closeout, both primary seats inspect the consolidated deferral batch
 once. They choose `fix now`, `track once`, or `drop` for each related set,
 challenge any convenience-based postponement, and investigate repeated minor
-symptoms as one possible material cause. A fix returns to its designated
-producer and repeats the affected verification/review. A worthwhile deferral
+symptoms as one possible material cause. A fix returns to its responsible
+primary and designated executor and repeats the affected verification/review. A worthwhile deferral
 uses one existing tracking altitude and an event-based revisit trigger; no
 batch, missing seat, or preference-only note is silently upgraded to agreement
 or durable work. A scheduled/background peer task, notification promise, or
@@ -416,7 +453,8 @@ closes the checkpoint.
 Both seats approve the final diff and evidence ledger. The host reports:
 
 - final plan version and both approvals;
-- session roles and every producer/reviewer assignment with routing evidence;
+- session roles and every responsible-primary/executor/reviewer assignment with
+  routing reason, requested-versus-observed provenance and usage evidence;
 - design option chosen (or the recorded waiver);
 - acceptance criteria with reproducible evidence;
 - exact test, coverage, security, and UI results;
