@@ -1923,6 +1923,7 @@ fn protocol_is_native_interactive_and_cleanup_is_fail_closed() {
         "removes this evaluation skill from the fixture",
         "never authorizes deleting a duty",
         "fixes qualifying versus comparison arms before launch",
+        "integration, cross-family review, trace, and overhead",
         "failed qualifying acceptance",
         "Comparisons inform claims but do not gate the qualifying tuple",
     ] {

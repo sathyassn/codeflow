@@ -250,10 +250,6 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
     let policy = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
     ));
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
-
     for required in [
         "\"seat\": \"claude-primary\"",
         "\"role\": \"claude-judgment-primary\"",
@@ -333,14 +329,19 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
             "capability-routing contract lost marker: {required}"
         );
     }
+}
 
+#[test]
+fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
     for superseded in ["**Codex implements.**", "Fixed role binding"] {
         assert!(
             !skill.contains(superseded),
             "orchestrator retained superseded fixed-role marker: {superseded}"
         );
     }
-
     for stale_pin in ["Fable 5", "gpt-5.6-sol"] {
         assert!(
             !skill.contains(stale_pin),
