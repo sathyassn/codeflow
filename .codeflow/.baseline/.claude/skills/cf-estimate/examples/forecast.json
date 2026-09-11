@@ -1,0 +1,435 @@
+{
+  "schema_version": 1,
+  "id": "fictional-read-contract-v1",
+  "anchor_epoch_seconds": 0,
+  "horizon_seconds": 28800,
+  "profile": {
+    "path": ".agents/skills/cf-estimate/examples/profile.md",
+    "sha256": "ffbb5e1d14c587d0cada70ac70de4176b64d452165065f0b706bd2933cb2059a"
+  },
+  "rubric": {
+    "path": ".agents/skills/cf-estimate/references/rubric.md",
+    "sha256": "6be380b10ecf6b156169bb31c5ca6b368d054eac12523bd2912f971c4d2f6d21"
+  },
+  "packages": [
+    {
+      "id": "read-contract",
+      "source": {
+        "kind": "declared",
+        "pin": {
+          "path": ".agents/skills/cf-estimate/examples/brief.md",
+          "sha256": "0e58f866936dd1b18169d6987d1f33b13eb1a54447589129166e6d2a385b6bd4"
+        },
+        "reference": "Fictional fixture only; not a canonical task or external tracker attestation."
+      },
+      "context_pins": [],
+      "grade": "easy",
+      "grade_evidence": [
+        "S2=1; other S/C/X/T/R anchors zero as explained in the pinned brief. Scope, ownership and acceptance are settled; consumed integration retains delivery time."
+      ],
+      "duration_basis": "judgment",
+      "stage_exclusions": []
+    }
+  ],
+  "boundaries": [],
+  "resources": [
+    {
+      "id": "producer",
+      "capacity": 1,
+      "windows": [
+        {
+          "start_seconds": 0,
+          "end_seconds": 28800
+        }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "capacity": 1,
+      "windows": [
+        {
+          "start_seconds": 0,
+          "end_seconds": 28800
+        }
+      ]
+    },
+    {
+      "id": "release-owner",
+      "capacity": 1,
+      "windows": [
+        {
+          "start_seconds": 0,
+          "end_seconds": 28800
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "favorable",
+      "assumptions": [
+        "Fictional favorable judgment; preserve independent review and all acceptance checks. No probabilistic or calibrated claim."
+      ],
+      "activities": [
+        {
+          "id": "implement",
+          "package_id": "read-contract",
+          "stage": "implement",
+          "start_seconds": 0,
+          "duration_seconds": 1800,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [],
+          "after_boundaries": [],
+          "basis": "Illustrative 30 minutes for implement; replace with project-specific evidence."
+        },
+        {
+          "id": "review",
+          "package_id": "read-contract",
+          "stage": "review",
+          "start_seconds": 1800,
+          "duration_seconds": 900,
+          "demands": [
+            {
+              "resource_id": "reviewer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "implement"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 15 minutes for review; replace with project-specific evidence."
+        },
+        {
+          "id": "verify",
+          "package_id": "read-contract",
+          "stage": "verify",
+          "start_seconds": 2700,
+          "duration_seconds": 1200,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "review"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 20 minutes for verify; replace with project-specific evidence."
+        },
+        {
+          "id": "rework",
+          "package_id": "read-contract",
+          "stage": "rework",
+          "start_seconds": 3900,
+          "duration_seconds": 600,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "verify"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 10 minutes for rework; replace with project-specific evidence."
+        },
+        {
+          "id": "integrate",
+          "package_id": null,
+          "stage": "integrate",
+          "start_seconds": 4500,
+          "duration_seconds": 600,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "rework"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 10 minutes for integrate; replace with project-specific evidence."
+        },
+        {
+          "id": "release",
+          "package_id": null,
+          "stage": "release",
+          "start_seconds": 5100,
+          "duration_seconds": 300,
+          "demands": [
+            {
+              "resource_id": "release-owner",
+              "units": 1
+            }
+          ],
+          "after": [
+            "integrate"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 5 minutes for release; replace with project-specific evidence."
+        }
+      ],
+      "milestones": [
+        {
+          "id": "delivery",
+          "after": [
+            "release"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "planning",
+      "assumptions": [
+        "Fictional planning judgment; preserve independent review and all acceptance checks. No probabilistic or calibrated claim."
+      ],
+      "activities": [
+        {
+          "id": "implement",
+          "package_id": "read-contract",
+          "stage": "implement",
+          "start_seconds": 0,
+          "duration_seconds": 3000,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [],
+          "after_boundaries": [],
+          "basis": "Illustrative 50 minutes for implement; replace with project-specific evidence."
+        },
+        {
+          "id": "review",
+          "package_id": "read-contract",
+          "stage": "review",
+          "start_seconds": 3000,
+          "duration_seconds": 1500,
+          "demands": [
+            {
+              "resource_id": "reviewer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "implement"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 25 minutes for review; replace with project-specific evidence."
+        },
+        {
+          "id": "verify",
+          "package_id": "read-contract",
+          "stage": "verify",
+          "start_seconds": 4500,
+          "duration_seconds": 2100,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "review"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 35 minutes for verify; replace with project-specific evidence."
+        },
+        {
+          "id": "rework",
+          "package_id": "read-contract",
+          "stage": "rework",
+          "start_seconds": 6600,
+          "duration_seconds": 1500,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "verify"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 25 minutes for rework; replace with project-specific evidence."
+        },
+        {
+          "id": "integrate",
+          "package_id": null,
+          "stage": "integrate",
+          "start_seconds": 8100,
+          "duration_seconds": 900,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "rework"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 15 minutes for integrate; replace with project-specific evidence."
+        },
+        {
+          "id": "release",
+          "package_id": null,
+          "stage": "release",
+          "start_seconds": 9000,
+          "duration_seconds": 600,
+          "demands": [
+            {
+              "resource_id": "release-owner",
+              "units": 1
+            }
+          ],
+          "after": [
+            "integrate"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 10 minutes for release; replace with project-specific evidence."
+        }
+      ],
+      "milestones": [
+        {
+          "id": "delivery",
+          "after": [
+            "release"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "adverse",
+      "assumptions": [
+        "Fictional adverse judgment; preserve independent review and all acceptance checks. No probabilistic or calibrated claim."
+      ],
+      "activities": [
+        {
+          "id": "implement",
+          "package_id": "read-contract",
+          "stage": "implement",
+          "start_seconds": 0,
+          "duration_seconds": 4800,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [],
+          "after_boundaries": [],
+          "basis": "Illustrative 80 minutes for implement; replace with project-specific evidence."
+        },
+        {
+          "id": "review",
+          "package_id": "read-contract",
+          "stage": "review",
+          "start_seconds": 4800,
+          "duration_seconds": 2400,
+          "demands": [
+            {
+              "resource_id": "reviewer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "implement"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 40 minutes for review; replace with project-specific evidence."
+        },
+        {
+          "id": "verify",
+          "package_id": "read-contract",
+          "stage": "verify",
+          "start_seconds": 7200,
+          "duration_seconds": 3300,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "review"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 55 minutes for verify; replace with project-specific evidence."
+        },
+        {
+          "id": "rework",
+          "package_id": "read-contract",
+          "stage": "rework",
+          "start_seconds": 10500,
+          "duration_seconds": 2700,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "verify"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 45 minutes for rework; replace with project-specific evidence."
+        },
+        {
+          "id": "integrate",
+          "package_id": null,
+          "stage": "integrate",
+          "start_seconds": 13200,
+          "duration_seconds": 1500,
+          "demands": [
+            {
+              "resource_id": "producer",
+              "units": 1
+            }
+          ],
+          "after": [
+            "rework"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 25 minutes for integrate; replace with project-specific evidence."
+        },
+        {
+          "id": "release",
+          "package_id": null,
+          "stage": "release",
+          "start_seconds": 14700,
+          "duration_seconds": 900,
+          "demands": [
+            {
+              "resource_id": "release-owner",
+              "units": 1
+            }
+          ],
+          "after": [
+            "integrate"
+          ],
+          "after_boundaries": [],
+          "basis": "Illustrative 15 minutes for release; replace with project-specific evidence."
+        }
+      ],
+      "milestones": [
+        {
+          "id": "delivery",
+          "after": [
+            "release"
+          ]
+        }
+      ]
+    }
+  ]
+}

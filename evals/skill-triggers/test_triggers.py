@@ -143,6 +143,7 @@ class TriggerTests(unittest.TestCase):
     def test_changed_skills_name_use_when(self) -> None:
         for skill_id in (
             "cf-herdr",
+            "cf-estimate",
             "cf-plan",
             "cf-consult",
             "cf-customize",

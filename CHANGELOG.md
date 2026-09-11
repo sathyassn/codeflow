@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Optional agentic operating and estimation method (ADR-0057).** Standard and
+  full projects receive cf-estimate: anchored four-grade classification,
+  evidence-labelled scenarios, explicit resource/dependency allocation and
+  prospective outcome learning. Planning and customization actively offer a
+  project-specific preview, confirm adoption and respect existing authority or
+  decline. No universal hour bands, forced profile, second tracker or claim of
+  predictive calibration is installed.
+
 - **Grok Build as a first-class host and catalog family (ADR-0054).** Interactive
   `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
   remains `claude-judgment-primary` and `codex-engineering-primary`;
@@ -30,6 +38,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Qualified native transport fallback (ADR-0059).** Prefer the official Codex
+  plugin, but allow verified official native clients when it is incompatible.
+  Preserve safety, tools and independent-review evidence; distinguish product
+  behavior from optional transport qualification instead of blocking unrelated
+  delivery. No plugin fork, new broker or permission bypass is introduced.
 - **High default for development primaries (ADR-0056).** Claude, Codex, and
   catalog Grok primaries now start at high; bounded routine workers may use
   medium, while xhigh remains trigger-driven and owned by the receiving family.

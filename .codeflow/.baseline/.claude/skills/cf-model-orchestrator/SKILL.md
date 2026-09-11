@@ -138,15 +138,16 @@ Detect capabilities, not model identity.
 
 | Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|
-| Claude Code | Official `codex-plugin-cc` / Codex app-server only | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
+| Claude Code | Official `codex-plugin-cc` preferred; qualified native Codex client fallback (`cf-delegate`) | Claude host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task producer/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. Claude produces design natively. Catalog Grok may produce or take named extra-family review |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
 Herdr/tmux cwd is the project being worked. Same topic reuses the tab; a new
 topic gets a new tab; close it when that work is done. Claude Code reaches
-Codex via plugin/app-server only (missing plugin degrades; no Herdr CLI third
-lane). Grok reaches Codex via official `codex` CLI and the app-server daemon
+Codex preferably via plugin/app-server; an incompatible plugin permits the
+qualified native fallback in `cf-delegate`, not simulated Codex. Grok reaches
+Codex via official `codex` CLI and the app-server daemon
 (Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
 Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
 harnesses delegate to one native host unless both lanes are proven. Missing
@@ -159,6 +160,10 @@ lane: solo fallback. Host is not duty; Claude produces design.
    facts autonomously, and ask only when a missing answer changes an
    operator-owned outcome, public behavior, authority, material security
    boundary, or irreversible action.
+   When the brief concerns agentic operating/development estimates, capacity or
+   deadlines, route to `cf-estimate` after context discovery: offer a useful
+   preview, reuse compatible adoption or respect decline. Do not turn an
+   estimate request into adoption, installation or implementation authority.
 2. Identify the active host and required lane from the matrix. Set the current
    session role to `host`; every cross-family entry uses `ROLE: peer` and the
    receiving primary's default effort. Only that primary dispatches its own
@@ -172,8 +177,9 @@ lane: solo fallback. Host is not duty; Claude produces design.
      when `HERDR_ENV=1`; `tmux` is the degraded TTY. Verify account access with
      a short **interactive** Claude canary; do not treat a status subcommand as
      authoritative when it contradicts a working authenticated TTY.
-   - Claude-host lane: the `codex@openai-codex` plugin is enabled and
-     `/codex:setup` succeeds. Pass the Codex primary selector and default
+   - Claude-host preferred lane: the `codex@openai-codex` plugin is enabled and
+     `/codex:setup` succeeds; otherwise qualify the native fallback in
+     `cf-delegate` before relying on it. Pass the Codex primary selector and default
      effort from the current ensemble record on the plugin task/rescue
      invocation at default effort; workers take escalation; do not inherit
      an unobserved user default.
@@ -338,8 +344,8 @@ validation is bounded rather than reflexively deferring it. Only uncertain
 secondary observations enter the consolidated deferral batch; work does not
 switch to cosmetic bait while actionable material work remains.
 
-For a Claude host, use the official plugin for Codex-produced or Codex-reviewed
-units:
+For a Claude host, prefer the official plugin for Codex-produced or Codex-reviewed
+units; its qualified native fallback follows `cf-delegate`:
 
 - `/codex:review` or `/codex:adversarial-review` for read-only critiques;
 - `/codex:rescue --model <primary-selector> --effort <primary-default>` for

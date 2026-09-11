@@ -19,6 +19,9 @@ You are clarifying and materializing planned work, not building it.
    When the work spans areas/teams, or an external tracker/planning method may
    already own it, load `cf-method/references/project-organization.md` and
    identify the single authority before creating records.
+   For agentic operating, estimation, capacity or deadline decisions, use
+   `cf-estimate` to offer a context-specific preview, reuse compatible adoption
+   or honor decline. An estimate answer does not authorize adoption or work.
 3. Clarity gate — before drafting durable records, be able to state the problem
    and who it serves; intended outcome and public behavior; scope and non-goals;
    material authority/security/recovery constraints; testable acceptance; and

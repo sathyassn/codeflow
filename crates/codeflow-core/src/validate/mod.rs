@@ -439,7 +439,7 @@ fn validate_sections(body: &[u8], required: &[String]) -> Vec<ValidationError> {
     errs
 }
 
-fn canonical_identity(
+pub(crate) fn canonical_identity(
     path: &Path,
     data: &HashMap<String, serde_yaml::Value>,
     valid: impl Fn(&str) -> bool,

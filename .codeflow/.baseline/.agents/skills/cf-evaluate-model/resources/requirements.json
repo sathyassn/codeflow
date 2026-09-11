@@ -1,7 +1,89 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-08-high-primary-v1",
+  "requirements_version": "2026-09-10-estimation-native-fallback-v3",
   "requirements": [
+    {
+      "id": "CF-MM-016",
+      "level": "hard",
+      "statement": "An incompatible preferred integration permits a qualified official native fallback with the same authority, required tools and five evidence obligations; a safety denial cannot be evaded. Independent product trials are distinct from transport qualification; changed cohorts preserve historical records and required behavior.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-delegate/resources/native-fallback.md",
+          "markers": [
+            "## One practical qualification",
+            "## Preserve the security goal",
+            "## Separate the claims"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-EST-001",
+      "level": "hard",
+      "statement": "Offer a useful project-specific preview before adoption, persist only confirmed decisions, reuse compatible adoption, honor a decline until its event, and preserve the existing work authority.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-estimate/SKILL.md",
+          "markers": [
+            "Ask before adopting it or creating durable project records.",
+            "honor the recorded decision until its material re-offer event",
+            "never clone task status, acceptance"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-EST-002",
+      "level": "hard",
+      "statement": "Grades follow owned outcome/proof drivers and semantic refusal obligations at the rubric cuts; missing material ownership/acceptance is UNSIZED, while technique uncertainty, consequence, permission, model effort and duration remain distinct.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-estimate/references/rubric.md",
+          "markers": [
+            "Count a surface only when the package owns the changed behavior/proof.",
+            "Count semantics, not headings:",
+            "They are not universal hours, worker effort settings, legacy XS/S/M/L/XL values,"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-EST-003",
+      "level": "hard",
+      "statement": "Even at cold start produce numeric evidence-labelled full-delivery scenarios, allocate real constrained resources and boundary availability, and do not convert an estimate request into execution or risky probes.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-estimate/references/operating-model.md",
+          "markers": [
+            "Return numbers with assumptions and uncertainty, not",
+            "even a completed task status is not calendar evidence.",
+            "Obtain authority before risky or external actions."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-EST-004",
+      "level": "hard",
+      "statement": "Preserve source-pinned predictions and all started/censored outcomes; checker consistency, illustrative fixtures, model agreement and a small pilot cannot establish predictive calibration or delivery authority.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-estimate/references/operating-model.md",
+          "markers": [
+            "never replace the initial prediction with an as-built grade",
+            "completed, ongoing, cancelled, failed, reopened and superseded.",
+            "deterministic checks, cross-model agreement and a small pilot cannot establish"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-estimate/references/records.md",
+          "markers": [
+            "Historical pins stay frozen when sources change;",
+            "It does not prove realistic durations, comprehensive acceptance, code quality, authorization,"
+          ]
+        }
+      ]
+    },
     {
       "id": "CF-GIT-004",
       "level": "hard",

@@ -292,6 +292,12 @@ dest = ".claude/skills/cf-delegate/resources/claude-turn-completion.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "claude/skills/cf-delegate/resources/native-fallback.md"
+dest = ".claude/skills/cf-delegate/resources/native-fallback.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # The five workflow commands are now SKILL.md skills. Claude Code merged custom
 # commands into skills (v2.1.101, 2026-04-11): `.claude/skills/<name>/SKILL.md`
 # creates `/<name>` just like the old `.claude/commands/<name>.md` did. Keeping
@@ -652,6 +658,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-delegate/resources/claude-turn-completion.md"
 dest = ".agents/skills/cf-delegate/resources/claude-turn-completion.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/native-fallback.md"
+dest = ".agents/skills/cf-delegate/resources/native-fallback.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -1059,3 +1071,102 @@ src = "pm/spec.md.tmpl"
 dest = "project-management/templates/spec.md"
 ownership = "managed"
 tiers = ["full"]
+
+# Optional agentic estimation guidance; project forecasts remain user-owned.
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/profile.md"
+dest = ".agents/skills/cf-estimate/examples/profile.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/brief.md"
+dest = ".agents/skills/cf-estimate/examples/brief.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/forecast.json"
+dest = ".agents/skills/cf-estimate/examples/forecast.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/profile.md"
+dest = ".claude/skills/cf-estimate/examples/profile.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/brief.md"
+dest = ".claude/skills/cf-estimate/examples/brief.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/examples/forecast.json"
+dest = ".claude/skills/cf-estimate/examples/forecast.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+
+[[entry]]
+src = "agents/skills/cf-estimate/SKILL.md"
+dest = ".claude/skills/cf-estimate/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/rubric.md"
+dest = ".claude/skills/cf-estimate/references/rubric.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/operating-model.md"
+dest = ".claude/skills/cf-estimate/references/operating-model.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/records.md"
+dest = ".claude/skills/cf-estimate/references/records.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/worked-example.md"
+dest = ".claude/skills/cf-estimate/references/worked-example.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/SKILL.md"
+dest = ".agents/skills/cf-estimate/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/rubric.md"
+dest = ".agents/skills/cf-estimate/references/rubric.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/operating-model.md"
+dest = ".agents/skills/cf-estimate/references/operating-model.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/records.md"
+dest = ".agents/skills/cf-estimate/references/records.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-estimate/references/worked-example.md"
+dest = ".agents/skills/cf-estimate/references/worked-example.md"
+ownership = "managed"
+tiers = ["standard", "full"]

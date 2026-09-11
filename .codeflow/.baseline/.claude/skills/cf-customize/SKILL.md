@@ -53,10 +53,11 @@ Then verify and **offer** remediation — never install silently.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
   - **Claude-host lane** — `codex login status`, `codex mcp list`, the enabled
     `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
-    plugin/app-server is the only Claude → Codex transport (ADR-0023). If it
-    is down, degrade to solo — do not start Codex via Herdr from Claude Code.
+    plugin/app-server is preferred. If unavailable or incompatible, qualify
+    the official native fallback in `cf-delegate`; missing plugin alone does
+    not establish a missing Codex seat. Verify task tools and safety boundaries.
     Never use headless `codex exec`, a hand-rolled app-server driver,
-    tmux-driving Codex, or a third-party Grok Codex plugin.
+    or a third-party Grok Codex plugin.
   - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
     environment-variable denies), `herdr` when `HERDR_ENV=1` else `tmux`, and
     `claude mcp list`, followed by authenticated interactive TTY canaries for
@@ -237,6 +238,12 @@ confirms the final content.
   links between authorities, never status mirroring or a host-local database as
   shared team truth. Existing project practice wins when it is coherent and
   durable—propose migration only for an evidenced failure.
+- **Agentic operating/estimation method** — when useful to this project's
+  delivery or capacity decisions, invoke `cf-estimate` for a concrete preview
+  against its existing planning authority. Confirm new adoption, reuse a
+  compatible profile or honor a recorded decline until its material re-offer
+  event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
+  automatically; a setup walkthrough does not authorize method adoption.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer
