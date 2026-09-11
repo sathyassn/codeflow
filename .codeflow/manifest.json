@@ -185,7 +185,7 @@
     ".agents/skills/cf-evaluate-model/SKILL.md": {
       "src": "agents/skills/cf-evaluate-model/SKILL.md",
       "ownership": "managed",
-      "sha256": "d2742f5ff23e9a82fc06992b2bf9555745a1d6cf934337f73d97325a78cad30d",
+      "sha256": "c0337724cef5eca6a546c9ac3348f7ab46a624ea9e5027850b3100577df4b45a",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
@@ -593,7 +593,7 @@
     ".claude/skills/cf-evaluate-model/SKILL.md": {
       "src": "agents/skills/cf-evaluate-model/SKILL.md",
       "ownership": "managed",
-      "sha256": "d2742f5ff23e9a82fc06992b2bf9555745a1d6cf934337f73d97325a78cad30d",
+      "sha256": "c0337724cef5eca6a546c9ac3348f7ab46a624ea9e5027850b3100577df4b45a",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/cases.json": {

@@ -63,10 +63,13 @@ limits of catalog support in consuming scaffolds.
    `list-cases --pack <pack-id>` and run those cases explicitly. Packs may
    compose other packs, but even `release-smoke` is not a promotion suite.
    Internal-route qualification pre-registers route/harness/selector/effort/
-   workload tuples and cases/arms; runs three fresh trials each; and retains all
-   attempts, integration, cross-family review, trace, and overhead. Any failure,
-   absent observed route/trace, or validity threat leaves it candidate. It covers
-   evidenced tuples only—not primary binding, universal reliability, or economy.
+   workload tuples and cases, and fixes qualifying versus comparison arms before
+   launch. The qualifying tuple needs three fresh accepted
+   trials per case and qualifying arm; retain attempts, review, trace, and
+   overhead. A failed qualifying acceptance, absent observed route/trace, invalid
+   control/fixture, or unresolved validity threat leaves it candidate.
+   Comparisons inform claims but do not gate the qualifying tuple. It covers
+   evidenced tuples—not primary binding, universal reliability, or economy.
 4. **Materialize each trial.** Use an explicit temporary run root and the exact
    CodeFlow binary under test:
 

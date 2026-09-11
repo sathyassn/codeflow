@@ -1922,6 +1922,9 @@ fn protocol_is_native_interactive_and_cleanup_is_fail_closed() {
         "`claude -p` / `--print`",
         "removes this evaluation skill from the fixture",
         "never authorizes deleting a duty",
+        "fixes qualifying versus comparison arms before launch",
+        "failed qualifying acceptance",
+        "Comparisons inform claims but do not gate the qualifying tuple",
     ] {
         assert!(
             normalized_skill.contains(&normalized(required)),
