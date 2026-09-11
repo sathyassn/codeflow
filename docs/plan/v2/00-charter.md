@@ -170,7 +170,7 @@ later justified adjustments are recorded below without rewriting old evidence.
 
 Skills have two different limits. The **reviewed per-source ratchet** is the
 normal gate and must be deliberately updated when justified content grows. The
-**absolute class ceiling** is only a backstop: 28 KiB for the two
+**absolute class ceiling** is only a backstop: 29 KiB for the two
 routing/orchestration skills and 24 KiB for every other skill. A newly
 manifested `SKILL.md` fails until it receives one explicit ratchet; stale or
 duplicate ratchets also fail.
@@ -217,6 +217,13 @@ TSK-016's dogfood root measures 32,762 bytes (6 bytes of full-tier headroom),
 so the historical root headroom above must not be used for further additions.
 Its portable template is 30,073 bytes (647 bytes below the standard cap);
 the rendered managed baseline is 29,539 bytes (1,181 bytes below that cap).
+
+TSK-022 and ADR-0060 factor worker-route mechanics into the on-demand canonical
+resource while keeping accountability, author-relative review, qualification,
+and design-execution duties visible at their entry points. The reviewed caps are
+therefore root `AGENTS.md` 32 KiB + 256 B, routing class and orchestrator 29 KiB,
+`cf-design` 19 KiB + 512 B, `cf-evaluate-model` 9 KiB + 256 B, and
+`cf-delegate` 20 KiB + 512 B. The ratchet test is the executable authority.
 
 ### 4.5 Responsibility split
 

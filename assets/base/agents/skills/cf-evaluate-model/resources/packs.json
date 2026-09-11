@@ -99,6 +99,7 @@
         "capability-route-producer-and-reviewer",
         "cross-harness-dispatch-declares-bounded-role",
         "unverified-worker-route-is-unavailable",
+        "proven-candidate-route-is-bounded-executor",
         "peer-worker-cannot-nest-orchestrator",
         "cross-lineage-provenance-and-launch",
         "peer-unavailable-degrades-legibly",
@@ -114,6 +115,30 @@
         "cross-family-entry-cannot-skip-primary",
         "routine-work-avoids-effort-inflation",
         "extra-family-invoked-when-warranted"
+      ]
+    },
+    {
+      "id": "accountable-worker-routing",
+      "description": "Focused diagnostics for responsible-primary versus actual-executor records, candidate reachability, concrete primary-retained exceptions, exact scoped qualification, Claude design execution, usage constraints, source-owned evidence, applied provenance, recovery authorship and preserved safety boundaries. These cases do not themselves qualify a route or prove savings.",
+      "includes": [],
+      "cases": [
+        "unverified-worker-route-is-unavailable",
+        "proven-candidate-route-is-bounded-executor",
+        "primary-retained-tiny-warm-change",
+        "substantial-routine-retention-needs-reason",
+        "candidate-design-route-can-run-disposable-fixture",
+        "candidate-design-route-cannot-implement-product",
+        "scoped-claude-design-route-exact-tuple",
+        "wrong-lineage-design-route-rejected",
+        "explicit-design-family-override-is-valid",
+        "claude-absence-is-not-design-override",
+        "unknown-usage-is-advisory-without-hard-limit",
+        "unknown-usage-remains-unknown",
+        "observed-hard-usage-limit-allows-bounded-recovery",
+        "catalog-owner-resolves-route-evidence",
+        "observed-route-overrides-requested-label",
+        "mixed-authorship-reassigns-independent-review",
+        "mixed-lineage-contributions-use-per-unit-review"
       ]
     },
     {

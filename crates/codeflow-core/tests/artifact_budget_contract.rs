@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 use codeflow_core::scaffold::{DirSource, ScaffoldManifest, Tier};
 
 const KIB: usize = 1024;
-const ROOT_AGENTS_MAX_BYTES: usize = 32 * KIB;
+// TSK-022 / ADR-0060 add accountable executor and acceptance duties after
+// duplicate mechanics were factored into the canonical routing resource.
+const ROOT_AGENTS_MAX_BYTES: usize = 32 * KIB + 256;
 const STANDARD_AGENTS_MAX_BYTES: usize = 30 * KIB;
 const MINIMAL_AGENTS_MAX_BYTES: usize = 16 * KIB;
 const STANDARD_CLAUDE_MAX_BYTES: usize = 6 * KIB;
 const MINIMAL_CLAUDE_MAX_BYTES: usize = 3 * KIB;
-const ROUTING_SKILL_MAX_BYTES: usize = 28 * KIB;
+const ROUTING_SKILL_MAX_BYTES: usize = 29 * KIB;
 const OTHER_SKILL_MAX_BYTES: usize = 24 * KIB;
 const REVIEWER_AGENT_MAX_BYTES: usize = 9 * KIB;
 const SECURITY_REVIEWER_AGENT_MAX_BYTES: usize = 12 * KIB;
@@ -55,22 +57,28 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     // reaches. Each keeps only its trigger and rule here; the worked comparison
     // of content models lives in the on-demand composition reference, which grew
     // by more than the skill did. Still inside the 24 KiB non-routing ceiling.
-    ("agents/skills/cf-design/SKILL.md", 19 * KIB),
+    // TSK-022 keeps Claude design authorship, implementation, and fidelity
+    // explicit while routing mechanics remain in the canonical resource.
+    ("agents/skills/cf-design/SKILL.md", 19 * KIB + 512),
     ("agents/skills/cf-develop/SKILL.md", 4 * KIB),
     ("agents/skills/cf-docs-portal/SKILL.md", 9 * KIB),
     ("agents/skills/cf-editorial-review/SKILL.md", 6 * KIB),
     ("agents/skills/cf-estimate/SKILL.md", 6 * KIB),
-    ("agents/skills/cf-evaluate-model/SKILL.md", 9 * KIB),
+    // TSK-022 distinguishes narrow route evidence from primary promotion.
+    ("agents/skills/cf-evaluate-model/SKILL.md", 9 * KIB + 256),
     // 8 KiB after cwd-resume, unattended TTY launch, and Herdr send-text
     // delivery; 6 KiB would clip those reviewed duties.
     ("agents/skills/cf-herdr/SKILL.md", 8 * KIB),
-    // TSK-016: compact intake routes keep optional estimation discoverable.
-    ("agents/skills/cf-model-orchestrator/SKILL.md", 28 * KIB),
+    // TSK-016 keeps optional estimation discoverable; TSK-022 adds accountable
+    // primary/executor routing while detailed rules stay in on-demand resources.
+    ("agents/skills/cf-model-orchestrator/SKILL.md", 29 * KIB),
     ("agents/skills/cf-plan/SKILL.md", 9 * KIB), // optional estimation offer/consent route
     ("agents/skills/cf-present/SKILL.md", 8 * KIB),
     ("agents/skills/cf-ship/SKILL.md", 6 * KIB),
     ("agents/skills/cf-stack/SKILL.md", 4 * KIB),
-    ("claude/skills/cf-delegate/SKILL.md", 20 * KIB),
+    // TSK-022 adds candidate execution with primary acceptance and authorship
+    // provenance while retaining the transport's fail-closed lifecycle.
+    ("claude/skills/cf-delegate/SKILL.md", 20 * KIB + 512),
     ("claude/skills/cf-method/SKILL.md", 19 * KIB),
 ];
 
@@ -533,10 +541,7 @@ fn orchestration_byte_efficiency_cannot_delete_semantic_duties() {
             ("independent discovery", "**Both think independently.**"),
             ("Claude design lead", "**Claude leads design.**"),
             ("capability routing", "**Host routes execution.**"),
-            (
-                "producer-relative review",
-                "**Review is producer-relative.**",
-            ),
+            ("author-relative review", "**Review is author-relative.**"),
             (
                 "evidence over consensus",
                 "**Evidence outranks agreement.**",

@@ -7,10 +7,11 @@ metadata.
 
 ## Nodes and edges
 
-Every assignment row is one outcome-bearing node:
+Every assignment row is one outcome-bearing node and uses the canonical
+responsibility/execution fields from `capability-routing.md`:
 
 ```text
-TASK_ID | OUTCOME | PRODUCER | CROSS_LINEAGE_REVIEWER | WRITE_SCOPE | ACCEPTANCE_EVIDENCE
+TASK_ID | OUTCOME | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | AUTHORSHIP | CROSS_LINEAGE_REVIEWER seat@effort | WRITE_SCOPE | ACCEPTANCE_EVIDENCE
 ```
 
 Use one directed edge per dependency:
@@ -82,8 +83,9 @@ depends_on: [TSK-003-001]
 `depends_on` preserves non-executable structural topology. It lists every
 direct candidate predecessor, including mutually exclusive guarded candidates
 at a later join; Plan guards and ledger evidence own activation and readiness.
-Assignment rows own producer/reviewer and the task body owns acceptance
-criteria. Do not duplicate those fields into edge labels. CodeFlow accepts the
+Assignment rows own responsible primary, actual execution and reviewer; the
+task body owns acceptance criteria. Do not duplicate those fields into edge
+labels. CodeFlow accepts the
 historical `dependencies` spelling when reading older records, but new work
 writes `depends_on`; defining both is invalid. `validate --docs` checks only
 identity, references, duplicates, and acyclicity. It never interprets guards,
@@ -98,8 +100,8 @@ dependent work continues when evidence requires any of these:
 - add, remove, redirect, or change a dependency edge or decision guard;
 - change a node outcome, accepted scope or non-goal, acceptance evidence,
   cross-task interface, or security/recovery boundary;
-- change a named producer, cross-lineage reviewer, writer, shared-file owner,
-  branch/worktree owner, or lineage;
+- change a named responsible primary, cross-lineage reviewer, task/file owner,
+  branch/worktree owner, authored lineage, scope or isolation boundary;
 - change concurrency or integration constraints in a way that alters safe
   isolation, ownership, evidence, or the critical path.
 
@@ -112,7 +114,9 @@ boundary above:
 - an extra test that strengthens already-required evidence without changing
   accepted behavior or gates;
 - same-seat effort escalation on an approved trigger;
-- primary-owned internal worker routing that does not replace a named seat;
+- primary-owned internal worker routing, including a permitted executor or
+  worker-effort change, that preserves the named seats, authored-lineage review,
+  task/file ownership, scope and isolation boundary;
 - a different valid topological order under unchanged ownership, guards, and
   safety.
 
@@ -122,7 +126,7 @@ recording it does not satisfy the trace contract.
 
 Node granularity prevents both evasion and ceremony. A node is a unit that
 needs its own outcome and acceptance evidence plus at least one of: a distinct
-producer/reviewer assignment, branch/worktree, decision branch, or integration
+responsible-primary/reviewer assignment, branch/worktree, decision branch, or integration
 slot. The default shape is a **narrow complete path** that is demoable or
 verifiable on its own (schema through the exercised surface plus tests), not a
 horizontal layer-slice. Wide mechanical refactors are the exception: expand

@@ -14,8 +14,8 @@ role qualified as `claude-judgment-primary` **produces** design
 in its own native interactive session; the Codex primary challenges
 feasibility, proportionality, failure modes, fidelity, and testability. A Grok
 or Codex host may pass options and review; it never drafts the direction for
-Claude to rubber-stamp. Extra catalog families do not author design. Model
-names and effort live in the ensemble binding, not here.
+Claude to rubber-stamp. Model names and effort live in the ensemble binding,
+not here.
 
 ## 1. Select the process weight
 
@@ -252,6 +252,16 @@ native session. Codex challenges the choice. Both standing primaries approve
 the exact Plan vN before implementation. Extra-family review, when a trigger
 fires and it is available, is evidence — never a silent third vote.
 
+The same Claude owner authors and implements real design and retains fidelity
+judgment under the orchestrator's canonical routing contract, including its
+same-Claude fallback. Until a matching evidenced tuple is scoped-qualified, the
+primary executes; candidates run only disposable fixtures. Another family needs
+an explicit task-specific operator override recorded in Plan vN—Claude absence
+is not one. Turning settled product/UX/UI into components, layout, styles, or
+interactions is design implementation; plumbing, asset transfer, and evidence
+are non-design only when they realize no design decision. Scoped routes gain no
+direction or fidelity authority.
+
 ## 8. Critique before build
 
 Before viewing final renders, register the applicable gates, their questions,
@@ -296,8 +306,9 @@ the reasoning behind choices; it supplies no formats, bans, or house style.
 Implementation follows the established repository architecture and the
 orchestrator's quality contract, reusing the existing design system and adding
 reusable foundations or components only where recurrence is evidenced.
-Implementer check and other-lineage Computer Use QA follow the quality
-contract; Playwright stays the web driver.
+The Claude design owner performs the implementer check. Computer Use QA comes
+from a lineage different from the actual author under the quality contract;
+Playwright stays the web driver.
 
 For web surfaces, WCAG 2.2 AA is the default minimum unless the project records
 a stronger or different surface-appropriate target with its rationale.

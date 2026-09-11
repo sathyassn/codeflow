@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-10-estimation-portal-integration-v1",
+  "fixtures_version": "2026-09-11-accountable-worker-routing-v3",
   "fixtures": [
     {
       "id": "native-route-choice",
@@ -1700,6 +1700,94 @@
       "files": {
         "WORKTREE_INVENTORY.md": "# Worktree inventory\n\nA: feat/export-ui — clean; PR 41 MERGED; recorded head equals branch tip; owner inactive.\nB: fix/retry-race — dirty and untracked; active owner: worker-b; no PR.\nC: spike/cache — clean; PR 39 CLOSED without merge; no patch-identity proof; owner unavailable; recheck trigger: owner disposition or superseding tracked task.\n\n`git worktree prune --dry-run` reports one unrelated stale administrative record whose directory no longer exists.\n",
         "CODEFLOW_STATUS.txt": "cleanup: 3 candidate(s) against origin/main\n  removable worktree feat/export-ui -> /tmp/export-ui (landed by ancestry in origin/main)\n  preserve-dirty worktree fix/retry-race -> /tmp/retry-race (local changes present)\n  retain-unproven worktree spike/cache -> /tmp/cache (not proven landed in origin/main)\n"
+      }
+    },
+    {
+      "id": "accountable-worker-routing",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/accountable-worker-routing",
+        "peer": "available",
+        "native_worker_route": "current_readiness_verified",
+        "prior_completed_workload_canary": false,
+        "route_status": "candidate"
+      },
+      "files": {
+        "WORK.md": "# Bounded backend unit\n\nImplement a pure parser helper and collect its focused test evidence. The unit is substantial, well-specified, separable, and within the responsible Codex primary's owned task. The fixture catalog maps route `sol-bounded-execution` to selector `gpt-5.6-sol` at effort `high`. At the current reference time, 2030-01-07T14:05:00Z, an authenticated `codex-app` native session and model inventory show `gpt-5.6-sol`/`high` available, the native connection responsive, and support for the required workspace-write sandbox with approvals disabled. No workload has started and there is no prior completed workload canary. Route status is `candidate`. Claude is the named independent reviewer. No economy claim is requested.\n",
+        "PLAN.md": "# Approved assignment boundary\n\nTask and files are owned by the Codex engineering primary. Scope, acceptance, isolation and Claude review are fixed. An internal executor may change within that boundary when recorded with actual provenance.\n"
+      }
+    },
+    {
+      "id": "primary-retention-routing",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/primary-retention-routing",
+        "peer": "available",
+        "native_worker_route": "observed"
+      },
+      "files": {
+        "UNITS.md": "# Two implementation units\n\nA. Correct one punctuation mark in the already-open line the primary is editing; validation is one focused docs check.\nB. Implement six independent serializer cases across three files. The contract and acceptance examples are settled, the candidate route is natively proven, and no risk, unavailable dependency, unresolved reasoning or recovery condition is recorded. The proposed assignment keeps B on the already-open primary without another routing reason.\n"
+      }
+    },
+    {
+      "id": "design-route-boundaries",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/design-route-boundaries",
+        "peer": "available",
+        "claude_design_primary": "available"
+      },
+      "files": {
+        "DESIGN_ROUTES.md": "# Design route evidence and proposals\n\n- claude-design-candidate: owner lineage Claude; candidate; native selector/effort observed. Proposed use A is a disposable qualification fixture; proposed use B is the real account surface.\n- claude-design-scoped: owner lineage Claude; scoped-qualified only for harness=claude-code, selector=claude-scoped, effort=high, workload=design-implementation; reviewed evidence covers that exact tuple.\n- codex-design-scoped: owner lineage Codex; claims scoped-qualified design-implementation and is proposed for the real account surface without an operator override.\n",
+        "DESIGN_INTENT.md": "# Settled product direction\n\nFor the real account surface, translate the approved hierarchy into components, layout, styles, responsive behavior and interactions. Claude retains direction and fidelity approval.\n"
+      }
+    },
+    {
+      "id": "usage-routing-evidence",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/usage-routing-evidence",
+        "peer": "available"
+      },
+      "files": {
+        "USAGE.md": "# Native observations\n\nAt 2030-01-07T14:00:00Z, the Codex harness reports two model labels sharing account bucket B, with 40% remaining and reset at 18:00Z. It exposes no per-model split. Claude usage is unknown. Task fit and route capability are known. The brief sets no quota hard limit.\n",
+        "ROUTE.md": "# Dispatch trace\n\nRequested candidate route selector=worker-a effort=medium. Native start metadata observed selector=worker-b effort=high. The returned diff and test evidence identify worker-b/high.\n"
+      }
+    },
+    {
+      "id": "hard-usage-constraint",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/hard-usage-constraint",
+        "peer": "available"
+      },
+      "files": {
+        "LIMIT.md": "# Observed task limit\n\nAt 2030-01-07T15:00:00Z, the native account control reports shared bucket B at 3% remaining. The operator-set task rule forbids starting a new native worker when this bucket is at or below 5%. It permits the already-open responsible primary to complete the bounded rollback and focused verification. The candidate worker route is otherwise available and capable; no per-model split is exposed.\n",
+        "RECOVERY.md": "# Current unit\n\nA failed local edit needs a bounded rollback in the assigned worktree. Scope, acceptance, hooks, and cross-lineage review remain unchanged.\n"
+      }
+    },
+    {
+      "id": "route-evidence-ownership",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/route-evidence-ownership",
+        "peer": "available"
+      },
+      "files": {
+        "CATALOG.md": "# Published route reference\n\nCodeFlow's managed catalog at source revision synthetic-catalog-a owns route `worker-a` and repository-relative evidence path `reports/routes/worker-a.md`. CodeFlow's source contract verified that owned report. This consuming project has no local `reports/routes/worker-a.md`.\n",
+        "CONSUMER.md": "# Consumer question\n\nThis checkout contains the managed catalog entry but no local `reports/routes/worker-a.md`. A maintainer asks whether setup needs repair or a local report copy before the route can be considered.\n"
+      }
+    },
+    {
+      "id": "mixed-authorship-routing",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/mixed-authorship-routing",
+        "peer": "available"
+      },
+      "files": {
+        "HISTORY.md": "# Unit history\n\nThe Codex primary owns and integrates the task. Recovery unit R was authored by a Claude worker after an earlier Codex attempt was discarded; the plan still names Claude as R's reviewer from before recovery. Native provenance and R's current diff identify only Claude authorship.\n\nThe combined deliverable also retains two independent contributions: unit A's parser implementation was authored by a Codex worker and reviewed by Claude; unit B's migration adapter was produced through the Claude primary and reviewed by Codex. Both remain in the integrated diff. The Claude judgment primary will review the combined diff, but its review is not independent review of its own unit B.\n",
+        "BOUNDARIES.md": "# Safety\n\nUse native interactive sessions only. Preserve repository hooks, secret boundaries, the assigned worktree and the standing primaries' approval duties.\n"
       }
     },
     {
