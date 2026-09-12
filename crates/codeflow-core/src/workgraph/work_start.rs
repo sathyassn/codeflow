@@ -7,7 +7,7 @@
 //! updates files, refs, branches, worktrees, or record status.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use git2::{Repository, TreeWalkMode, TreeWalkResult};
 use thiserror::Error;
@@ -16,6 +16,30 @@ use crate::workgraph::{
     is_canonical_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id,
     is_valid_task_format_id,
 };
+
+/// Maximum task-home entries inspected by the activation probe. An exhausted
+/// inventory is an error, never evidence that durable work is absent.
+const MAX_ACTIVATION_ENTRIES: usize = 16_384;
+
+#[derive(Debug, Error)]
+pub enum DurableTrackingError {
+    #[error("cannot inspect CodeFlow state at {}: {source}", path.display())]
+    StateMetadata {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("CodeFlow state path {} is not a regular path (or is a symlink)", .0.display())]
+    StatePath(PathBuf),
+    #[error("cannot read existing CodeFlow state; repair .codeflow/project.toml")]
+    StateRead(#[from] crate::scaffold::ScaffoldError),
+    #[error("unsupported CodeFlow state schema version {0}")]
+    UnsupportedStateVersion(u32),
+    #[error("CodeFlow task-home inventory exceeds {MAX_ACTIVATION_ENTRIES} entries")]
+    TaskInventoryLimit,
+    #[error("cannot inspect CodeFlow task-home inventory")]
+    TaskInventoryUnreadable,
+}
 
 #[derive(Debug, Error)]
 pub enum WorkStartError {
@@ -162,18 +186,70 @@ fn looks_like_full_object_id(target: &str) -> bool {
     matches!(target.len(), 40 | 64) && target.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Whether this repository has opted into the full durable-work lifecycle.
+/// Whether full durable-work protection is active. Unknown relevant state is
+/// returned as an error so hook and CI callers can block it explicitly.
 ///
-/// Full-tier state remains authoritative even if its task directory was
-/// accidentally removed; the directory fallback preserves brownfield and
-/// pre-state repositories that already carry durable task records. Minimal and
-/// standard scaffolds therefore retain their documented use of `task/` as an
-/// ordinary branch prefix.
-#[must_use]
-pub fn durable_work_tracking_enabled(repo_root: &Path) -> bool {
-    crate::scaffold::state::ProjectState::load(repo_root)
-        .is_ok_and(|state| state.tier == crate::scaffold::manifest::Tier::Full)
-        || repo_root.join("project-management/tasks").is_dir()
+/// Full tier remains authoritative without task files. Lower-tier or absent
+/// state requires an actual supported TSK path in a flat or historical nested
+/// task home; a foreign directory alone is not an opt-in signal.
+///
+/// # Errors
+///
+/// Returns a typed error for malformed, unsupported or unsafe state, and for
+/// an unreadable or exhausted bounded task-home probe.
+pub fn durable_work_tracking_enabled(repo_root: &Path) -> Result<bool, DurableTrackingError> {
+    let state_dir = repo_root.join(crate::scaffold::state::CODEFLOW_DIR);
+    match std::fs::symlink_metadata(&state_dir) {
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err(DurableTrackingError::StatePath(state_dir));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(DurableTrackingError::StateMetadata {
+                path: state_dir,
+                source,
+            });
+        }
+        Ok(_) => {}
+    }
+
+    let state_path = crate::scaffold::state::ProjectState::path(repo_root);
+    match std::fs::symlink_metadata(&state_path) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(DurableTrackingError::StatePath(state_path));
+        }
+        Ok(_) => {
+            let state = crate::scaffold::state::ProjectState::load(repo_root)?;
+            if state.schema_version != 1 {
+                return Err(DurableTrackingError::UnsupportedStateVersion(
+                    state.schema_version,
+                ));
+            }
+            if state.tier == crate::scaffold::manifest::Tier::Full {
+                return Ok(true);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(DurableTrackingError::StateMetadata {
+                path: state_path,
+                source,
+            });
+        }
+    }
+
+    crate::workgraph::layout::has_task_record_path(
+        &repo_root.join("project-management"),
+        MAX_ACTIVATION_ENTRIES,
+    )
+    .map_err(|error| match error {
+        crate::workgraph::layout::InventoryError::LimitExceeded => {
+            DurableTrackingError::TaskInventoryLimit
+        }
+        crate::workgraph::layout::InventoryError::Unreadable => {
+            DurableTrackingError::TaskInventoryUnreadable
+        }
+    })
 }
 
 /// Whether a stable target resolves to a real local or remote-tracking branch.
@@ -675,6 +751,33 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
+    #[cfg(unix)]
+    struct RestorePermissions {
+        path: PathBuf,
+        original: fs::Permissions,
+    }
+
+    #[cfg(unix)]
+    impl RestorePermissions {
+        fn deny(path: &Path) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
+            let original = fs::metadata(path).unwrap().permissions();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+            Self {
+                path: path.to_path_buf(),
+                original,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, self.original.clone());
+        }
+    }
+
     #[test]
     fn tree_path_classifier_matches_only_supported_record_layouts() {
         assert_eq!(
@@ -930,10 +1033,22 @@ mod tests {
     #[test]
     fn durable_work_tracking_is_tier_and_layout_aware() {
         let absent = tempfile::tempdir().unwrap();
-        assert!(!durable_work_tracking_enabled(absent.path()));
+        assert!(!durable_work_tracking_enabled(absent.path()).unwrap());
 
         std::fs::create_dir_all(absent.path().join("project-management/tasks")).unwrap();
-        assert!(durable_work_tracking_enabled(absent.path()));
+        assert!(!durable_work_tracking_enabled(absent.path()).unwrap());
+        std::fs::write(
+            absent.path().join("project-management/tasks/notes.md"),
+            "foreign notes",
+        )
+        .unwrap();
+        assert!(!durable_work_tracking_enabled(absent.path()).unwrap());
+        std::fs::write(
+            absent.path().join("project-management/tasks/TSK-001.md"),
+            "malformed CodeFlow-shaped record",
+        )
+        .unwrap();
+        assert!(durable_work_tracking_enabled(absent.path()).unwrap());
 
         let full = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(full.path().join(".codeflow")).unwrap();
@@ -950,7 +1065,149 @@ permission_preset = "strict"
 "#,
         )
         .unwrap();
-        assert!(durable_work_tracking_enabled(full.path()));
+        assert!(durable_work_tracking_enabled(full.path()).unwrap());
+    }
+
+    #[test]
+    fn durable_work_tracking_rejects_indeterminate_state_and_keeps_legacy_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".codeflow");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let state_path = state_dir.join("project.toml");
+        std::fs::write(&state_path, "tier = [malformed").unwrap();
+        assert!(matches!(
+            durable_work_tracking_enabled(dir.path()),
+            Err(DurableTrackingError::StateRead(_))
+        ));
+        std::fs::write(
+            &state_path,
+            r#"schema_version = 9
+tier = "minimal"
+scaffold_version = "3.0.0"
+stack = "rust"
+areas = []
+policy_armed = true
+git_hooks = "wired"
+permission_preset = "strict"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            durable_work_tracking_enabled(dir.path()),
+            Err(DurableTrackingError::UnsupportedStateVersion(9))
+        ));
+        std::fs::write(
+            &state_path,
+            r#"schema_version = 1
+tier = "standard"
+scaffold_version = "3.0.0"
+stack = "rust"
+areas = []
+policy_armed = true
+git_hooks = "wired"
+permission_preset = "strict"
+"#,
+        )
+        .unwrap();
+        assert!(!durable_work_tracking_enabled(dir.path()).unwrap());
+        std::fs::create_dir_all(dir.path().join("project-management/epics/EPC-001/tasks")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join("project-management/epics/EPC-001/tasks/TSK-001-001.md"),
+            "malformed CodeFlow-shaped record",
+        )
+        .unwrap();
+        assert!(durable_work_tracking_enabled(dir.path()).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_work_tracking_rejects_nonregular_and_dangling_state_paths() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".codeflow");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        symlink("absent.toml", state_dir.join("project.toml")).unwrap();
+        assert!(matches!(
+            durable_work_tracking_enabled(dir.path()),
+            Err(DurableTrackingError::StatePath(_))
+        ));
+        std::fs::remove_file(state_dir.join("project.toml")).unwrap();
+        std::fs::create_dir(state_dir.join("project.toml")).unwrap();
+        assert!(matches!(
+            durable_work_tracking_enabled(dir.path()),
+            Err(DurableTrackingError::StatePath(_))
+        ));
+        std::fs::remove_dir(state_dir.join("project.toml")).unwrap();
+        let fifo = state_dir.join("project.toml");
+        let created = Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(created.success());
+        assert!(matches!(
+            durable_work_tracking_enabled(dir.path()),
+            Err(DurableTrackingError::StatePath(_))
+        ));
+        std::fs::remove_file(&fifo).unwrap();
+        std::fs::remove_dir(&state_dir).unwrap();
+        symlink("missing-state-dir", &state_dir).unwrap();
+        assert!(matches!(
+            durable_work_tracking_enabled(dir.path()),
+            Err(DurableTrackingError::StatePath(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_work_tracking_reports_unreadable_state_and_task_home() {
+        use std::io::ErrorKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".codeflow");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_path = state_dir.join("project.toml");
+        fs::write(
+            &state_path,
+            r#"schema_version = 1
+tier = "minimal"
+scaffold_version = "3.0.0"
+stack = "rust"
+areas = []
+policy_armed = true
+git_hooks = "wired"
+permission_preset = "strict"
+"#,
+        )
+        .unwrap();
+        let denied_state = RestorePermissions::deny(&state_path);
+        match fs::read(&state_path) {
+            Ok(_) => eprintln!("EACCES state probe unavailable under this test identity"),
+            Err(error) => {
+                assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+                assert!(matches!(
+                    durable_work_tracking_enabled(dir.path()),
+                    Err(DurableTrackingError::StateRead(_))
+                ));
+            }
+        }
+        drop(denied_state);
+        assert!(!durable_work_tracking_enabled(dir.path()).unwrap());
+        fs::remove_file(&state_path).unwrap();
+
+        let tasks = dir.path().join("project-management/tasks");
+        fs::create_dir_all(&tasks).unwrap();
+        let denied_tasks = RestorePermissions::deny(&tasks);
+        match fs::read_dir(&tasks) {
+            Ok(_) => eprintln!("EACCES task-home probe unavailable under this test identity"),
+            Err(error) => {
+                assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+                assert!(matches!(
+                    durable_work_tracking_enabled(dir.path()),
+                    Err(DurableTrackingError::TaskInventoryUnreadable)
+                ));
+            }
+        }
+        drop(denied_tasks);
+        assert!(!durable_work_tracking_enabled(dir.path()).unwrap());
     }
 
     #[test]

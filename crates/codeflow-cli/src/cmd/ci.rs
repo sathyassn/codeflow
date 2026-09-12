@@ -176,9 +176,26 @@ pub fn run(args: &CiArgs) -> i32 {
     // A durable task branch may contain implementation only after its planning
     // record is present on the declared integration target. This uses the same
     // read-only merge-base preflight as `codeflow work start` and pre-commit.
-    if branch.starts_with("task/") && durable_work_tracking_enabled(&root) {
-        evaluate_work_start(&root, &branch, &mut tagged);
-        ran.push("work-start");
+    if branch.starts_with("task/") {
+        match durable_work_tracking_enabled(&root) {
+            Ok(true) => {
+                evaluate_work_start(&root, &branch, &mut tagged);
+                ran.push("work-start");
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tagged.push(TaggedViolation {
+                    sha: None,
+                    violation: Violation::new(
+                        "work.tracking_state",
+                        PolicyLevel::Block,
+                        format!("cannot determine durable-work tracking: {error}"),
+                        "repair CodeFlow state or task-home access before task work".to_string(),
+                    ),
+                });
+                ran.push("work-start");
+            }
+        }
     }
 
     // --- PR-body check ----------------------------------------------------
