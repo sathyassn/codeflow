@@ -7,16 +7,19 @@ created: {{DATE}}
 
 # SPC-{{NNN}} — {{TITLE}}
 
-<!-- Specs are inputs, not living documents. `codeflow spec new --for
+<!-- Specs are optional frozen work inputs, not living requirements. `codeflow spec new --for
      EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
      item. Write one only when interfaces, formats, or behavior need pinning
      down before building; many work items need no spec. `approved` requires
      no unresolved open question. Set `implemented` and freeze the record when
-     the consuming work ships; later change gets a new spec. -->
+     the consuming work ships; later change gets a new spec. Keep maintained
+     requirements and executable schemas current at their declared authority. -->
 
 ## Summary
 
-<!-- What is being pinned down and why the consuming work needs it. -->
+<!-- What is being pinned down and why. Link the authoritative living source
+     and revision when applicable; do not duplicate it here or invent an
+     external_refs frontmatter field. -->
 
 ## Delta against current capability
 

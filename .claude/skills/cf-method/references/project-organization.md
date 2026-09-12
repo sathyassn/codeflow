@@ -6,9 +6,57 @@ external tracker, or handling discoveries during implementation. It is an
 opinionated default for durable projects, not a reason to replace an existing
 credible authority.
 
+## Earn the project shape
+
+For a new project, start with the accepted product, users, change horizon, and
+delivery constraints. Map responsibilities and the interfaces between them;
+then decide which boundaries deserve a native unit or an explicit owner:
+
+- **Source and build:** use the language's real package/workspace boundaries.
+  Share code only for actual consumers and a maintained contract, not to make
+  every directory look symmetrical.
+- **Runtime and release:** separate a process, deployment, or independently
+  versioned artifact when scaling, failure recovery, operations, or release
+  cadence requires it. A package is not automatically a service, and a
+  separate release version alone does not establish independent governance.
+- **Data and trust:** identify who can write a schema, publish a contract, hold
+  a credential, or cross a trust boundary. A folder name is not access control;
+  enforce the boundary in the applicable runtime, policy, and tests.
+- **Verification:** keep native tests with their units and place cross-system
+  journeys/contracts where their real integration can be exercised. Do not
+  create a tools, contracts, design-system, or deployment tree without an
+  accepted use and a named authority for its contents.
+
+For an existing project, first locate its manifests, deployable units, data
+owners, local instructions, CI, and accepted knowledge and work authorities.
+Keep a coherent native layout and vocabulary; do not move source or create
+parallel docs/tasks for visual conformity. Record the boundary map in the
+project-owned architecture and nearest local instructions. Propose a migration
+only for an evidenced conflict or operational cost, with its owner and path to
+reconcile it. `cf-customize` performs this post-init project-specific review;
+the human adoption guide covers choices that must be made before `init`.
+Unlike later root-discovering commands, `init` and `update` use the process
+current directory. Standard docs and full work records have fixed operating
+destinations; a prose link does not relocate a parsed record. Recorded tier
+only rises, and recognizable historical tasks may keep tracking active below
+full. Default init preserves existing content mechanically, but skipped files,
+combined instructions, and `.new` update conflicts need semantic
+reconciliation. Foreign content at a parsed record home may still fail an
+explicit `validate --docs` even when automatic task gates are inactive.
+
+For example, an order product may have customer and operator web apps using an
+actual shared design system, one order API owning order data and migrations,
+and an asynchronous receipt worker with its own failure and scaling lifecycle.
+An API/event contract and cross-system test are warranted if both runtimes
+consume them. That does not prescribe `apps/`, `services/`, `contracts/`, or a
+second data directory: each native toolchain and accepted authority chooses
+its home. The worker does not gain direct order-table access merely because it
+is in the same repository. No mobile app, SDK, or extra deployable is implied.
+
 ## Authority and layout
 
-Git-tracked Markdown is the shared workgraph authority:
+When CodeFlow durable tracking is active, Git-tracked Markdown is the shared
+repository-execution workgraph authority at these fixed paths:
 
 ```text
 project-management/
@@ -157,10 +205,23 @@ ships. Later semantic change gets a new spec or an explicit superseding record;
 do not rewrite history. Create an ADR only for a durable architectural decision.
 Do not repeat the same prose at several altitudes.
 
+Maintained requirements and executable interface schemas remain current in
+their declared project-owned homes. An SPC is an optional frozen agreement for
+one change, not a second living product manual or the only place to write
+requirements. If an existing requirement or contract already settles the
+change, link it and omit the SPC. When an SPC is needed, identify the source and
+revision in its body and pin only the implementation delta; its `specs` link
+from the consumer contains an SPC ID, not a URL or another method's spec ID.
+The SPC template has no parsed `external_refs` field. On later change, update
+the living authority and allocate new warranted work; do not edit the frozen
+SPC to make history appear current.
+
 ## One authority per work item
 
-The authority owns status, acceptance, and lifecycle. Other systems keep an
-opaque link and only the context needed at their own altitude.
+The authority owns status, acceptance, and lifecycle for its work item. Other
+systems keep an opaque link and only the context needed at their own altitude.
+Distinguish a portfolio/product item from a repository-execution task: they can
+be related without becoming two copies of the same task tree.
 
 | Situation | Recommended authority |
 |---|---|
@@ -170,18 +231,32 @@ opaque link and only the context needed at their own altitude.
 | High-volume issue queue | The project's chosen issue tracker |
 | Current-session execution detail | Native harness task tools |
 
-`external_refs` contains opaque links or IDs, never mirrored status. An external
-system may own portfolio state while CodeFlow owns repository execution
-boundaries; record that split once. Do not require two status updates to call
+Epic/task template `external_refs` holds opaque links or IDs as preserved
+metadata, not a parsed gate input and never mirrored status. An external system may
+own portfolio state while CodeFlow owns repository execution boundaries;
+record that split once. Do not require two status updates to call
 one item complete.
 
+Active full-tier or recognizable historical CodeFlow task tracking still
+requires its distinct Git task records and planning anchors for implementation;
+an external ticket, approved external spec, or `external_refs` link cannot
+satisfy or waive `work start`, pre-commit, or CI. Make the smallest honest
+CodeFlow execution record for the gated repository outcome, referring to the
+external authority instead of copying its spec or task decomposition. Do not
+import or paraphrase an equivalent authoritative tree. When durable CodeFlow
+tracking is not active, retain the approved external method or
+native/session plan at earned durability; do not fabricate CodeFlow workgraph
+guarantees or silently upgrade the tier. Close or cancel each item at its
+declared authority.
+
 Linear, Jira, or another board may receive a **one-way projection** through the
-project's issue-tracker MCP or CLI. CodeFlow `status` remains the only
-completeness signal for repo work. Missing or failed remote updates never block
-`work start`, review, or ship. Never poll the remote to decide whether a
-CodeFlow task is done. Intake may start on the board; once it becomes repo
-work, allocate CodeFlow records and keep the remote as a link plus optional
-comment.
+project's issue-tracker MCP or CLI. For CodeFlow-owned execution tasks,
+`codeflow status` is the repository completion signal. Missing or failed
+remote updates never block `work start`, review, or ship. Never poll the remote
+to decide whether a
+CodeFlow task is done. Intake may start on the board; when active tracking
+owns the repository execution, allocate its CodeFlow anchor and keep the
+remote item as a link plus optional comment.
 
 | Event in CodeFlow | Allowed remote action | Not allowed |
 |---|---|---|
@@ -196,15 +271,18 @@ project.
 Spec Kit, BMAD, or another planning method may supply a constitution, brief,
 specification, plan, or task tree. Identify its authority, check intent/scope/
 acceptance/interfaces/dependencies/risks for consistency, run the independent
-duo reconciliation, then materialize only missing CodeFlow execution records.
-Do not import or paraphrase an equivalent authoritative tree.
+duo reconciliation. Materialize only the CodeFlow execution records required
+by active tracking or its assigned authority, not a copy of the external tree.
+If durable tracking is active, create the distinct repository-execution anchor
+the gates require; do not call the external work tree an anchor.
 
 ## Single surface and monorepos
 
 Keep one repo-level namespace for a single application or for a monorepo whose
-parts share an integration boundary. Tasks identify affected areas, paths, and
-capabilities instead of recreating the source tree under
-`project-management/`.
+parts share an integration boundary. Plan around coherent outcomes and direct
+prerequisites, not one epic per team or one task per folder. Tasks identify
+affected areas, paths, and capabilities instead of recreating the source tree
+under `project-management/`.
 
 ```text
 EPC-014  account recovery outcome
@@ -279,10 +357,11 @@ a prototype is for an interaction or logic question that paper cannot settle.
 - **Task created only on its implementation branch:** move it through a
   planning PR and merge it into the declared target before product changes.
 - **Material discovery:** Plan vN+1; no after-the-fact closeout waiver.
-- **Cancellation:** stop product edits, preserve useful work and evidence, and
-  update the authoritative task to `cancelled` with the reason and resource
-  disposition through a reviewed non-task planning/closeout change. Never call
-  cancellation complete or run the delivery path as though it shipped.
+- **CodeFlow task cancellation:** stop product edits, preserve useful work and
+  evidence, and update its task to `cancelled` with the reason and resource
+  disposition through a reviewed non-task planning/closeout change. Close or
+  cancel other work at its declared authority. Never call cancellation
+  complete or run the delivery path as though it shipped.
 - **External tracker disagreement:** the declared authority wins; repair the
   link/context, not a second status mirror.
 - **Already-running historical task:** preserve legacy readability and use the

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-11-accountable-worker-routing-v3",
+  "fixtures_version": "2026-09-12-project-organization-v1",
   "fixtures": [
     {
       "id": "native-route-choice",
@@ -972,10 +972,55 @@
         "existing_authority": "external-planning-method"
       },
       "files": {
-        "PLANNING_AUTHORITY.md": "# Work authority\n\nThe team's established planning method owns the approved product specification, work-item status, assignments, and acceptance. Its item `EXT-184` covers the repository implementation. CodeFlow has just been initialized for engineering execution and verification.\n",
+        "PLANNING_AUTHORITY.md": "# Work authority\n\nThe team's established planning method owns product approval, portfolio status, assignments, and acceptance. Its item `EXT-184` covers the export-retention outcome. This full-tier CodeFlow installation separately owns repository-execution readiness and evidence; its records must link to EXT-184, not copy the external task tree.\n",
         "external/specification.md": "# Approved export retention change\n\nAuthority: EXT-184\nStatus: approved\nScope: API, worker, and storage lifecycle.\n",
         "external/tasks.md": "# Authoritative tasks\n\n- EXT-184-A: API contract\n- EXT-184-B: worker retention\n- EXT-184-C: whole-flow verification\n",
+        "GATES.md": "# Installed gates\n\nRecorded tier: full. Implementation will use task/TSK-NNN-<slug>. The project has no anchored CodeFlow implementation task for EXT-184 yet. Work start, pre-commit and CI enforce the CodeFlow graph once the task branch is used. An external approval is not an anchor.\n",
         "PROPOSAL.md": "# Proposed onboarding\n\nCopy the external specification into `project-management/specs/SPC-001.md`, recreate all three tasks as TSK records, synchronize status after every change, and put the shared task state in `.codeflow/work.db` so every worktree can query it.\n"
+      }
+    },
+    {
+      "id": "order-product-boundaries",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/order-shape",
+        "peer": "available"
+      },
+      "files": {
+        "ACCEPTED_BRIEF.md": "# Accepted order product\n\nCustomers place orders on a web app; operators use a separate console. Both consume a maintained shared web design system. One order API owns the order schema, migrations and order writes. Receipts are delivered asynchronously: the worker must scale and recover failures independently of the API and consumes an order event. Operations deploy both runtimes and verify the customer-to-receipt journey. The event shape is contract-first and must have one published owner. No mobile app, public SDK, extension, second database owner, or separate billing service has been requested.\n",
+        "LAYOUT_PROPOSAL.md": "# Candidate layout\n\nThe sponsor suggests apps/customer-web, apps/operator-console, services/order-api, services/receipt-worker, design-system, contracts/orders, delivery, tests, mobile/ios, mobile/android, sdk, extensions, services/billing, data/orders, data/receipts, and tools. They ask whether every folder should be a deployable or a security boundary. No language or framework has been selected; native manifests and build commands are not yet known.\n"
+      }
+    },
+    {
+      "id": "brownfield-standard-authority",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/brownfield-adoption",
+        "peer": "available",
+        "existing_authority": "external-planning-method"
+      },
+      "files": {
+        "ADOPTION_INVENTORY.md": "# Existing repository\n\nThe installed CodeFlow tier is standard. Product source lives in components/orders and packages/ui; native manifests and CI already build both there. The team intends to retain these paths. Existing authoritative requirements live in specs/product, architecture decisions in design/decisions, and work approval/status in an external planning method. A maintainer once ran `codeflow init` from components/orders and saw a nested scaffold; they now want a safe root-level adoption without force. The `project-management/tasks` folder contains only a foreign README, not TSK records. No prior CodeFlow TSK record is known, but inspect rather than infer activation solely from tier.\n",
+        "EXTERNAL_AUTHORITY.md": "# Work authority\n\nThe external method owns product requirements, acceptance, and work-item status. A link to a CodeFlow repository-execution task is acceptable if that tracking is actually active; mirrored status or a copied task tree is not.\n",
+        "COLLISIONS.md": "# Collision notes\n\nThe project has custom root AGENTS.md text and an existing project-management/templates/task.md. Default init must preserve existing content; a differing managed template may be skipped and later update may retain the original with a .new conflict sidecar. The team will review the report and reconcile instructions semantically. The standard documentation entry points are fixed and a prose pointer alone does not relocate parsed docs. Explicit `codeflow validate --docs` currently reports the foreign project-management/tasks/README.md as invalid frontmatter; distinguish that direct validation conflict from whether automatic durable-work gates activate.\n",
+        "project-management/tasks/README.md": "# Foreign task notes\n\nThese are prose notes, not CodeFlow TSK records.\n",
+        "project-management/templates/task.md": "# Existing team task note\n\nThis is the team's older plain-text template; it is not a CodeFlow task schema.\n",
+        "components/orders/manifest.txt": "native order build unit\n",
+        "packages/ui/manifest.txt": "native shared UI build unit\n"
+      }
+    },
+    {
+      "id": "living-requirement-frozen-agreement",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/requirements-change",
+        "peer": "available"
+      },
+      "files": {
+        "CHANGE_BRIEF.md": "# Approved change\n\nThe operator approved changing receipt retention from 30 to 45 days for all new orders. The current product requirement must become 45 days. The published event schema does not change, and the existing requirement plus API contract settle the behavior; no unresolved interface or cross-surface agreement remains. Plan the repository implementation but do not implement. The team asks if SPC-001 should be edited or a mandatory SPC-002 created.\n",
+        "docs/requirements/receipt-retention.md": "# Current receipt retention\n\nAccepted current behavior: retain receipt metadata for 30 days. This is the maintained product authority; update it when a new behavior is approved.\n",
+        "project-management/specs/SPC-001.md": "---\nid: SPC-001\ntitle: original receipt retention agreement\nstatus: implemented\ncreated: 2026-04-01\n---\n\n# SPC-001 — original receipt retention agreement\n\n## Summary\n\nFrozen input for the delivered 30-day retention implementation. Source: docs/requirements/receipt-retention.md at revision 2f8c6d1.\n\n## Behavior\n\nReceipt metadata was retained for 30 days.\n\n## Open questions\n\nNone.\n",
+        "project-management/tasks/TSK-001.md": "---\nid: TSK-001\nepic_id: null\nstandalone_reason: Original receipt retention was one bounded repository outcome.\ntitle: implement original receipt retention\nstatus: complete\nwork_type: feat\nspecs: [SPC-001]\ndepends_on: []\nintegration_target: main\nexternal_refs: []\ncreated: 2026-04-01\n---\n\n# TSK-001 — implement original receipt retention\n\n## Description\n\nDelivered 30-day receipt retention under SPC-001.\n\n## Acceptance Criteria\n\n- [x] Receipt metadata is retained for 30 days.\n"
       }
     },
     {

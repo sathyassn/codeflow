@@ -107,21 +107,19 @@ never turn local drift into an automatic merge, transfer or validation waiver.
 
 ## Project organization and work authority
 
-The full tier writes flat, stable-ID records:
-`epics/EPC-NNN.md`, `specs/SPC-NNN.md`, and `tasks/TSK-NNN.md`.
-Each sequence is independent and relationships live in frontmatter. A task
-points to an epic or carries a justified standalone reason; specs are linked
-from the epic/task that consumes them.
-Historical nested epic/task records remain read-compatible but are not written.
-One system owns each work item's status and acceptance; external trackers or
-planning methods are linked, never mirrored, and host-local databases remain
-rebuildable caches rather than team truth.
+Full-tier records keep independent EPC/SPC/TSK IDs and frontmatter links in
+flat `project-management/` homes; historical nested records remain readable.
+An epic or justified standalone task owns a coherent repository outcome, not
+a team or folder. External portfolio/product work may have its own authority,
+but active CodeFlow tracking still requires distinct Git execution anchors;
+links never waive `work start`, pre-commit, or CI. Local databases are caches,
+not team truth. Maintained requirements remain current; optional SPC inputs
+freeze a particular work agreement.
 
-Load `references/project-organization.md` when choosing an item home, planning a
-monorepo or cross-area body, coexisting with another planning method/tracker, or
-recording implementation discoveries at closeout. It contains the flexible
-decision model and template contract; do not load it for an obvious bounded
-task. When authoring or editing a skill, load
+Load `references/project-organization.md` for new-project boundary choices,
+brownfield adoption, monorepos, artifact/authority selection, or implementation
+discoveries. It supplies the decision model and fixed-path limits; an obvious
+bounded task needs no extra reading. When authoring or editing a skill, load
 `references/skill-authoring.md` for description-trigger rules.
 
 ## Managing a body of work

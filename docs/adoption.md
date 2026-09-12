@@ -41,13 +41,41 @@ install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
 
+### Before `init`: choose the root and authority
+
+Run `init` or `update` from the intended project root: these commands use the
+current directory, not a discovered Git root. Inventory existing source/build
+units, deployables, release and data owners, instructions, docs, work tracking,
+hooks, and CI before choosing a tier. Init does not rearrange product source.
+It does install fixed operating destinations: root `AGENTS.md`/`CLAUDE.md`,
+standard documentation entry points under `docs/`, and (at full) CodeFlow
+records/templates under `project-management/`; these parsed homes are not
+relocated by an arbitrary link or config setting. Pick the lowest tier whose
+conventions the project accepts. Reinitializing lower does not undo a recorded
+higher tier.
+
+Use default init on an adoption branch and inspect every created, skipped, or
+merged file. It preserves existing content mechanically, but a skip or combined
+instruction file may still need semantic reconciliation. Do not use `--force`
+as a collision shortcut. Later update conflicts preserve the original and
+write a `.new` sidecar to resolve; update-ignore settings do not choose paths
+for the initial scaffold. `/cf-customize` is a post-init skill installed with
+the method, not a pre-init discovery tool or a promise that conflicts were
+resolved automatically.
+Unrelated files occupying a parsed CodeFlow record home can still make an
+explicit `validate --docs` report a collision even when automatic durable-work
+tracking is inactive; resolve the conflict rather than claiming graph validity.
+
 ## What each tier installs
 
 Tier is recorded in `.codeflow/project.toml`; re-running `init` at a higher tier
-is an idempotent additive upgrade (downgrade = stop managing, never delete).
+is an idempotent additive upgrade. A lower-tier request is ignored: the recorded
+tier remains active and no files are removed.
 
-Enforcement is the floor; the tiers scale project-management (ADR-0019). Every
-tier is a clean superset of the one below.
+Enforcement is the floor; the tiers scale installed method and work artifacts
+(ADR-0019). Every tier is a clean superset of the one below. Tier describes
+what init installs, not by itself whether historical CodeFlow task records
+still activate durable-work checks in an existing repository.
 
 | Tier | Adds | For |
 |---|---|---|
@@ -60,24 +88,30 @@ tier is a clean superset of the one below.
 The full tier writes independently allocated `epics/EPC-NNN.md`,
 `specs/SPC-NNN.md`, and `tasks/TSK-NNN.md`; filenames are stable IDs, while
 titles can evolve. Use `codeflow epic new`, `spec new --for <epic-or-task>`,
-and `task new`. A single-surface repo and a shared-release monorepo use the same
-repo-level namespace. In a monorepo, tasks normally align to areas such as a
-shared contract, backend, web, mobile, or infrastructure, while the epic owns
-their cross-area outcome and integration evidence.
+and `task new`. A single-surface repo and a shared-integration monorepo use the
+same repo-level namespace. Plan tasks around reviewable outcomes and direct
+dependencies, not one record per team or folder; the epic owns cross-area
+integration evidence.
 
-For durable work, plan and validate records on a `plan/` branch, merge the
+For active CodeFlow durable work, plan and validate records on a `plan/` branch, merge the
 planning PR into each task's declared `integration_target`, then implement from
 `task/TSK-NNN-<slug>`. `codeflow work start TSK-NNN` verifies that stable
 anchor, parent or standalone rationale, approved specs, and completed
 predecessors without mutating repository state.
 
 CodeFlow is the natural authority for finite repo-local gated work. Keep the
-team's external tracker authoritative when work is multi-team, cross-repo,
-assignment/roadmap/SLA driven, or already owned by an established planning
-method. Link opaque IDs or URLs through `external_refs`; do not mirror status,
-specs, or task trees. A host-local database may cache/index records but is not a
-shared team authority. `/cf-customize` records this project-specific choice, and
-the agent-facing decision model lives in
+team's external tracker authoritative for its own portfolio/product items when
+work is multi-team, cross-repo, assignment/roadmap/SLA driven, or already owned
+by an established method. Active full or recognizable historical CodeFlow task
+tracking still requires distinct repository-execution records and planning
+anchors: an external ticket or approved spec cannot satisfy or waive
+`work start`, pre-commit, or CI. Link opaque IDs or URLs in epic/task template
+`external_refs` metadata, not as gate inputs; do not mirror status, specs, or
+task trees. When durable tracking is inactive, keep the approved external
+method or native/session plan at earned durability without claiming these
+workgraph guarantees or silently upgrading tier. A host-local database may
+cache/index records but is not shared team authority. `/cf-customize` records
+this post-init project choice; the agent-facing decision model lives in
 `cf-method/references/project-organization.md`.
 
 ## Greenfield — an empty directory
@@ -151,8 +185,10 @@ Adopt gradually: start `--minimal` (the full enforcement floor — all the git
 hooks, CI, the in-session guards, and the armed policy — with none of the method
 machinery), run for a while, then re-init `--standard` and later `--full` as the
 work earns the weight. Each step is additive and idempotent, and — because the
-floor is the same at every tier — the upgrade never *adds* enforcement you were
-missing, only the method on top. An existing `--minimal` repo initialized before
+floor is the same at every tier — the upgrade adds the method on top; existing
+recognizable historical CodeFlow tasks may already keep durable tracking
+active below full. Inspect installed state and the gate result rather than
+assuming the tier name switches it off. A `--minimal` repo initialized before
 this floor moved down gains the rest of the enforcement plane automatically on
 its next `codeflow update` (the reconciliation installs the now-in-tier files).
 When you add the standard/full method, run `/cf-customize` before treating the
