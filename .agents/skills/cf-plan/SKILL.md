@@ -16,9 +16,10 @@ You are clarifying and materializing planned work, not building it.
    and non-goals), `docs/capabilities.md` (does this exist? what does it
    touch?), and the most recent `docs/decisions/` ADRs. Run `codeflow recall`
    for prior related work.
-   When the work spans areas/teams, or an external tracker/planning method may
-   already own it, load `cf-method/references/project-organization.md` and
-   identify the single authority before creating records.
+   When work spans areas/teams, involves source/build/runtime/release/data/trust
+   boundaries, or an external method may own it, load
+   `cf-method/references/project-organization.md`. Identify each item's
+   authority and the actual installed CodeFlow tracking state before records.
    For agentic operating, estimation, capacity or deadline decisions, use
    `cf-estimate` to offer a context-specific preview, reuse compatible adoption
    or honor decline. An estimate answer does not authorize adoption or work.
@@ -43,20 +44,21 @@ You are clarifying and materializing planned work, not building it.
    re-grill.
 4. Check the request against `product.md` non-goals; surface conflicts instead
    of planning around them.
-5. In an orchestrated run, materialize the exact versioned plan both seats
-   settled; do not silently add design or scope. A substantive amendment creates
-   a new plan version and returns to both seats for approval. In a recorded solo
+5. Use the exact dual-settled Plan vN; never add scope or design silently.
+   Substantive amendments return to both seats as Plan vN+1. In a recorded solo
    degradation, perform the same clarity/evidence work and name the missing
    cross-vendor assurance.
-   For multi-task work, load the orchestrator's `resources/task-graph.md` and
-   materialize the exact approved topology into canonical `depends_on` task
+   Before allocating, check whether active tracking or approved adoption assigns
+   CodeFlow execution. Otherwise retain the approved external or native/session
+   plan at earned durability; create no CodeFlow records or gate claims.
+   For CodeFlow multi-task work, load the orchestrator's
+   `resources/task-graph.md` and put the approved topology in `depends_on` task
    frontmatter. A node, edge, decision guard, ownership, acceptance/interface,
    or safety-boundary mutation creates Plan vN+1; an in-node step does not.
-6. Draft on a `plan/` branch, matching artifact to work weight. When the brief
-   supplies a set or batch of tasks, first partition it by coherent durable
-   outcome and direct dependencies: each related multi-task body may become an
-   epic, while unrelated outcomes and genuine standalone tasks keep separate
-   landing routes. Do not treat the batch itself as an epic boundary. An
+6. For CodeFlow execution, draft on a `plan/` branch. Partition a task set by
+   coherent durable outcomes and direct dependencies. Related tasks may form
+   epics; unrelated or standalone tasks keep separate landing routes. A batch
+   is not an epic boundary. An
    **epic** (in
    `project-management/epics/`) is warranted only for a body of work that is >1
    PR, >1 session, or spans multiple capabilities; anything smaller is a single
@@ -81,9 +83,12 @@ You are clarifying and materializing planned work, not building it.
    integration target; it cannot authorize its own planning record.
    The target must be a real local or remote-tracking branch, not `HEAD`, a
    tag, an object ID, or another Git revision expression.
-   Do not hand-invent IDs. If another method already owns equivalent specs or
-   tasks, reference its settled artifact in `external_refs`; do not mirror its
-   status or duplicate its work tree.
+   Do not hand-invent IDs. If another method owns product specs or task
+   decomposition, link the settled source in epic/task template `external_refs`
+   metadata or an SPC body with its revision; `specs` arrays contain only SPC
+   IDs. Do not mirror status or copy its tree. Active full/historical tracking
+   nevertheless requires distinct anchored repository-execution tasks; an
+   external artifact cannot satisfy or waive those gates.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
    every non-trivial repository task: both seats plan independently, Claude leads
    design, and each implementation task uses the canonical assignment record in
@@ -101,13 +106,13 @@ You are clarifying and materializing planned work, not building it.
    the test strategy. Name evidence for each selected property/generative,
    mutation, or architecture fitness check, or record `none selected`; concrete
    tools and thresholds remain project-owned.
-9. Record the closeout contract on each task: bounded in-node discoveries are
-   captured only when review-relevant; a material graph, scope, interface,
+9. Record the closeout contract on each CodeFlow task: capture bounded in-node
+   discoveries only when review-relevant; a material graph, scope, interface,
    ownership, acceptance, or safety change stops work and requires Plan vN+1
    before implementation continues. Closeout cannot approve a deviation after
    the fact.
-10. Run `codeflow validate --docs`, then have both primary seats review the
-    exact materialized graph and present it for operator approval only where
+10. For CodeFlow records: Run `codeflow validate --docs`, have both primary
+    seats review the exact graph, and present it for approval only where
     the operator owns the decision. Merge the planning PR into every task's
     declared `integration_target`. Implementation begins later from
     `task/TSK-NNN-<slug>` only after `codeflow work start TSK-NNN` passes. That
@@ -118,7 +123,7 @@ Failure paths are explicit: repair allocation collisions and links on the
 planning branch; resolve cycles, missing parents, draft specs, and incomplete
 predecessors rather than bypassing validation; return a material discovery to
 Plan vN+1 and both seats; record a proved unavailable seat as reduced assurance,
-never as dual approval. If the outcome is cancelled, stop product work and
+never as dual approval. If a CodeFlow task is cancelled, stop product work and
 record `cancelled`, its reason, preserved evidence, and resource disposition
 through a reviewed non-task planning/closeout change; never label cancellation
-complete or shipped.
+complete or shipped. Close or cancel other work at its declared authority.

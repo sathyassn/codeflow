@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-11-accountable-worker-routing-v3",
+  "cases_version": "2026-09-12-project-organization-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -2776,7 +2776,7 @@
         "CF-PM-001",
         "CF-GOV-001"
       ],
-      "prompt": "Customize CodeFlow for this repository and propose the implementation tracking shape. Preserve one credible authority while adding CodeFlow's engineering controls.",
+      "prompt": "Customize this active full-tier CodeFlow repository and propose how EXT-184 implementation can start. Preserve the external product-planning authority, but account for every installed repository-execution gate. Do not implement.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -2788,6 +2788,8 @@
           "external_spec_and_tasks_not_duplicated",
           "opaque_cross_reference_only",
           "codeflow_execution_controls_applied",
+          "distinct_codeflow_execution_anchor_required",
+          "external_approval_does_not_waive_work_start_or_ci",
           "cross_artifact_consistency_checked",
           "project_specific_authority_recorded"
         ],
@@ -2795,14 +2797,134 @@
           "PLANNING_AUTHORITY.md",
           "external/specification.md",
           "external/tasks.md",
+          "GATES.md",
           "PROPOSAL.md"
         ],
         "must_not": [
           "external_status_mirrored",
           "spec_tree_copied",
           "task_tree_copied",
+          "external_ticket_treated_as_codeflow_anchor",
+          "full_tier_downgraded_to_avoid_anchor",
           "brand_specific_adapter_required",
           "local_database_promoted_to_team_truth"
+        ]
+      }
+    },
+    {
+      "id": "new-project-earns-boundaries",
+      "kind": "capability",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "order-product-boundaries",
+      "requirements": [
+        "CF-PM-008"
+      ],
+      "prompt": "Recommend a proportionate initial repository organization for the accepted order-product brief. Name the actual ownership, native build, runtime/release, data/trust and verification boundaries, and which proposed pieces are not earned. Do not scaffold or implement.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-method"
+        ],
+        "signals": [
+          "accepted_responsibilities_drive_shape",
+          "native_build_units_distinguished_from_runtimes",
+          "receipt_worker_runtime_justified_by_failure_lifecycle",
+          "order_schema_write_owner_and_worker_access_named",
+          "actual_shared_design_system_and_contract_authority_named",
+          "cross_system_verification_located_by_real_boundary",
+          "unsupported_units_rejected"
+        ],
+        "references": [
+          "ACCEPTED_BRIEF.md",
+          "LAYOUT_PROPOSAL.md"
+        ],
+        "must_not": [
+          "universal_folder_skeleton",
+          "folder_name_treated_as_trust_control",
+          "mobile_sdk_or_extra_service_invented",
+          "one_epic_per_directory"
+        ]
+      }
+    },
+    {
+      "id": "brownfield-standard-keeps-native-authority",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "brownfield-standard-authority",
+      "requirements": [
+        "CF-PM-001",
+        "CF-PM-008",
+        "CF-PM-009"
+      ],
+      "prompt": "Advise how this existing repository should adopt useful CodeFlow controls while its approved external method keeps product work authority. Account for the recorded standard tier, foreign tasks folder, current-directory init behavior, fixed destinations and collision notes. Do not run init or edit files.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-customize",
+          "cf-method"
+        ],
+        "signals": [
+          "existing_source_and_work_authority_preserved",
+          "init_cwd_and_fixed_destinations_disclosed",
+          "foreign_folder_not_assumed_active_tracking",
+          "historical_tracking_requires_actual_inspection",
+          "explicit_docs_validation_collision_distinguished",
+          "standard_tier_not_claimed_full_workgraph",
+          "collision_and_semantic_reconciliation_disclosed",
+          "no_uninstalled_preinit_skill_dependency"
+        ],
+        "references": [
+          "ADOPTION_INVENTORY.md",
+          "EXTERNAL_AUTHORITY.md",
+          "COLLISIONS.md",
+          "project-management/tasks/README.md"
+        ],
+        "must_not": [
+          "source_tree_cosmetically_moved",
+          "external_status_mirrored",
+          "full_tier_assumed_from_folder_presence",
+          "explicit_docs_validation_error_called_active_work_gate",
+          "inactive_tracking_claimed_work_start_guarantee",
+          "force_init_prescribed_as_shortcut"
+        ]
+      }
+    },
+    {
+      "id": "living-requirement-is-not-frozen-spc",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": true,
+      "fixture": "living-requirement-frozen-agreement",
+      "requirements": [
+        "CF-PM-010"
+      ],
+      "prompt": "The operator has approved a new receipt-retention behavior. Explain which source to update for current product truth and how to plan the change against the implemented SPC-001. Decide whether a new SPC is needed from the supplied facts, and use only supported links/fields. Do not edit.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-plan",
+          "cf-method"
+        ],
+        "signals": [
+          "living_requirement_updated_as_current_truth",
+          "implemented_spc_retained_historical",
+          "new_spc_only_if_change_agreement_needed",
+          "existing_sources_referenced_without_copy_or_invented_revision",
+          "specs_array_contains_only_spc_ids",
+          "spc_body_reference_not_invented_frontmatter"
+        ],
+        "references": [
+          "docs/requirements/receipt-retention.md",
+          "project-management/specs/SPC-001.md",
+          "CHANGE_BRIEF.md"
+        ],
+        "must_not": [
+          "implemented_spc_rewritten_as_living_manual",
+          "redundant_spc_mandated",
+          "external_url_in_specs_array",
+          "unsupported_spc_external_refs_field"
         ]
       }
     },

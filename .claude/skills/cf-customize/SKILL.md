@@ -229,16 +229,16 @@ confirms the final content.
   outside its managed region. Do not repeat the project brief or common commands
   already owned by `docs/product.md`, `docs/architecture.md`, or `AGENTS.md`.
   **Never edit inside either managed block**—`codeflow update` owns it.
-- **Project shape and work authority** — identify whether this is a
-  single-surface repo, a shared-release monorepo, or independently governed
-  products in one tree; name the durable area boundaries and nearest local
-  instructions. For each class of work, settle one authority: CodeFlow Git
-  records, an external team tracker, an existing planning method, or a
-  high-volume issue queue. Load
-  `cf-method/references/project-organization.md`; configure only opaque loose
-  links between authorities, never status mirroring or a host-local database as
-  shared team truth. Existing project practice wins when it is coherent and
-  durable—propose migration only for an evidenced failure.
+- **Project shape and work authority** — load
+  `cf-method/references/project-organization.md`. Map accepted responsibilities,
+  interfaces, native build/runtime/release units, data/trust owners, and local
+  instructions before proposing folders. Preserve coherent existing layout and
+  living knowledge. Name each work authority: external portfolio/product items
+  differ from CodeFlow repository-execution records. Active full/historical
+  tracking still needs anchored tasks; external approval never waives its gates.
+  Without active tracking, claim no workgraph parity and do not silently raise
+  tier. Use opaque links, never status mirroring or a host-local database as
+  shared team truth. Migrate only for an evidenced failure.
 - **Agentic operating/estimation method** — when useful to this project's
   delivery or capacity decisions, invoke `cf-estimate` for a concrete preview
   against its existing planning authority. Confirm new adoption, reuse a
