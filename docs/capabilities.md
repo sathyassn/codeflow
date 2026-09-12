@@ -59,7 +59,12 @@ rust-embed), with bootstrap grace, husky/hooksPath detection, and a printed
 per-file report. Standard/full reports close with `/cf-customize`, pointing at
 the consuming project's product, architecture, agent context, harness settings,
 and tools; minimal does not advertise an uninstalled method skill. Re-running
-at a higher tier is an additive upgrade.
+at a higher tier is an additive upgrade. Init writes into the current working
+directory; standard document destinations are fixed, and conflicting existing
+content is preserved for explicit reconciliation. A lower-tier request does
+not undo a recorded higher tier. The installed tier describes what init lays
+down, not whether recognizable historical CodeFlow task records already make
+durable work tracking active.
 
 The harness starters are executable policy, not prompt-only guidance. Codex
 ships one current-schema guarded permission profile with public research,
@@ -449,14 +454,22 @@ guards. Task frontmatter keeps non-executable structural `depends_on` data.
 `validate --docs` checks canonical identities and filenames, relationship
 shape, parent-or-standalone ownership, spec readiness, stable integration
 targets, completed acceptance criteria, and malformed, dangling,
-self-referential, duplicate, or cyclic topology. On full-tier task branches,
-`codeflow work start`, pre-commit, and detached CI additionally share one
-read-only merge-base check proving that validated planning is present on the
-declared stable target. Material graph or cross-task contract changes force
-Plan vN+1; in-node implementation detail does not. Review-relevant bounded
-discoveries persist at task closeout; closeout cannot retroactively approve a
+self-referential, duplicate, or cyclic topology. Explicit `codeflow work start`
+always checks the assigned CodeFlow task branch's planning anchor. Pre-commit
+and detached CI apply that same read-only merge-base check when full-tier or
+recognizable historical CodeFlow task tracking is active. It proves validated
+planning is present on the declared stable target. Material graph or cross-task
+contract changes force Plan vN+1; in-node implementation detail does not.
+Review-relevant bounded discoveries persist at task closeout; closeout cannot
+retroactively approve a
 material change. Project organization keeps one authoritative work-item home
-and links, rather than mirrors, external planning methods or trackers.
+and links, rather than mirrors, external planning methods or trackers. A foreign
+tasks folder alone does not activate those durable gates; malformed relevant
+tracking state yields a diagnostic instead of a silent opt-out. New projects
+earn structure from accepted ownership and interface boundaries; existing
+projects retain credible native layouts. Current requirements stay living
+authority while SPC files freeze only warranted change agreements. External
+approval never waives active CodeFlow execution gates.
 Verification planning selects property tests, targeted mutation testing, or
 project-owned architecture fitness checks only when the risk and oracle
 evidence earn them. CodeFlow adds neither a scheduler nor mandatory
@@ -548,6 +561,11 @@ silently changes global harness settings. `codeflow init` prints the next step,
 and doctor keeps a nudge visible while scaffold sentinels remain. Ships as the
 `cf-customize` skill, mirrored across
 `.claude/skills`, `.agents/skills`, and the `assets/base` scaffold source.
+The walk-through maps existing source, build, runtime, data/trust, and work
+authorities before proposing changes. It preserves credible native layouts and
+does not treat an external tracker or foreign tasks directory as reason to
+duplicate status or force a CodeFlow workgraph; pre-init cwd, fixed paths, and
+collisions remain explicit onboarding decisions.
 
 ## CAP-013 — model-binding-evaluation
 
