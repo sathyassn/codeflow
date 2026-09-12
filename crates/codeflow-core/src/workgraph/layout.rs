@@ -7,6 +7,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::is_valid_task_format_id;
+
 /// Bounded inventory for hostile-input readers; existing store/lint callers keep
 /// their historical behavior. Paths follow exactly the layouts enumerated below.
 #[derive(Default)]
@@ -58,6 +60,84 @@ pub(crate) fn bounded_record_files(
     files.epics.sort();
     files.specs.sort();
     Ok(files)
+}
+
+/// Look only in the flat and historical nested task homes when deciding whether
+/// an uninitialized or lower-tier repository already carries `CodeFlow` work.
+/// Unlike a complete inventory, this never enters the spec directory or reads
+/// epic record contents; the bounded epics-directory walk only locates legacy
+/// nested task homes. Task contents are deliberately not parsed here: malformed
+/// TSK-shaped records must reach the normal workgraph validator.
+pub(crate) fn has_task_record_path(
+    pm_root: &Path,
+    maximum_entries: usize,
+) -> Result<bool, InventoryError> {
+    // The parent must also be a real directory: checking only child paths
+    // would follow a symlinked project-management directory outside the repo.
+    if checked_directory_entries(pm_root)?.is_none() {
+        return Ok(false);
+    }
+    let mut remaining = maximum_entries;
+    if task_dir_has_record(&pm_root.join("tasks"), &mut remaining)? {
+        return Ok(true);
+    }
+
+    let epics = pm_root.join("epics");
+    let Some(entries) = checked_directory_entries(&epics)? else {
+        return Ok(false);
+    };
+    for entry in entries {
+        charge_entry(&mut remaining)?;
+        let entry = entry.map_err(|_| InventoryError::Unreadable)?;
+        if entry
+            .file_type()
+            .map_err(|_| InventoryError::Unreadable)?
+            .is_dir()
+            && task_dir_has_record(&entry.path().join("tasks"), &mut remaining)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn task_dir_has_record(dir: &Path, remaining: &mut usize) -> Result<bool, InventoryError> {
+    let Some(entries) = checked_directory_entries(dir)? else {
+        return Ok(false);
+    };
+    for entry in entries {
+        charge_entry(remaining)?;
+        let entry = entry.map_err(|_| InventoryError::Unreadable)?;
+        if !entry
+            .file_type()
+            .map_err(|_| InventoryError::Unreadable)?
+            .is_file()
+        {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().is_some_and(|extension| extension == "md")
+            && path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(is_valid_task_format_id)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn checked_directory_entries(dir: &Path) -> Result<Option<fs::ReadDir>, InventoryError> {
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) if !metadata.file_type().is_dir() => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(InventoryError::Unreadable),
+        Ok(_) => {}
+    }
+    fs::read_dir(dir)
+        .map(Some)
+        .map_err(|_| InventoryError::Unreadable)
 }
 
 fn charge_entry(remaining: &mut usize) -> Result<(), InventoryError> {
@@ -187,6 +267,74 @@ fn real_directory_entries(dir: &Path) -> Option<fs::ReadDir> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_activation_probe_reads_only_supported_task_homes() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path();
+        fs::create_dir_all(pm.join("tasks")).unwrap();
+        fs::create_dir_all(pm.join("specs")).unwrap();
+        fs::create_dir_all(pm.join("epics/EPC-002/tasks")).unwrap();
+        fs::write(pm.join("tasks/notes.md"), "foreign note").unwrap();
+        fs::write(pm.join("specs/SPC-001.md"), "unrelated spec").unwrap();
+        assert!(!has_task_record_path(pm, 4).unwrap());
+
+        fs::write(pm.join("epics/EPC-002/tasks/TSK-002-001.md"), "not YAML").unwrap();
+        assert!(has_task_record_path(pm, 4).unwrap());
+        fs::remove_file(pm.join("epics/EPC-002/tasks/TSK-002-001.md")).unwrap();
+        fs::write(pm.join("tasks/TSK-001.md"), "not YAML").unwrap();
+        assert!(has_task_record_path(pm, 1).unwrap());
+    }
+
+    #[test]
+    fn task_activation_probe_reports_bounded_uncertainty() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path();
+        fs::create_dir_all(pm.join("tasks")).unwrap();
+        fs::write(pm.join("tasks/notes.md"), "foreign note").unwrap();
+        assert!(matches!(
+            has_task_record_path(pm, 0),
+            Err(InventoryError::LimitExceeded)
+        ));
+        assert!(!has_task_record_path(pm, 1).unwrap());
+
+        // An unrelated spec directory is never part of this decision.
+        fs::create_dir_all(pm.join("specs")).unwrap();
+        for index in 0..10 {
+            fs::write(pm.join(format!("specs/SPC-{index:03}.md")), "spec").unwrap();
+        }
+        assert!(!has_task_record_path(pm, 1).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_activation_probe_does_not_follow_task_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("TSK-001.md"), "external").unwrap();
+        fs::create_dir_all(pm.join("epics/EPC-001")).unwrap();
+        symlink(outside.path(), pm.join("tasks")).unwrap();
+        symlink(outside.path(), pm.join("epics/EPC-001/tasks")).unwrap();
+        assert!(!has_task_record_path(pm, 1).unwrap());
+
+        fs::remove_file(pm.join("tasks")).unwrap();
+        fs::create_dir_all(pm.join("tasks")).unwrap();
+        symlink(
+            outside.path().join("TSK-001.md"),
+            pm.join("tasks/TSK-001.md"),
+        )
+        .unwrap();
+        assert!(!has_task_record_path(pm, 2).unwrap());
+
+        let linked_parent = tempfile::tempdir().unwrap();
+        symlink(pm, linked_parent.path().join("project-management")).unwrap();
+        assert!(
+            !has_task_record_path(&linked_parent.path().join("project-management"), 2).unwrap()
+        );
+    }
 
     #[test]
     fn bounded_inventory_matches_existing_layouts_and_fails_before_truncating() {

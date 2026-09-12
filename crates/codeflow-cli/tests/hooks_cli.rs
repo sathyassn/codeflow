@@ -9,6 +9,33 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[cfg(unix)]
+struct RestorePermissions {
+    path: std::path::PathBuf,
+    original: std::fs::Permissions,
+}
+
+#[cfg(unix)]
+impl RestorePermissions {
+    fn deny(path: &Path) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let original = std::fs::metadata(path).unwrap().permissions();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        Self {
+            path: path.to_path_buf(),
+            original,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestorePermissions {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.path, self.original.clone());
+    }
+}
+
 /// Shared isolated `CODEFLOW_HOME`: these tests initialize tempdir repos
 /// (policy.json / project.toml), so without the override every invocation's
 /// registry touch would write them into the developer's real
@@ -47,6 +74,21 @@ fn run_with_stdin(cmd: &mut Command, stdin: &str) -> Output {
         .write_all(stdin.as_bytes())
         .expect("stdin written");
     child.wait_with_output().expect("binary exits")
+}
+
+#[cfg(unix)]
+fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
+    let mut command = codeflow();
+    command
+        .args(["ci", "--base", "main", "--head", "HEAD", "--branch", branch])
+        .current_dir(dir);
+    if valid_body {
+        command.args([
+            "--pr-body",
+            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test",
+        ]);
+    }
+    command.output().unwrap()
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -1169,7 +1211,13 @@ fn pre_commit_blocks_an_invalid_visible_workgraph_before_task_work() {
 fn pre_commit_blocks_task_branch_without_a_visible_task_record() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
-    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    let state_dir = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("project.toml"),
+        "schema_version = 1\ntier = 'full'\nscaffold_version = '3.0.0'\nstack = 'rust'\nareas = []\npolicy_armed = true\ngit_hooks = 'wired'\npermission_preset = 'strict'\n",
+    )
+    .unwrap();
     git(dir.path(), &["switch", "-c", "task/TSK-001-missing-record"]);
     std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
     git(dir.path(), &["add", "implementation.rs"]);
@@ -1193,6 +1241,9 @@ fn pre_commit_blocks_task_branch_without_a_visible_task_record() {
 fn pre_commit_keeps_task_prefix_available_without_durable_work_tracking() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
+    let foreign_tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&foreign_tasks).unwrap();
+    std::fs::write(foreign_tasks.join("notes.md"), "External tracker notes").unwrap();
     git(dir.path(), &["switch", "-c", "task/tidy-the-logger"]);
     std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
     git(dir.path(), &["add", "implementation.rs"]);
@@ -1209,4 +1260,264 @@ fn pre_commit_keeps_task_prefix_available_without_durable_work_tracking() {
         "minimal and standard tiers must not require full-tier task records: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn pre_commit_blocks_indeterminate_state_without_a_task_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let state_dir = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("project.toml"), "tier = [invalid").unwrap();
+    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("cannot determine durable-work tracking"),
+        "{err}"
+    );
+    assert!(err.contains("cannot read existing CodeFlow state"), "{err}");
+    assert!(
+        !err.contains("[invalid"),
+        "state contents must not be echoed: {err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_state_blocks_both_hook_and_ci() {
+    use std::io::ErrorKind;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let state_dir = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let state_path = state_dir.join("project.toml");
+    std::fs::write(
+        &state_path,
+        r#"schema_version = 1
+tier = "minimal"
+scaffold_version = "3.0.0"
+stack = "rust"
+areas = []
+policy_armed = true
+git_hooks = "wired"
+permission_preset = "strict"
+"#,
+    )
+    .unwrap();
+    git(
+        dir.path(),
+        &["switch", "-c", "task/TSK-001-unreadable-state"],
+    );
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let denied_state = RestorePermissions::deny(&state_path);
+    match std::fs::read(&state_path) {
+        Ok(_) => {
+            eprintln!("EACCES state probe unavailable under this test identity");
+            return;
+        }
+        Err(error) => assert_eq!(error.kind(), ErrorKind::PermissionDenied),
+    }
+    let hook = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(hook.status.code(), Some(1));
+    let hook_error = String::from_utf8_lossy(&hook.stderr);
+    assert!(
+        hook_error.contains("cannot read existing CodeFlow state"),
+        "{hook_error}"
+    );
+
+    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
+    let ci = task_branch_ci(dir.path(), "task/TSK-001-unreadable-state", false);
+    assert_eq!(ci.status.code(), Some(1));
+    let ci_error = String::from_utf8_lossy(&ci.stderr);
+    assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
+    assert!(
+        ci_error.contains("cannot read existing CodeFlow state"),
+        "{ci_error}"
+    );
+    drop(denied_state);
+
+    std::fs::write(dir.path().join("control.rs"), "fn control() {}\n").unwrap();
+    git(dir.path(), &["add", "control.rs"]);
+    let restored_hook = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(
+        restored_hook.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&restored_hook.stderr)
+    );
+    let restored_ci = task_branch_ci(dir.path(), "task/TSK-001-unreadable-state", true);
+    assert_eq!(
+        restored_ci.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&restored_ci.stdout),
+        String::from_utf8_lossy(&restored_ci.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_task_home_blocks_both_hook_and_ci() {
+    use std::io::ErrorKind;
+
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(
+        dir.path(),
+        &["switch", "-c", "task/TSK-001-unreadable-tasks"],
+    );
+    let tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let denied_tasks = RestorePermissions::deny(&tasks);
+    match std::fs::read_dir(&tasks) {
+        Ok(_) => {
+            eprintln!("EACCES task-home probe unavailable under this test identity");
+            return;
+        }
+        Err(error) => assert_eq!(error.kind(), ErrorKind::PermissionDenied),
+    }
+    let hook = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(hook.status.code(), Some(1));
+    let hook_error = String::from_utf8_lossy(&hook.stderr);
+    assert!(
+        hook_error.contains("cannot inspect CodeFlow task-home inventory"),
+        "{hook_error}"
+    );
+
+    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
+    let ci = task_branch_ci(dir.path(), "task/TSK-001-unreadable-tasks", false);
+    assert_eq!(ci.status.code(), Some(1));
+    let ci_error = String::from_utf8_lossy(&ci.stderr);
+    assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
+    assert!(
+        ci_error.contains("cannot inspect CodeFlow task-home inventory"),
+        "{ci_error}"
+    );
+    drop(denied_tasks);
+
+    std::fs::write(dir.path().join("control.rs"), "fn control() {}\n").unwrap();
+    git(dir.path(), &["add", "control.rs"]);
+    let restored_hook = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(
+        restored_hook.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&restored_hook.stderr)
+    );
+    let restored_ci = task_branch_ci(dir.path(), "task/TSK-001-unreadable-tasks", true);
+    assert_eq!(
+        restored_ci.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&restored_ci.stdout),
+        String::from_utf8_lossy(&restored_ci.stderr)
+    );
+}
+
+#[test]
+fn pre_commit_recognizes_nested_only_historical_task() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["switch", "-c", "task/TSK-001-001-unanchored"]);
+    let nested = dir.path().join("project-management/epics/EPC-001/tasks");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        nested.join("TSK-001-001.md"),
+        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- [ ] anchored first\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "."]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not present at the merge-base"), "{err}");
+}
+
+#[test]
+fn task_home_inventory_limit_blocks_both_hook_and_ci() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["switch", "-c", "task/TSK-001-overflow"]);
+    let tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    for index in 0..=16_384 {
+        std::fs::write(tasks.join(format!("foreign-{index:05}.txt")), "").unwrap();
+    }
+    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
+    git(dir.path(), &["add", "implementation.rs"]);
+
+    let hook = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    assert_eq!(hook.status.code(), Some(1));
+    let hook_error = String::from_utf8_lossy(&hook.stderr);
+    assert!(
+        hook_error.contains("inventory exceeds 16384"),
+        "{hook_error}"
+    );
+
+    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
+    let ci = codeflow()
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-overflow",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(ci.status.code(), Some(1));
+    let ci_error = String::from_utf8_lossy(&ci.stderr);
+    assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
+    assert!(ci_error.contains("inventory exceeds 16384"), "{ci_error}");
 }

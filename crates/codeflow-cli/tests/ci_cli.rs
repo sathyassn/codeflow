@@ -181,6 +181,9 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
 fn ci_keeps_task_prefix_available_without_durable_work_tracking() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
+    let foreign_tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&foreign_tasks).unwrap();
+    std::fs::write(foreign_tasks.join("notes.md"), "External tracker notes").unwrap();
     let output = run_in(
         dir.path(),
         &[
@@ -204,6 +207,64 @@ fn ci_keeps_task_prefix_available_without_durable_work_tracking() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("work-start"), "{stdout}");
+}
+
+#[test]
+fn ci_blocks_indeterminate_state_without_a_task_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let state_dir = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("project.toml"), "tier = [invalid").unwrap();
+
+    let output = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-repair",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("work.tracking_state"), "{err}");
+    assert!(
+        !err.contains("[invalid"),
+        "state contents must not be echoed: {err}"
+    );
+}
+
+#[test]
+fn ci_recognizes_nested_only_historical_task() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let nested = dir.path().join("project-management/epics/EPC-001/tasks");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        nested.join("TSK-001-001.md"),
+        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- [ ] anchored first\n",
+    )
+    .unwrap();
+
+    let output = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-001-unanchored",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("work.stable_planning_anchor"), "{err}");
 }
 
 /// A body satisfying every default-required section with real content.
