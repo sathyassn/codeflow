@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-13-release-policy-v3",
+  "cases_version": "2026-09-13-release-policy-v4",
   "full_trials": 3,
   "cases": [
     {
@@ -48,7 +48,7 @@
         "routes": ["cf-model-orchestrator", "cf-customize"],
         "signals": ["same_work_pr_contains_warranted_metadata", "pending_patch_not_incremented_per_pr", "compatible_feature_changes_pending_to_minor", "ci_checks_inputs_not_llm_judgment", "explicit_publication_after_merge", "adoption_requires_project_confirmation_and_tests"],
         "references": ["BRIEF.md"],
-        "must_not": ["automatic_second_release_pr_default", "publish_on_every_merge", "codeflow_version_used_as_product_version", "prose_policy_called_implemented"]
+        "must_not": ["automatic_second_release_pr_default", "publication_requires_source_date_or_cut_commit", "publish_on_every_merge", "codeflow_version_used_as_product_version", "prose_policy_called_implemented"]
       }
     },
     {

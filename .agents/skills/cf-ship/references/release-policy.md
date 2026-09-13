@@ -80,10 +80,12 @@ keeps `1.5.0`. Once `1.5.0` is actually published, the next fix targets `1.5.1`.
 No shipped impact means no manufactured bump or empty version section.
 
 Keep impact beside the curated entries (or in the project's existing input).
-An undated `## [X.Y.Z]` section can describe pending source state without claiming
-publication. State that convention explicitly; the actual public release owns
-availability and date. This avoids needing a later bookkeeping PR just to move
-Unreleased notes. Preserve the project's existing convention when different.
+An undated `## [X.Y.Z]` section describes source state without claiming
+publication. It stays undated in Git after publication: the public release owns
+availability and date. Publishing reads the reviewed source; it does not date
+the source heading, move Unreleased notes, or create a bookkeeping commit/PR.
+State that convention explicitly. Preserve an existing project's different
+convention under its own adopted release process.
 
 Before opening/updating the PR, reconcile against the current target, preserve
 other pending work, and update only coupled stamps. Recheck the proposed merge
