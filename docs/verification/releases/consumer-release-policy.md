@@ -1,6 +1,52 @@
 # Consumer release-policy verification
 
-## Scope
+## Current scope — same-work-PR revision
+
+TSK-028 offers same-work-PR preparation to projects without an adopted release
+process. Existing tools and independent version domains remain authoritative;
+no repository-specific release engine is installed in consumers. Publication
+still requires a separate deliberate request, not an automatically created PR.
+
+The revised pack contains eleven advice-only scenarios: the original seven
+plus cumulative pending versions, withdrawal/recovery, supported publisher
+interfaces, and stable-SemVer project adoption. Pack registration and schema
+validation do not prove model behavior or publication safety.
+
+The first revised cohort completed five native Opus/high diagnostics: three new
+cases and the existing package-authority and calendar-version cases. Codex read
+the responses against the fixture facts. Subsequent native source review found
+an ambiguous merge premise and answer leakage in fixtures. The corrected corpus
+advanced to v3; the earlier answers remain observations of their original inputs.
+Three fresh corrected-input cases met their bounded release-judgment criteria.
+The fourth, new stable-SemVer proposal, failed purpose alignment: despite matching
+six registered signals, it proposed dating the Git changelog at publication,
+reintroducing a bookkeeping commit. The failed raw result is retained.
+
+`10e41ad82` makes the existing no-cut convention explicit and adds that forbidden
+outcome to the case and hard requirement (v4). A separate fresh Opus/high trial
+kept source sections undated after publication, assigned publication date/status
+to the public release, retained cumulative pending versions and opened the next
+section in later work. Codex read the complete answer against the criteria. Its
+proposed heading-to-impact mapping still needs project-specific semantic review;
+it is not a universal SemVer calculator or an implementation. No model binding
+was promoted and no failed result was relabelled.
+
+At `10e41ad82`, the evaluation-kit suite passed 52 tests and suite validation
+passed. Native Opus and Grok independently approved the canonical source and
+subsequent no-cut clarification; Opus verified mirror/hash parity. Supported
+scaffold update synchronized the changed assets, baselines and manifest while
+preserving repository-owned settings and workflows. The preceding revision
+`05fcbc93c` passed all ten strict essential gate targets. The final consumer
+revision `10e41ad82` also passed all ten: formatting, workspace, Clippy, rustdoc,
+release helper, gate parity, evaluation kit, skill triggers, Herdr delivery and
+document validation. Its workspace target completed in 179,892 ms with exit 0.
+Final combined integration validation remains a separate check.
+
+No trial publishes assets, qualifies a model binding, or proves automatic
+cross-family routing. Native review and disposable-fixture observations remain
+distinct from deterministic tests and actual hosted release execution.
+
+## Historical scope — superseded release-candidate starter
 
 TSK-028 adds project-owned release guidance, not a release engine installed in
 every consumer. Existing tools and version domains remain authoritative. The
