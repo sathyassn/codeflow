@@ -177,6 +177,9 @@ jobs:
     with:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
+    permissions:
+      "contents": "write"
+      "pull-requests": "read"
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:

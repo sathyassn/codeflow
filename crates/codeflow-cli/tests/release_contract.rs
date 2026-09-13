@@ -78,6 +78,24 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         dist.get("pr-run-mode").and_then(toml::Value::as_str),
         Some("plan")
     );
+    let authority_permissions = dist
+        .get("github-custom-job-permissions")
+        .and_then(toml::Value::as_table)
+        .and_then(|jobs| jobs.get("release-plan-authority"))
+        .and_then(toml::Value::as_table)
+        .expect("release authority custom-job permissions must be explicit");
+    assert_eq!(
+        authority_permissions
+            .get("contents")
+            .and_then(toml::Value::as_str),
+        Some("write")
+    );
+    assert_eq!(
+        authority_permissions
+            .get("pull-requests")
+            .and_then(toml::Value::as_str),
+        Some("read")
+    );
     assert!(
         dist.get("host-jobs").is_none(),
         "cargo-dist 0.32 host jobs do not gate its host job; authority must be a local artifact"
@@ -108,6 +126,15 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
     }
     assert!(!workflow.contains("push:\n    tags:"));
     assert!(workflow.contains("  custom-release-plan-authority:\n"));
+    let custom_call = workflow
+        .split("  custom-release-plan-authority:\n")
+        .nth(1)
+        .expect("generated authority call must exist")
+        .split("\n  # Build and package")
+        .next()
+        .expect("authority call must precede global packaging");
+    assert!(custom_call.contains("\"contents\": \"write\""));
+    assert!(custom_call.contains("\"pull-requests\": \"read\""));
     let post_announce = workflow
         .split("  custom-release-post-announce:\n")
         .nth(1)
@@ -181,6 +208,7 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "github.event.pull_request.head.ref == 'chore/release-codeflow'",
         "collaborators/${login}/permission",
         "select(.user.type == \"User\")",
+        "pull-requests: read",
         ".parents[1].sha == $head",
         "scripts/release.py authorize-event",
         "gh workflow run release.yml",
@@ -213,6 +241,7 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "select(.user.type == \"User\")",
         "GIT_CONFIG_COUNT=1",
         "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
+        "pull-requests: read",
     ] {
         assert!(
             authority.contains(required),
