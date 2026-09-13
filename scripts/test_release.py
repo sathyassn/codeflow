@@ -80,6 +80,11 @@ class Repository:
             "bootstrap": {
                 "comparison": {"tag": "v2.0.0", "commit": self.baseline},
                 "published": {
+                    "changelog_sha256": release.hashlib.sha256(
+                        release.published_snapshot(
+                            (self.root / "CHANGELOG.md").read_text(), "2.0.0"
+                        ).encode()
+                    ).hexdigest(),
                     "version": "2.0.0",
                     "source_commit": self.baseline,
                     "release_target_commit": self.baseline,
@@ -91,6 +96,7 @@ class Repository:
                 "impact": "major",
                 "id": "pre-policy-v3",
             },
+            "required_publication_checks": ["release state", "codeflow gates"],
             "watched_contract_paths": ["docs/releasing.md", "assets/**"],
         }
         self.write(".release/config.json", json.dumps(value, indent=2) + "\n")
@@ -114,6 +120,7 @@ class Repository:
             json.dumps(
                 {
                     "schema_version": 1,
+                    "drafts_visible": True,
                     "tags": tags or {"v2.0.0": self.baseline},
                     "releases": releases if releases is not None else [bootstrap_release],
                 }
@@ -234,8 +241,63 @@ class PendingVersionTests(unittest.TestCase):
             for path in release.VERSION_STAMP_PATHS
         }
         files["Cargo.lock"] = files["Cargo.lock"].replace(b'2.0.1', b'9.9.9', 1)
-        with self.assertRaisesRegex(release.ReleaseError, "package versions"):
+        with self.assertRaisesRegex(release.ReleaseError, "version stamps"):
             release.validate_version_stamps(files)
+
+    def test_sync_recovers_partial_stamp_write_through_build_and_update(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "recover partial update")])
+        lock = self.repo.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('version = "2.0.1"', 'version = "9.9.9"', 1))
+        log = self.repo.root / "cargo-calls.log"
+        cargo = self.repo.root / "fake-cargo"
+        self.repo.write(
+            "fake-cargo",
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$*\" >> {log}\n"
+            "exit 0\n",
+        )
+        cargo.chmod(0o755)
+        binary = self.repo.root / "target/debug/codeflow"
+        binary.parent.mkdir(parents=True)
+        self.repo.write(
+            "target/debug/codeflow",
+            "#!/usr/bin/env python3\n"
+            "from pathlib import Path\n"
+            "import sys\n"
+            "if sys.argv[1:] == ['--version']:\n"
+            "    print('codeflow 2.0.1')\n"
+            "elif sys.argv[1:] == ['update']:\n"
+            "    path = Path('Cargo.lock')\n"
+            "    path.write_text(path.read_text().replace('9.9.9', '2.0.1'))\n"
+            "else:\n"
+            "    raise SystemExit(2)\n",
+        )
+        binary.chmod(0o755)
+        release.sync(self.repo.args(cargo=str(cargo)))
+        self.assertEqual(
+            release.validate_version_stamps(
+                {path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS}
+            ),
+            "2.0.1",
+        )
+        self.assertEqual(
+            log.read_text().splitlines(),
+            ["check --workspace", "build --locked -p codeflow-cli"],
+        )
+
+    def test_published_section_must_match_exact_public_source(self) -> None:
+        self.repo.write(
+            "CHANGELOG.md",
+            "# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- altered after publication\n",
+        )
+        head = self.repo.commit("docs: stale published edit")
+        with self.assertRaisesRegex(release.ReleaseError, "historical bootstrap"):
+            release.validate_release_tree(
+                head,
+                self.config,
+                json.loads(self.repo.host.read_text()),
+                cwd=self.repo.root,
+            )
 
     def test_sync_validates_before_write_and_leaves_target_untouched(self) -> None:
         self.repo.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n- invalid\n")
@@ -294,6 +356,7 @@ class BaselineTests(unittest.TestCase):
         }
         return {
             "schema_version": 1,
+            "drafts_visible": True,
             "tags": {"v2.0.0": self.repo.baseline, **tags},
             "releases": [bootstrap, *releases],
         }
@@ -306,6 +369,13 @@ class BaselineTests(unittest.TestCase):
         text = "# Changelog\n\n## [3.0.1]\n\n<!-- codeflow:release-impact patch -->\n- later fix\n\n## [3.0.0]\n\n- public\n\n## [2.0.0] - 2026-01-01\n\n- old\n"
         self.assertEqual(release.expected_pending(text, baseline, self.config)[0], "3.0.1")
 
+    def test_public_release_target_may_be_branch_when_tag_and_marker_are_exact(self) -> None:
+        source = "b" * 40
+        published = {**self.published("3.0.0", source), "target": "main"}
+        state = self.state({"v3.0.0": source}, [published])
+        baseline = release.resolve_baseline(self.config, state, cwd=self.repo.root)
+        self.assertEqual((baseline.version, baseline.source), ("3.0.0", source))
+
     def test_stable_looking_prerelease_never_becomes_public_baseline(self) -> None:
         source = "b" * 40
         state = self.state({"v3.0.0": source}, [self.published("3.0.0", source, prerelease=True)])
@@ -317,12 +387,24 @@ class BaselineTests(unittest.TestCase):
         states = [
             self.state({"v3.0.0": source}, []),
             self.state({}, [{"tag": "v3.0.0", "draft": True, "target": source}]),
+            self.state(
+                {"v3.0.0": source},
+                [{key: value for key, value in self.published("3.0.0", source).items()
+                  if key != "prerelease"}],
+            ),
             self.state({"v3.0.0": source}, [{**self.published("3.0.0", source), "body": ""}]),
             self.state({"v3.0.0": source}, [{**self.published("3.0.0", source), "assets": []}]),
         ]
         for state in states:
             with self.subTest(state=state), self.assertRaises(release.ReleaseError):
                 release.resolve_baseline(self.config, state, cwd=self.repo.root)
+
+    def test_public_only_inventory_does_not_claim_draft_absence(self) -> None:
+        source = "b" * 40
+        state = self.state({}, [{"tag": "v3.0.0", "draft": True, "target": source}])
+        state["drafts_visible"] = False
+        baseline = release.resolve_baseline(self.config, state, cwd=self.repo.root)
+        self.assertEqual(baseline.version, "2.0.0")
 
     def test_bootstrap_preserves_distinct_tag_and_published_source(self) -> None:
         baseline = release.resolve_baseline(
@@ -393,14 +475,30 @@ class PullRequestTests(unittest.TestCase):
         self.repo.pending("2.1.0", [("minor", "feature")])
         head = self.repo.commit("fix: implementation marker")
         self.run_check(base, head, self.repo.body("minor"))
-        with self.assertRaisesRegex(release.ReleaseError, "below marker floor|entry impact"):
+        with self.assertRaisesRegex(release.ReleaseError, "below marker floor|must equal"):
             self.run_check(base, head, self.repo.body("none"))
+
+    def test_declared_impact_must_equal_new_annotation(self) -> None:
+        base = self.repo.target
+        self.repo.pending("2.0.1", [("patch", "small fix")])
+        head = self.repo.commit("feat: overstated declaration")
+        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+            self.run_check(base, head, self.repo.body("minor"))
+
+    def test_release_bearing_commit_cannot_reuse_existing_pending_label(self) -> None:
+        self.repo.pending("3.0.0", [("major", "existing break")])
+        base = self.repo.commit("feat!: existing pending break")
+        changelog = self.repo.root / "CHANGELOG.md"
+        changelog.write_text(changelog.read_text() + "\n", encoding="utf-8")
+        head = self.repo.commit("feat!: unrelated release-bearing commit")
+        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+            self.run_check(base, head, self.repo.body("major", migration="docs/migrate.md"))
 
     def test_new_major_entry_cannot_hide_behind_none_declaration(self) -> None:
         base = self.repo.target
         self.repo.pending("3.0.0", [("major", "hidden break")])
         head = self.repo.commit("docs: claim none")
-        with self.assertRaisesRegex(release.ReleaseError, "entry impact"):
+        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
             self.run_check(base, head, self.repo.body("none"))
 
     def test_feat_then_exact_revert_can_be_net_none(self) -> None:
@@ -426,18 +524,35 @@ class PullRequestTests(unittest.TestCase):
             self.run_check(base, head, self.repo.body("major", contract="breaking"))
         self.run_check(base, head, self.repo.body("major", contract="breaking", migration="docs/migrate.md"))
 
-    def test_clean_stale_merge_fails_even_when_git_can_merge_it(self) -> None:
-        base = self.repo.target
-        command(self.repo.root, "git", "switch", "-q", "-c", "work")
-        self.repo.pending("2.0.1", [("patch", "fix")])
-        head = self.repo.commit("fix: work")
-        command(self.repo.root, "git", "switch", "-q", "main")
-        self.repo.write("independent.txt", "target advanced\n")
-        target = self.repo.commit("chore: advance target")
-        merged = command(self.repo.root, "git", "merge-tree", "--write-tree", target, head)
-        self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
-        with self.assertRaisesRegex(release.ReleaseError, "stale"):
-            self.run_check(base, head, self.repo.body("patch"), target=target)
+    def test_concurrent_clean_stale_merges_fail_in_both_orders(self) -> None:
+        for work_name, target_name in [("alpha", "beta"), ("beta", "alpha")]:
+            repo = Repository()
+            try:
+                base = repo.target
+                command(repo.root, "git", "switch", "-q", "-c", work_name)
+                repo.pending("2.0.1", [("patch", f"{work_name} fix")])
+                head = repo.commit(f"fix: {work_name}")
+                command(repo.root, "git", "switch", "-q", "main")
+                repo.write(f"{target_name}.txt", "other work advanced main\n")
+                target = repo.commit(f"chore: merge {target_name} first")
+                merged = command(repo.root, "git", "merge-tree", "--write-tree", target, head)
+                self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
+                body_path = repo.root / "body.md"
+                body_path.write_text(repo.body("patch"))
+                with self.subTest(first=target_name, second=work_name), self.assertRaisesRegex(
+                    release.ReleaseError, "stale"
+                ):
+                    release.check_pr(
+                        repo.args(
+                            base=base,
+                            head=head,
+                            target_ref=target,
+                            body_file=body_path,
+                            body_env=None,
+                        )
+                    )
+            finally:
+                repo.cleanup()
 
     def test_withdrawal_requires_rationale_and_can_lower_remaining_state(self) -> None:
         self.repo.pending("3.0.0", [("major", "withdraw me"), ("patch", "keep me")])
@@ -447,6 +562,35 @@ class PullRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "withdrawal rationale"):
             self.run_check(base, head, self.repo.body("none"))
         self.run_check(base, head, self.repo.body("none", withdrawal="Breaking change was fully reverted."))
+
+    def test_withdrawal_cannot_reuse_a_tagged_or_draft_version(self) -> None:
+        self.repo.pending("3.0.0", [("major", "withdraw me")])
+        base = self.repo.commit("feat!: pending")
+        self.repo.write("CHANGELOG.md", "# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- public\n")
+        self.repo.write_stamps("2.0.0")
+        head = self.repo.commit("revert: withdraw pending break")
+        source = "b" * 40
+        bootstrap = json.loads(self.repo.host.read_text())["releases"][0]
+        states = [
+            ({"v2.0.0": self.repo.baseline, "v3.0.0": source}, [bootstrap]),
+            (
+                {"v2.0.0": self.repo.baseline},
+                [
+                    bootstrap,
+                    {"tag": "v3.0.0", "draft": True, "target": source, "assets": []},
+                ],
+            ),
+        ]
+        for tags, releases in states:
+            self.repo.write_host(tags=tags, releases=releases)
+            with self.subTest(tags=tags, releases=releases), self.assertRaisesRegex(
+                release.ReleaseError, "verified public release|unresolved publication attempt"
+            ):
+                self.run_check(
+                    base,
+                    head,
+                    self.repo.body("none", withdrawal="Breaking change was fully reverted."),
+                )
 
     def test_prose_only_pending_note_edit_uses_existing_rationale(self) -> None:
         self.repo.pending("2.0.1", [("patch", "fix a crash")])
@@ -502,7 +646,7 @@ class PublicationTests(unittest.TestCase):
         event.write_text(json.dumps({"event_name": "workflow_dispatch", "ref": "refs/heads/main", "actor": "owner", "triggering_actor": "rerunner"}))
         users.write_text(json.dumps({"owner": "User", "rerunner": "User"}))
         permissions.write_text(json.dumps({"owner": "admin", "rerunner": "write"}))
-        pulls.write_text(json.dumps([{"state": "closed", "merged_at": "now", "merge_commit_sha": self.repo.target, "base": {"ref": "main", "repo": {"full_name": "owner/repo"}}, "head": {"repo": {"full_name": "owner/repo"}}, "merged_by": {"type": "User"}}]))
+        pulls.write_text(json.dumps([{"state": "closed", "merged_at": "now", "merge_commit_sha": self.repo.target, "base": {"ref": "main", "repo": {"full_name": "owner/repo"}}, "head": {"repo": {"full_name": "contributor/fork"}}, "merged_by": {"type": "User"}}]))
         args = self.repo.args(event=event, users=users, permissions=permissions, pulls=pulls, repository="owner/repo", source=self.repo.target)
         release.verify_authority(args)
         permissions.write_text(json.dumps({"owner": "admin", "rerunner": "read"}))
@@ -516,6 +660,47 @@ class PublicationTests(unittest.TestCase):
         pulls.write_text(json.dumps([{"state": "closed", "merged_at": "now", "merge_commit_sha": "f" * 40, "base": {"ref": "main", "repo": {"full_name": "owner/repo"}}, "head": {"repo": {"full_name": "owner/repo"}}, "merged_by": {"type": "User"}}]))
         with self.assertRaisesRegex(release.ReleaseError, "ordinary human-merged"):
             release.verify_authority(args)
+        pulls.write_text(json.dumps([{"state": "closed", "merged_at": "now", "merge_commit_sha": self.repo.target, "base": {"ref": "main", "repo": {"full_name": "attacker/repo"}}, "head": {"repo": {"full_name": "contributor/fork"}}, "merged_by": {"type": "User"}}]))
+        with self.assertRaisesRegex(release.ReleaseError, "ordinary human-merged"):
+            release.verify_authority(args)
+
+    def test_required_checks_are_successful_on_exact_source(self) -> None:
+        state = self.repo.root / "checks.json"
+        source = self.repo.target
+        good = [
+            {"name": name, "head_sha": source, "status": "completed", "conclusion": "success"}
+            for name in ["release state", "codeflow gates"]
+        ]
+        state.write_text(json.dumps([{"check_runs": good}]))
+        args = self.repo.args(state=state, source=source)
+        release.verify_checks(args)
+        good[1]["head_sha"] = "f" * 40
+        state.write_text(json.dumps([{"check_runs": good}]))
+        with self.assertRaisesRegex(release.ReleaseError, "codeflow gates"):
+            release.verify_checks(args)
+
+    def test_publication_rejects_a_selected_snapshot_after_main_changes(self) -> None:
+        args = self.repo.args(
+            source=self.repo.target,
+            main_source="f" * 40,
+            main_ref=None,
+            tag="v2.0.0",
+        )
+        with self.assertRaisesRegex(release.ReleaseError, "no longer current main"):
+            release.verify_publication(args)
+
+    def test_publication_requires_write_visible_draft_inventory(self) -> None:
+        state = json.loads(self.repo.host.read_text())
+        state["drafts_visible"] = False
+        self.repo.host.write_text(json.dumps(state))
+        args = self.repo.args(
+            source=self.repo.target,
+            main_source=self.repo.target,
+            main_ref=None,
+            tag="v2.0.0",
+        )
+        with self.assertRaisesRegex(release.ReleaseError, "write-visible draft"):
+            release.verify_publication(args)
 
     def test_wrong_source_tag_notes_assets_and_partial_publication_fail(self) -> None:
         source = "c" * 40
@@ -543,6 +728,20 @@ class PublicationTests(unittest.TestCase):
         self.assertIn("reviewed fix", notes)
         self.assertNotIn("release-impact", notes)
         self.assertIn(release.SOURCE_MARKER.format(source=head), notes)
+
+    def test_release_notes_strip_bounded_legacy_delimiters(self) -> None:
+        self.repo.write(
+            "CHANGELOG.md",
+            "# Changelog\n\n## [3.0.0]\n\n"
+            "<!-- codeflow:release-impact major legacy-group=pre-policy-v3 "
+            f"sha256={'a' * 64} -->\n- reviewed backlog\n"
+            f"{release.LEGACY_END}\n\n## [2.0.0] - 2026-01-01\n\n- public\n",
+        )
+        head = self.repo.commit("docs: bind legacy notes")
+        notes = release.release_notes(self.repo.root, head, "v3.0.0", head)
+        self.assertIn("reviewed backlog", notes)
+        self.assertNotIn("legacy-group", notes)
+        self.assertNotIn("legacy-group-end", notes)
 
     def test_published_assets_require_exact_same_run_bytes(self) -> None:
         source = "c" * 40

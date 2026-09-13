@@ -65,16 +65,31 @@ jobs:
             --permissions /tmp/authority-permissions.json --pulls /tmp/authority-pulls.json \
             --repository "$GITHUB_REPOSITORY" --source "$GITHUB_SHA"
 
-          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-            | jq -e '[.check_runs[] | select(.name == "release state" and .status == "completed" and .conclusion == "success")] | length > 0' >/dev/null
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            > /tmp/authority-checks.json
+          python3 scripts/release.py verify-checks --state /tmp/authority-checks.json \
+            --source "$GITHUB_SHA"
           python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \
-            --main-source "$main_sha" --tag "$REQUESTED_TAG"
+            --main-source "$main_sha" --tag "$REQUESTED_TAG" --drafts-visible
           plan_tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
           test "$plan_tag" = "$REQUESTED_TAG"
           python3 scripts/release.py release-notes --ref "$GITHUB_SHA" \
             --source "$GITHUB_SHA" --tag "$REQUESTED_TAG" --output /tmp/release-notes.md
 
-          tag_target=$(git rev-parse --verify "refs/tags/${REQUESTED_TAG}^{commit}" 2>/dev/null || true)
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/commits/tags/${REQUESTED_TAG}" --jq .sha \
+            > /tmp/release-tag-target 2>/tmp/tag.error
+          tag_rc=$?
+          set -e
+          if [ "$tag_rc" -eq 0 ]; then
+            tag_target=$(cat /tmp/release-tag-target)
+          elif grep -q 'HTTP 404' /tmp/tag.error; then
+            tag_target=""
+          else
+            cat /tmp/tag.error >&2
+            exit "$tag_rc"
+          fi
           set +e
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${REQUESTED_TAG}" > /tmp/release.json 2>/tmp/release.error
           release_rc=$?

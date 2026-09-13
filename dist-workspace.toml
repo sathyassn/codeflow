@@ -45,4 +45,5 @@ pull-requests = "read"
 checks = "read"
 
 [dist.github-custom-job-permissions.release-main-recheck]
-contents = "read"
+contents = "write"
+checks = "read"

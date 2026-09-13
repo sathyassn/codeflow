@@ -126,6 +126,8 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         "workflow_dispatch:",
         "custom-release-plan-authority:",
         "uses: ./.github/workflows/release-plan-authority.yml",
+        "custom-release-main-recheck:",
+        "uses: ./.github/workflows/release-main-recheck.yml",
         "plan: ${{ needs.plan.outputs.val }}",
         "gh release upload",
         "gh release edit",
@@ -162,10 +164,27 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         .next()
         .expect("host job must precede announce");
     assert!(host.contains("- custom-release-plan-authority"));
+    assert!(host.contains("- custom-release-main-recheck"));
     assert!(host.contains("needs.custom-release-plan-authority.result == 'skipped'"));
     assert!(host.contains("needs.custom-release-plan-authority.result == 'success'"));
-    assert!(!host.contains("result == 'failure'"));
-    assert!(!host.contains("result == 'cancelled'"));
+    assert!(host.contains("needs.custom-release-main-recheck.result == 'skipped'"));
+    assert!(host.contains("needs.custom-release-main-recheck.result == 'success'"));
+    for blocked in ["failure", "cancelled"] {
+        assert!(
+            !host.contains(&format!("result == '{blocked}'")),
+            "a {blocked} authority or recheck must block hosting"
+        );
+    }
+    let announce = workflow
+        .split("  announce:\n")
+        .nth(1)
+        .expect("generated announce job must exist")
+        .split("\n  custom-release-post-announce:")
+        .next()
+        .expect("announce must precede post-announce verification");
+    assert!(announce.contains("needs.host.result == 'success'"));
+    assert!(!announce.contains("needs.host.result == 'failure'"));
+    assert!(!announce.contains("needs.host.result == 'cancelled'"));
     let custom = workflow
         .split("  custom-release-plan-authority:\n")
         .nth(1)
@@ -214,6 +233,7 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         "scripts/release.py verify-authority",
         "check-runs?per_page=100",
         "scripts/release.py verify-publication",
+        "commits/tags/${REQUESTED_TAG}",
         "scripts/release.py verify-host-state",
         "scripts/release.py release-notes",
         "gh release create",
@@ -234,6 +254,7 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
     let recheck = fs::read_to_string(root.join(".github/workflows/release-main-recheck.yml"))
         .expect("main recheck workflow must be readable");
     assert!(recheck.contains("scripts/release.py verify-publication"));
+    assert!(recheck.contains("scripts/release.py verify-checks"));
     assert!(recheck.contains("--source \"$GITHUB_SHA\""));
     assert!(recheck.contains("--main-source \"$main_sha\""));
     assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));

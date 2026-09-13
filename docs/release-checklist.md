@@ -70,13 +70,17 @@ named human release decision.
       without drift.
 - [ ] The deliberately dispatched plan authority records `GITHUB_SHA` on
       `main`, checks current actor/rerunner permission, ordinary merged-PR
-      provenance, source/version/notes and exact-source CI. It fails closed on
+      provenance, source/version/notes and the exact-source `release state` plus
+      `codeflow gates` checks. Its write-scoped token can see draft releases;
+      read-scoped PR checks make no draft-absence claim. It fails closed on
       wrong tag, source, public release, foreign draft, or draft assets. It may
       create or reuse only the exact source-bound empty draft; upload/announce does
       not clobber a later host conflict.
 - [ ] Generated host dependencies reject failed/cancelled local authority and
       global main-recheck jobs; publishing cannot skip either. The recheck runs
       after platform builds. Dry-run creates no draft and performs no hosting.
+      Only one deliberate publication is operated at a time; the custom-job
+      concurrency group is not represented as a whole-workflow lock.
 - [ ] The post-announce verifier binds the public tag and release to the exact
       selected main source and matches every asset name, size and SHA-256 digest to
       the same-run staged artifact set, with no missing, duplicate or extra asset.

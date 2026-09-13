@@ -192,7 +192,9 @@ def github_pages(endpoint: str, *, cwd: Path) -> list[Any]:
     return [item for page in pages for item in page]
 
 
-def discover_host_state(repository: str, *, cwd: Path) -> dict[str, Any]:
+def discover_host_state(
+    repository: str, *, cwd: Path, drafts_visible: bool = False
+) -> dict[str, Any]:
     if not repository:
         try:
             raw = run(["gh", "repo", "view", "--json", "nameWithOwner"], cwd=cwd).stdout
@@ -247,7 +249,12 @@ def discover_host_state(repository: str, *, cwd: Path) -> dict[str, Any]:
                 ],
             }
         )
-    return {"schema_version": 1, "tags": tags, "releases": compact}
+    return {
+        "schema_version": 1,
+        "drafts_visible": drafts_visible,
+        "tags": tags,
+        "releases": compact,
+    }
 
 
 def get_host_state(args: argparse.Namespace) -> dict[str, Any]:
@@ -255,10 +262,15 @@ def get_host_state(args: argparse.Namespace) -> dict[str, Any]:
         value = load_json(args.host_state)
     else:
         repository = getattr(args, "repository", "") or os.getenv("GITHUB_REPOSITORY", "")
-        value = discover_host_state(repository, cwd=args.root)
+        value = discover_host_state(
+            repository,
+            cwd=args.root,
+            drafts_visible=getattr(args, "drafts_visible", False),
+        )
     if (
         not isinstance(value, dict)
         or value.get("schema_version") != 1
+        or not isinstance(value.get("drafts_visible"), bool)
         or not isinstance(value.get("tags"), dict)
         or not isinstance(value.get("releases"), list)
     ):
@@ -328,21 +340,17 @@ def resolve_baseline(
         if (
             not isinstance(tag, str)
             or not STABLE_TAG.fullmatch(tag)
-            or item.get("draft") is True
-            or item.get("prerelease") is True
+            or item.get("draft") is not False
+            or item.get("prerelease") is not False
         ):
             continue
         version = tag.removeprefix("v")
         if semver(version) <= semver(bootstrap.version):
             continue
-        target = item.get("target")
-        if (
-            not isinstance(target, str)
-            or not re.fullmatch(r"[0-9a-f]{40}", target)
-            or tags.get(tag) != target
-        ):
-            fail(f"public {tag} tag/source identity is not immutable and equal")
-        if SOURCE_MARKER.format(source=target) not in str(item.get("body") or ""):
+        source = tags.get(tag)
+        if not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source):
+            fail(f"public {tag} lacks immutable peeled-tag source identity")
+        if SOURCE_MARKER.format(source=source) not in str(item.get("body") or ""):
             fail(f"public {tag} lacks the exact-source marker")
         assets = item.get("assets")
         if not isinstance(assets, list) or not assets:
@@ -353,7 +361,7 @@ def resolve_baseline(
             for asset in assets
         ):
             fail(f"public {tag} has an asset without SHA-256 identity")
-        public.append(Baseline(version, tag, target, target))
+        public.append(Baseline(version, tag, source, source))
     baseline = max(public, key=lambda item: semver(item.version))
     allowed_tag, allowed_source = allow_attempt or ("", "")
     for tag, target in tags.items():
@@ -363,18 +371,19 @@ def resolve_baseline(
             and (tag, target) != (allowed_tag, allowed_source)
         ):
             fail(f"{tag} exists without a verified public release; resolve that attempt first")
-    for item in releases:
-        tag = str(item.get("tag", "")) if isinstance(item, dict) else ""
-        if (
-            isinstance(item, dict)
-            and item.get("draft") is True
-            and STABLE_TAG.fullmatch(tag)
-            and semver(tag) > semver(baseline.version)
-        ):
-            if (tag, item.get("target")) != (allowed_tag, allowed_source):
-                fail(f"draft {tag} is an unresolved publication attempt")
-            if item.get("assets"):
-                fail(f"draft {tag} already has assets; refuse a concurrent or rebuilt upload")
+    if state["drafts_visible"]:
+        for item in releases:
+            tag = str(item.get("tag", "")) if isinstance(item, dict) else ""
+            if (
+                isinstance(item, dict)
+                and item.get("draft") is True
+                and STABLE_TAG.fullmatch(tag)
+                and semver(tag) > semver(baseline.version)
+            ):
+                if (tag, item.get("target")) != (allowed_tag, allowed_source):
+                    fail(f"draft {tag} is an unresolved publication attempt")
+                if item.get("assets"):
+                    fail(f"draft {tag} already has assets; refuse a concurrent or rebuilt upload")
     return baseline
 
 
@@ -388,8 +397,10 @@ class ChangelogSection:
     body: str
 
 
-def changelog_sections(text: str) -> list[ChangelogSection]:
-    if re.search(r"(?m)^## \[Unreleased\]\s*$", text):
+def changelog_sections(
+    text: str, *, allow_legacy_unreleased: bool = False
+) -> list[ChangelogSection]:
+    if not allow_legacy_unreleased and re.search(r"(?m)^## \[Unreleased\]\s*$", text):
         fail("CHANGELOG.md uses [Unreleased]; use one undated pending version")
     headings = list(
         re.finditer(r"(?m)^## \[(\d+\.\d+\.\d+)\](?: - (\d{4}-\d{2}-\d{2}))?\s*$", text)
@@ -503,7 +514,7 @@ VERSION_STAMP_PATHS = [
 ]
 
 
-def validate_version_stamps(files: dict[str, bytes]) -> str:
+def version_stamp_values(files: dict[str, bytes]) -> dict[str, str]:
     try:
         cargo = tomllib.loads(files["Cargo.toml"].decode())["workspace"]["package"]["version"]
         lock = tomllib.loads(files["Cargo.lock"].decode())
@@ -511,20 +522,39 @@ def validate_version_stamps(files: dict[str, bytes]) -> str:
         manifest = json.loads(files[".codeflow/manifest.json"])
     except (KeyError, UnicodeDecodeError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         fail(f"cannot parse coupled stamps: {error}")
-    semver(cargo)
+    if not isinstance(cargo, str):
+        fail("workspace package version is not a string")
     own = {
         package["name"]: package["version"]
         for package in lock.get("package", [])
         if package.get("name") in {"codeflow-cli", "codeflow-core", "codeflow-present"}
     }
-    if len(own) != 3 or set(own.values()) != {cargo}:
-        fail(f"workspace package versions disagree: Cargo={cargo}, lock={own}")
-    if project.get("scaffold_version") != cargo or manifest.get("scaffold_version") != cargo:
-        fail("managed project/manifest stamps disagree with workspace")
-    marker = f"<!-- codeflow:managed:begin scaffold={cargo} -->".encode()
+    if len(own) != 3:
+        fail(f"workspace lock is missing package stamps: {own}")
+    values = {"Cargo.toml": cargo, **{f"Cargo.lock:{name}": value for name, value in own.items()}}
+    for name, value in [
+        (".codeflow/project.toml", project.get("scaffold_version")),
+        (".codeflow/manifest.json", manifest.get("scaffold_version")),
+    ]:
+        if not isinstance(value, str):
+            fail(f"{name} scaffold stamp is not a string")
+        values[name] = value
     for name in ["AGENTS.md", "CLAUDE.md"]:
-        if marker not in files[name]:
-            fail(f"{name} managed stamp disagrees with {cargo}")
+        markers = re.findall(rb"<!-- codeflow:managed:begin scaffold=(\d+\.\d+\.\d+) -->", files[name])
+        if len(markers) != 1:
+            fail(f"{name} must contain exactly one managed scaffold stamp")
+        values[name] = markers[0].decode()
+    for value in values.values():
+        semver(value)
+    return values
+
+
+def validate_version_stamps(files: dict[str, bytes]) -> str:
+    values = version_stamp_values(files)
+    versions = set(values.values())
+    if len(versions) != 1:
+        fail(f"coupled version stamps disagree: {values}")
+    cargo = values["Cargo.toml"]
     return cargo
 
 
@@ -537,8 +567,10 @@ def validate_release_tree(
     allow_attempt: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     baseline = resolve_baseline(config, state, cwd=cwd, allow_attempt=allow_attempt)
+    changelog = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode()
+    validate_published_sections(changelog, baseline, config, cwd=cwd)
     version, pending, impacts = expected_pending(
-        file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode(), baseline, config
+        changelog, baseline, config
     )
     stamped = validate_version_stamps(
         {path: file_at_ref(ref, path, cwd=cwd) for path in VERSION_STAMP_PATHS}
@@ -571,6 +603,38 @@ def section_bytes(text: str, version: str) -> str:
     if section is None:
         fail(f"CHANGELOG.md lacks section {version}")
     return text[section.start : section.end].rstrip()
+
+
+def published_snapshot(
+    text: str, through: str, *, allow_legacy_unreleased: bool = False
+) -> str:
+    sections = []
+    for section in changelog_sections(
+        text, allow_legacy_unreleased=allow_legacy_unreleased
+    ):
+        if semver(section.version) <= semver(through):
+            raw = text[section.start : section.end].rstrip()
+            raw = re.sub(r"\n(?:\[[^\]]+\]: [^\n]+\n?)+\Z", "", raw).rstrip()
+            sections.append(raw)
+    return "\n\n".join(sections)
+
+
+def validate_published_sections(
+    text: str, baseline: Baseline, config: dict[str, Any], *, cwd: Path
+) -> None:
+    bootstrap_version = str(config["bootstrap"]["published"].get("version", ""))
+    current = published_snapshot(text, baseline.version)
+    if baseline.version == bootstrap_version:
+        expected = config["bootstrap"]["published"].get("changelog_sha256")
+        if not isinstance(expected, str) or hashlib.sha256(current.encode()).hexdigest() != expected:
+            fail("published changelog sections differ from the bounded historical bootstrap")
+        return
+    source_text = file_at_ref(baseline.source, "CHANGELOG.md", cwd=cwd).decode()
+    source = published_snapshot(
+        source_text, baseline.version, allow_legacy_unreleased=True
+    )
+    if not source or current != source:
+        fail("published changelog sections differ from their exact public source")
 
 
 def check_pr(args: argparse.Namespace) -> None:
@@ -638,16 +702,30 @@ def check_pr(args: argparse.Namespace) -> None:
     for entry in before_entries:
         if entry in added:
             added.remove(entry)
-    # A same-impact prose refinement changes evidence, not release semantics.
+    # Pair same-label replacements without guessing whether prose is "similar".
+    edited_labels = False
     for impact in IMPACT_ORDER:
         old = [entry for entry in removed if entry[0] == impact]
         new = [entry for entry in added if entry[0] == impact]
         for _ in range(min(len(old), len(new))):
             removed.remove(old.pop())
             added.remove(new.pop())
+            edited_labels = True
     declared_additions = [entry for entry in added if not (adopting and entry[1].startswith("legacy:"))]
-    if declared_additions and max(IMPACT_ORDER[item[0]] for item in declared_additions) > IMPACT_ORDER[fields["impact"]]:
-        fail("new changelog entry impact exceeds declared impact")
+    added_impact = max(
+        (item[0] for item in declared_additions),
+        key=lambda item: IMPACT_ORDER[item],
+        default="none",
+    )
+    if fields["impact"] != added_impact:
+        fail(
+            f"declared impact {fields['impact']} must equal newly added changelog impact "
+            f"{added_impact}"
+        )
+    if edited_labels and fields["impact"] == "none":
+        eligible = all(path == "CHANGELOG.md" or path.startswith("docs/") for path in paths)
+        if not eligible:
+            fail("no-impact pending-note refinement is limited to documentation changes")
     if fields["impact"] != "none":
         if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
             fail("non-none impact requires curated changelog change and evidence")
@@ -702,9 +780,11 @@ def sync(args: argparse.Namespace) -> None:
     validate_metadata_paths(args.root)
     changelog = args.root / "CHANGELOG.md"
     text = changelog.read_text(encoding="utf-8")
+    validate_published_sections(text, baseline, config, cwd=args.root)
     version, pending, _ = expected_pending(text, baseline, config, strict=False)
     files = {path: (args.root / path).read_bytes() for path in VERSION_STAMP_PATHS}
-    current = validate_version_stamps(files)
+    values = version_stamp_values(files)
+    current = version if set(values.values()) == {version} else None
     synced_text = text
     if pending is not None and pending.version != version:
         heading = text[pending.start : pending.body_start]
@@ -747,6 +827,7 @@ def release_notes(root: Path, ref: str, tag: str, source: str) -> str:
     if section is None or not section.body:
         fail(f"CHANGELOG.md lacks curated notes for {tag}")
     body = IMPACT_MARKER.sub("", section.body)
+    body = body.replace(LEGACY_END, "")
     body = re.sub(r"(?m)^_Staging evidence:.*_\s*$", "", body)
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
     return f"{body}\n\n{SOURCE_MARKER.format(source=source)}\n"
@@ -759,8 +840,40 @@ def write_release_notes(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "prepared", "output": str(args.output)}))
 
 
+def verify_checks(args: argparse.Namespace) -> None:
+    pages = load_json(args.state)
+    required = load_config(args.config).get("required_publication_checks")
+    if (
+        not isinstance(pages, list)
+        or not isinstance(required, list)
+        or not required
+        or len(set(required)) != len(required)
+        or any(not isinstance(name, str) or not name for name in required)
+    ):
+        fail("publication check inventory or configured requirements are malformed")
+    runs: list[Any] = []
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
+            fail("publication check page is malformed")
+        runs.extend(page["check_runs"])
+    passed = {
+        run.get("name")
+        for run in runs
+        if isinstance(run, dict)
+        and run.get("head_sha") == args.source
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    }
+    missing = [name for name in required if name not in passed]
+    if missing:
+        fail(f"selected source lacks successful required checks: {', '.join(missing)}")
+    print(json.dumps({"status": "verified", "checks": required}, sort_keys=True))
+
+
 def verify_publication(args: argparse.Namespace) -> None:
     config, state = load_config(args.config), get_host_state(args)
+    if not state["drafts_visible"]:
+        fail("publication verification requires write-visible draft inventory")
     source = git("rev-parse", f"{args.source}^{{commit}}", cwd=args.root)
     main = (
         args.main_source
@@ -804,7 +917,6 @@ def verify_authority(args: argparse.Namespace) -> None:
         and pull.get("state") == "closed"
         and (pull.get("base") or {}).get("ref") == "main"
         and ((pull.get("base") or {}).get("repo") or {}).get("full_name") == args.repository
-        and ((pull.get("head") or {}).get("repo") or {}).get("full_name") == args.repository
         and pull.get("merge_commit_sha") == args.source
         and (pull.get("merged_by") or {}).get("type") == "User"
     ]
@@ -886,6 +998,7 @@ def verify_published_assets(args: argparse.Namespace) -> None:
 def add_host_args(value: argparse.ArgumentParser) -> None:
     value.add_argument("--host-state", type=Path)
     value.add_argument("--repository", default="")
+    value.add_argument("--drafts-visible", action="store_true")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -922,6 +1035,11 @@ def parser() -> argparse.ArgumentParser:
     publication.add_argument("--tag", required=True)
     add_host_args(publication)
     publication.set_defaults(func=verify_publication)
+
+    checks = sub.add_parser("verify-checks")
+    checks.add_argument("--state", type=Path, required=True)
+    checks.add_argument("--source", required=True)
+    checks.set_defaults(func=verify_checks)
 
     authority = sub.add_parser("verify-authority")
     authority.add_argument("--event", type=Path, required=True)

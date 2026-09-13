@@ -5,6 +5,7 @@
       "tag": "v2.1.0"
     },
     "published": {
+      "changelog_sha256": "56aeff28b413cfe728288982218bf376a2a9b3ed40407f8ca156cbb7474b2e52",
       "release_target_commit": "3c3efdb91009361e18b0fabad699b5e875d4e4dd",
       "source_archive_sha256": "1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb",
       "source_commit": "3c3efdb91009361e18b0fabad699b5e875d4e4dd",
@@ -19,7 +20,10 @@
   },
   "main_branch": "main",
   "release_unit": "codeflow",
-  "required_publication_check": "release state",
+  "required_publication_checks": [
+    "release state",
+    "codeflow gates"
+  ],
   "schema_version": 2,
   "watched_contract_paths": [
     ".github/workflows/**",

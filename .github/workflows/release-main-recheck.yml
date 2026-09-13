@@ -6,7 +6,8 @@ on:
         required: true
         type: string
 permissions:
-  contents: read
+  contents: write
+  checks: read
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -29,5 +30,10 @@ jobs:
             esac
           done
           main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            > /tmp/authority-checks.json
+          python3 scripts/release.py verify-checks --state /tmp/authority-checks.json \
+            --source "$GITHUB_SHA"
           python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \
-            --main-source "$main_sha" --tag "$REQUESTED_TAG"
+            --main-source "$main_sha" --tag "$REQUESTED_TAG" --drafts-visible

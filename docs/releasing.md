@@ -152,6 +152,9 @@ and blocks claiming that platform's release qualification.
    discovers public state read-only, calculates from the latest verified public
    release, and updates coupled stamps through Cargo and `codeflow update`
    only when needed. It never pushes, opens a PR, tags, or publishes.
+   Read-scoped PR/main checks cannot see GitHub draft releases and do not claim
+   that they can; draft absence is checked later inside the write-scoped,
+   read-only-in-behavior publisher guards.
 2. Refresh against the current target before merge. PR CI checks the actual
    proposed merge tree, not conflict absence. Main-push CI repeats the state
    check without writing. Without strict branch protection a stale clean merge
@@ -160,14 +163,19 @@ and blocks claiming that platform's release qualification.
    permission explicitly dispatches cargo-dist's generated Release workflow
    with `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor
    must both be GitHub Users with effective permission. `GITHUB_SHA` must
-   still equal current main and be associated with an ordinary human-merged
-   same-repository PR. No static allowlist or second-human role is implied.
-4. The supported local-artifact job checks source/version/notes, exact-source
-   CI, and host collisions, then creates or resumes only an exact empty draft.
+   still equal current main and be the result of an ordinary PR human-merged
+   into this repository's main. Contributor forks remain valid. No static
+   allowlist or second-human role is implied.
+4. The supported local-artifact job checks source/version/notes, the exact-source
+   `release state` and `codeflow gates` checks, and write-visible host collisions,
+   then creates or resumes only an exact empty draft.
    The supported global-artifact job rechecks main after platform builds.
    Failed or cancelled guards block host and announce. This narrows but cannot
    atomically close the small scheduler/API race before hosting; changed main
-   fails and requires deliberate redispatch.
+   fails and requires deliberate redispatch. Its concurrency group covers the
+   authority job, not the whole generated workflow, so operate one deliberate
+   publication at a time; no-clobber and partial-attempt checks remain the
+   safety boundary if runs overlap.
 5. cargo-dist uploads without `--clobber` and announces last. Its
    post-announce verifier compares tag/source and every asset name, size, and
    SHA-256 digest to the same-run files.
