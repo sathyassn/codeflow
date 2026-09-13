@@ -21,12 +21,15 @@ description: Land finished work — docs and capability updates, then a PR throu
    or starter behavior, also run the adopted portal's locked check/build and
    `codeflow validate --portal <adopted-root>`; add rendered/browser checks
    matched to UX impact. Non-adopters receive no portal gate.
-4. Sweep the change for touched contract surfaces — API, CLI flags, config
-   schema, file formats, defaults, managed-file semantics. Each one is either
-   marked breaking (`type!:` on the commit + a `BREAKING CHANGE:` footer with the
-   migration path, which drives the major bump) or consciously stated
-   non-breaking with the reason. The `breaking_watch_paths` warn is a backstop,
-   not the judgment.
+4. Assess release impact using the project's adopted policy and
+   [references/release-policy.md](references/release-policy.md). Sweep API,
+   CLI flags, config, formats, defaults and managed instructions for actual
+   compatibility changes. A touched contract is not automatically breaking;
+   a misleading commit type is not proof of compatibility. Mark an actual
+   break with `type!:` and a `BREAKING CHANGE:` migration footer, and reconcile
+   the project's authoritative release input and PR explanation. Use its one
+   version calculator; `breaking_watch_paths` only warns. A reviewed merge is
+   not permission to publish or deploy.
    For a multi-platform binary or installer release, keep native Windows and
    WSL2/Linux evidence separate: the native Windows installer must select its
    Windows binary, while WSL2 uses the Linux installer and binary. Cross-build

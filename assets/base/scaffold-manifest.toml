@@ -76,8 +76,9 @@
 #   discipline is armed from the first commit at every tier; the engine performs
 #   no tier-based softening. A project may deliberately relax specific rules in
 #   its own .codeflow/policy.json, but that is not recommended: conventional-commit
-#   discipline is load-bearing for the git-cliff version/changelog automation
-#   (the version bump and CHANGELOG are derived from the commit history).
+#   discipline may be load-bearing for the project's chosen commit-driven
+#   release tool. Consumers own their version and changelog authority; this
+#   scaffold does not install CodeFlow's repository release pipeline.
 
 schema_version = 1
 
@@ -327,6 +328,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-ship/references/pr-evidence.md"
 dest = ".claude/skills/cf-ship/references/pr-evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-ship/references/release-policy.md"
+dest = ".claude/skills/cf-ship/references/release-policy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -688,6 +695,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-ship/references/pr-evidence.md"
 dest = ".agents/skills/cf-ship/references/pr-evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-ship/references/release-policy.md"
+dest = ".agents/skills/cf-ship/references/release-policy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

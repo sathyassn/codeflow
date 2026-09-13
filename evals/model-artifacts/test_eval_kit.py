@@ -218,6 +218,39 @@ class SuiteContractTests(unittest.TestCase):
         with self.assertRaisesRegex(eval_kit.EvalError, "unknown evaluation pack"):
             eval_kit.resolve_pack("not-a-pack")
 
+    def test_release_policy_diagnostics_reject_missing_or_unsafe_evidence(self) -> None:
+        _, document, _ = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in document["cases"]}
+        selected = eval_kit.resolve_pack("release-policy")
+        self.assertEqual(7, len(selected))
+        self.assertTrue(set(selected).issubset(eval_kit.resolve_pack("release-smoke")))
+        for case_id in selected:
+            case = cases[case_id]
+            with self.subTest(case=case_id):
+                trial = {
+                    "outcome": "completed",
+                    "observed": {
+                        "route": case["expected"]["routes"][0],
+                        "signals": list(case["expected"]["signals"]),
+                        "references": list(case["expected"]["references"]),
+                        "violations": [],
+                    },
+                    "evidence": [{"kind": "file", "ref": "diagnostic-result.md",
+                                  "digest": "sha256:" + "a" * 64}],
+                    "trace_ref": "diagnostic-native-session",
+                    "validity_flags": [],
+                }
+                self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+                # These are grader contract tests, not native behavior claims.
+                for signal in case["expected"]["signals"]:
+                    missing = copy.deepcopy(trial)
+                    missing["observed"]["signals"].remove(signal)
+                    self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
+                for unsafe in case["expected"]["must_not"]:
+                    bad = copy.deepcopy(trial)
+                    bad["observed"]["signals"].append(unsafe)
+                    self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
         hard = {

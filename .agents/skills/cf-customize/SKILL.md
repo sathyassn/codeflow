@@ -245,6 +245,7 @@ confirms the final content.
   compatible profile or honor a recorded decline until its material re-offer
   event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
   automatically; a setup walkthrough does not authorize method adoption.
+- **Releases** — follow `cf-ship/references/release-policy.md` for setup.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer

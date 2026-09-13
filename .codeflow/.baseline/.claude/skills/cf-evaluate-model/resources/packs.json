@@ -2,6 +2,20 @@
   "schema_version": 1,
   "packs": [
     {
+      "id": "release-policy",
+      "description": "Scoped diagnostics for compatibility judgment, single release authority, consumer adoption and exact-source publication. Registration or syntax checks do not prove live behavior or qualify a model binding.",
+      "includes": [],
+      "cases": [
+        "release-managed-default-is-not-docs-only",
+        "release-compatible-addition-is-not-major",
+        "release-internal-refactor-can-be-none",
+        "release-doctrine-and-version-domains",
+        "release-existing-package-authority-preserved",
+        "release-new-project-offers-complete-opt-in",
+        "release-stale-approval-and-hash-conflict"
+      ]
+    },
+    {
       "id": "agentic-estimation",
       "description": "Focused native behavioral diagnostics for project-specific preview/consent/reuse/decline, owned rubric boundaries, cold-start allocations, safe probes, current source evidence and all-started outcomes. Reuses existing orchestration/authority cases; registration or checker success is not a behavioral result, binding qualification or predictive calibration.",
       "includes": [],
@@ -213,7 +227,8 @@
         "project-organization",
         "presentation-review",
         "documentation-portal",
-        "git-delivery"
+        "git-delivery",
+        "release-policy"
       ],
       "cases": []
     },

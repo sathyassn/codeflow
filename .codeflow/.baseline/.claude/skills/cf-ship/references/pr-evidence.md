@@ -10,6 +10,12 @@ Open the PR. Commits stay conventional (`type(scope): description`,
 Tables for tabular data, fenced blocks for pasted output, and bullets for
 enumerable points; do not split necessary explanations to meet a line count.
 Summary is plain language a zero-context reader understands.
+Assess the complete change under the project's adopted release policy; load
+[release-policy.md](release-policy.md) for impact, authority and publication
+boundaries. Carry its required release-impact explanation or justified `none`,
+with evidence and migration when needed. Reconcile the authoritative commits
+or change entries that will land, not only the PR title; do not add a competing
+version calculator or release ledger.
 Write Summary and Changes from `git log --oneline <base>..<head>` and
 `git diff --stat <base>...<head>` on source-of-truth paths — every logical
 change on the branch, not the last conversation, last review, or last
