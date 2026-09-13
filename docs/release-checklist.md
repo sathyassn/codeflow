@@ -8,14 +8,15 @@ named human release decision.
 
 ## 1. Scope and version
 
-- [ ] The generated candidate records the exact current `main` source, contains
-      only allowlisted derived changes, and still matches its recorded hashes.
-- [ ] Conventional commits resolve to the intended SemVer bump; breaking
-      changes and migrations are explicit.
+- [ ] The normal work PR contains reviewed pending notes, one adjacent impact
+      annotation per new entry, and all warranted coupled stamp changes.
+- [ ] The cumulative version is the verified public baseline bumped once by
+      the highest remaining pending impact. Conventional markers do not
+      understate it; breaking changes and migrations are explicit.
 - [ ] `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, release notes, and the proposed
       `vX.Y.Z` tag agree.
-- [ ] The human-approved candidate head is the exact second parent of its main
-      merge, its recorded source is the first parent, and both trees agree.
+- [ ] PR validation used the current target and actual proposed merge tree.
+      Recheck immediately before the human merge because clean is not fresh.
 - [ ] Every shipped behavior change links its capability/epic and accepted ADR;
       documentation describes current behavior, not an aspiration.
 
@@ -67,23 +68,21 @@ named human release decision.
 
 - [ ] The pinned cargo-dist version regenerates the committed release workflow
       without drift.
-- [ ] The dispatched plan authority job revalidates the merged candidate and
-      fails closed on a wrong tag, public release, foreign draft, or any draft
-      asset before global packaging or hosting. It may create or reuse only the exact empty
-      candidate-bound draft with reviewed notes; generated upload/announce does
+- [ ] The deliberately dispatched plan authority records `GITHUB_SHA` on
+      `main`, checks current actor/rerunner permission, ordinary merged-PR
+      provenance, source/version/notes and exact-source CI. It fails closed on
+      wrong tag, source, public release, foreign draft, or draft assets. It may
+      create or reuse only the exact source-bound empty draft; upload/announce does
       not clobber a later host conflict.
-- [ ] The generated host dependency rejects failed or cancelled authority; a
-      publishing run cannot skip it. Dry-run may build rehearsal artifacts but
-      creates no draft and performs no hosting or announcement. Exact-head
-      candidate PR checks are approved and green,
-      including after an edited release-impact declaration.
+- [ ] Generated host dependencies reject failed/cancelled local authority and
+      global main-recheck jobs; publishing cannot skip either. The recheck runs
+      after platform builds. Dry-run creates no draft and performs no hosting.
 - [ ] The post-announce verifier binds the public tag and release to the exact
-      candidate and matches every public asset name, size and SHA-256 digest to
+      selected main source and matches every asset name, size and SHA-256 digest to
       the same-run staged artifact set, with no missing, duplicate or extra asset.
-- [ ] If the repository deletes a merged head branch, authorization restores
-      only the exact reviewed candidate before dispatch. A held candidate is
-      either retried unchanged or abandoned through the reviewed source-restore
-      procedure in `docs/releasing.md`; no record or notes are silently dropped.
+- [ ] A tag-only or exact empty draft attempt is retried only for the same
+      source/notes. Draft assets, another source, or a public version block
+      overwrite and enter explicit recovery; no tag/version is repurposed.
 - [ ] `cargo dist plan --output-format=json` lists the two macOS archives, the
       Linux x86-64 archive, the Windows x86-64 MSVC archive, and both shell and
       PowerShell installers on native runners.
@@ -192,9 +191,11 @@ named human release decision.
 
 ## 5. Publish, canary, and rollback
 
-- [ ] A human approves and merges the release PR. No agent merges or tags it.
-- [ ] The annotated release tag points at the reviewed merge commit and starts
-      the expected release workflow.
+- [ ] A human approves and merges the normal work PR after its release-state
+      check is fresh. No agent merges or tags it.
+- [ ] A human deliberately dispatches the generated workflow for current
+      `main` and the pending `vX.Y.Z`; cargo-dist creates the tag only after
+      the guarded build succeeds.
 - [ ] Release archives, installers, checksums/attestations emitted by the pinned
       distribution workflow, and release notes are complete and mutually
       consistent before the release is announced.

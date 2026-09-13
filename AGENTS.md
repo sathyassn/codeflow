@@ -459,6 +459,11 @@ to reason from, not a rote checklist.
   `codeflow integrate` remains shipped for offline/no-remote use, not this
   repo's daily path. Releases follow `docs/releasing.md`; ordinary task branches
   never publish or move tags.
+- **Release state travels with the work PR (ADR-0062):** add one adjacent
+  `codeflow:release-impact` marker for every new pending CHANGELOG entry and run
+  `python3 scripts/release.py sync` before review. Refresh against current main
+  before merge. Only a human explicitly dispatches cargo-dist publication from
+  main; task work never creates, moves, or reuses a tag or published version.
 - **Remote branch protection is unavailable here and not pursued** (private +
   GitHub Free → `codeflow remote protect` returns 403). The operative boundary on
   this repo is server-side CI plus the local git-hook / git-guard plane plus

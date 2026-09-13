@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for CodeFlow's repository-local release automation."""
-
+"""Behavior tests for CodeFlow's same-PR release state."""
 from __future__ import annotations
 
 import argparse
@@ -10,18 +9,17 @@ import io
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 
-
 SCRIPT = Path(__file__).with_name("release.py")
 SPEC = importlib.util.spec_from_file_location("codeflow_release", SCRIPT)
 assert SPEC and SPEC.loader
 release = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = release
 SPEC.loader.exec_module(release)
 
 
@@ -39,34 +37,19 @@ class Repository:
         command(self.root, "git", "init", "-q", "-b", "main")
         command(self.root, "git", "config", "user.name", "Release Test")
         command(self.root, "git", "config", "user.email", "release@example.invalid")
-        self.write("Cargo.toml", '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "2.0.0"\n')
-        self.write(
-            "Cargo.lock",
-            'version = 4\n\n[[package]]\nname = "codeflow-cli"\nversion = "2.0.0"\n'
-            '[[package]]\nname = "codeflow-core"\nversion = "2.0.0"\n'
-            '[[package]]\nname = "codeflow-present"\nversion = "2.0.0"\n',
-        )
-        self.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- reviewed note\n\n## [2.0.0] - 2026-01-02\n\n- staged prose\n")
-        self.write("AGENTS.md", "<!-- codeflow:managed:begin scaffold=2.0.0 -->\n")
-        self.write("CLAUDE.md", "<!-- codeflow:managed:begin scaffold=2.0.0 -->\n")
-        self.write(".codeflow/project.toml", 'scaffold_version = "2.0.0"\ntier = "full"\n')
-        self.write(
-            ".codeflow/manifest.json",
-            '{"schema_version": 1, "scaffold_version": "2.0.0", "files": {}}\n',
-        )
-        self.write("docs/releasing.md", "release policy\n")
-        self.write("assets/contract.txt", "contract\n")
-        self.commit("chore(release): v1.0.0")
+        self.version = "2.0.0"
+        self.write_stamps(self.version)
+        self.write("CHANGELOG.md", "# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- public\n")
+        self.write("docs/releasing.md", "policy\n")
+        self.commit("chore: baseline")
         self.baseline = command(self.root, "git", "rev-parse", "HEAD")
-        command(self.root, "git", "tag", "v1.0.0")
+        command(self.root, "git", "tag", "v2.0.0")
         self.config = self.root / ".release/config.json"
-        self.record = self.root / ".release/candidate.json"
-        self.fake_cliff = self.root / "fake-git-cliff"
-        self.write("fake-git-cliff", "#!/bin/sh\nprintf 'v2.0.0\\n'\n")
-        self.fake_cliff.chmod(0o755)
+        self.host = self.root / "host.json"
         self.write_config()
-        self.commit("feat: configure release fixture")
-        self.source = command(self.root, "git", "rev-parse", "HEAD")
+        self.write_host()
+        self.commit("chore: release config")
+        self.target = command(self.root, "git", "rev-parse", "HEAD")
 
     def cleanup(self) -> None:
         self.temp.cleanup()
@@ -76,776 +59,523 @@ class Repository:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(value, encoding="utf-8")
 
-    def write_config(self, **overrides: object) -> None:
-        config = {
-            "schema_version": 1,
+    def write_stamps(self, version: str) -> None:
+        self.write("Cargo.toml", f'[workspace]\nmembers = []\n\n[workspace.package]\nversion = "{version}"\n')
+        packages = "".join(
+            f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+            for name in ["codeflow-cli", "codeflow-core", "codeflow-present"]
+        )
+        self.write("Cargo.lock", f"version = 4\n\n{packages}")
+        self.write(".codeflow/project.toml", f'scaffold_version = "{version}"\n')
+        self.write(".codeflow/manifest.json", json.dumps({"scaffold_version": version}) + "\n")
+        marker = f"<!-- codeflow:managed:begin scaffold={version} -->\n"
+        self.write("AGENTS.md", marker)
+        self.write("CLAUDE.md", marker)
+
+    def write_config(self) -> None:
+        value = {
+            "schema_version": 2,
             "release_unit": "codeflow",
             "main_branch": "main",
-            "candidate_branch": "chore/release-codeflow",
-            "candidate_record": ".release/candidate.json",
-            "comparison": {"tag": "v1.0.0", "commit": self.baseline},
-            "published": {
-                "version": "1.0.0",
-                "source_commit": self.baseline,
-                "release_target_commit": self.baseline,
-                "source_archive_sha256": "a" * 64,
+            "bootstrap": {
+                "comparison": {"tag": "v2.0.0", "commit": self.baseline},
+                "published": {
+                    "version": "2.0.0",
+                    "source_commit": self.baseline,
+                    "release_target_commit": self.baseline,
+                    "source_archive_sha256": "a" * 64,
+                },
             },
-            "watched_contract_paths": ["assets/**", "docs/releasing.md"],
-            "generated_allowlist": [
-                ".codeflow/**",
-                "AGENTS.md",
-                "CLAUDE.md",
-                "Cargo.toml",
-                "Cargo.lock",
-                "CHANGELOG.md",
-            ],
+            "legacy_pending_group": {
+                "version": "3.0.0",
+                "impact": "major",
+                "id": "pre-policy-v3",
+            },
+            "watched_contract_paths": ["docs/releasing.md", "assets/**"],
         }
-        config.update(overrides)
-        self.write(".release/config.json", json.dumps(config, indent=2) + "\n")
+        self.write(".release/config.json", json.dumps(value, indent=2) + "\n")
+
+    def write_host(
+        self,
+        *,
+        tags: dict[str, str] | None = None,
+        releases: list[dict[str, object]] | None = None,
+    ) -> None:
+        bootstrap_release = {
+            "tag": "v2.0.0",
+            "draft": False,
+            "prerelease": False,
+            "target": self.baseline,
+            "body": "historical bootstrap",
+            "assets": [],
+        }
+        self.write(
+            "host.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "tags": tags or {"v2.0.0": self.baseline},
+                    "releases": releases if releases is not None else [bootstrap_release],
+                }
+            ),
+        )
 
     def commit(self, message: str) -> str:
         command(self.root, "git", "add", ".")
         command(self.root, "git", "commit", "-q", "-m", message)
         return command(self.root, "git", "rev-parse", "HEAD")
 
+    def pending(self, version: str, entries: list[tuple[str, str]]) -> None:
+        body = "\n".join(
+            f"<!-- codeflow:release-impact {impact} -->\n- {note}\n"
+            for impact, note in entries
+        )
+        self.write(
+            "CHANGELOG.md",
+            f"# Changelog\n\n## [{version}]\n\n{body}\n## [2.0.0] - 2026-01-01\n\n- public\n",
+        )
+        self.write_stamps(version)
+
     def args(self, **values: object) -> argparse.Namespace:
-        defaults = {"root": self.root, "config": self.config, "record": self.record}
+        defaults = {
+            "root": self.root,
+            "config": self.config,
+            "host_state": self.host,
+            "repository": "",
+        }
         defaults.update(values)
         return argparse.Namespace(**defaults)
 
-    def prepare_and_finalize(self) -> str:
-        release.prepare(
-            self.args(git_cliff=str(self.fake_cliff), date="2026-02-03")
-        )
-        release.finalize(self.args())
-        self.commit("chore(release): v2.0.0")
-        return command(self.root, "git", "rev-parse", "HEAD")
-
-
-class ReleaseImpactTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.repo = Repository()
-
-    def tearDown(self) -> None:
-        self.repo.cleanup()
-
-    def body(self, impact: str, *, contract: str = "compatible", migration: str = "") -> str:
+    @staticmethod
+    def body(
+        impact: str,
+        *,
+        contract: str = "compatible",
+        migration: str = "",
+        withdrawal: str = "",
+    ) -> str:
         return (
             "## Release impact\n\n"
-            "- Unit: `codeflow`\n"
-            f"- Impact: `{impact}`\n"
-            "- Rationale: Reviewed fixture impact.\n"
-            "- Evidence: CHANGELOG.md [Unreleased].\n"
-            f"- Contract: `{contract}`\n"
+            "- Unit: codeflow\n"
+            f"- Impact: {impact}\n"
+            "- Rationale: reviewed fixture.\n"
+            "- Evidence: CHANGELOG.md pending entry.\n"
+            f"- Contract: {contract}\n"
             f"- Migration: {migration}\n"
+            f"- Withdrawal: {withdrawal}\n"
         )
 
-    def add_commit(self, subject: str, path: str = "CHANGELOG.md") -> tuple[str, str]:
-        base = command(self.repo.root, "git", "rev-parse", "HEAD")
-        with (self.repo.root / path).open("a", encoding="utf-8") as target:
-            target.write(f"\n{subject}\n")
-        head = self.repo.commit(subject)
-        return base, head
 
-    def check(self, base: str, head: str, body: str) -> None:
-        body_file = self.repo.root / "body.md"
-        body_file.write_text(body, encoding="utf-8")
+class PendingVersionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repository()
+        self.config = release.load_config(self.repo.config)
+        self.baseline = release.Baseline("2.0.0", "v2.0.0", self.repo.baseline, self.repo.baseline)
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def expected(self, impacts: list[str]) -> str:
+        entries = [(impact, f"{impact} change {index}") for index, impact in enumerate(impacts)]
+        highest = max(impacts, key=release.IMPACT_ORDER.get)
+        version = release.bump("2.0.0", highest)
+        self.repo.pending(version, entries)
+        actual, _, _ = release.expected_pending(
+            (self.repo.root / "CHANGELOG.md").read_text(), self.baseline, self.config
+        )
+        return actual
+
+    def test_cumulative_order_independence_and_all_impacts(self) -> None:
+        self.assertEqual(self.expected(["patch", "patch"]), "2.0.1")
+        self.assertEqual(self.expected(["patch", "minor"]), "2.1.0")
+        self.assertEqual(self.expected(["minor", "patch"]), "2.1.0")
+        self.assertEqual(self.expected(["major", "patch"]), "3.0.0")
+        self.assertEqual(self.expected(["patch", "major"]), "3.0.0")
+
+    def test_no_all_none_requires(self) -> None:
+        text = "# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- public\n"
+        version, pending, impacts = release.expected_pending(text, self.baseline, self.config)
+        self.assertEqual((version, pending, impacts), ("2.0.0", None, []))
+        self.repo.pending("2.0.0", [("none", "internal")])
+        with self.assertRaisesRegex(release.ReleaseError, "newest-first|none-only"):
+            release.expected_pending(
+                (self.repo.root / "CHANGELOG.md").read_text(), self.baseline, self.config
+            )
+
+    def test_markers_are_adjacent_and_legacy_group_is_bounded(self) -> None:
+        backlog = "- backlog"
+        digest = release.hashlib.sha256(backlog.encode()).hexdigest()
+        self.config["legacy_pending_group"]["sha256"] = digest
+        text = (
+            "# Changelog\n\n## [3.0.0]\n\n"
+            "<!-- codeflow:release-impact minor -->\n- new guidance\n\n"
+            f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
+            f"{backlog}\n<!-- codeflow:legacy-group-end -->\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n"
+        )
+        self.assertEqual(release.expected_pending(text, self.baseline, self.config)[0], "3.0.0")
+        with self.assertRaisesRegex(release.ReleaseError, "bounded"):
+            release.expected_pending(text.replace("pre-policy-v3", "unbounded"), self.baseline, self.config)
+
+    def test_undated_single_pending_section_only(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "fix")])
+        text = (self.repo.root / "CHANGELOG.md").read_text().replace("## [2.0.1]", "## [2.0.1] - 2026-02-02")
+        with self.assertRaisesRegex(release.ReleaseError, "undated"):
+            release.expected_pending(text, self.baseline, self.config)
+        text = text.replace("## [2.0.1] - 2026-02-02", "## [2.1.0]\n\n<!-- codeflow:release-impact minor -->\n- feature\n\n## [2.0.1]")
+        with self.assertRaisesRegex(release.ReleaseError, "more than one"):
+            release.expected_pending(text, self.baseline, self.config)
+
+    def test_stamp_drift_is_rejected(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "fix")])
+        self.repo.commit("fix: pending")
+        files = {
+            path: release.file_at_ref("HEAD", path, cwd=self.repo.root)
+            for path in release.VERSION_STAMP_PATHS
+        }
+        files["Cargo.lock"] = files["Cargo.lock"].replace(b'2.0.1', b'9.9.9', 1)
+        with self.assertRaisesRegex(release.ReleaseError, "package versions"):
+            release.validate_version_stamps(files)
+
+    def test_sync_validates_before_write_and_leaves_target_untouched(self) -> None:
+        self.repo.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n- invalid\n")
+        before = {path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS}
+        with self.assertRaisesRegex(release.ReleaseError, "Unreleased"):
+            release.sync(self.repo.args(cargo="missing-cargo"))
+        after = {path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS}
+        self.assertEqual(before, after)
+
+    def test_sync_rejects_metadata_symlink_escape_without_touching_target(self) -> None:
+        outside = self.repo.root.parent / f"{self.repo.root.name}-outside-changelog"
+        outside.write_text("outside stays unchanged\n", encoding="utf-8")
+        changelog = self.repo.root / "CHANGELOG.md"
+        changelog.unlink()
+        changelog.symlink_to(outside)
+        try:
+            with self.assertRaisesRegex(release.ReleaseError, "escapes repository"):
+                release.sync(self.repo.args(cargo="missing-cargo"))
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside stays unchanged\n")
+        finally:
+            outside.unlink()
+
+    def test_sync_recomputes_stale_heading_before_stamp_work(self) -> None:
+        self.repo.pending("2.0.1", [("major", "breaking change")])
+        self.repo.write_stamps("3.0.0")
+        release.sync(self.repo.args(cargo="missing-cargo"))
+        self.assertIn("## [3.0.0]", (self.repo.root / "CHANGELOG.md").read_text())
+
+
+class BaselineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repository()
+        self.config = release.load_config(self.repo.config)
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def published(self, version: str, source: str, *, prerelease: bool = False) -> dict[str, object]:
+        return {
+            "tag": f"v{version}",
+            "draft": False,
+            "prerelease": prerelease,
+            "target": source,
+            "body": release.SOURCE_MARKER.format(source=source),
+            "assets": [{"name": "codeflow.tar.xz", "digest": "sha256:" + "b" * 64, "size": 1}],
+        }
+
+    def state(self, tags: dict[str, str], releases: list[dict[str, object]]) -> dict[str, object]:
+        bootstrap = {
+            "tag": "v2.0.0",
+            "draft": False,
+            "prerelease": False,
+            "target": self.repo.baseline,
+            "body": "bootstrap",
+            "assets": [],
+        }
+        return {
+            "schema_version": 1,
+            "tags": {"v2.0.0": self.repo.baseline, **tags},
+            "releases": [bootstrap, *releases],
+        }
+
+    def test_new_verified_public_release_automatically_becomes_baseline(self) -> None:
+        source = "b" * 40
+        state = self.state({"v3.0.0": source}, [self.published("3.0.0", source)])
+        baseline = release.resolve_baseline(self.config, state, cwd=self.repo.root)
+        self.assertEqual((baseline.version, baseline.source), ("3.0.0", source))
+        text = "# Changelog\n\n## [3.0.1]\n\n<!-- codeflow:release-impact patch -->\n- later fix\n\n## [3.0.0]\n\n- public\n\n## [2.0.0] - 2026-01-01\n\n- old\n"
+        self.assertEqual(release.expected_pending(text, baseline, self.config)[0], "3.0.1")
+
+    def test_stable_looking_prerelease_never_becomes_public_baseline(self) -> None:
+        source = "b" * 40
+        state = self.state({"v3.0.0": source}, [self.published("3.0.0", source, prerelease=True)])
+        with self.assertRaisesRegex(release.ReleaseError, "without a verified public release"):
+            release.resolve_baseline(self.config, state, cwd=self.repo.root)
+
+    def test_tag_draft_bad_source_notes_or_assets_fail_closed(self) -> None:
+        source = "b" * 40
+        states = [
+            self.state({"v3.0.0": source}, []),
+            self.state({}, [{"tag": "v3.0.0", "draft": True, "target": source}]),
+            self.state({"v3.0.0": source}, [{**self.published("3.0.0", source), "body": ""}]),
+            self.state({"v3.0.0": source}, [{**self.published("3.0.0", source), "assets": []}]),
+        ]
+        for state in states:
+            with self.subTest(state=state), self.assertRaises(release.ReleaseError):
+                release.resolve_baseline(self.config, state, cwd=self.repo.root)
+
+    def test_bootstrap_preserves_distinct_tag_and_published_source(self) -> None:
+        baseline = release.resolve_baseline(
+            self.config, json.loads(self.repo.host.read_text()), cwd=self.repo.root
+        )
+        self.assertEqual(baseline.comparison_commit, self.repo.baseline)
+        self.assertEqual(baseline.source, self.repo.baseline)
+        config = json.loads(self.repo.config.read_text())
+        config["bootstrap"]["published"]["source_commit"] = "f" * 40
+        baseline = release.resolve_baseline(config, json.loads(self.repo.host.read_text()), cwd=self.repo.root)
+        self.assertNotEqual(baseline.source, baseline.comparison_commit)
+
+    def test_missing_live_bootstrap_is_not_silently_trusted(self) -> None:
+        with self.assertRaisesRegex(release.ReleaseError, "live host state"):
+            release.resolve_baseline(
+                self.config,
+                {"schema_version": 1, "tags": {}, "releases": []},
+                cwd=self.repo.root,
+            )
+
+    @mock.patch.object(release, "github_json")
+    @mock.patch.object(release, "github_pages")
+    def test_discovery_flattens_pages_and_only_peels_annotated_tags(
+        self, pages: mock.Mock, one: mock.Mock
+    ) -> None:
+        direct = "a" * 40
+        tag_object = "b" * 40
+        peeled = "c" * 40
+        pages.side_effect = [
+            [{"tag_name": "v3.0.0", "draft": False, "prerelease": False,
+              "target_commitish": direct, "body": "notes", "assets": []}],
+            [
+                {"ref": "refs/tags/v2.0.0", "object": {"type": "commit", "sha": direct}},
+                {"ref": "refs/tags/v3.0.0", "object": {"type": "tag", "sha": tag_object}},
+            ],
+        ]
+        one.return_value = {"object": {"type": "commit", "sha": peeled}}
+        state = release.discover_host_state("owner/repo", cwd=self.repo.root)
+        self.assertEqual(state["tags"], {"v2.0.0": direct, "v3.0.0": peeled})
+        one.assert_called_once_with(
+            f"repos/owner/repo/git/tags/{tag_object}", cwd=self.repo.root
+        )
+        self.assertEqual(pages.call_count, 2)
+
+
+class PullRequestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repository()
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def run_check(self, base: str, head: str, body: str, *, target: str | None = None) -> None:
+        body_path = self.repo.root / "body.md"
+        body_path.write_text(body)
         release.check_pr(
-            self.repo.args(base=base, head=head, body_file=body_file, body_env=None)
+            self.repo.args(
+                base=base,
+                head=head,
+                target_ref=target or base,
+                body_file=body_path,
+                body_env=None,
+            )
         )
 
-    def test_patch_minor_major_and_mixed_markers(self) -> None:
-        base, patch = self.add_commit("fix: correct output")
-        self.check(base, patch, self.body("patch", contract="not-applicable"))
-        base, minor = self.add_commit("feat: add output")
-        self.check(base, minor, self.body("minor", contract="not-applicable"))
-        base, major = self.add_commit("feat!: replace output")
-        self.check(base, major, self.body("major", contract="breaking", migration="docs/migrate.md"))
-        self.assertEqual(release.commit_impact(patch, major, cwd=self.repo.root), "major")
+    def test_marker_floor_is_minimum_not_second_calculator(self) -> None:
+        base = self.repo.target
+        self.repo.pending("2.1.0", [("minor", "feature")])
+        head = self.repo.commit("fix: implementation marker")
+        self.run_check(base, head, self.repo.body("minor"))
+        with self.assertRaisesRegex(release.ReleaseError, "below marker floor|entry impact"):
+            self.run_check(base, head, self.repo.body("none"))
 
-    def test_multi_commit_impact_reads_every_record_subject(self) -> None:
-        base, feature = self.add_commit("feat: add route", "feature.txt")
-        _, fix = self.add_commit("fix: repair route", "fix.txt")
-        self.assertEqual(release.commit_impact(base, fix, cwd=self.repo.root), "minor")
+    def test_new_major_entry_cannot_hide_behind_none_declaration(self) -> None:
+        base = self.repo.target
+        self.repo.pending("3.0.0", [("major", "hidden break")])
+        head = self.repo.commit("docs: claim none")
+        with self.assertRaisesRegex(release.ReleaseError, "entry impact"):
+            self.run_check(base, head, self.repo.body("none"))
 
-        _, major = self.add_commit("feat!: replace route", "major.txt")
-        _, later_fix = self.add_commit("fix: follow up", "later-fix.txt")
-        self.assertEqual(release.commit_impact(feature, later_fix, cwd=self.repo.root), "major")
-
-        base, older_feature = self.add_commit("feat: expose another route", "older-feature.txt")
-        _, chore_one = self.add_commit("chore: tidy one", "chore-one.txt")
-        _, chore_two = self.add_commit("docs: tidy two", "chore-two.txt")
-        self.assertEqual(
-            release.commit_impact(base, chore_two, cwd=self.repo.root), "minor"
+    def test_feat_then_exact_revert_can_be_net_none(self) -> None:
+        base = self.repo.target
+        self.repo.write("product.txt", "temporary\n")
+        self.repo.commit("feat: temporary")
+        command(self.repo.root, "git", "rm", "product.txt")
+        head = self.repo.commit("revert: remove temporary")
+        self.run_check(
+            base,
+            head,
+            self.repo.body("none", contract="not-applicable").replace(
+                "CHANGELOG.md pending entry.", "Net product diff is empty."
+            ),
         )
 
-    def test_revert_and_all_none_are_none(self) -> None:
-        base, head = self.add_commit("revert: undo internal experiment", "internal.txt")
-        body = self.body("none", contract="not-applicable").replace(
-            "CHANGELOG.md [Unreleased].", "No shipped surface changed."
-        )
-        self.check(base, head, body)
-
-    def test_rejects_marker_mismatch_and_missing_migration(self) -> None:
-        base, head = self.add_commit("feat!: break output")
-        with self.assertRaisesRegex(release.ReleaseError, "contradicts"):
-            self.check(base, head, self.body("minor"))
+    def test_major_needs_migration_and_watched_path_needs_contract(self) -> None:
+        base = self.repo.target
+        self.repo.pending("3.0.0", [("major", "break")])
+        self.repo.write("docs/releasing.md", "changed\n")
+        head = self.repo.commit("feat!: break")
         with self.assertRaisesRegex(release.ReleaseError, "migration"):
-            self.check(base, head, self.body("major", contract="breaking"))
+            self.run_check(base, head, self.repo.body("major", contract="breaking"))
+        self.run_check(base, head, self.repo.body("major", contract="breaking", migration="docs/migrate.md"))
 
-    def test_watched_path_requires_explicit_contract_assessment(self) -> None:
-        base, head = self.add_commit("docs: explain contract", "docs/releasing.md")
-        with self.assertRaisesRegex(release.ReleaseError, "watched contract"):
-            self.check(base, head, self.body("none", contract="not-applicable"))
+    def test_clean_stale_merge_fails_even_when_git_can_merge_it(self) -> None:
+        base = self.repo.target
+        command(self.repo.root, "git", "switch", "-q", "-c", "work")
+        self.repo.pending("2.0.1", [("patch", "fix")])
+        head = self.repo.commit("fix: work")
+        command(self.repo.root, "git", "switch", "-q", "main")
+        self.repo.write("independent.txt", "target advanced\n")
+        target = self.repo.commit("chore: advance target")
+        merged = command(self.repo.root, "git", "merge-tree", "--write-tree", target, head)
+        self.assertRegex(merged.splitlines()[0], r"^[0-9a-f]{40}$")
+        with self.assertRaisesRegex(release.ReleaseError, "stale"):
+            self.run_check(base, head, self.repo.body("patch"), target=target)
 
-    def test_non_none_requires_curated_note_change(self) -> None:
-        base, head = self.add_commit("fix: shipped defect", "internal.txt")
-        with self.assertRaisesRegex(release.ReleaseError, "CHANGELOG"):
-            self.check(base, head, self.body("patch", contract="not-applicable"))
+    def test_withdrawal_requires_rationale_and_can_lower_remaining_state(self) -> None:
+        self.repo.pending("3.0.0", [("major", "withdraw me"), ("patch", "keep me")])
+        base = self.repo.commit("feat!: pending")
+        self.repo.pending("2.0.1", [("patch", "keep me")])
+        head = self.repo.commit("revert: withdraw breaking change")
+        with self.assertRaisesRegex(release.ReleaseError, "withdrawal rationale"):
+            self.run_check(base, head, self.repo.body("none"))
+        self.run_check(base, head, self.repo.body("none", withdrawal="Breaking change was fully reverted."))
 
-    def test_none_allows_historical_changelog_correction(self) -> None:
-        base = command(self.repo.root, "git", "rev-parse", "HEAD")
-        changelog = (self.repo.root / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.repo.write("CHANGELOG.md", changelog.replace("staged prose", "corrected prose"))
-        head = self.repo.commit("docs: correct historical release note")
-        self.check(base, head, self.body("none", contract="compatible"))
+    def test_prose_only_pending_note_edit_uses_existing_rationale(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "fix a crash")])
+        base = self.repo.commit("fix: pending behavior")
+        self.repo.pending("2.0.1", [("patch", "clarify when the crash occurs")])
+        head = self.repo.commit("docs: clarify pending notes")
+        self.run_check(
+            base,
+            head,
+            self.repo.body("none", contract="not-applicable").replace(
+                "reviewed fixture.", "Clarifies the existing pending note only."
+            ),
+        )
+
+    def test_actual_unreleased_and_staged_section_can_adopt_new_model(self) -> None:
+        old = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- new guidance\n\n"
+            "## [3.0.0] - 2026-02-02\n\n- legacy backlog\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n"
+        )
+        self.repo.write("CHANGELOG.md", old)
+        self.repo.write_stamps("3.0.0")
+        base = self.repo.commit("chore: staged legacy state")
+        legacy = "### Changed\n\n- legacy backlog"
+        digest = release.hashlib.sha256(legacy.encode()).hexdigest()
+        config = json.loads(self.repo.config.read_text())
+        config["legacy_pending_group"]["sha256"] = digest
+        self.repo.write(".release/config.json", json.dumps(config, indent=2) + "\n")
+        new = (
+            "# Changelog\n\n## [3.0.0]\n\n"
+            "<!-- codeflow:release-impact minor -->\n- new guidance\n\n"
+            f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
+            f"{legacy}\n<!-- codeflow:legacy-group-end -->\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n"
+        )
+        self.repo.write("CHANGELOG.md", new)
+        head = self.repo.commit("feat: adopt same pr releases")
+        self.run_check(base, head, self.repo.body("minor"))
 
 
-class CandidateTests(unittest.TestCase):
+class PublicationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = Repository()
 
     def tearDown(self) -> None:
         self.repo.cleanup()
 
-    def test_staged_unpublished_version_preserves_prose_and_is_idempotent(self) -> None:
-        candidate = self.repo.prepare_and_finalize()
-        changelog = (self.repo.root / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.assertIn("## [2.0.0] - 2026-01-02", changelog)
-        self.assertIn("reviewed note", changelog)
-        self.assertIn("staged prose", changelog)
-        record = release.load_json(self.repo.record)
-        self.assertEqual(record["tag"], "v2.0.0")
-        self.assertEqual(record["comparison"]["commit"], self.repo.baseline)
-        self.assertEqual(record["published_provenance"]["source_archive_sha256"], "a" * 64)
-        release.verify_ref_candidate(candidate, release.load_config(self.repo.config), record, cwd=self.repo.root)
-        with self.assertRaisesRegex(release.ReleaseError, "equal-tree main merge"):
-            release.prepare(self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-03"))
+    def test_actor_rerunner_ref_and_ordinary_pr_authority(self) -> None:
+        event = self.repo.root / "event.json"
+        users = self.repo.root / "users.json"
+        permissions = self.repo.root / "permissions.json"
+        pulls = self.repo.root / "pulls.json"
+        event.write_text(json.dumps({"event_name": "workflow_dispatch", "ref": "refs/heads/main", "actor": "owner", "triggering_actor": "rerunner"}))
+        users.write_text(json.dumps({"owner": "User", "rerunner": "User"}))
+        permissions.write_text(json.dumps({"owner": "admin", "rerunner": "write"}))
+        pulls.write_text(json.dumps([{"state": "closed", "merged_at": "now", "merge_commit_sha": self.repo.target, "base": {"ref": "main", "repo": {"full_name": "owner/repo"}}, "head": {"repo": {"full_name": "owner/repo"}}, "merged_by": {"type": "User"}}]))
+        args = self.repo.args(event=event, users=users, permissions=permissions, pulls=pulls, repository="owner/repo", source=self.repo.target)
+        release.verify_authority(args)
+        permissions.write_text(json.dumps({"owner": "admin", "rerunner": "read"}))
+        with self.assertRaisesRegex(release.ReleaseError, "triggering_actor"):
+            release.verify_authority(args)
+        permissions.write_text(json.dumps({"owner": "admin", "rerunner": "write"}))
+        event.write_text(json.dumps({"event_name": "workflow_dispatch", "ref": "refs/heads/feature", "actor": "owner", "triggering_actor": "rerunner"}))
+        with self.assertRaisesRegex(release.ReleaseError, "on main"):
+            release.verify_authority(args)
+        event.write_text(json.dumps({"event_name": "workflow_dispatch", "ref": "refs/heads/main", "actor": "owner", "triggering_actor": "rerunner"}))
+        pulls.write_text(json.dumps([{"state": "closed", "merged_at": "now", "merge_commit_sha": "f" * 40, "base": {"ref": "main", "repo": {"full_name": "owner/repo"}}, "head": {"repo": {"full_name": "owner/repo"}}, "merged_by": {"type": "User"}}]))
+        with self.assertRaisesRegex(release.ReleaseError, "ordinary human-merged"):
+            release.verify_authority(args)
 
-    def test_empty_unreleased_batch_does_not_create_candidate(self) -> None:
-        self.repo.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n## [2.0.0] - 2026-01-02\n\n- staged\n")
-        self.repo.commit("chore: empty unreleased")
-        release.prepare(self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-03"))
-        self.assertFalse(self.repo.record.exists())
+    def test_wrong_source_tag_notes_assets_and_partial_publication_fail(self) -> None:
+        source = "c" * 40
+        notes = self.repo.root / "notes.md"
+        state = self.repo.root / "state.json"
+        notes.write_text("reviewed\n")
+        base = {"draft": True, "assets": [], "tag_name": "v3.0.0", "name": "v3.0.0", "target_commitish": source, "body": "reviewed"}
+        state.write_text(json.dumps({"tag_target": source, "release": base}))
+        args = argparse.Namespace(state=state, source=source, tag="v3.0.0", notes=notes)
+        release.verify_host_state(args)
+        for changed in [
+            {"tag_target": "d" * 40, "release": None},
+            {"tag_target": source, "release": {**base, "body": "wrong"}},
+            {"tag_target": source, "release": {**base, "assets": [{"name": "partial"}]}},
+            {"tag_target": source, "release": {**base, "draft": False}},
+        ]:
+            state.write_text(json.dumps(changed))
+            with self.subTest(changed=changed), self.assertRaises(release.ReleaseError):
+                release.verify_host_state(args)
 
-    def test_empty_batch_does_not_require_unreachable_historical_source(self) -> None:
-        self.repo.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n## [2.0.0]\n\n- staged\n")
-        config = release.load_config(self.repo.config)
-        config["published"]["source_commit"] = "0" * 40
-        release.write_json(self.repo.config, config)
-        self.repo.commit("chore: no release work")
-        release.prepare(self.repo.args(git_cliff="missing-git-cliff", date="2026-02-03"))
-        self.assertFalse(self.repo.record.exists())
+    def test_release_notes_strip_internal_markers_and_bind_source(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "reviewed fix")])
+        head = self.repo.commit("fix: notes")
+        notes = release.release_notes(self.repo.root, head, "v2.0.1", head)
+        self.assertIn("reviewed fix", notes)
+        self.assertNotIn("release-impact", notes)
+        self.assertIn(release.SOURCE_MARKER.format(source=head), notes)
 
-    def test_all_none_or_revert_history_does_not_invoke_patch_floor(self) -> None:
-        command(self.repo.root, "git", "tag", "v2.0.0")
-        self.repo.write(
-            "CHANGELOG.md",
-            "# Changelog\n\n## [Unreleased]\n\n- internal note\n\n"
-            "## [2.0.0] - 2026-01-02\n\n- staged\n",
-        )
-        self.repo.commit("chore: internal bookkeeping")
-        release.prepare(
-            self.repo.args(git_cliff="missing-git-cliff", date="2026-02-03")
-        )
-        self.assertFalse(self.repo.record.exists())
-
-        self.repo.write("internal.txt", "reverted\n")
-        self.repo.commit("revert: undo internal bookkeeping")
-        release.prepare(
-            self.repo.args(git_cliff="missing-git-cliff", date="2026-02-03")
-        )
-        self.assertFalse(self.repo.record.exists())
-
-    def test_next_cycle_uses_new_reachable_tag_not_bootstrap_again(self) -> None:
-        candidate = self.repo.prepare_and_finalize()
-        command(self.repo.root, "git", "branch", "chore/release-codeflow", candidate)
-        command(self.repo.root, "git", "switch", "-q", "main")
-        command(self.repo.root, "git", "reset", "--hard", "-q", self.repo.source)
-        command(self.repo.root, "git", "merge", "--no-ff", "-q", "chore/release-codeflow", "-m", "Merge release")
-        command(self.repo.root, "git", "tag", "v2.0.0", candidate)
-        changelog = (self.repo.root / "CHANGELOG.md").read_text(encoding="utf-8")
-        changelog = changelog.replace("## [Unreleased]\n", "## [Unreleased]\n\n### Fixed\n\n- later fix\n", 1)
-        self.repo.write("CHANGELOG.md", changelog)
-        self.repo.write("fake-git-cliff", "#!/bin/sh\nprintf 'v2.0.1\\n'\n")
-        self.repo.fake_cliff.chmod(0o755)
-        self.repo.commit("fix: later release")
-        release.prepare(self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-04"))
-        record = release.load_json(self.repo.record)
-        self.assertEqual(record["comparison"]["tag"], "v2.0.0")
-        self.assertEqual(record["comparison"]["commit"], candidate)
-        self.assertEqual(release.workspace_version(self.repo.root / "Cargo.toml"), "2.0.1")
-
-    def test_stale_merged_candidate_blocks_until_reviewed_source_restore(self) -> None:
-        candidate = self.repo.prepare_and_finalize()
-        command(self.repo.root, "git", "branch", "chore/release-codeflow", candidate)
-        command(self.repo.root, "git", "switch", "-q", "main")
-        command(self.repo.root, "git", "reset", "--hard", "-q", self.repo.source)
-        self.repo.write("concurrent.txt", "landed after candidate preparation\n")
-        self.repo.commit("fix: concurrent main change")
-        command(
-            self.repo.root,
-            "git",
-            "merge",
-            "--no-ff",
-            "-q",
-            "chore/release-codeflow",
-            "-m",
-            "Merge stale release",
-        )
-        with self.assertRaisesRegex(release.ReleaseError, "equal-tree main merge"):
-            release.prepare(
-                self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-04")
-            )
-
-        record = release.load_json(self.repo.record)
-        for path in record["generated_files"]:
-            (self.repo.root / path).write_bytes(
-                release.file_at_ref(record["source_commit"], path, cwd=self.repo.root)
-            )
-        self.repo.record.unlink()
-        self.repo.commit("chore(release): restore abandoned candidate")
-        release.prepare(
-            self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-04")
-        )
-        self.assertEqual(release.load_json(self.repo.record)["tag"], "v2.0.0")
-
-    def test_unknown_or_moved_comparison_tag_fails_closed(self) -> None:
-        config = release.load_config(self.repo.config)
-        config["comparison"]["commit"] = "0" * 40
-        release.write_json(self.repo.config, config)
-        with self.assertRaisesRegex(release.ReleaseError, "do not move"):
-            release.prepare(self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-03"))
-
-    def test_shallow_clone_needs_targeted_historical_source_fetch(self) -> None:
-        command(self.repo.root, "git", "switch", "-q", "-c", "published-source")
-        self.repo.write("published.txt", "published bytes\n")
-        published = self.repo.commit("chore: historical published source")
-        command(self.repo.root, "git", "switch", "main")
-        config = release.load_config(self.repo.config)
-        config["published"]["source_commit"] = published
-        release.write_json(self.repo.config, config)
-        self.repo.commit("chore: record historical source")
-        with tempfile.TemporaryDirectory(prefix="codeflow-release-origin-") as directory:
-            bare = Path(directory) / "origin.git"
-            clone = Path(directory) / "clone"
-            command(self.repo.root, "git", "clone", "-q", "--bare", str(self.repo.root), str(bare))
-            command(Path(directory), "git", "clone", "-q", "--depth=1", "--single-branch", "--branch", "main", f"file://{bare}", str(clone))
-            command(clone, "git", "fetch", "-q", "origin", "refs/tags/v1.0.0:refs/tags/v1.0.0")
-            cloned_config = release.load_config(clone / ".release/config.json")
-            with self.assertRaisesRegex(release.ReleaseError, "published source commit"):
-                release.validate_provenance(cloned_config, cwd=clone)
-            command(clone, "git", "fetch", "--no-tags", "origin", published)
-            release.validate_provenance(cloned_config, cwd=clone)
-
-    def test_finalize_rejects_unrelated_change(self) -> None:
-        release.prepare(self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-03"))
-        self.repo.write("secrets.txt", "unrelated\n")
-        with self.assertRaisesRegex(release.ReleaseError, "non-generated"):
-            release.finalize(self.repo.args())
-
-    def test_refresh_guard_rejects_manual_candidate_edits(self) -> None:
-        candidate = self.repo.prepare_and_finalize()
-        release.guard_refresh(self.repo.args(ref=candidate))
-        self.repo.write("CHANGELOG.md", (self.repo.root / "CHANGELOG.md").read_text() + "manual edit\n")
-        edited = self.repo.commit("docs: edit generated candidate")
-        with self.assertRaisesRegex(release.ReleaseError, "changed paths|edited after generation"):
-            release.guard_refresh(self.repo.args(ref=edited))
-
-    def test_forged_record_tag_or_version_is_rejected(self) -> None:
-        self.repo.prepare_and_finalize()
-        record = release.load_json(self.repo.record)
-        record["tag"] = "v9.9.9"
-        release.write_json(self.repo.record, record)
-        forged = self.repo.commit("chore: forge candidate tag")
-        with self.assertRaisesRegex(release.ReleaseError, "exactly v plus"):
-            release.verify_ref_candidate(
-                forged, release.load_config(self.repo.config), record, cwd=self.repo.root
-            )
-        record["tag"] = "v2.0.1"
-        record["version"] = "2.0.1"
-        release.write_json(self.repo.record, record)
-        forged = self.repo.commit("chore: forge candidate version")
-        with self.assertRaisesRegex(release.ReleaseError, "coupled version stamps"):
-            release.verify_ref_candidate(
-                forged, release.load_config(self.repo.config), record, cwd=self.repo.root
-            )
-
-    def test_lock_and_manifest_version_drift_are_rejected(self) -> None:
-        files = {
-            path: (self.repo.root / path).read_bytes()
-            for path in release.VERSION_STAMP_PATHS
+    def test_published_assets_require_exact_same_run_bytes(self) -> None:
+        source = "c" * 40
+        artifacts = self.repo.root / "artifacts"
+        artifacts.mkdir()
+        artifact = artifacts / "codeflow.tar.xz"
+        artifact.write_bytes(b"archive")
+        state = self.repo.root / "published.json"
+        release_data = {
+            "draft": False,
+            "tag_name": "v3.0.0",
+            "target_commitish": source,
+            "assets": [{"name": artifact.name, "size": artifact.stat().st_size, "state": "uploaded", "digest": "sha256:" + release.sha256(artifact)}],
         }
-        files["Cargo.lock"] = files["Cargo.lock"].replace(b'version = "2.0.0"', b'version = "9.0.0"', 1)
-        with self.assertRaisesRegex(release.ReleaseError, "workspace package versions"):
-            release.validate_version_stamps(files)
-
-        files = {
-            path: (self.repo.root / path).read_bytes()
-            for path in release.VERSION_STAMP_PATHS
-        }
-        files[".codeflow/manifest.json"] = files[".codeflow/manifest.json"].replace(
-            b'"scaffold_version": "2.0.0"', b'"scaffold_version": "9.0.0"'
-        )
-        with self.assertRaisesRegex(release.ReleaseError, "manifest stamp"):
-            release.validate_version_stamps(files)
-
-
-class AuthorizationTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.repo = Repository()
-        self.candidate = self.repo.prepare_and_finalize()
-        command(self.repo.root, "git", "branch", "chore/release-codeflow", self.candidate)
-        command(self.repo.root, "git", "switch", "-q", "main")
-        command(self.repo.root, "git", "reset", "--hard", "-q", self.repo.source)
-        command(self.repo.root, "git", "merge", "--no-ff", "-q", "chore/release-codeflow", "-m", "Merge release")
-        self.merge = command(self.repo.root, "git", "rev-parse", "HEAD")
-
-    def tearDown(self) -> None:
-        self.repo.cleanup()
-
-    def test_exact_second_parent_and_equal_tree_authorize(self) -> None:
-        result = release.merged_candidate(
-            self.candidate, "main", release.load_config(self.repo.config), cwd=self.repo.root
-        )
-        self.assertEqual(result["candidate"], self.candidate)
-        self.assertEqual(result["merge"], self.merge)
-
-    def test_event_requires_human_and_exact_merge(self) -> None:
-        event = {
-            "action": "closed",
-            "pull_request": {
-                "merged": True,
-                "state": "closed",
-                "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
-                "head": {"ref": "chore/release-codeflow", "sha": self.candidate, "repo": {"full_name": "owner/repo"}},
-                "merge_commit_sha": self.merge,
-                "merged_by": {"type": "Bot", "login": "release-bot"},
-                "user": {"login": "candidate-author", "type": "User"},
-            },
-        }
-        event_path = self.repo.root / "event.json"
-        pull_path = self.repo.root / "pull.json"
-        reviews_path = self.repo.root / "reviews.json"
-        permissions_path = self.repo.root / "permissions.json"
-        event_path.write_text(json.dumps(event), encoding="utf-8")
-        pull_path.write_text(json.dumps(event["pull_request"]), encoding="utf-8")
-        reviews = [{
-            "id": 1,
-            "state": "APPROVED",
-            "commit_id": self.candidate,
-            "submitted_at": "2026-02-03T00:00:00Z",
-            "author_association": "OWNER",
-            "user": {"login": "reviewer", "type": "User"},
-        }]
-        reviews_path.write_text(json.dumps(reviews), encoding="utf-8")
-        permissions_path.write_text(json.dumps({"reviewer": "write"}), encoding="utf-8")
-        with self.assertRaisesRegex(release.ReleaseError, "human"):
-            release.authorize_event(self.repo.args(event=event_path, pull=pull_path, reviews=reviews_path, permissions=permissions_path, repository="owner/repo"))
-        event["pull_request"]["merged_by"] = {"type": "User", "login": "maintainer"}
-        event_path.write_text(json.dumps(event), encoding="utf-8")
-        pull_path.write_text(json.dumps(event["pull_request"]), encoding="utf-8")
-        release.authorize_event(self.repo.args(event=event_path, pull=pull_path, reviews=reviews_path, permissions=permissions_path, repository="owner/repo"))
-
-    def test_latest_change_request_and_stale_approval_block(self) -> None:
-        pull = {
-            "state": "closed",
-            "merged": True,
-            "merged_by": {"login": "maintainer", "type": "User"},
-            "user": {"login": "candidate-author", "type": "User"},
-            "head": {"sha": self.candidate, "repo": {"full_name": "owner/repo"}},
-            "base": {"repo": {"full_name": "owner/repo"}},
-        }
-        approval = {
-            "id": 1,
-            "state": "APPROVED",
-            "commit_id": self.repo.source,
-            "submitted_at": "2026-02-03T00:00:00Z",
-            "author_association": "MEMBER",
-            "user": {"login": "reviewer", "type": "User"},
-        }
-        with self.assertRaisesRegex(release.ReleaseError, "exact head"):
-            release.verify_review_data(pull, [approval], {"reviewer": "write"}, self.candidate, "owner/repo")
-        approval["commit_id"] = self.candidate
-        change = dict(approval, id=2, state="CHANGES_REQUESTED", submitted_at="2026-02-03T00:01:00Z")
-        with self.assertRaisesRegex(release.ReleaseError, "requests changes"):
-            release.verify_review_data(pull, [approval, change], {"reviewer": "write"}, self.candidate, "owner/repo")
-        approval["user"] = {"login": "candidate-author", "type": "User"}
-        with self.assertRaisesRegex(release.ReleaseError, "exact head"):
-            release.verify_review_data(pull, [approval], {"candidate-author": "admin"}, self.candidate, "owner/repo")
-        approval["user"] = {"login": "reviewer", "type": "User"}
-        with self.assertRaisesRegex(release.ReleaseError, "exact head"):
-            release.verify_review_data(pull, [approval], {"reviewer": "read"}, self.candidate, "owner/repo")
-
-    def test_bot_review_is_irrelevant_when_current_human_approval_exists(self) -> None:
-        pull = {
-            "state": "closed",
-            "merged": True,
-            "merged_by": {"login": "maintainer", "type": "User"},
-            "user": {"login": "candidate-author", "type": "User"},
-            "head": {"sha": self.candidate, "repo": {"full_name": "owner/repo"}},
-            "base": {"repo": {"full_name": "owner/repo"}},
-        }
-        approval = {
-            "id": 1,
-            "state": "APPROVED",
-            "commit_id": self.candidate,
-            "submitted_at": "2026-02-03T00:00:00Z",
-            "user": {"login": "reviewer", "type": "User"},
-        }
-        bot = {
-            "id": 2,
-            "state": "CHANGES_REQUESTED",
-            "commit_id": self.candidate,
-            "submitted_at": "2026-02-04T00:00:00Z",
-            "user": {"login": "release-bot", "type": "Bot"},
-        }
-        release.verify_review_data(
-            pull,
-            [approval, bot],
-            {"reviewer": "write"},
-            self.candidate,
-            "owner/repo",
-        )
-
-    def test_moving_branch_without_merged_head_is_not_authority(self) -> None:
-        command(self.repo.root, "git", "switch", "-q", "chore/release-codeflow")
-        self.repo.write("CHANGELOG.md", (self.repo.root / "CHANGELOG.md").read_text() + "stale\n")
-        moved = self.repo.commit("chore(release): move candidate")
-        with self.assertRaises(release.ReleaseError):
-            release.merged_candidate(
-                moved, "main", release.load_config(self.repo.config), cwd=self.repo.root
-            )
-
-    def test_wrong_existing_tag_is_rejected(self) -> None:
-        command(self.repo.root, "git", "tag", "v2.0.0", self.repo.source)
-        with self.assertRaisesRegex(release.ReleaseError, "not reviewed candidate"):
-            release.merged_candidate(
-                self.candidate, "main", release.load_config(self.repo.config), cwd=self.repo.root
-            )
-
-
-class HostingTests(unittest.TestCase):
-    def verify(self, state: dict[str, object], candidate: str = "c" * 40) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "host.json"
-            notes = Path(directory) / "notes.md"
-            path.write_text(json.dumps(state), encoding="utf-8")
-            notes.write_text("reviewed notes\n", encoding="utf-8")
-            release.verify_host_state(
-                argparse.Namespace(
-                    state=path,
-                    candidate=candidate,
-                    tag="v2.0.0",
-                    notes=notes,
-                )
-            )
-
-    def test_fresh_exact_tag_and_owned_empty_draft_are_retryable(self) -> None:
-        self.verify({"tag_target": None, "release": None})
-        self.verify({"tag_target": "c" * 40, "release": None})
-        self.verify(
-            {
-                "tag_target": None,
-                "release": {
-                    "draft": True,
-                    "assets": [],
-                    "tag_name": "v2.0.0",
-                    "name": "v2.0.0",
-                    "target_commitish": "c" * 40,
-                    "body": "reviewed notes",
-                },
-            }
-        )
-
-    def test_partial_public_or_mismatched_state_fails_closed(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "cannot be proven"):
-            self.verify({"tag_target": "c" * 40, "release": {"draft": True, "assets": [{"name": "partial"}]}})
-        with self.assertRaisesRegex(release.ReleaseError, "publicly"):
-            self.verify({"tag_target": "c" * 40, "release": {"draft": False, "assets": []}})
-        with self.assertRaisesRegex(release.ReleaseError, "reviewed release notes"):
-            self.verify(
-                {
-                    "tag_target": "c" * 40,
-                    "release": {
-                        "draft": True,
-                        "assets": [],
-                        "tag_name": "v2.0.0",
-                        "name": "v2.0.0",
-                        "target_commitish": "c" * 40,
-                        "body": "unrelated draft",
-                    },
-                }
-            )
-        with self.assertRaisesRegex(release.ReleaseError, "does not target"):
-            self.verify({"tag_target": "d" * 40, "release": None})
-
-    def test_published_assets_match_same_run_names_sizes_and_digests(self) -> None:
-        candidate = "c" * 40
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            artifacts = root / "artifacts"
-            artifacts.mkdir()
-            (artifacts / "codeflow.tar.gz").write_bytes(b"archive")
-            (artifacts / "dist-manifest.json").write_bytes(b"{}\n")
-            (artifacts / "linux-dist-manifest.json").write_bytes(b"not uploaded")
-
-            assets = []
-            for path in [artifacts / "codeflow.tar.gz", artifacts / "dist-manifest.json"]:
-                assets.append(
-                    {
-                        "name": path.name,
-                        "size": path.stat().st_size,
-                        "state": "uploaded",
-                        "digest": f"sha256:{release.sha256(path)}",
-                    }
-                )
-            state = root / "published.json"
-            state.write_text(
-                json.dumps(
-                    {
-                        "tag_target": candidate,
-                        "release": {
-                            "draft": False,
-                            "tag_name": "v2.0.0",
-                            "target_commitish": candidate,
-                            "assets": assets,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            args = argparse.Namespace(
-                state=state,
-                artifacts_dir=artifacts,
-                candidate=candidate,
-                tag="v2.0.0",
-            )
+        state.write_text(json.dumps({"tag_target": source, "release": release_data}))
+        args = argparse.Namespace(state=state, source=source, tag="v3.0.0", artifacts_dir=artifacts)
+        release.verify_published_assets(args)
+        artifact.write_bytes(b"different")
+        with self.assertRaisesRegex(release.ReleaseError, "same-run"):
             release.verify_published_assets(args)
 
-            if os.name != "nt":
-                symlink = artifacts / "linked-archive"
-                symlink.symlink_to(artifacts / "codeflow.tar.gz")
-                with self.assertRaisesRegex(release.ReleaseError, "not a regular file"):
-                    release.verify_published_assets(args)
-                symlink.unlink()
-
-            assets[0]["digest"] = "sha256:" + "0" * 64
-            state.write_text(
-                json.dumps(
-                    {
-                        "tag_target": candidate,
-                        "release": {
-                            "draft": False,
-                            "tag_name": "v2.0.0",
-                            "target_commitish": candidate,
-                            "assets": assets,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(release.ReleaseError, "same-run staged files"):
-                release.verify_published_assets(args)
-
-            assets.append(dict(assets[0]))
-            state.write_text(
-                json.dumps(
-                    {
-                        "tag_target": candidate,
-                        "release": {
-                            "draft": False,
-                            "tag_name": "v2.0.0",
-                            "target_commitish": candidate,
-                            "assets": assets,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(release.ReleaseError, "duplicated"):
-                release.verify_published_assets(args)
-
-
-class ReleaseNotesTests(unittest.TestCase):
-    def test_extracts_only_the_exact_curated_version_and_binds_candidate(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "CHANGELOG.md").write_text(
-                "# Changelog\n\n## [Unreleased]\n\n## [3.0.0] - 2026-09-13\n\n"
-                "### Added\n\n- reviewed note\n\n## [2.1.0] - 2026-07-05\n\n- old\n",
-                encoding="utf-8",
-            )
-            candidate = "c" * 40
-            self.assertEqual(
-                release.release_notes(root, "v3.0.0", candidate),
-                "### Added\n\n- reviewed note\n\n"
-                f"<!-- codeflow-release-candidate: {candidate} -->\n",
-            )
-
-    def test_command_surface_materializes_notes_and_reports_errors(self) -> None:
-        commands = {
-            release.parser().parse_args(values).command
-            for values in [
-                ["check-pr", "--base", "a", "--head", "b", "--body-env", "BODY"],
-                ["prepare"],
-                ["finalize"],
-                ["guard-refresh", "--ref", "candidate"],
-                [
-                    "authorize-event",
-                    "--event",
-                    "event.json",
-                    "--pull",
-                    "pull.json",
-                    "--reviews",
-                    "reviews.json",
-                    "--permissions",
-                    "permissions.json",
-                    "--repository",
-                    "owner/repo",
-                ],
-                [
-                    "verify-review",
-                    "--pull",
-                    "pull.json",
-                    "--reviews",
-                    "reviews.json",
-                    "--permissions",
-                    "permissions.json",
-                    "--candidate",
-                    "c" * 40,
-                    "--repository",
-                    "owner/repo",
-                ],
-                ["verify-dispatch"],
-                [
-                    "verify-host-state",
-                    "--state",
-                    "state.json",
-                    "--candidate",
-                    "c" * 40,
-                    "--tag",
-                    "v3.0.0",
-                    "--notes",
-                    "notes.md",
-                ],
-                [
-                    "verify-published-assets",
-                    "--state",
-                    "state.json",
-                    "--artifacts-dir",
-                    "artifacts",
-                    "--candidate",
-                    "c" * 40,
-                    "--tag",
-                    "v3.0.0",
-                ],
-                [
-                    "release-notes",
-                    "--candidate",
-                    "c" * 40,
-                    "--tag",
-                    "v3.0.0",
-                    "--output",
-                    "notes.md",
-                ],
-            ]
-        }
-        self.assertEqual(
-            commands,
-            {
-                "check-pr",
-                "prepare",
-                "finalize",
-                "guard-refresh",
-                "authorize-event",
-                "verify-review",
-                "verify-dispatch",
-                "verify-host-state",
-                "verify-published-assets",
-                "release-notes",
-            },
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "CHANGELOG.md").write_text(
-                "# Changelog\n\n## [Unreleased]\n\n## [3.0.0]\n\n- reviewed\n",
-                encoding="utf-8",
-            )
-            output = root / "notes.md"
-            argv = [
-                "release.py",
-                "--root",
-                str(root),
-                "release-notes",
-                "--candidate",
-                "c" * 40,
-                "--tag",
-                "v3.0.0",
-                "--output",
-                str(output),
-            ]
-            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(release.main(), 0)
-            self.assertIn("reviewed", output.read_text(encoding="utf-8"))
-
-            (root / "CHANGELOG.md").unlink()
-            with (
-                mock.patch.object(sys, "argv", argv),
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                self.assertEqual(release.main(), 2)
-
-
-@unittest.skipUnless(
-    os.environ.get("CODEFLOW_REAL_GIT_CLIFF") == "1" and shutil.which("git-cliff"),
-    "set CODEFLOW_REAL_GIT_CLIFF=1 with git-cliff 2.13.1 installed",
-)
-class RealGitCliffTests(unittest.TestCase):
-    def calculate(self, subjects: list[str]) -> str:
-        with tempfile.TemporaryDirectory(prefix="codeflow-cliff-") as directory:
-            root = Path(directory)
-            command(root, "git", "init", "-q", "-b", "main")
-            command(root, "git", "config", "user.name", "Release Test")
-            command(root, "git", "config", "user.email", "release@example.invalid")
-            (root / "file.txt").write_text("one\n", encoding="utf-8")
-            command(root, "git", "add", ".")
-            command(root, "git", "commit", "-q", "-m", "chore: initial")
-            command(root, "git", "tag", "v1.0.0")
-            for index, subject in enumerate(subjects, start=2):
-                (root / "file.txt").write_text(f"{index}\n", encoding="utf-8")
-                command(root, "git", "commit", "-q", "-am", subject)
-            return release.cliff_version("git-cliff", cwd=root)
-
-    def test_real_calculator_contract(self) -> None:
-        for subjects, expected in [
-            (["fix: repair output"], "v1.0.1"),
-            (["feat: add output"], "v1.1.0"),
-            (["feat!: replace output"], "v2.0.0"),
-            (["fix: repair output", "feat: add output"], "v1.1.0"),
-        ]:
-            with self.subTest(subjects=subjects):
-                self.assertEqual(self.calculate(subjects), expected)
-
-    def test_real_calculator_all_none_and_revert_behavior_is_pinned(self) -> None:
-        # git-cliff 2.13.1 filters these from rendered notes but applies its
-        # patch floor while calculating a bumped version. The preparer's empty
-        # curated-notes check is therefore the all-none no-op boundary.
-        self.assertEqual(self.calculate(["chore: internal only"]), "v1.0.1")
-        self.assertEqual(self.calculate(["revert: undo internal experiment"]), "v1.0.1")
+    def test_command_surface_has_no_candidate_or_finalizer(self) -> None:
+        commands = {release.parser().parse_args(values).command for values in [
+            ["sync"],
+            ["check-state"],
+            ["check-pr", "--base", "a", "--head", "b", "--target-ref", "c", "--body-env", "BODY"],
+            ["verify-publication", "--source", "a", "--main-source", "b" * 40, "--tag", "v1.0.0"],
+        ]}
+        self.assertEqual(commands, {"sync", "check-state", "check-pr", "verify-publication"})
+        for removed in ["prepare", "finalize", "guard-refresh", "authorize-event"]:
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                release.parser().parse_args([removed])
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

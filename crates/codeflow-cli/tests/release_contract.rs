@@ -68,6 +68,13 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         Some("./release-plan-authority")
     );
     assert_eq!(
+        dist.get("global-artifacts-jobs")
+            .and_then(toml::Value::as_array)
+            .and_then(|jobs| jobs.first())
+            .and_then(toml::Value::as_str),
+        Some("./release-main-recheck")
+    );
+    assert_eq!(
         dist.get("post-announce-jobs")
             .and_then(toml::Value::as_array)
             .and_then(|jobs| jobs.first())
@@ -93,6 +100,12 @@ fn distribution_config_keeps_supported_targets_and_installers() {
     assert_eq!(
         authority_permissions
             .get("pull-requests")
+            .and_then(toml::Value::as_str),
+        Some("read")
+    );
+    assert_eq!(
+        authority_permissions
+            .get("checks")
             .and_then(toml::Value::as_str),
         Some("read")
     );
@@ -177,56 +190,30 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
 }
 
 #[test]
-fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary() {
+fn release_workflows_keep_same_pr_and_current_main_boundary() {
     let root = workspace_root();
-    let candidate = fs::read_to_string(root.join(".github/workflows/release-candidate.yml"))
-        .expect("candidate workflow must be readable");
-    for required in [
-        "group: codeflow-release-candidate",
-        "refs/heads/chore/release-codeflow",
-        "cargo install git-cliff --version 2.13.1 --locked",
-        "cargo install cargo-dist --version 0.32.0 --locked",
-        "persist-credentials: false",
-        "GIT_CONFIG_COUNT=1",
-        "GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
-        "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
-        "python3 scripts/release.py guard-refresh",
-        "python3 scripts/release.py finalize",
-        "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1",
-    ] {
-        assert!(
-            candidate.contains(required),
-            "candidate workflow is missing {required}"
-        );
-    }
-
-    let authorize = fs::read_to_string(root.join(".github/workflows/release-authorize.yml"))
-        .expect("authorization workflow must be readable");
-    for required in [
-        "pull_request_target:",
-        "github.event.pull_request.merged == true",
-        "github.event.pull_request.head.ref == 'chore/release-codeflow'",
-        "collaborators/${login}/permission",
-        "select(.user.type == \"User\")",
-        "pull-requests: read",
-        ".parents[1].sha == $head",
-        "scripts/release.py authorize-event",
-        "gh workflow run release.yml",
-        "-f tag=",
-        "git/ref/heads/chore/release-codeflow",
-        "refs/heads/chore/release-codeflow",
-    ] {
-        assert!(
-            authorize.contains(required),
-            "authorization workflow is missing {required}"
-        );
-    }
+    assert!(!root
+        .join(".github/workflows/release-candidate.yml")
+        .exists());
+    assert!(!root
+        .join(".github/workflows/release-authorize.yml")
+        .exists());
+    assert!(!root.join("cliff.toml").exists());
 
     let authority = fs::read_to_string(root.join(".github/workflows/release-plan-authority.yml"))
         .expect("plan authority workflow must be readable");
     for required in [
-        "scripts/release.py verify-dispatch",
-        "scripts/release.py verify-review",
+        "test \"$GITHUB_REF\" = refs/heads/main",
+        "git/ref/heads/main",
+        "test \"$GITHUB_SHA\" = \"$main_sha\"",
+        "GITHUB_TRIGGERING_ACTOR",
+        "collaborators/${login}/permission",
+        "commits/${GITHUB_SHA}/pulls",
+        "pulls/${pr_number}",
+        "merge_commit_sha == env.GITHUB_SHA",
+        "scripts/release.py verify-authority",
+        "check-runs?per_page=100",
+        "scripts/release.py verify-publication",
         "scripts/release.py verify-host-state",
         "scripts/release.py release-notes",
         "gh release create",
@@ -235,19 +222,22 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "github.event.inputs.tag != 'dry-run'",
         "plan_tag=",
         "REQUESTED_TAG:",
-        "commits/${candidate}/pulls",
-        "pulls/${pr_number}",
-        "collaborators/${login}/permission",
-        "select(.user.type == \"User\")",
-        "GIT_CONFIG_COUNT=1",
-        "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
         "pull-requests: read",
+        "checks: read",
     ] {
         assert!(
             authority.contains(required),
             "plan authority workflow is missing {required}"
         );
     }
+
+    let recheck = fs::read_to_string(root.join(".github/workflows/release-main-recheck.yml"))
+        .expect("main recheck workflow must be readable");
+    assert!(recheck.contains("scripts/release.py verify-publication"));
+    assert!(recheck.contains("--source \"$GITHUB_SHA\""));
+    assert!(recheck.contains("--main-source \"$main_sha\""));
+    assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));
+    assert!(recheck.contains("collaborators/${login}/permission"));
 
     let published = fs::read_to_string(root.join(".github/workflows/release-post-announce.yml"))
         .expect("post-announce verification workflow must be readable");

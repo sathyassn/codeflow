@@ -1,21 +1,17 @@
 name: release source authority
-
 on:
   workflow_call:
     inputs:
       plan:
-        description: cargo-dist plan JSON for the requested run
         required: true
         type: string
-
 permissions:
   contents: write
   pull-requests: read
-
+  checks: read
 concurrency:
   group: codeflow-release-publication
   cancel-in-progress: false
-
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -24,93 +20,82 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Verify dry-run remains non-publishing
+      - name: Keep dry runs non-publishing
         if: github.event.inputs.tag == 'dry-run'
         env:
           PLAN_JSON: ${{ inputs.plan }}
         run: |
           printf '%s' "$PLAN_JSON" | jq -e '.ci.github.pr_run_mode == "plan"' >/dev/null
-          echo "Dry-run plan accepted; no tag, draft, asset or release was changed."
-
-      - name: Verify merged candidate and stage reviewed draft
+          echo "Dry-run plan accepted; no hosted state changed."
+      - name: Verify deliberate current-main authority
         if: github.event.inputs.tag != 'dry-run'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PLAN_JSON: ${{ inputs.plan }}
           REQUESTED_TAG: ${{ github.event.inputs.tag }}
         run: |
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
-          echo "::add-mask::$GIT_CONFIG_VALUE_0"
-          git fetch origin main --tags
-          unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
-          authority=$(python3 scripts/release.py verify-dispatch --candidate-ref "$GITHUB_SHA" --main-ref origin/main)
-          printf '%s\n' "$authority"
-          tag=$(printf '%s' "$authority" | jq -r .tag)
-          candidate=$(printf '%s' "$authority" | jq -r .candidate)
-          plan_tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
-          if [ "$tag" != "$REQUESTED_TAG" ] || [ "$plan_tag" != "$tag" ] || [ "$candidate" != "$GITHUB_SHA" ]; then
-            echo "::error::Requested tag, cargo-dist plan and verified candidate disagree."
-            exit 1
-          fi
-          python3 scripts/release.py release-notes \
-            --tag "$tag" --candidate "$candidate" --output /tmp/release-notes.md
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          test "$GITHUB_SHA" = "$main_sha"
 
-          gh api "repos/${GITHUB_REPOSITORY}/commits/${candidate}/pulls" \
-            | jq --arg candidate "$candidate" --arg repo "$GITHUB_REPOSITORY" '
-                [ .[] | select(
-                    .merged_at != null and .state == "closed" and
-                    .base.ref == "main" and .base.repo.full_name == $repo and
-                    .head.ref == "chore/release-codeflow" and
-                    .head.repo.full_name == $repo and .head.sha == $candidate
-                  ) ]
-                | if length == 1 then .[0] else error("candidate needs one exact merged same-repository PR") end
-              ' > /tmp/release-pull-list-match.json
-          pr_number=$(jq -r .number /tmp/release-pull-list-match.json)
-          gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" > /tmp/release-pull.json
-          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/reviews?per_page=100" \
-            | jq 'add' > /tmp/release-reviews.json
-          printf '{}\n' > /tmp/release-permissions.json
-          for login in $(jq -r '[.[] | select(.user.type == "User") | .user.login] | unique[]' /tmp/release-reviews.json); do
+          jq -n --arg event "$GITHUB_EVENT_NAME" --arg ref "$GITHUB_REF" \
+            --arg actor "$GITHUB_ACTOR" --arg rerunner "$GITHUB_TRIGGERING_ACTOR" \
+            '{event_name:$event,ref:$ref,actor:$actor,triggering_actor:$rerunner}' \
+            > /tmp/authority-event.json
+          printf '{}\n' > /tmp/authority-users.json
+          printf '{}\n' > /tmp/authority-permissions.json
+          for login in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do
+            type=$(gh api "users/${login}" --jq .type)
             permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .permission)
-            jq --arg login "$login" --arg permission "$permission" \
-              '. + {($login): $permission}' /tmp/release-permissions.json > /tmp/release-permissions.next
-            mv /tmp/release-permissions.next /tmp/release-permissions.json
+            jq --arg login "$login" --arg value "$type" '. + {($login):$value}' \
+              /tmp/authority-users.json > /tmp/next && mv /tmp/next /tmp/authority-users.json
+            jq --arg login "$login" --arg value "$permission" '. + {($login):$value}' \
+              /tmp/authority-permissions.json > /tmp/next && mv /tmp/next /tmp/authority-permissions.json
           done
-          python3 scripts/release.py verify-review \
-            --pull /tmp/release-pull.json \
-            --reviews /tmp/release-reviews.json \
-            --permissions /tmp/release-permissions.json \
-            --candidate "$candidate" \
-            --repository "$GITHUB_REPOSITORY"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" > /tmp/authority-candidates.json
+          printf '[]\n' > /tmp/authority-pulls.json
+          while read -r pr_number; do
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" > /tmp/authority-pull.json
+            jq --slurpfile pull /tmp/authority-pull.json '. + [$pull[0]]' \
+              /tmp/authority-pulls.json > /tmp/next && mv /tmp/next /tmp/authority-pulls.json
+          done < <(jq -r '.[] | select(.merge_commit_sha == env.GITHUB_SHA) | .number' /tmp/authority-candidates.json)
+          python3 scripts/release.py verify-authority \
+            --event /tmp/authority-event.json --users /tmp/authority-users.json \
+            --permissions /tmp/authority-permissions.json --pulls /tmp/authority-pulls.json \
+            --repository "$GITHUB_REPOSITORY" --source "$GITHUB_SHA"
 
-          tag_target=$(git rev-parse --verify "refs/tags/${tag}^{commit}" 2>/dev/null || true)
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            | jq -e '[.check_runs[] | select(.name == "release state" and .status == "completed" and .conclusion == "success")] | length > 0' >/dev/null
+          python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \
+            --main-source "$main_sha" --tag "$REQUESTED_TAG"
+          plan_tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
+          test "$plan_tag" = "$REQUESTED_TAG"
+          python3 scripts/release.py release-notes --ref "$GITHUB_SHA" \
+            --source "$GITHUB_SHA" --tag "$REQUESTED_TAG" --output /tmp/release-notes.md
+
+          tag_target=$(git rev-parse --verify "refs/tags/${REQUESTED_TAG}^{commit}" 2>/dev/null || true)
           set +e
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > /tmp/release-api.json 2>/tmp/release-api.error
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${REQUESTED_TAG}" > /tmp/release.json 2>/tmp/release.error
           release_rc=$?
           set -e
           if [ "$release_rc" -eq 0 ]; then
-            jq '{draft: .draft, tag_name: .tag_name, name: .name, body: .body,
-                 target_commitish: .target_commitish,
-                 assets: [.assets[] | {name, size, state, digest}]}' \
-              /tmp/release-api.json > /tmp/release-state.json
-          elif grep -q 'HTTP 404' /tmp/release-api.error; then
-            printf 'null\n' > /tmp/release-state.json
+            jq '{draft,tag_name,name,body,target_commitish,assets:[.assets[]|{name,size,state,digest}]}' \
+              /tmp/release.json > /tmp/release-one.json
+          elif grep -q 'HTTP 404' /tmp/release.error; then
+            printf 'null\n' > /tmp/release-one.json
           else
-            cat /tmp/release-api.error >&2
+            cat /tmp/release.error >&2
             exit "$release_rc"
           fi
-          jq -n --arg tag_target "$tag_target" --slurpfile release /tmp/release-state.json \
-            '{tag_target: (if $tag_target == "" then null else $tag_target end), release: $release[0]}' \
-            > /tmp/host-state.json
-          host=$(python3 scripts/release.py verify-host-state \
-            --state /tmp/host-state.json --candidate "$candidate" \
-            --tag "$tag" --notes /tmp/release-notes.md)
-          printf '%s\n' "$host"
-          if [ "$(printf '%s' "$host" | jq -r .status)" != "resume-draft" ]; then
-            gh release create "$tag" --draft --target "$candidate" --title "$tag" \
-              --notes-file /tmp/release-notes.md
+          jq -n --arg tag_target "$tag_target" --slurpfile release /tmp/release-one.json \
+            '{tag_target:(if $tag_target == "" then null else $tag_target end),release:$release[0]}' \
+            > /tmp/publication-state.json
+          disposition=$(python3 scripts/release.py verify-host-state \
+            --state /tmp/publication-state.json --source "$GITHUB_SHA" \
+            --tag "$REQUESTED_TAG" --notes /tmp/release-notes.md)
+          printf '%s\n' "$disposition"
+          if [ "$(printf '%s' "$disposition" | jq -r .status)" != resume-draft ]; then
+            gh release create "$REQUESTED_TAG" --draft --target "$GITHUB_SHA" \
+              --title "$REQUESTED_TAG" --notes-file /tmp/release-notes.md
           fi

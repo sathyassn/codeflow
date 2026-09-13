@@ -1,0 +1,33 @@
+name: release main recheck
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck selected main after platform builds
+        if: github.event.inputs.tag != 'dry-run'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          for login in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do
+            test "$(gh api "users/${login}" --jq .type)" = User
+            case "$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .permission)" in
+              write|maintain|admin) ;;
+              *) echo "::error::${login} lacks current publication permission"; exit 1 ;;
+            esac
+          done
+          main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \
+            --main-source "$main_sha" --tag "$REQUESTED_TAG"

@@ -15,9 +15,8 @@
      footer — must agree with its authoritative release input. They calculate
      versions only if that project uses a commit-driven release tool; do not
      introduce a second calculator alongside fragments or another policy.
-     For CodeFlow, conventional commits remain the version-calculation input. The
-     Release impact section explains why the selected impact matches the actual
-     contract; it is reviewed evidence, not a second calculator.
+     For CodeFlow, adjacent changelog impact annotations are the one version
+     input. Conventional commit markers are conservative mismatch tripwires.
 
      Delete unused tables and `## Notes` when empty. Keep evidence gaps explicit;
      blank placeholders and invented numbers are not completed evidence. -->
@@ -42,11 +41,14 @@
 
 ## Release impact
 
-<!-- Required. CodeFlow has one release unit. The impact must agree with the
-     conventional commits that will land. Contract paths require an explicit
-     compatible/breaking assessment; path matches do not prove a break. A major
-     impact needs concrete migration guidance. A non-none impact needs the
-     reviewed CHANGELOG.md entry in this PR. -->
+<!-- Required. CodeFlow has one release unit. Declared impact cannot be below
+     conventional markers. Contract paths require an explicit assessment; path
+     matches do not prove a break. Put a codeflow:release-impact
+     patch|minor|major HTML marker directly before each new pending changelog
+     entry. A major impact needs migration guidance. When this PR removes
+     pending content or lowers the target, add a Withdrawal field that says
+     what was removed and why the remaining net contract permits it. Do not add
+     Withdrawal to ordinary PRs. -->
 
 - Unit: `codeflow`
 - Impact: `none | patch | minor | major`
