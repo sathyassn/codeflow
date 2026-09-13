@@ -41,35 +41,64 @@ project and asks for adoption before installing tooling, changing workflows,
 creating settings or enabling remote permissions. An accepted setup request is
 not automatic consent to a release policy or publication. A project may decline.
 
-For a new, single stable-SemVer product, a practical starting design is reviewed
-change intent plus curated Unreleased notes, one version calculator, a maintained
-release-candidate PR, and human-approved exact-source publication:
+For a new, single stable-SemVer product, offer reviewed change intent, curated
+notes and warranted version updates **in the ordinary work PR**. Publication
+is a separate deliberate action, not another automatically created PR:
 
 ```text
-change PR -> impact review/check -> merge
-                                     |
-                          refresh one candidate PR
-                                     |
-                         verify + human approval
-                                     |
-                        publish exact source/assets
-                                     |
-                         separate consumer upgrade
+work + impact + notes + version -> review/check -> merge
+                                                    |
+                                  explicit publication request
+                                                    |
+                                   verify/publish exact source
+                                                    |
+                                     separate consumer upgrade
 ```
 
-Choose a maintained stack-appropriate tool after verifying its fit: an existing
-Changesets package graph remains Changesets; a compatible Release Please setup
-may own release PRs and versions; git-cliff may calculate from reviewed commits
-where the project adopts that input. These are alternatives, not layers to run
-together. Check the installed version's behavior, private-registry requirements,
-workspace support and hosting permissions before promising automation.
+Use a maintained stack-appropriate tool where it fits. Existing Changesets or
+Release Please release-PR workflows remain valid project choices; do not replace
+them merely to match this starter. A commit-driven calculator is another valid
+choice when expressly adopted. These are alternatives, not layers. Verify the
+installed tool's actual workflow, workspace support and hosting permissions;
+never invent dispatch inputs or automation it does not provide.
 
 Complete adoption includes the actual commands/workflow, an owner, version and
-note sources, and disposable-fixture tests for ordinary, breaking, no-release
-and repeated runs. Verify how automatic PR creation triggers checks on the exact
-candidate revision with the chosen credential. Unknown hosting permissions are
-a setup prerequisite, not a reason to pretend a prose policy is enforced.
-Prefer a small extension to the existing tool over a custom release framework.
+note sources, and disposable-fixture tests for ordinary, breaking, no-release,
+concurrent, post-publication and repeated runs. The local preparation command
+leaves a reviewable diff; CI validates without creating repair commits or PRs.
+Where the project intentionally uses bot PRs, verify their check triggers and
+notification behavior. Prefer a small extension to existing tooling over a
+custom release framework; prose alone is not enforcement.
+
+## Keep pending metadata in the work PR
+
+For the same-PR starter, calculate the next pending version from the **verified
+last published version** and highest remaining reviewed pending impact—not the
+previous source version or PR count. From published `1.4.0`, two pending fixes
+still target `1.4.1`; adding a compatible feature targets `1.5.0`; another fix
+keeps `1.5.0`. Once `1.5.0` is actually published, the next fix targets `1.5.1`.
+No shipped impact means no manufactured bump or empty version section.
+
+Keep impact beside the curated entries (or in the project's existing input).
+An undated `## [X.Y.Z]` section can describe pending source state without claiming
+publication. State that convention explicitly; the actual public release owns
+availability and date. This avoids needing a later bookkeeping PR just to move
+Unreleased notes. Preserve the project's existing convention when different.
+
+Before opening/updating the PR, reconcile against the current target, preserve
+other pending work, and update only coupled stamps. Recheck the proposed merge
+result: even a clean merge can contain a stale version. Integration tasks do
+not count twice when their final main PR is assessed. A newly published section
+is frozen; stale work must start the next pending section rather than amend it.
+Without strict target-freshness enforcement, describe the check-to-merge race
+honestly and reject inconsistent state before publication.
+
+Removing or changing a pending entry needs a truthful explanation: a wording
+clarification is not a withdrawn feature. A real withdrawal is assessed against
+the remaining net contract and may lower an unpublished target. Resolve an
+existing tag/draft attempt first; never reuse a spent identity. These checks
+cover actual state, not a second release ledger or a mandatory extra approval
+role. The independent reviewer still judges the meaning of the change.
 
 ## Assess each change
 
@@ -108,11 +137,11 @@ guarantee of automatic detection.
 
 ## Verify and publish deliberately
 
-Candidate preparation preserves curated meaning and touches only coupled
-version fields. It distinguishes proposed/source builds from published releases,
-handles no-change and reverted work under the adopted calculator, and converges
-on one candidate on refresh. Preserve or flag manual candidate edits rather
-than silently discarding them. Recompute and re-review when the source changes.
+Preparation preserves curated meaning and touches only coupled version fields.
+It distinguishes source builds from published releases, handles no-change and
+reverted work under the adopted calculator, and is idempotent on unchanged
+input. Preserve or flag manual edits rather than silently discarding them.
+Recompute and re-review when the source changes.
 
 Before publication, verify the authorized source identity, candidate versions,
 notes/migration, package contents, checksums and required platform evidence

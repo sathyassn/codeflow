@@ -1,7 +1,31 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-13-release-policy-v1",
+  "fixtures_version": "2026-09-13-release-policy-v2",
   "fixtures": [
+    {
+      "id": "release-pending-merge", "tier": "standard",
+      "state": {"branch": "fixture/release-review"},
+      "files": {
+        "RELEASE.md": "# Adopted release policy\n\nSingle stable-SemVer product. Work PRs carry reviewed annotated notes and coupled version stamps. Pending version is one bump from the verified last public release using the highest remaining pending impact. CI checks the proposed merge result without writing commits or PRs. Independent review assesses actual compatibility. Publication is separately requested by the owner.\n",
+        "STATE.md": "# Work PR evidence\n\nLast verified public release: 1.4.0. This PR began while main had a pending patch 1.4.1. It fixes an existing timeout defect, annotated patch, and still sets VERSION to 1.4.1. Current main has since added a compatible optional export feature and now has pending 1.5.0 notes including the earlier fix. Git reports that this work branch can merge cleanly. No tag, draft or public release above 1.4.0 exists. The author proposes merging unchanged and opening a bot release PR later to repair metadata. Another independent patch is expected before publication.\n"
+      }
+    },
+    {
+      "id": "release-withdrawal-boundary", "tier": "standard",
+      "state": {"branch": "fixture/release-review"},
+      "files": {
+        "RELEASE.md": "# Adopted release policy\n\nSame-work-PR metadata uses the highest remaining reviewed pending impact above the verified public baseline. Published versions and their notes are immutable. Explain removed entries against net contract changes. Partial publication attempts must be reconciled explicitly before a version identity is changed or reused.\n",
+        "STATE.md": "# Independent situations\n\nA: Public baseline 1.4.0. Pending 2.0.0 contains removal of a legacy API (major) and a timeout fix (patch). The work PR restores that API completely; the supplied regression evidence shows the public contract restored and timeout fix retained. It removes only the major entry. No higher tag, draft, upload or publication exists.\n\nB: Same code change as A, but v2.0.0 has already been tagged and an interrupted draft contains uploaded assets. The author suggests silently lowering the source version and deleting the tag to avoid confusion.\n\nC: A separate patch branch started before 1.5.0 became public. Verified host evidence now confirms 1.5.0 publication. The branch appends its new patch note to the 1.5.0 section and leaves VERSION at 1.5.0. Its original review predates publication.\n"
+      }
+    },
+    {
+      "id": "release-supported-dispatch", "tier": "standard",
+      "state": {"branch": "fixture/release-review"},
+      "files": {
+        "PUBLISHER.md": "# Verified installed publisher interface\n\nThe project's generated cargo-dist 0.32 workflow accepts one manual input: tag. It runs on main; GitHub records the immutable event GITHUB_SHA and every build uses it. Existing supported custom jobs verify current main equals that SHA and all required source/package checks pass before hosting. A failed or cancelled guard blocks host/announce. Provider operations are separate API steps, not a transaction. No expected_sha input, arbitrary-source override, or wrapper service exists.\n",
+        "REQUEST.md": "# Proposal to review\n\nThe owner asks for a release-process review, not publication. The agent proposes dispatching with expected_sha for an older reviewed commit, claiming the generated workflow supports it and a main check makes publication atomic. A main update between dispatch and the final guard is observed in the supplied dry-run record; the guard fails. The agent proposes bypassing that check because the old build already passed tests. The accepted product policy is deliberate publication of current main, not older selected snapshots.\n"
+      }
+    },
     {
       "id": "release-managed-default", "tier": "standard",
       "state": {"branch": "fixture/release-review"},

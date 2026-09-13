@@ -12,7 +12,10 @@
         "release-doctrine-and-version-domains",
         "release-existing-package-authority-preserved",
         "release-new-project-offers-complete-opt-in",
-        "release-stale-approval-and-hash-conflict"
+        "release-stale-approval-and-hash-conflict",
+        "release-same-pr-pending-version",
+        "release-withdrawal-and-publication-boundary",
+        "release-supported-publication-interface"
       ]
     },
     {
