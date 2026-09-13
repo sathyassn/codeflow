@@ -191,13 +191,13 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "a0d5bf0c13aac3959dcc4c9f0d16500ed695808b433c90a0be132414c3b3e6be",
+      "sha256": "51419edcd93660e6947a89f6cf0830d3b421e8fc86d36f914fb204d693254a92",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "cf7eb52ae36b6cfb21287d7afa8a5f8e92cbeea5dfbec94bbb3c13c9125f991f",
+      "sha256": "4b178abfff1efba8c021369ebe11028f86970f6d337704013ede49c4b06d1a49",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -215,7 +215,7 @@
     ".agents/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "72cfce02f4f97bc556cea455dc97a30a682b2f707c378fafc140dc4284eef733",
+      "sha256": "24b8ba9401cddfdd5f47e9d00fc3340c360777444c9079a03375a4844ec1e90b",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
@@ -227,7 +227,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c95949bd674a8990173a55924e7eb6c04bddc834bd02f2d72201a482b23618a4",
+      "sha256": "326fdb78c63fdc2e3f94f9a6ed8f556d8267f0241eff8330b1db136639018dbc",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
@@ -389,7 +389,7 @@
     ".agents/skills/cf-ship/references/release-policy.md": {
       "src": "agents/skills/cf-ship/references/release-policy.md",
       "ownership": "managed",
-      "sha256": "6bba522528d08a3b95124fe46ebe490ad7d551235579b09d39ccad5ef13c8a80",
+      "sha256": "96935d7720b14facdf71eb13caed7df40c999c48b80c83b19c9abffc3bbd7ec9",
       "exec": false
     },
     ".agents/skills/cf-stack/SKILL.md": {
@@ -605,13 +605,13 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "a0d5bf0c13aac3959dcc4c9f0d16500ed695808b433c90a0be132414c3b3e6be",
+      "sha256": "51419edcd93660e6947a89f6cf0830d3b421e8fc86d36f914fb204d693254a92",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "cf7eb52ae36b6cfb21287d7afa8a5f8e92cbeea5dfbec94bbb3c13c9125f991f",
+      "sha256": "4b178abfff1efba8c021369ebe11028f86970f6d337704013ede49c4b06d1a49",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -629,7 +629,7 @@
     ".claude/skills/cf-evaluate-model/resources/packs.json": {
       "src": "agents/skills/cf-evaluate-model/resources/packs.json",
       "ownership": "managed",
-      "sha256": "72cfce02f4f97bc556cea455dc97a30a682b2f707c378fafc140dc4284eef733",
+      "sha256": "24b8ba9401cddfdd5f47e9d00fc3340c360777444c9079a03375a4844ec1e90b",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
@@ -641,7 +641,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c95949bd674a8990173a55924e7eb6c04bddc834bd02f2d72201a482b23618a4",
+      "sha256": "326fdb78c63fdc2e3f94f9a6ed8f556d8267f0241eff8330b1db136639018dbc",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
@@ -803,7 +803,7 @@
     ".claude/skills/cf-ship/references/release-policy.md": {
       "src": "agents/skills/cf-ship/references/release-policy.md",
       "ownership": "managed",
-      "sha256": "6bba522528d08a3b95124fe46ebe490ad7d551235579b09d39ccad5ef13c8a80",
+      "sha256": "96935d7720b14facdf71eb13caed7df40c999c48b80c83b19c9abffc3bbd7ec9",
       "exec": false
     },
     ".claude/skills/cf-stack/SKILL.md": {

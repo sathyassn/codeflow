@@ -96,7 +96,10 @@ honestly and reject inconsistent state before publication.
 Removing or changing a pending entry needs a truthful explanation: a wording
 clarification is not a withdrawn feature. A real withdrawal is assessed against
 the remaining net contract and may lower an unpublished target. Resolve an
-existing tag/draft attempt first; never reuse a spent identity. These checks
+existing tag/draft attempt first. A tag or public release reserves that version
+for its original content; abandoning an attempt does not permit repurposing it.
+An untagged draft may be resumed unchanged or explicitly abandoned by its owner,
+not silently rewritten by a later work PR. These checks
 cover actual state, not a second release ledger or a mandatory extra approval
 role. The independent reviewer still judges the meaning of the change.
 

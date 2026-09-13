@@ -15,7 +15,8 @@
         "release-stale-approval-and-hash-conflict",
         "release-same-pr-pending-version",
         "release-withdrawal-and-publication-boundary",
-        "release-supported-publication-interface"
+        "release-supported-publication-interface",
+        "release-new-semver-same-pr-opt-in"
       ]
     },
     {

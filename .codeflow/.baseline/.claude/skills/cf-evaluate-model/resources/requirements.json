@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-13-release-policy-v2",
+  "requirements_version": "2026-09-13-release-policy-v3",
   "requirements": [
     {
       "id": "CF-REL-004",

@@ -222,7 +222,7 @@ class SuiteContractTests(unittest.TestCase):
         _, document, _ = eval_kit.suite_documents()
         cases = {case["id"]: case for case in document["cases"]}
         selected = eval_kit.resolve_pack("release-policy")
-        self.assertEqual(10, len(selected))
+        self.assertEqual(11, len(selected))
         self.assertTrue(set(selected).issubset(eval_kit.resolve_pack("release-smoke")))
         for case_id in selected:
             case = cases[case_id]
