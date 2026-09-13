@@ -86,11 +86,11 @@ limits of catalog support in consuming scaffolds.
    may add only their declared bare origin or control worktree inside that same
    marked opaque workspace; they never use an external remote. Never reuse a
    fixture between trials.
-5. **Run the subject naturally.** Open the required native interactive harness
-   rooted at that fixture, put the exact CodeFlow binary under test first on the
-   session `PATH`, and give it only `TASK.md` as the task. Preserve its session
-   reference plus scoped observable evidence. Duo cases require both real
-   native seats; a missing seat is an observed degradation, not simulated.
+5. **Run the subject naturally.** Open the native interactive harness in the
+   fixture and give only `TASK.md` as the task. Match actual CodeFlow and hook
+   executables to the external receipt per [protocol](resources/protocol.md);
+   `PATH` or version is not proof. Preserve session and scoped evidence. Duo
+   cases require real native seats; a missing seat is observed degradation, not simulation.
 6. **Record raw observations.** Use the result shape in the protocol. Record the
    route, signals actually observed, violations, references consulted, evidence
    references, duration, tokens/cost when exposed, and any `not_run` reason.

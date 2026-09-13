@@ -36,13 +36,13 @@ created: {{DATE}}
 
 ## Affected surfaces and interfaces
 
-<!-- Name the capabilities, areas/teams, user journeys, shared contracts, and
-     integration boundaries affected. In a monorepo, tasks normally align to
-     these surfaces while this epic owns the cross-area outcome. Omit details
-     already owned by architecture or a linked authoritative specification. -->
+<!-- Name the capabilities, user journeys, and material native build, runtime,
+     release, data/trust, and shared-contract boundaries affected. This epic
+     owns the cross-area outcome, not a team or directory. Omit details already
+     owned by architecture or a linked authoritative source. -->
 
-## Tasks
+## Plan graph (when needed)
 
-<!-- TSK-NNN links once broken down; small epics may have none. For a
-     multi-task body, include or link the exact dual-approved TASK_GRAPH vN.
-     Task frontmatter carries the same direct edges in `depends_on`. -->
+<!-- Link the exact dual-approved TASK_GRAPH vN for a multi-task body; omit
+     when unnecessary. Task frontmatter owns membership (`epic_id`) and direct
+     predecessors (`depends_on`); this is not a second task roster. -->

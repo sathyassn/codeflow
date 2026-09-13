@@ -38,6 +38,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Native evaluation executable binding.** Disposable trial receipts now
+  record the resolved CodeFlow executable and SHA-256 and reject changed bytes
+  during materialization. Launch guidance requires actual native command and
+  hook attribution; a matching version or intended `PATH` is insufficient.
+  Peer-dependent Claude turns require the peer's verified native result before
+  the host returns. The strict delegate terminal state machine is unchanged.
+
+- **Proportionate project organization.** New projects derive their repository
+  shape from accepted ownership, native build, runtime, release, data, and trust
+  boundaries; existing projects keep credible source layouts and work
+  authorities. Onboarding explains current-directory init, fixed document
+  destinations, tier history, and collision reconciliation. A foreign tasks
+  folder alone no longer activates durable CodeFlow work gates, while full-tier
+  and recognizable historical CodeFlow tasks retain their planning anchors.
+  Relevant indeterminate tracking state now stops with a diagnostic.
+  Living requirements remain distinct from frozen change specifications; an
+  external tracker cannot waive active repository-execution gates.
+
 - **Accountable worker execution (ADR-0060).** Plans now distinguish the
   responsible primary from the actual binding-or-route executor and record
   requested-versus-observed provenance plus scoped usage evidence. Natively

@@ -1464,6 +1464,53 @@ mod tests {
     }
 
     #[test]
+    fn later_different_stop_poisons_without_replacing_first_result() {
+        let (_temp, path) = state();
+        ready(&path);
+        arm("run-1", &path, "turn-1", b"hello").unwrap();
+        accept(&path, Some(PROMPT_ID));
+        stop(&path, PROMPT_ID, "waiting for the peer").unwrap();
+        let result_path = path.join("turns/turn-1/result.json");
+        let original = std::fs::read(&result_path).unwrap();
+
+        let error = stop(&path, PROMPT_ID, "peer returned; final answer").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unsafe);
+        assert!(path.join("poison.json").exists());
+        assert_eq!(std::fs::read(&result_path).unwrap(), original);
+        assert_eq!(
+            wait(
+                "run-1",
+                &path,
+                Some("turn-1"),
+                WaitUntil::Terminal,
+                Duration::ZERO,
+                || false,
+            )
+            .unwrap_err()
+            .kind,
+            ErrorKind::Unsafe
+        );
+    }
+
+    #[test]
+    fn later_stop_cannot_bind_to_armed_but_unaccepted_next_turn() {
+        let (_temp, path) = state();
+        ready(&path);
+        arm("run-1", &path, "turn-1", b"hello").unwrap();
+        accept(&path, Some(PROMPT_ID));
+        stop(&path, PROMPT_ID, "waiting for the peer").unwrap();
+        let result_path = path.join("turns/turn-1/result.json");
+        let original = std::fs::read(&result_path).unwrap();
+        arm("run-1", &path, "turn-2", b"again").unwrap();
+
+        let error = stop(&path, PROMPT_ID, "late peer continuation").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Unsafe);
+        assert_eq!(std::fs::read(&result_path).unwrap(), original);
+        assert!(!path.join("turns/turn-2/result.json").exists());
+        assert!(path.join("poison.json").exists());
+    }
+
+    #[test]
     fn terminal_turn_ids_cannot_be_rearmed() {
         let (_temp, path) = state();
         ready(&path);

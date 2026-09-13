@@ -21,8 +21,10 @@ created: {{DATE}}
 
 ## Affected surfaces and interfaces
 
-<!-- Paths/areas, capabilities, public contracts, data or state boundaries, and
-     integration points this task may change. Delete when genuinely obvious. -->
+<!-- Paths/areas, capabilities, public contracts, and material native build,
+     runtime, release, data/trust, or integration boundaries this task may
+     change. Name the actual owner; a folder alone does not enforce a boundary.
+     Delete when genuinely obvious. -->
 
 ## Acceptance Criteria
 
@@ -38,10 +40,12 @@ created: {{DATE}}
 
 ## Execution contract
 
-<!-- For non-trivial orchestrated work: approved Plan vN, producer, independent
-     cross-lineage reviewer, integration target, and task-specific
-     risk/recovery requirement. Shared engineering/security/testing doctrine
-     stays in AGENTS.md and the skills; do not paste a generic checklist here.
+<!-- For non-trivial orchestrated work: approved Plan vN, responsible primary,
+     actual executor (if different), independent cross-lineage reviewer,
+     integration target, and task-specific risk/recovery requirement. The
+     primary remains accountable for acceptance when execution is delegated.
+     Shared engineering/security/testing doctrine stays in AGENTS.md and the
+     skills; do not paste it here.
      Delete this section for a trivial direct task. -->
 
 ## Closeout

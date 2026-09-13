@@ -16,6 +16,16 @@ historical failures/unrun records. It never retroactively passes the old route
 or qualifies a new model binding. Required peer/tool behavior still needs live
 evidence. See `cf-delegate/resources/native-fallback.md` for alternate clients.
 
+The materialization receipt owns the resolved CodeFlow executable path and
+SHA-256 outside the subject fixture. Bind native launch context to that path,
+verify its bytes in the subject's command environment, and retain observable
+commands showing which executable ran, including subprocess hooks. A version
+string, intended `PATH`, or top-level absolute invocation does not prove a
+bare-name hook used the same binary. Missing or mismatched command evidence is
+a runtime-binding validity threat (`harness_context_mismatch`; use
+`missing_trace` when the trace is absent), not a model-behavior failure or
+candidate qualification. Preserve the original response and content grade.
+
 Use regression cases for behavior that must remain nearly perfect. Use
 capability cases to learn what a model can do and where it fails. Report both
 per-trial pass rate and consistency across repeated trials; never hide variance

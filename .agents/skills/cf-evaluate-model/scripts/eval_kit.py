@@ -877,6 +877,17 @@ def tree_digest(root: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def executable_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as executable:
+            for chunk in iter(lambda: executable.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise EvalError(f"cannot read CodeFlow executable {path}: {error}") from error
+    return "sha256:" + digest.hexdigest()
+
+
 def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dict:
     if trial < 1:
         raise EvalError("trial must be at least 1")
@@ -906,12 +917,15 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         raise EvalError(f"trial fixture already exists: {output}")
     if record_path.exists():
         raise EvalError(f"trial record already exists: {record_path}")
-    output.mkdir(parents=True)
     codeflow_path = codeflow.expanduser().resolve()
     if not codeflow_path.is_file() or not os.access(codeflow_path, os.X_OK):
         raise EvalError(f"CodeFlow binary is not executable: {codeflow_path}")
+    codeflow_sha256 = executable_digest(codeflow_path)
+    output.mkdir(parents=True)
     tier_flag = "--full" if fixture["tier"] == "full" else "--standard"
     run_command([str(codeflow_path), "init", "--yes", tier_flag], output)
+    if executable_digest(codeflow_path) != codeflow_sha256:
+        raise EvalError("CodeFlow executable changed during materialization")
     remove_grader_material(output)
     state = fixture["state"]
     branch = state.get("branch", "fixture/base")
@@ -952,6 +966,10 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         "fixture_state": fixture["state"],
         "fixture_digest": digest,
         "path": str(output),
+        "codeflow_executable": {
+            "path": str(codeflow_path),
+            "sha256": codeflow_sha256,
+        },
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(record_path, trial_record)

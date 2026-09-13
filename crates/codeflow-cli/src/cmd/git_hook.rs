@@ -132,12 +132,20 @@ pub fn run(args: &GitHookArgs) -> i32 {
 /// disagree with the authoritative CI check.
 fn durable_work_preflight(root: &Path) -> Option<i32> {
     let branch = current_branch(root)?;
-    if !branch.starts_with("task/") || !durable_work_tracking_enabled(root) {
+    if !branch.starts_with("task/") {
         return None;
     }
     let staged = staged_files(root);
     if staged.is_empty() {
         return None;
+    }
+    match durable_work_tracking_enabled(root) {
+        Ok(true) => {}
+        Ok(false) => return None,
+        Err(error) => {
+            eprintln!("codeflow pre-commit: cannot determine durable-work tracking: {error}");
+            return Some(1);
+        }
     }
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {

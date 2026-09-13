@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-11-accountable-worker-routing-v3",
+  "requirements_version": "2026-09-12-project-organization-v1",
   "requirements": [
     {
       "id": "CF-MM-016",
@@ -1329,7 +1329,7 @@
           "path": ".agents/skills/cf-method/references/project-organization.md",
           "markers": [
             "The authority owns status, acceptance, and lifecycle",
-            "`external_refs` contains opaque links or IDs, never mirrored status",
+            "Epic/task template `external_refs` holds opaque links or IDs as preserved metadata",
             "must remain rebuildable from Git Markdown"
           ]
         },
@@ -1358,7 +1358,7 @@
         {
           "path": ".agents/skills/cf-plan/SKILL.md",
           "markers": [
-            "bounded in-node discoveries are captured only when review-relevant",
+            "capture bounded in-node discoveries only when review-relevant",
             "Closeout cannot approve a deviation after the fact"
           ]
         }
@@ -1448,7 +1448,7 @@
         {
           "path": ".agents/skills/cf-plan/SKILL.md",
           "markers": [
-            "A substantive amendment creates",
+            "Substantive amendments return to both seats as Plan vN+1",
             "Failure paths are explicit",
             "record a proved unavailable seat as reduced assurance"
           ]
@@ -1470,8 +1470,8 @@
         {
           "path": ".agents/skills/cf-plan/SKILL.md",
           "markers": [
-            "partition it by coherent durable",
-            "Do not treat the batch itself as an epic boundary",
+            "Partition a task set by coherent durable outcomes",
+            "A batch is not an epic boundary",
             "For each multi-task epic, first create one shared",
             "Select this shape autonomously",
             "do not ask the operator merely to choose the routine landing mechanism",
@@ -1504,6 +1504,62 @@
             "the request boundary is not automatically an epic",
             "for every task in a multi-task epic",
             "Create that one shared branch from the intended protected target"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-008",
+      "level": "hard",
+      "statement": "Project structure is earned from accepted responsibilities, interfaces, native build units, runtime and release lifecycles, and data/trust ownership; a shared repository or similar folder names alone do not establish deployable, authority, or access boundaries. Existing coherent layouts remain in place without a cosmetic migration.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "## Earn the project shape",
+            "Source and build",
+            "Runtime and release",
+            "Data and trust",
+            "Keep a coherent native layout"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-009",
+      "level": "hard",
+      "statement": "Brownfield adoption distinguishes init's current-directory root and fixed operating destinations from later root-discovering commands, tier installation from active historical work tracking, and mechanical preservation from semantic reconciliation or update conflicts; inactive tracking never receives invented CodeFlow graph assurances.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "Unlike later root-discovering commands",
+            "fixed operating destinations",
+            "Default init preserves existing content mechanically",
+            "semantic reconciliation",
+            "When durable CodeFlow tracking is not active",
+            "recognizable historical CodeFlow task tracking"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-PM-010",
+      "level": "hard",
+      "statement": "Maintained product requirements and executable schemas stay current at their declared authorities while an optional SPC pins a work agreement and freezes after delivery; consumers link only SPC IDs in specs arrays and refer to an external source/revision in supported body or epic/task external_refs without inventing an SPC field.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/project-organization.md",
+          "markers": [
+            "Maintained requirements and executable interface schemas remain current",
+            "The SPC template has no parsed `external_refs` field"
+          ]
+        },
+        {
+          "path": "project-management/templates/spec.md",
+          "markers": [
+            "optional frozen work inputs, not living requirements",
+            "Link the authoritative living source"
           ]
         }
       ]
