@@ -334,6 +334,58 @@ class SuiteContractTests(unittest.TestCase):
                             cases[case_id]["prompt"].rstrip() + "\n",
                             (root / "TASK.md").read_text(encoding="utf-8"),
                         )
+                        self.assertEqual(
+                            {
+                                "path": str(codeflow),
+                                "sha256": "sha256:"
+                                + hashlib.sha256(codeflow.read_bytes()).hexdigest(),
+                            },
+                            record["codeflow_executable"],
+                        )
+                        self.assertEqual(
+                            record,
+                            eval_kit.load_json(
+                                run_root
+                                / "records"
+                                / f"{root.parent.name}.fixture.json"
+                            ),
+                        )
+                        self.assertNotIn(
+                            "codeflow_executable", (root / "TASK.md").read_text()
+                        )
+
+    def test_materialize_rejects_missing_and_nonexecutable_binary(self) -> None:
+        case_id = eval_kit.resolve_pack("agentic-estimation")[0]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            missing = root / "missing-codeflow"
+            with self.assertRaisesRegex(eval_kit.EvalError, "not executable"):
+                eval_kit.materialize(case_id, 1, root / "missing", missing)
+
+            binary = root / "codeflow"
+            binary.write_bytes(b"candidate")
+            with patch.object(eval_kit.os, "access", return_value=False):
+                with self.assertRaisesRegex(eval_kit.EvalError, "not executable"):
+                    eval_kit.materialize(case_id, 1, root / "nonexecutable", binary)
+
+    def test_materialize_rejects_executable_replaced_during_init(self) -> None:
+        case_id = eval_kit.resolve_pack("agentic-estimation")[0]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = root / "codeflow"
+            binary.write_bytes(b"candidate-before-init")
+
+            def replace_on_init(command: list[str], _root: Path) -> None:
+                self.assertEqual(binary.resolve(), Path(command[0]))
+                binary.write_bytes(b"different-candidate-after-init")
+
+            with patch.object(eval_kit.os, "access", return_value=True):
+                with patch.object(eval_kit, "run_command", side_effect=replace_on_init):
+                    with self.assertRaisesRegex(
+                        eval_kit.EvalError, "changed during materialization"
+                    ):
+                        eval_kit.materialize(case_id, 1, root / "run", binary)
+            self.assertEqual([], list((root / "run" / "records").glob("*.fixture.json")))
 
     def test_target_before_fixture_creates_a_real_unmerged_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
