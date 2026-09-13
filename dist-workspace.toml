@@ -15,6 +15,7 @@ pr-run-mode = "plan"
 # cargo-dist 0.32 makes its host job depend on this job and rejects its failure
 # or cancellation; platform compilation may run concurrently but cannot publish.
 local-artifacts-jobs = ["./release-plan-authority"]
+post-announce-jobs = ["./release-post-announce"]
 # CodeFlow has no external package publisher. Deferring GitHub hosting to the
 # announce phase keeps the tag/release as cargo-dist's final operation.
 github-release = "announce"

@@ -50,8 +50,10 @@ authority; platform compilation may overlap but cannot publish. That authority c
 or reuses only an exact candidate-bound empty draft with the reviewed curated
 notes; wrong tags, public releases, foreign drafts, and partial assets block.
 cargo-dist uploads without clobbering and its supported announce phase makes the
-tag and completed release public only after all artifacts are available. Dry-run
-is plan-only. The exact candidate ref is restored after repository auto-deletion
+tag and completed release public only after all artifacts are available. A
+supported post-announce job then compares the public source and asset digests
+with the same-run staged files. Dry-run may build but cannot host. The exact
+candidate ref is restored after repository auto-deletion
 only after the merge, tree, reviewer and permission checks succeed.
 
 ## Consequences

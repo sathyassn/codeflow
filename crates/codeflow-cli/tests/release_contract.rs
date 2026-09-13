@@ -68,6 +68,13 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         Some("./release-plan-authority")
     );
     assert_eq!(
+        dist.get("post-announce-jobs")
+            .and_then(toml::Value::as_array)
+            .and_then(|jobs| jobs.first())
+            .and_then(toml::Value::as_str),
+        Some("./release-post-announce")
+    );
+    assert_eq!(
         dist.get("pr-run-mode").and_then(toml::Value::as_str),
         Some("plan")
     );
@@ -91,6 +98,8 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         "plan: ${{ needs.plan.outputs.val }}",
         "gh release upload",
         "gh release edit",
+        "custom-release-post-announce:",
+        "uses: ./.github/workflows/release-post-announce.yml",
     ] {
         assert!(
             workflow.contains(required),
@@ -99,6 +108,12 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
     }
     assert!(!workflow.contains("push:\n    tags:"));
     assert!(workflow.contains("  custom-release-plan-authority:\n"));
+    let post_announce = workflow
+        .split("  custom-release-post-announce:\n")
+        .nth(1)
+        .expect("generated post-announce verifier must exist");
+    assert!(post_announce.contains("- announce"));
+    assert!(post_announce.contains("plan: ${{ needs.plan.outputs.val }}"));
     let host = workflow
         .split("  host:\n")
         .nth(1)
@@ -202,6 +217,22 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         assert!(
             authority.contains(required),
             "plan authority workflow is missing {required}"
+        );
+    }
+
+    let published = fs::read_to_string(root.join(".github/workflows/release-post-announce.yml"))
+        .expect("post-announce verification workflow must be readable");
+    for required in [
+        "scripts/release.py verify-published-assets",
+        "pattern: artifacts-*",
+        "merge-multiple: true",
+        "releases/tags/${tag}",
+        "commits/tags/${tag}",
+        "contents: read",
+    ] {
+        assert!(
+            published.contains(required),
+            "post-announce workflow is missing {required}"
         );
     }
 }

@@ -590,6 +590,92 @@ class HostingTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "does not target"):
             self.verify({"tag_target": "d" * 40, "release": None})
 
+    def test_published_assets_match_same_run_names_sizes_and_digests(self) -> None:
+        candidate = "c" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "codeflow.tar.gz").write_bytes(b"archive")
+            (artifacts / "dist-manifest.json").write_bytes(b"{}\n")
+            (artifacts / "linux-dist-manifest.json").write_bytes(b"not uploaded")
+
+            assets = []
+            for path in [artifacts / "codeflow.tar.gz", artifacts / "dist-manifest.json"]:
+                assets.append(
+                    {
+                        "name": path.name,
+                        "size": path.stat().st_size,
+                        "state": "uploaded",
+                        "digest": f"sha256:{release.sha256(path)}",
+                    }
+                )
+            state = root / "published.json"
+            state.write_text(
+                json.dumps(
+                    {
+                        "tag_target": candidate,
+                        "release": {
+                            "draft": False,
+                            "tag_name": "v2.0.0",
+                            "target_commitish": candidate,
+                            "assets": assets,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                state=state,
+                artifacts_dir=artifacts,
+                candidate=candidate,
+                tag="v2.0.0",
+            )
+            release.verify_published_assets(args)
+
+            if os.name != "nt":
+                symlink = artifacts / "linked-archive"
+                symlink.symlink_to(artifacts / "codeflow.tar.gz")
+                with self.assertRaisesRegex(release.ReleaseError, "not a regular file"):
+                    release.verify_published_assets(args)
+                symlink.unlink()
+
+            assets[0]["digest"] = "sha256:" + "0" * 64
+            state.write_text(
+                json.dumps(
+                    {
+                        "tag_target": candidate,
+                        "release": {
+                            "draft": False,
+                            "tag_name": "v2.0.0",
+                            "target_commitish": candidate,
+                            "assets": assets,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(release.ReleaseError, "same-run staged files"):
+                release.verify_published_assets(args)
+
+            assets.append(dict(assets[0]))
+            state.write_text(
+                json.dumps(
+                    {
+                        "tag_target": candidate,
+                        "release": {
+                            "draft": False,
+                            "tag_name": "v2.0.0",
+                            "target_commitish": candidate,
+                            "assets": assets,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(release.ReleaseError, "duplicated"):
+                release.verify_published_assets(args)
+
 
 class ReleaseNotesTests(unittest.TestCase):
     def test_extracts_only_the_exact_curated_version_and_binds_candidate(self) -> None:
@@ -654,6 +740,17 @@ class ReleaseNotesTests(unittest.TestCase):
                     "notes.md",
                 ],
                 [
+                    "verify-published-assets",
+                    "--state",
+                    "state.json",
+                    "--artifacts-dir",
+                    "artifacts",
+                    "--candidate",
+                    "c" * 40,
+                    "--tag",
+                    "v3.0.0",
+                ],
+                [
                     "release-notes",
                     "--candidate",
                     "c" * 40,
@@ -675,6 +772,7 @@ class ReleaseNotesTests(unittest.TestCase):
                 "verify-review",
                 "verify-dispatch",
                 "verify-host-state",
+                "verify-published-assets",
                 "release-notes",
             },
         )

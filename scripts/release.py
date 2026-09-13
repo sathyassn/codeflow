@@ -698,6 +698,58 @@ def verify_host_state(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "resume-draft"}))
 
 
+def verify_published_assets(args: argparse.Namespace) -> None:
+    state = load_json(args.state)
+    if state.get("tag_target") != args.candidate:
+        fail("published tag does not resolve to the exact candidate")
+    release = state.get("release")
+    if not isinstance(release, dict):
+        fail("published release metadata is missing")
+    if (
+        release.get("draft") is not False
+        or release.get("tag_name") != args.tag
+        or release.get("target_commitish") != args.candidate
+    ):
+        fail("published release identity does not match the exact candidate")
+
+    expected: dict[str, dict[str, Any]] = {}
+    try:
+        entries = sorted(args.artifacts_dir.iterdir())
+    except OSError as error:
+        fail(f"cannot inspect staged release artifacts: {error}")
+    for path in entries:
+        if path.name.endswith("-dist-manifest.json"):
+            continue
+        if path.is_symlink() or not path.is_file():
+            fail(f"staged release artifact is not a regular file: {path.name}")
+        expected[path.name] = {
+            "size": path.stat().st_size,
+            "digest": f"sha256:{sha256(path)}",
+        }
+    if not expected:
+        fail("staged release artifact set is empty")
+
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        fail("published release assets are missing")
+    actual: dict[str, dict[str, Any]] = {}
+    for asset in assets:
+        if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+            fail("published release asset metadata is malformed")
+        name = asset["name"]
+        if name in actual:
+            fail(f"published release asset name is duplicated: {name}")
+        if asset.get("state") != "uploaded":
+            fail(f"published release asset is not uploaded: {name}")
+        actual[name] = {"size": asset.get("size"), "digest": asset.get("digest")}
+    if actual != expected:
+        fail(
+            "published release assets disagree with the same-run staged files: "
+            f"expected={expected}, actual={actual}"
+        )
+    print(json.dumps({"status": "verified", "tag": args.tag, "assets": len(actual)}))
+
+
 def verify_review_data(
     pull: dict[str, Any],
     reviews: list[Any],
@@ -818,6 +870,13 @@ def parser() -> argparse.ArgumentParser:
     host.add_argument("--tag", required=True)
     host.add_argument("--notes", type=Path, required=True)
     host.set_defaults(func=verify_host_state)
+
+    published = sub.add_parser("verify-published-assets")
+    published.add_argument("--state", type=Path, required=True)
+    published.add_argument("--artifacts-dir", type=Path, required=True)
+    published.add_argument("--candidate", required=True)
+    published.add_argument("--tag", required=True)
+    published.set_defaults(func=verify_published_assets)
 
     notes = sub.add_parser("release-notes")
     notes.add_argument("--candidate", required=True)

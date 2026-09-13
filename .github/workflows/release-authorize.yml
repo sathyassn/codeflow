@@ -9,10 +9,6 @@ permissions:
   contents: write
   pull-requests: read
 
-concurrency:
-  group: codeflow-release-publication
-  cancel-in-progress: false
-
 jobs:
   authorize:
     if: >-
@@ -20,6 +16,9 @@ jobs:
       github.event.pull_request.base.ref == 'main' &&
       github.event.pull_request.head.ref == 'chore/release-codeflow'
     runs-on: ubuntu-latest
+    concurrency:
+      group: codeflow-release-publication
+      cancel-in-progress: false
     steps:
       - name: Verify trusted current pull-request authority
         env:

@@ -26,6 +26,11 @@ markers. It checks known contradictions and demands an assessment for watched
 contracts; it does not infer compatibility. git-cliff alone calculates the
 version after merge, from reviewed commit markers.
 
+Use a plain `revert:` only when the resulting change has no shipped release
+impact. A revert that changes supported behavior or a public contract must use
+the `fix:`, `feat:`, or breaking marker that describes the resulting release,
+with matching PR impact and curated Unreleased notes.
+
 ### Cross-build toolchain
 
 Release CI uses native cargo-dist runners for macOS, Linux, and Windows so each
@@ -143,7 +148,7 @@ and blocks claiming that platform's release qualification.
    next version. An empty Unreleased section or a range containing only
    `none`-impact/revert commits is a no-op before git-cliff runs; this is
    important because pinned git-cliff 2.13.1 retains a patch floor even when
-   those commits are filtered from rendered notes. A merged candidate with no
+   repository policy assigns no release impact. A merged candidate with no
    corresponding tag is held for publication, not regenerated. A tag ends this
    local pending guard; it is not by itself evidence that hosted publication or
    installer verification completed, which the release evidence must establish.
@@ -182,7 +187,10 @@ and blocks claiming that platform's release qualification.
 A failed or cancelled authority job blocks cargo-dist host and announce. The
 supported local-artifact extension lets platform compilation run concurrently,
 but global packaging and all hosting wait for authority. A `dry-run` validates
-only the cargo-dist plan and never creates a draft. cargo-dist 0.32's generated
+the cargo-dist plan and may rehearse configured artifact builds, but never
+creates a draft, hosts, or announces. After announcement, a supported
+post-announce job compares the exact tag/source and public asset names, sizes,
+and SHA-256 digests with the same-run staged files. cargo-dist 0.32's generated
 jobs still receive the workflow's write-scoped token even though every checkout
 uses `persist-credentials: false`; this upstream permission breadth is a recorded
 limitation, not a claim that untrusted build code is least-privileged.
