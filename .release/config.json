@@ -1,0 +1,40 @@
+{
+  "candidate_branch": "chore/release-codeflow",
+  "candidate_record": ".release/candidate.json",
+  "comparison": {
+    "commit": "d70c6f17d4bf199a545c843856b3ded4681aff20",
+    "tag": "v2.1.0"
+  },
+  "generated_allowlist": [
+    ".codeflow/.baseline/**",
+    ".codeflow/manifest.json",
+    ".codeflow/project.toml",
+    "AGENTS.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "CHANGELOG.md",
+    "CLAUDE.md"
+  ],
+  "main_branch": "main",
+  "published": {
+    "release_target_commit": "3c3efdb91009361e18b0fabad699b5e875d4e4dd",
+    "source_archive_sha256": "1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb",
+    "source_commit": "3c3efdb91009361e18b0fabad699b5e875d4e4dd",
+    "version": "2.1.0"
+  },
+  "release_unit": "codeflow",
+  "schema_version": 1,
+  "watched_contract_paths": [
+    ".github/workflows/**",
+    ".codeflow/**",
+    "assets/**",
+    "Cargo.lock",
+    "Cargo.toml",
+    "CHANGELOG.md",
+    "crates/codeflow-cli/src/**",
+    "crates/codeflow-core/src/**",
+    "dist-workspace.toml",
+    "docs/adoption.md",
+    "docs/releasing.md"
+  ]
+}

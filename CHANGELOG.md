@@ -38,6 +38,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Human-authorized release automation (ADR-0061).** CodeFlow PRs now declare
+  reviewed release impact; git-cliff remains the sole bump calculator while a
+  guarded workflow maintains one candidate PR and cargo-dist remains the sole
+  publisher after a human merges the exact candidate. The v2.1 tag/source
+  discrepancy is preserved as explicit provenance, not repaired by moving a
+  tag. Consumer projects keep their own version and publication authorities;
+  customization, shipping, and review route to one opt-in project policy with
+  seven scoped model diagnostics recorded separately from deterministic tests.
+
 - **Native evaluation executable binding.** Disposable trial receipts now
   record the resolved CodeFlow executable and SHA-256 and reject changed bytes
   during materialization. Launch guidance requires actual native command and

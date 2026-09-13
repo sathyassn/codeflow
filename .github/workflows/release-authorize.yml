@@ -1,0 +1,109 @@
+name: authorize merged release candidate
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+jobs:
+  authorize:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.ref == 'chore/release-codeflow'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: codeflow-release-publication
+      cancel-in-progress: false
+    steps:
+      - name: Verify trusted current pull-request authority
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > /tmp/release-pull.json
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            | jq 'add' > /tmp/release-reviews.json
+          printf '{}\n' > /tmp/release-permissions.json
+          for login in $(jq -r '[.[] | select(.user.type == "User") | .user.login] | unique[]' /tmp/release-reviews.json); do
+            permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .permission)
+            jq --arg login "$login" --arg permission "$permission" \
+              '. + {($login): $permission}' /tmp/release-permissions.json > /tmp/release-permissions.next
+            mv /tmp/release-permissions.next /tmp/release-permissions.json
+          done
+          gh api "repos/${GITHUB_REPOSITORY}/git/commits/${CANDIDATE_SHA}" > /tmp/candidate-commit.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/commits/${MERGE_SHA}" > /tmp/merge-commit.json
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg head "$CANDIDATE_SHA" --arg merge "$MERGE_SHA" '
+            .merged == true and .state == "closed" and
+            .base.ref == "main" and .base.repo.full_name == $repo and
+            .head.ref == "chore/release-codeflow" and .head.repo.full_name == $repo and
+            .head.sha == $head and .merge_commit_sha == $merge and
+            .merged_by.type == "User"
+          ' /tmp/release-pull.json >/dev/null
+          jq -e --arg head "$CANDIDATE_SHA" --slurpfile permissions /tmp/release-permissions.json \
+            --slurpfile pull /tmp/release-pull.json '
+            [ .[] | select(
+                (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED") and
+                .user.type == "User" and
+                .user.login != $pull[0].user.login and
+                ($permissions[0][.user.login] == "write" or
+                 $permissions[0][.user.login] == "maintain" or
+                 $permissions[0][.user.login] == "admin")
+              ) ]
+            | sort_by(.user.login, .submitted_at, .id)
+            | group_by(.user.login) | map(last)
+            | any(.state == "APPROVED" and .commit_id == $head)
+              and all(.state != "CHANGES_REQUESTED")
+          ' /tmp/release-reviews.json >/dev/null
+          jq -e --arg head "$CANDIDATE_SHA" --slurpfile candidate /tmp/candidate-commit.json '
+            .tree.sha == $candidate[0].tree.sha and
+            (.parents | length) == 2 and .parents[1].sha == $head
+          ' /tmp/merge-commit.json >/dev/null
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+
+      - name: Verify human-approved source
+        id: authority
+        run: |
+          result=$(python3 scripts/release.py authorize-event \
+            --event "$GITHUB_EVENT_PATH" \
+            --pull /tmp/release-pull.json \
+            --reviews /tmp/release-reviews.json \
+            --permissions /tmp/release-permissions.json \
+            --repository "$GITHUB_REPOSITORY")
+          printf '%s\n' "$result"
+          echo "tag=$(printf '%s' "$result" | jq -r .tag)" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch cargo-dist on the exact candidate branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          current=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/chore/release-codeflow" --jq .object.sha 2>/tmp/release-ref.error)
+          ref_rc=$?
+          set -e
+          if [ "$ref_rc" -eq 0 ]; then
+            if [ "$current" != "$CANDIDATE_SHA" ]; then
+              echo "::error::The candidate dispatch ref exists at an unreviewed commit."
+              exit 1
+            fi
+          elif grep -q 'HTTP 404' /tmp/release-ref.error; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref='refs/heads/chore/release-codeflow' -f sha="$CANDIDATE_SHA" >/dev/null
+          else
+            cat /tmp/release-ref.error >&2
+            exit "$ref_rc"
+          fi
+          gh workflow run release.yml --ref chore/release-codeflow \
+            -f tag="${{ steps.authority.outputs.tag }}"

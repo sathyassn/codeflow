@@ -3,7 +3,8 @@
 How a codeflow release is cut, and how a project that *consumes* codeflow should
 think about its own versioning. Decision record: ADR-0012 (supersedes ADR-0010).
 Use [the release checklist](release-checklist.md) as the evidence-bearing
-approval record for every run of this procedure.
+approval record for every run of this procedure. ADR-0061 automates the
+candidate and exact-source dispatch while preserving the human decision.
 
 ## codeflow's own releases
 
@@ -11,11 +12,24 @@ Version source of truth: `Cargo.toml [workspace.package] version` (all three
 crates inherit it via `version.workspace = true`). Releases are conventional-commit
 driven and human-gated. Two tools do the work:
 
-- **git-cliff** derives the next SemVer **and** the changelog from the
-  Conventional Commits the commit-msg gate already enforces — reading git history
-  only, so it never publishes or runs `cargo package`.
+- **git-cliff** is the sole next-SemVer calculator. It reads the Conventional
+  Commits the commit-msg gate already enforces, but never replaces the curated
+  Unreleased prose, publishes, or runs `cargo package`.
 - **cargo-dist** builds four target binaries plus shell and PowerShell
-  installers and publishes the GitHub Release, triggered by the version tag.
+  installers and is the only tag, release, and artifact publisher. Its
+  generated workflow runs only by explicit dispatch from an authorized
+  candidate.
+
+PRs carry one `Release impact` section. `scripts/release.py check-pr` compares
+the declaration with the actual base-relative changes and landed conventional
+markers. It checks known contradictions and demands an assessment for watched
+contracts; it does not infer compatibility. git-cliff alone calculates the
+version after merge, from reviewed commit markers.
+
+Use a plain `revert:` only when the resulting change has no shipped release
+impact. A revert that changes supported behavior or a public contract must use
+the `fix:`, `feat:`, or breaking marker that describes the resulting release,
+with matching PR impact and curated Unreleased notes.
 
 ### Cross-build toolchain
 
@@ -127,47 +141,73 @@ Keep native macOS, Linux and Windows execution claims separate from cross-target
 type checking. Missing native platform or installer evidence remains explicit
 and blocks claiming that platform's release qualification.
 
-### The runbook
+### Automated candidate and authorization
 
-Prerequisite: install the release-pinned git-cliff version
-(`cargo install git-cliff --version 2.13.1 --locked`, or the matching prebuilt
-binary from <https://github.com/orhun/git-cliff/releases>).
+1. A push to `main` runs `release-candidate.yml`. It verifies any existing
+   candidate's recorded hashes, installs git-cliff 2.13.1, and asks it for the
+   next version. An empty Unreleased section or a range containing only
+   `none`-impact/revert commits is a no-op before git-cliff runs; this is
+   important because pinned git-cliff 2.13.1 retains a patch floor even when
+   repository policy assigns no release impact. A merged candidate with no
+   corresponding tag is held for publication, not regenerated. A tag ends this
+   local pending guard; it is not by itself evidence that hosted publication or
+   installer verification completed, which the release evidence must establish.
+2. The preparer promotes the curated Unreleased body without replacing prose.
+   It preserves the staged v3 date as a candidate-cut date, never a publication
+   claim. It updates the root workspace version only when git-cliff advances it.
+   Cargo refreshes the lock, the release CLI runs `codeflow update`, and the
+   finalizer verifies every coupled version stamp and records hashes for the
+   bounded generated diff.
+3. A pinned create-pull-request action maintains the draft
+   `chore/release-codeflow` PR. Do not edit generated candidate files directly.
+   Apply an accepted note correction to `CHANGELOG.md` on `main`, then restore
+   or close the stale candidate so the guarded workflow can regenerate it.
+   The repository Actions setting must permit `GITHUB_TOKEN` to create PRs.
+   Current GitHub behavior creates approval-required PR workflow runs for token-
+   generated opened/synchronize/reopened events; a human must approve and observe
+   the checks on the exact head. Editing the impact declaration reruns its check.
+4. A **human merges** the exact candidate when every release check is complete.
+   The merge—not a label, branch name, model verdict, or moving ref—is the
+   authorization. `release-authorize.yml` proves the human event and current
+   merge shape, recreates the exact reviewed candidate ref if repository auto-
+   deletion removed it, then explicitly dispatches the cargo-dist workflow.
+5. cargo-dist's custom local-artifact job re-checks the candidate head, merge parents,
+   equal trees, tag target, and existing release state before global packaging or hosting. The
+   current repository permits merge commits and disables squash/rebase; a
+   different strategy is unsupported until this guard is reviewed. A wrong tag,
+   public release, foreign draft, or draft with any asset stops without overwrite.
+   The authority prepares an exact empty draft containing the reviewed curated
+   notes; a retry may reuse only that same candidate-bound empty draft. With no
+   external package publisher, cargo-dist uploads without `--clobber` and uses its
+   supported announce phase to create the tag and make the release public only
+   after every artifact is available. A provider mutation after the plan check is
+   a disclosed race and causes the generated commands to fail rather than replace
+   an asset or public release.
 
-```sh
-# 1. Refresh remote truth and choose an explicit remote-tracking base: latest
-#    main for a standalone release, or the accepted integration candidate after
-#    every required task has landed. Verify it is the reviewed commit.
-git fetch --prune --tags origin
-BASE=origin/main  # or origin/integration/EPC-NNN-<slug>
-EXPECTED="<reviewed-commit-sha>"
-test "$(git rev-parse "$BASE^{commit}")" = "$EXPECTED"
-git switch -c chore/release "$BASE"
+A failed or cancelled authority job blocks cargo-dist host and announce. The
+supported local-artifact extension lets platform compilation run concurrently,
+but global packaging and all hosting wait for authority. A `dry-run` validates
+the cargo-dist plan and may rehearse configured artifact builds, but never
+creates a draft, hosts, or announces. After announcement, a supported
+post-announce job compares the exact tag/source and public asset names, sizes,
+and SHA-256 digests with the same-run staged files. cargo-dist 0.32's generated
+jobs still receive the workflow's write-scoped token even though every checkout
+uses `persist-credentials: false`; this upstream permission breadth is a recorded
+limitation, not a claim that untrusted build code is least-privileged.
 
-# 2. Compute the next version from the conventional commits since the last tag:
-NEXT=$(git cliff --bumped-version)        # current history resolves to v3.0.0
-echo "$NEXT"
+If publication fails after a valid candidate merge, first resolve the recorded
+host collision and rerun the generated workflow against the preserved exact
+candidate branch and tag input. To abandon an unpublishable or stale merge, use
+a separate reviewed recovery PR: restore every recorded generated file from the
+candidate record's `source_commit`, move the promoted notes back under
+Unreleased, delete `.release/candidate.json`, and remove any owned empty draft.
+Never delete the record alone or let automation guess whether reviewed notes may
+be discarded. The next main run then calculates from the restored reviewed state.
 
-# 3. Bump the single workspace version (all three crates inherit it):
-#    edit Cargo.toml -> [workspace.package] version = "<NEXT without the leading v>"
-#    then refresh the lockfile:
-cargo build
-
-# 4. Generate a review aid; do not write it over the curated changelog:
-git cliff --unreleased --tag "$NEXT" > /tmp/codeflow-release-notes.md
-
-# 5. Promote the curated Unreleased body in CHANGELOG.md to a dated release,
-#    restore an empty Unreleased section above it, and reconcile the draft.
-#    Preserve human-written migrations and comparison links; rerunning this
-#    procedure must not duplicate a release section.
-
-# 6. Commit and open a PR:
-git commit -am "chore(release): $NEXT"
-git push -u origin chore/release   # then open the PR
-```
-
-- A **human merges** the release PR when required checks are evidenced green
-  (ADR-0006/0007; an infra-killed duplicate job is not a failed check) — agents never
-  merge to `main`.
+Before merging the candidate, re-verify the harness-parity claims against the
+currently installed harness versions—these surfaces move fast, and
+ADR-0008/ADR-0013/ADR-0014 and docs/adoption.md's cross-harness section pin a
+version that decays:
 - **Before tagging, re-verify the harness-parity claims** against the
   currently installed harness versions — these surfaces move fast, and
   ADR-0008/ADR-0013/ADR-0014 and docs/adoption.md's cross-harness section pin
@@ -209,25 +249,25 @@ git push -u origin chore/release   # then open the PR
     macOS/Linux architecture and the PowerShell installer on Windows; confirm
     WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
 
-  Record new verification in a current ADR/release note and update
-  docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
-- After merge, tag the release; the tag drives cargo-dist:
+Record new verification in a current ADR/release note and update
+docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
 
-  ```sh
-  git tag -a "$NEXT" -m "CodeFlow $NEXT" && git push origin "$NEXT"
-  ```
+The candidate workflow uses the repository's scoped `GITHUB_TOKEN`; it does not
+provision a PAT or publication credential. Hosted settings can still prevent
+token-created PRs, approval-required exact-head checks, workflow dispatch, or
+releases. Treat a zero-step or permission failure as absent evidence and repair
+the repository setting—never bypass the source and publication guards.
 
-  A real tag push triggers `.github/workflows/release.yml` — **no PAT or bot
-  needed**.
+### Historical bridge into v3
 
-### Why not release-plz / a bot?
-
-release-plz was evaluated and removed (ADR-0012): it is publish-centric and
-cannot `cargo package` this unpublished binary workspace. If full PR-bot
-automation (a bot opens the release PR for you) is wanted later, **release-please**
-fits — it has no crates.io coupling, unlike release-plz — but it needs a Personal
-Access Token so its tag triggers cargo-dist. Until then, the runbook above is the
-reliable, verifiable path.
+The live `v2.1.0` tag remains at
+`d70c6f17d4bf199a545c843856b3ded4681aff20` and is git-cliff's reachable
+calculation baseline. The published `source.tar.gz` independently identifies
+commit `3c3efdb91009361e18b0fabad699b5e875d4e4dd` and has SHA-256
+`1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb`.
+The release target and published source agree with each other, not with the
+current tag. The automation records all three facts, does not move the tag, and
+expects the already-staged `3.0.0` as the first candidate.
 
 ## Versioning in a project that consumes codeflow
 

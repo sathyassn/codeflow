@@ -8,13 +8,14 @@ named human release decision.
 
 ## 1. Scope and version
 
-- [ ] The release branch starts at the latest protected `main`, or at the clean
-      accepted integration candidate for one coherent epic, and contains only
-      the intended release changes.
+- [ ] The generated candidate records the exact current `main` source, contains
+      only allowlisted derived changes, and still matches its recorded hashes.
 - [ ] Conventional commits resolve to the intended SemVer bump; breaking
       changes and migrations are explicit.
 - [ ] `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, release notes, and the proposed
       `vX.Y.Z` tag agree.
+- [ ] The human-approved candidate head is the exact second parent of its main
+      merge, its recorded source is the first parent, and both trees agree.
 - [ ] Every shipped behavior change links its capability/epic and accepted ADR;
       documentation describes current behavior, not an aspiration.
 
@@ -66,6 +67,23 @@ named human release decision.
 
 - [ ] The pinned cargo-dist version regenerates the committed release workflow
       without drift.
+- [ ] The dispatched plan authority job revalidates the merged candidate and
+      fails closed on a wrong tag, public release, foreign draft, or any draft
+      asset before global packaging or hosting. It may create or reuse only the exact empty
+      candidate-bound draft with reviewed notes; generated upload/announce does
+      not clobber a later host conflict.
+- [ ] The generated host dependency rejects failed or cancelled authority; a
+      publishing run cannot skip it. Dry-run may build rehearsal artifacts but
+      creates no draft and performs no hosting or announcement. Exact-head
+      candidate PR checks are approved and green,
+      including after an edited release-impact declaration.
+- [ ] The post-announce verifier binds the public tag and release to the exact
+      candidate and matches every public asset name, size and SHA-256 digest to
+      the same-run staged artifact set, with no missing, duplicate or extra asset.
+- [ ] If the repository deletes a merged head branch, authorization restores
+      only the exact reviewed candidate before dispatch. A held candidate is
+      either retried unchanged or abandoned through the reviewed source-restore
+      procedure in `docs/releasing.md`; no record or notes are silently dropped.
 - [ ] `cargo dist plan --output-format=json` lists the two macOS archives, the
       Linux x86-64 archive, the Windows x86-64 MSVC archive, and both shell and
       PowerShell installers on native runners.

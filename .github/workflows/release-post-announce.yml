@@ -1,0 +1,52 @@
+name: verify published release
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: cargo-dist plan JSON for the completed announcement
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Download the exact run artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: artifacts-*
+          path: /tmp/release-artifacts
+          merge-multiple: true
+
+      - name: Verify public source and asset digests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PLAN_JSON: ${{ inputs.plan }}
+        run: |
+          tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::The completed cargo-dist plan has no announcement tag."
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/commits/tags/${tag}" --jq .sha > /tmp/release-tag-target
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            | jq '{draft: .draft, tag_name: .tag_name, name: .name, body: .body,
+                   target_commitish: .target_commitish,
+                   assets: [.assets[] | {name, size, state, digest}]}' \
+            > /tmp/release-api.json
+          jq -n --rawfile tag_target /tmp/release-tag-target \
+            --slurpfile release /tmp/release-api.json \
+            '{tag_target: ($tag_target | rtrimstr("\n")), release: $release[0]}' \
+            > /tmp/published-state.json
+          python3 scripts/release.py verify-published-assets \
+            --state /tmp/published-state.json \
+            --artifacts-dir /tmp/release-artifacts \
+            --candidate "$GITHUB_SHA" --tag "$tag"
