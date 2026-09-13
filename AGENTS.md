@@ -458,7 +458,9 @@ to reason from, not a rote checklist.
   from the template; a **human** merges on green CI — agents never merge to a
   protected branch. `codeflow integrate` remains a shipped product capability
   (the offline/no-remote sanctioned path) but is retired for this repo's
-  day-to-day landings.
+  day-to-day landings. CodeFlow release work additionally follows
+  `docs/releasing.md`; never substitute consumer guidance, move tags, or
+  publish from an ordinary task branch.
 - **Remote branch protection is unavailable here and not pursued** (private +
   GitHub Free → `codeflow remote protect` returns 403). The operative boundary on
   this repo is server-side CI plus the local git-hook / git-guard plane plus

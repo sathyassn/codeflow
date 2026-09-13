@@ -5,6 +5,18 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
+# Release publication is explicitly dispatched after the generated candidate
+# PR is merged. Pull-request artifact checks remain enabled.
+dispatch-releases = true
+# A repository-owned guard blocks every publishing build until the dispatched
+# source is proven to be the exact human-merged candidate.
+plan-jobs = ["./release-plan-authority"]
+# CodeFlow has no external package publisher. Deferring GitHub hosting to the
+# announce phase keeps the tag/release as cargo-dist's final operation.
+github-release = "announce"
+# The authority plan creates the empty draft after its exact-source checks.
+# cargo-dist uploads every artifact to that draft and alone makes it public.
+create-release = false
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
@@ -15,3 +27,8 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+
+[dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803"
+"actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+"actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"

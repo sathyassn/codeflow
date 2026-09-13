@@ -13,6 +13,25 @@ permissions:
   contents: read
 
 jobs:
+  release-impact:
+    name: release impact
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate reviewed release intent
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+        run: >-
+          python3 scripts/release.py check-pr
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --body-env CODEFLOW_PR_BODY
+
   gates:
     name: codeflow gates
     runs-on: ubuntu-latest

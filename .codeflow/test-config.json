@@ -72,6 +72,19 @@
       }
     },
     {
+      "name": "release-automation",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B scripts/test_release.py"
+        },
+        "full": {
+          "command": "python3 -B scripts/test_release.py"
+        }
+      }
+    },
+    {
       "name": "gate-parity",
       "enabled": true,
       "runner": "custom",

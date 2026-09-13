@@ -42,7 +42,9 @@ topo_order = false
 sort_commits = "oldest"
 # First match wins. feat -> Added, fix -> Fixed, etc.; merge commits are
 # non-conventional and dropped by filter_unconventional; chore/ci/test/build are
-# skipped as internal noise.
+# skipped from rendered notes. In git-cliff 2.13.1 this does not remove the
+# calculator's patch floor, so candidate preparation separately requires curated
+# Unreleased notes before invoking the sole version calculator.
 commit_parsers = [
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },

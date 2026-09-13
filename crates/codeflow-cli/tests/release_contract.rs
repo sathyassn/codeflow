@@ -47,6 +47,30 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         .collect::<Vec<_>>();
     assert!(installers.contains(&"shell"));
     assert!(installers.contains(&"powershell"));
+
+    assert_eq!(
+        dist.get("dispatch-releases").and_then(toml::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        dist.get("github-release").and_then(toml::Value::as_str),
+        Some("announce")
+    );
+    assert_eq!(
+        dist.get("create-release").and_then(toml::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        dist.get("plan-jobs")
+            .and_then(toml::Value::as_array)
+            .and_then(|jobs| jobs.first())
+            .and_then(toml::Value::as_str),
+        Some("./release-plan-authority")
+    );
+    assert!(
+        dist.get("host-jobs").is_none(),
+        "cargo-dist 0.32 host jobs do not gate its host job; authority must run in plan"
+    );
 }
 
 #[test]
@@ -57,10 +81,94 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         "runs-on: ${{ matrix.runner }}",
         "enable windows longpaths",
         "--output-format=json > plan-dist-manifest.json",
+        "workflow_dispatch:",
+        "custom-release-plan-authority:",
+        "uses: ./.github/workflows/release-plan-authority.yml",
+        "gh release upload",
+        "gh release edit",
     ] {
         assert!(
             workflow.contains(required),
             "generated workflow is missing {required}"
+        );
+    }
+    assert!(!workflow.contains("push:\n    tags:"));
+    let authority = workflow
+        .find("custom-release-plan-authority:")
+        .expect("generated plan authority must exist");
+    let builds = workflow
+        .find("build-local-artifacts:")
+        .expect("generated platform builds must exist");
+    assert!(
+        authority < builds,
+        "source authority must be generated before builds"
+    );
+    for pin in [
+        "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    ] {
+        assert!(
+            workflow.contains(pin),
+            "generated workflow is missing action pin {pin}"
+        );
+    }
+}
+
+#[test]
+fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary() {
+    let root = workspace_root();
+    let candidate = fs::read_to_string(root.join(".github/workflows/release-candidate.yml"))
+        .expect("candidate workflow must be readable");
+    for required in [
+        "group: codeflow-release-candidate",
+        "refs/heads/chore/release-codeflow",
+        "cargo install git-cliff --version 2.13.1 --locked",
+        "cargo install cargo-dist --version 0.32.0 --locked",
+        "python3 scripts/release.py guard-refresh",
+        "python3 scripts/release.py finalize",
+        "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1",
+    ] {
+        assert!(
+            candidate.contains(required),
+            "candidate workflow is missing {required}"
+        );
+    }
+
+    let authorize = fs::read_to_string(root.join(".github/workflows/release-authorize.yml"))
+        .expect("authorization workflow must be readable");
+    for required in [
+        "pull_request_target:",
+        "github.event.pull_request.merged == true",
+        "github.event.pull_request.head.ref == 'chore/release-codeflow'",
+        "collaborators/${login}/permission",
+        ".parents[1].sha == $head",
+        "scripts/release.py authorize-event",
+        "gh workflow run release.yml",
+        "-f tag=",
+    ] {
+        assert!(
+            authorize.contains(required),
+            "authorization workflow is missing {required}"
+        );
+    }
+
+    let authority = fs::read_to_string(root.join(".github/workflows/release-plan-authority.yml"))
+        .expect("plan authority workflow must be readable");
+    for required in [
+        "scripts/release.py verify-dispatch",
+        "scripts/release.py verify-review",
+        "scripts/release.py verify-host-state",
+        "scripts/release.py release-notes",
+        "gh release create",
+        "--draft",
+        "commits/${candidate}/pulls",
+        "pulls/${pr_number}",
+        "collaborators/${login}/permission",
+    ] {
+        assert!(
+            authority.contains(required),
+            "plan authority workflow is missing {required}"
         );
     }
 }
