@@ -6,7 +6,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
   pull-requests: read
 
 concurrency:
@@ -71,6 +71,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
 
       - name: Verify human-approved source
         id: authority
@@ -87,7 +88,23 @@ jobs:
       - name: Dispatch cargo-dist on the exact candidate branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          gh workflow run release.yml
-          --ref chore/release-codeflow
-          -f tag="${{ steps.authority.outputs.tag }}"
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          current=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/chore/release-codeflow" --jq .object.sha 2>/tmp/release-ref.error)
+          ref_rc=$?
+          set -e
+          if [ "$ref_rc" -eq 0 ]; then
+            if [ "$current" != "$CANDIDATE_SHA" ]; then
+              echo "::error::The candidate dispatch ref exists at an unreviewed commit."
+              exit 1
+            fi
+          elif grep -q 'HTTP 404' /tmp/release-ref.error; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref='refs/heads/chore/release-codeflow' -f sha="$CANDIDATE_SHA" >/dev/null
+          else
+            cat /tmp/release-ref.error >&2
+            exit "$ref_rc"
+          fi
+          gh workflow run release.yml --ref chore/release-codeflow \
+            -f tag="${{ steps.authority.outputs.tag }}"

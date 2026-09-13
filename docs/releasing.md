@@ -140,10 +140,13 @@ and blocks claiming that platform's release qualification.
 
 1. A push to `main` runs `release-candidate.yml`. It verifies any existing
    candidate's recorded hashes, installs git-cliff 2.13.1, and asks it for the
-   next version. An empty Unreleased section is a no-op before git-cliff runs;
-   this is important because pinned git-cliff 2.13.1 retains a patch floor even
-   when all conventional commits are filtered from rendered notes. A merged
-   candidate with no corresponding tag is held for publication, not regenerated.
+   next version. An empty Unreleased section or a range containing only
+   `none`-impact/revert commits is a no-op before git-cliff runs; this is
+   important because pinned git-cliff 2.13.1 retains a patch floor even when
+   those commits are filtered from rendered notes. A merged candidate with no
+   corresponding tag is held for publication, not regenerated. A tag ends this
+   local pending guard; it is not by itself evidence that hosted publication or
+   installer verification completed, which the release evidence must establish.
 2. The preparer promotes the curated Unreleased body without replacing prose.
    It preserves the staged v3 date as a candidate-cut date, never a publication
    claim. It updates the root workspace version only when git-cliff advances it.
@@ -154,12 +157,17 @@ and blocks claiming that platform's release qualification.
    `chore/release-codeflow` PR. Do not edit generated candidate files directly.
    Apply an accepted note correction to `CHANGELOG.md` on `main`, then restore
    or close the stale candidate so the guarded workflow can regenerate it.
+   The repository Actions setting must permit `GITHUB_TOKEN` to create PRs.
+   Current GitHub behavior creates approval-required PR workflow runs for token-
+   generated opened/synchronize/reopened events; a human must approve and observe
+   the checks on the exact head. Editing the impact declaration reruns its check.
 4. A **human merges** the exact candidate when every release check is complete.
    The merge—not a label, branch name, model verdict, or moving ref—is the
    authorization. `release-authorize.yml` proves the human event and current
-   merge shape, then explicitly dispatches the generated cargo-dist workflow.
-5. cargo-dist's custom plan job re-checks the candidate head, merge parents,
-   equal trees, tag target, and existing release state before publishing builds. The
+   merge shape, recreates the exact reviewed candidate ref if repository auto-
+   deletion removed it, then explicitly dispatches the cargo-dist workflow.
+5. cargo-dist's custom local-artifact job re-checks the candidate head, merge parents,
+   equal trees, tag target, and existing release state before global packaging or hosting. The
    current repository permits merge commits and disables squash/rebase; a
    different strategy is unsupported until this guard is reviewed. A wrong tag,
    public release, foreign draft, or draft with any asset stops without overwrite.
@@ -170,6 +178,23 @@ and blocks claiming that platform's release qualification.
    after every artifact is available. A provider mutation after the plan check is
    a disclosed race and causes the generated commands to fail rather than replace
    an asset or public release.
+
+A failed or cancelled authority job blocks cargo-dist host and announce. The
+supported local-artifact extension lets platform compilation run concurrently,
+but global packaging and all hosting wait for authority. A `dry-run` validates
+only the cargo-dist plan and never creates a draft. cargo-dist 0.32's generated
+jobs still receive the workflow's write-scoped token even though every checkout
+uses `persist-credentials: false`; this upstream permission breadth is a recorded
+limitation, not a claim that untrusted build code is least-privileged.
+
+If publication fails after a valid candidate merge, first resolve the recorded
+host collision and rerun the generated workflow against the preserved exact
+candidate branch and tag input. To abandon an unpublishable or stale merge, use
+a separate reviewed recovery PR: restore every recorded generated file from the
+candidate record's `source_commit`, move the promoted notes back under
+Unreleased, delete `.release/candidate.json`, and remove any owned empty draft.
+Never delete the record alone or let automation guess whether reviewed notes may
+be discarded. The next main run then calculates from the restored reviewed state.
 
 Before merging the candidate, re-verify the harness-parity claims against the
 currently installed harness versions—these surfaces move fast, and
@@ -221,9 +246,9 @@ docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
 
 The candidate workflow uses the repository's scoped `GITHUB_TOKEN`; it does not
 provision a PAT or publication credential. Hosted settings can still prevent
-token-created PR checks, workflow dispatch, or releases. Treat a zero-step or
-permission failure as absent evidence and repair the repository setting—never
-bypass the source and publication guards.
+token-created PRs, approval-required exact-head checks, workflow dispatch, or
+releases. Treat a zero-step or permission failure as absent evidence and repair
+the repository setting—never bypass the source and publication guards.
 
 ### Historical bridge into v3
 

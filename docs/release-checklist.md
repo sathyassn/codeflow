@@ -69,9 +69,17 @@ named human release decision.
       without drift.
 - [ ] The dispatched plan authority job revalidates the merged candidate and
       fails closed on a wrong tag, public release, foreign draft, or any draft
-      asset before cargo-dist builds. It may create or reuse only the exact empty
+      asset before global packaging or hosting. It may create or reuse only the exact empty
       candidate-bound draft with reviewed notes; generated upload/announce does
       not clobber a later host conflict.
+- [ ] The generated host dependency rejects failed or cancelled authority; a
+      publishing run cannot skip it. Dry-run performs plan-only validation and
+      creates no draft. Exact-head candidate PR checks are approved and green,
+      including after an edited release-impact declaration.
+- [ ] If the repository deletes a merged head branch, authorization restores
+      only the exact reviewed candidate before dispatch. A held candidate is
+      either retried unchanged or abandoned through the reviewed source-restore
+      procedure in `docs/releasing.md`; no record or notes are silently dropped.
 - [ ] `cargo dist plan --output-format=json` lists the two macOS archives, the
       Linux x86-64 archive, the Windows x86-64 MSVC archive, and both shell and
       PowerShell installers on native runners.

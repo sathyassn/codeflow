@@ -119,6 +119,10 @@ def commit_impact(base: str, head: str, *, cwd: Path = ROOT) -> str:
     raw = git("log", "--no-merges", "--format=%s%x1f%b%x1e", f"{base}..{head}", cwd=cwd)
     impact = "none"
     for entry in raw.split("\x1e"):
+        # git terminates each formatted record with our separator and then its
+        # own newline. Remove only that record boundary; body whitespace stays
+        # intact for BREAKING CHANGE detection.
+        entry = entry.lstrip("\r\n")
         if not entry.strip():
             continue
         subject, _, body = entry.partition("\x1f")
@@ -372,8 +376,11 @@ def prepare(args: argparse.Namespace) -> None:
     if not notes:
         print(json.dumps({"status": "none"}))
         return
-    validate_provenance(config, cwd=args.root)
     comparison_tag, comparison_commit = latest_stable_tag(cwd=args.root)
+    if commit_impact(comparison_commit, "HEAD", cwd=args.root) == "none":
+        print(json.dumps({"status": "none", "reason": "no release-impacting commits"}))
+        return
+    validate_provenance(config, cwd=args.root)
     tag = cliff_version(args.git_cliff, cwd=args.root)
     if semver(tag) <= semver(comparison_tag):
         fail(f"git-cliff result {tag} does not advance reachable {comparison_tag}")
@@ -410,9 +417,28 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def version_stamps(root: Path) -> dict[str, str]:
-    cargo_version = workspace_version(root / "Cargo.toml")
-    lock = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))
+VERSION_STAMP_PATHS = [
+    "Cargo.toml",
+    "Cargo.lock",
+    ".codeflow/project.toml",
+    ".codeflow/manifest.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+]
+
+
+def validate_version_stamps(files: dict[str, bytes]) -> str:
+    try:
+        cargo = tomllib.loads(files["Cargo.toml"].decode("utf-8"))
+        cargo_version = cargo["workspace"]["package"]["version"]
+        lock = tomllib.loads(files["Cargo.lock"].decode("utf-8"))
+        project = tomllib.loads(files[".codeflow/project.toml"].decode("utf-8"))
+        manifest = json.loads(files[".codeflow/manifest.json"])
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
+        fail(f"cannot parse coupled version stamps: {error}")
+    if not isinstance(cargo_version, str):
+        fail("workspace version must be a string")
+    semver(cargo_version)
     own = {
         package["name"]: package["version"]
         for package in lock.get("package", [])
@@ -420,15 +446,24 @@ def version_stamps(root: Path) -> dict[str, str]:
     }
     if set(own.values()) != {cargo_version} or len(own) != 3:
         fail(f"workspace package versions disagree: Cargo={cargo_version}, lock={own}")
-    project = tomllib.loads((root / ".codeflow/project.toml").read_text(encoding="utf-8"))
     scaffold = project.get("scaffold_version")
     if scaffold != cargo_version:
         fail(f"managed scaffold stamp {scaffold!r} disagrees with {cargo_version}")
+    manifest_scaffold = manifest.get("scaffold_version") if isinstance(manifest, dict) else None
+    if manifest_scaffold != cargo_version:
+        fail(f"managed manifest stamp {manifest_scaffold!r} disagrees with {cargo_version}")
+    marker = f"<!-- codeflow:managed:begin scaffold={cargo_version} -->".encode()
     for name in ["AGENTS.md", "CLAUDE.md"]:
-        text = (root / name).read_text(encoding="utf-8")
-        if f'version="{cargo_version}"' not in text:
+        if marker not in files[name]:
             fail(f"{name} managed version stamp disagrees with {cargo_version}")
-    return {"workspace": cargo_version, "scaffold": str(scaffold)}
+    return cargo_version
+
+
+def version_stamps(root: Path) -> dict[str, str]:
+    version = validate_version_stamps(
+        {path: (root / path).read_bytes() for path in VERSION_STAMP_PATHS}
+    )
+    return {"workspace": version, "scaffold": version}
 
 
 def diff_paths(source: str, *, cwd: Path) -> list[str]:
@@ -528,15 +563,11 @@ def verify_ref_candidate(ref: str, config: dict[str, Any], record: dict[str, Any
         actual = hashlib.sha256(file_at_ref(ref, path, cwd=cwd)).hexdigest()
         if actual != expected_hash:
             fail(f"candidate file {path} was edited after generation")
-    cargo = tomllib.loads(file_at_ref(ref, "Cargo.toml", cwd=cwd).decode("utf-8"))
-    if cargo.get("workspace", {}).get("package", {}).get("version") != version:
-        fail("candidate workspace version disagrees with its record")
-    project = tomllib.loads(file_at_ref(ref, ".codeflow/project.toml", cwd=cwd).decode("utf-8"))
-    if project.get("scaffold_version") != version:
-        fail("candidate scaffold version disagrees with its record")
-    for path in ["AGENTS.md", "CLAUDE.md"]:
-        if f'version="{version}"'.encode() not in file_at_ref(ref, path, cwd=cwd):
-            fail(f"candidate {path} managed version disagrees with its record")
+    actual_version = validate_version_stamps(
+        {path: file_at_ref(ref, path, cwd=cwd) for path in VERSION_STAMP_PATHS}
+    )
+    if actual_version != version:
+        fail("candidate coupled version stamps disagree with its record")
     changelog = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode("utf-8")
     _, _, unreleased = changelog_parts(changelog)
     if unreleased or not re.search(rf"(?m)^## \[{re.escape(version)}\](?: - \d{{4}}-\d{{2}}-\d{{2}})?$", changelog):
@@ -793,6 +824,7 @@ def parser() -> argparse.ArgumentParser:
     notes.add_argument("--tag", required=True)
     notes.add_argument("--output", type=Path, required=True)
     notes.set_defaults(func=write_release_notes)
+
     return value
 
 

@@ -61,15 +61,19 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         Some(false)
     );
     assert_eq!(
-        dist.get("plan-jobs")
+        dist.get("local-artifacts-jobs")
             .and_then(toml::Value::as_array)
             .and_then(|jobs| jobs.first())
             .and_then(toml::Value::as_str),
         Some("./release-plan-authority")
     );
+    assert_eq!(
+        dist.get("pr-run-mode").and_then(toml::Value::as_str),
+        Some("plan")
+    );
     assert!(
         dist.get("host-jobs").is_none(),
-        "cargo-dist 0.32 host jobs do not gate its host job; authority must run in plan"
+        "cargo-dist 0.32 host jobs do not gate its host job; authority must be a local artifact"
     );
 }
 
@@ -84,6 +88,7 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         "workflow_dispatch:",
         "custom-release-plan-authority:",
         "uses: ./.github/workflows/release-plan-authority.yml",
+        "plan: ${{ needs.plan.outputs.val }}",
         "gh release upload",
         "gh release edit",
     ] {
@@ -93,15 +98,29 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         );
     }
     assert!(!workflow.contains("push:\n    tags:"));
-    let authority = workflow
-        .find("custom-release-plan-authority:")
-        .expect("generated plan authority must exist");
-    let builds = workflow
-        .find("build-local-artifacts:")
-        .expect("generated platform builds must exist");
+    assert!(workflow.contains("  custom-release-plan-authority:\n"));
+    let host = workflow
+        .split("  host:\n")
+        .nth(1)
+        .expect("generated host job must exist")
+        .split("\n  announce:")
+        .next()
+        .expect("host job must precede announce");
+    assert!(host.contains("- custom-release-plan-authority"));
+    assert!(host.contains("needs.custom-release-plan-authority.result == 'skipped'"));
+    assert!(host.contains("needs.custom-release-plan-authority.result == 'success'"));
+    assert!(!host.contains("result == 'failure'"));
+    assert!(!host.contains("result == 'cancelled'"));
+    let custom = workflow
+        .split("  custom-release-plan-authority:\n")
+        .nth(1)
+        .expect("custom authority job must exist")
+        .split("\n  # Build and package")
+        .next()
+        .expect("custom authority must precede global artifacts");
     assert!(
-        authority < builds,
-        "source authority must be generated before builds"
+        custom.contains("needs.plan.outputs.publishing == 'true'"),
+        "a publishing run cannot skip authority"
     );
     for pin in [
         "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
@@ -125,6 +144,10 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "refs/heads/chore/release-codeflow",
         "cargo install git-cliff --version 2.13.1 --locked",
         "cargo install cargo-dist --version 0.32.0 --locked",
+        "persist-credentials: false",
+        "GIT_CONFIG_COUNT=1",
+        "GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+        "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
         "python3 scripts/release.py guard-refresh",
         "python3 scripts/release.py finalize",
         "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1",
@@ -147,6 +170,8 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "scripts/release.py authorize-event",
         "gh workflow run release.yml",
         "-f tag=",
+        "git/ref/heads/chore/release-codeflow",
+        "refs/heads/chore/release-codeflow",
     ] {
         assert!(
             authorize.contains(required),
@@ -163,10 +188,16 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "scripts/release.py release-notes",
         "gh release create",
         "--draft",
+        "github.event.inputs.tag == 'dry-run'",
+        "github.event.inputs.tag != 'dry-run'",
+        "plan_tag=",
+        "REQUESTED_TAG:",
         "commits/${candidate}/pulls",
         "pulls/${pr_number}",
         "collaborators/${login}/permission",
         "select(.user.type == \"User\")",
+        "GIT_CONFIG_COUNT=1",
+        "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
     ] {
         assert!(
             authority.contains(required),
@@ -179,6 +210,15 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
 fn strict_repository_gate_installs_its_declared_coverage_tool() {
     let workflow = fs::read_to_string(workspace_root().join(".github/workflows/codeflow-ci.yml"))
         .expect("repository CI workflow must be readable");
+    assert!(workflow.contains("types: [opened, synchronize, reopened, edited]"));
+    let release_impact = workflow
+        .split("  release-impact:\n")
+        .nth(1)
+        .expect("release-impact job must exist")
+        .split("\n  gates:")
+        .next()
+        .expect("release-impact must precede gates");
+    assert!(release_impact.contains("actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"));
     let gates = workflow
         .split("\n  rust:")
         .next()

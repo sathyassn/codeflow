@@ -45,11 +45,14 @@ its first parent, and the merge and candidate trees to match. If repository
 merge policy changes, the guard fails closed until a reviewed strategy replaces
 this proof. cargo-dist 0.32.0 is configured for explicit dispatch and remains
 the sole tag, release, installer, and artifact publisher. Its generated
-workflow calls the authority before any publishing build. That authority creates
+workflow makes global packaging and hosting depend on a supported local-artifact
+authority; platform compilation may overlap but cannot publish. That authority creates
 or reuses only an exact candidate-bound empty draft with the reviewed curated
 notes; wrong tags, public releases, foreign drafts, and partial assets block.
 cargo-dist uploads without clobbering and its supported announce phase makes the
-tag and completed release public only after all artifacts are available.
+tag and completed release public only after all artifacts are available. Dry-run
+is plan-only. The exact candidate ref is restored after repository auto-deletion
+only after the merge, tree, reviewer and permission checks succeed.
 
 ## Consequences
 
@@ -58,7 +61,14 @@ authority. A changing candidate invalidates review naturally through a new
 head. A merged-but-unpublished candidate holds later preparation instead of
 silently changing its version or source. Hosting retries are deliberately
 conservative: an exact unpublished tag or the exact owned empty draft can resume,
-but a conflicting draft or partial assets require explicit investigation.
+but a conflicting draft or partial assets require explicit investigation. A
+stale merged candidate is recovered only by a reviewed restoration of its
+recorded source bytes and curated notes; deleting its record alone is invalid.
+
+The generated cargo-dist 0.32 build jobs retain the workflow's write-scoped
+token environment, although checkout credentials are not persisted. That
+upstream permission breadth and unexecuted hosted publication remain explicit
+limitations; they are not described as least-privilege or release evidence.
 
 Syntactic checks cannot prove semantic compatibility, platform qualification,
 or release readiness. Independent review, the repository gates, native

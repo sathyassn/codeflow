@@ -20,9 +20,17 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Guard reviewed candidate output
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+          echo "::add-mask::$GIT_CONFIG_VALUE_0"
           set +e
           git ls-remote --exit-code --heads origin refs/heads/chore/release-codeflow > /tmp/candidate-ref
           remote_rc=$?
@@ -36,6 +44,7 @@ jobs:
             echo "::error::Could not inspect the remote release candidate; refusing to treat a network/auth error as absence."
             exit "$remote_rc"
           fi
+          unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
       - name: Check repository candidate-PR permission
         env:
@@ -55,9 +64,16 @@ jobs:
         run: cargo install cargo-dist --version 0.32.0 --locked
 
       - name: Fetch verified historical published source
-        run: >-
-          git fetch --no-tags origin
-          3c3efdb91009361e18b0fabad699b5e875d4e4dd
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+          echo "::add-mask::$GIT_CONFIG_VALUE_0"
+          git fetch --no-tags origin 3c3efdb91009361e18b0fabad699b5e875d4e4dd
+          unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
       - name: Exercise the pinned calculator contract
         env:

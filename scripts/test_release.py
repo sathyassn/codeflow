@@ -47,10 +47,13 @@ class Repository:
             '[[package]]\nname = "codeflow-present"\nversion = "2.0.0"\n',
         )
         self.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- reviewed note\n\n## [2.0.0] - 2026-01-02\n\n- staged prose\n")
-        self.write("AGENTS.md", '<!-- codeflow:managed:start version="2.0.0" -->\n')
-        self.write("CLAUDE.md", '<!-- codeflow:managed:start version="2.0.0" -->\n')
+        self.write("AGENTS.md", "<!-- codeflow:managed:begin scaffold=2.0.0 -->\n")
+        self.write("CLAUDE.md", "<!-- codeflow:managed:begin scaffold=2.0.0 -->\n")
         self.write(".codeflow/project.toml", 'scaffold_version = "2.0.0"\ntier = "full"\n')
-        self.write(".codeflow/manifest.json", "{}\n")
+        self.write(
+            ".codeflow/manifest.json",
+            '{"schema_version": 1, "scaffold_version": "2.0.0", "files": {}}\n',
+        )
         self.write("docs/releasing.md", "release policy\n")
         self.write("assets/contract.txt", "contract\n")
         self.commit("chore(release): v1.0.0")
@@ -62,7 +65,7 @@ class Repository:
         self.write("fake-git-cliff", "#!/bin/sh\nprintf 'v2.0.0\\n'\n")
         self.fake_cliff.chmod(0o755)
         self.write_config()
-        self.commit("chore: configure release fixture")
+        self.commit("feat: configure release fixture")
         self.source = command(self.root, "git", "rev-parse", "HEAD")
 
     def cleanup(self) -> None:
@@ -160,6 +163,22 @@ class ReleaseImpactTests(unittest.TestCase):
         self.check(base, major, self.body("major", contract="breaking", migration="docs/migrate.md"))
         self.assertEqual(release.commit_impact(patch, major, cwd=self.repo.root), "major")
 
+    def test_multi_commit_impact_reads_every_record_subject(self) -> None:
+        base, feature = self.add_commit("feat: add route", "feature.txt")
+        _, fix = self.add_commit("fix: repair route", "fix.txt")
+        self.assertEqual(release.commit_impact(base, fix, cwd=self.repo.root), "minor")
+
+        _, major = self.add_commit("feat!: replace route", "major.txt")
+        _, later_fix = self.add_commit("fix: follow up", "later-fix.txt")
+        self.assertEqual(release.commit_impact(feature, later_fix, cwd=self.repo.root), "major")
+
+        base, older_feature = self.add_commit("feat: expose another route", "older-feature.txt")
+        _, chore_one = self.add_commit("chore: tidy one", "chore-one.txt")
+        _, chore_two = self.add_commit("docs: tidy two", "chore-two.txt")
+        self.assertEqual(
+            release.commit_impact(base, chore_two, cwd=self.repo.root), "minor"
+        )
+
     def test_revert_and_all_none_are_none(self) -> None:
         base, head = self.add_commit("revert: undo internal experiment", "internal.txt")
         body = self.body("none", contract="not-applicable").replace(
@@ -183,6 +202,13 @@ class ReleaseImpactTests(unittest.TestCase):
         base, head = self.add_commit("fix: shipped defect", "internal.txt")
         with self.assertRaisesRegex(release.ReleaseError, "CHANGELOG"):
             self.check(base, head, self.body("patch", contract="not-applicable"))
+
+    def test_none_allows_historical_changelog_correction(self) -> None:
+        base = command(self.repo.root, "git", "rev-parse", "HEAD")
+        changelog = (self.repo.root / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.repo.write("CHANGELOG.md", changelog.replace("staged prose", "corrected prose"))
+        head = self.repo.commit("docs: correct historical release note")
+        self.check(base, head, self.body("none", contract="compatible"))
 
 
 class CandidateTests(unittest.TestCase):
@@ -221,6 +247,26 @@ class CandidateTests(unittest.TestCase):
         release.prepare(self.repo.args(git_cliff="missing-git-cliff", date="2026-02-03"))
         self.assertFalse(self.repo.record.exists())
 
+    def test_all_none_or_revert_history_does_not_invoke_patch_floor(self) -> None:
+        command(self.repo.root, "git", "tag", "v2.0.0")
+        self.repo.write(
+            "CHANGELOG.md",
+            "# Changelog\n\n## [Unreleased]\n\n- internal note\n\n"
+            "## [2.0.0] - 2026-01-02\n\n- staged\n",
+        )
+        self.repo.commit("chore: internal bookkeeping")
+        release.prepare(
+            self.repo.args(git_cliff="missing-git-cliff", date="2026-02-03")
+        )
+        self.assertFalse(self.repo.record.exists())
+
+        self.repo.write("internal.txt", "reverted\n")
+        self.repo.commit("revert: undo internal bookkeeping")
+        release.prepare(
+            self.repo.args(git_cliff="missing-git-cliff", date="2026-02-03")
+        )
+        self.assertFalse(self.repo.record.exists())
+
     def test_next_cycle_uses_new_reachable_tag_not_bootstrap_again(self) -> None:
         candidate = self.repo.prepare_and_finalize()
         command(self.repo.root, "git", "branch", "chore/release-codeflow", candidate)
@@ -239,6 +285,40 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(record["comparison"]["tag"], "v2.0.0")
         self.assertEqual(record["comparison"]["commit"], candidate)
         self.assertEqual(release.workspace_version(self.repo.root / "Cargo.toml"), "2.0.1")
+
+    def test_stale_merged_candidate_blocks_until_reviewed_source_restore(self) -> None:
+        candidate = self.repo.prepare_and_finalize()
+        command(self.repo.root, "git", "branch", "chore/release-codeflow", candidate)
+        command(self.repo.root, "git", "switch", "-q", "main")
+        command(self.repo.root, "git", "reset", "--hard", "-q", self.repo.source)
+        self.repo.write("concurrent.txt", "landed after candidate preparation\n")
+        self.repo.commit("fix: concurrent main change")
+        command(
+            self.repo.root,
+            "git",
+            "merge",
+            "--no-ff",
+            "-q",
+            "chore/release-codeflow",
+            "-m",
+            "Merge stale release",
+        )
+        with self.assertRaisesRegex(release.ReleaseError, "equal-tree main merge"):
+            release.prepare(
+                self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-04")
+            )
+
+        record = release.load_json(self.repo.record)
+        for path in record["generated_files"]:
+            (self.repo.root / path).write_bytes(
+                release.file_at_ref(record["source_commit"], path, cwd=self.repo.root)
+            )
+        self.repo.record.unlink()
+        self.repo.commit("chore(release): restore abandoned candidate")
+        release.prepare(
+            self.repo.args(git_cliff=str(self.repo.fake_cliff), date="2026-02-04")
+        )
+        self.assertEqual(release.load_json(self.repo.record)["tag"], "v2.0.0")
 
     def test_unknown_or_moved_comparison_tag_fails_closed(self) -> None:
         config = release.load_config(self.repo.config)
@@ -296,10 +376,29 @@ class CandidateTests(unittest.TestCase):
         record["version"] = "2.0.1"
         release.write_json(self.repo.record, record)
         forged = self.repo.commit("chore: forge candidate version")
-        with self.assertRaisesRegex(release.ReleaseError, "workspace version"):
+        with self.assertRaisesRegex(release.ReleaseError, "coupled version stamps"):
             release.verify_ref_candidate(
                 forged, release.load_config(self.repo.config), record, cwd=self.repo.root
             )
+
+    def test_lock_and_manifest_version_drift_are_rejected(self) -> None:
+        files = {
+            path: (self.repo.root / path).read_bytes()
+            for path in release.VERSION_STAMP_PATHS
+        }
+        files["Cargo.lock"] = files["Cargo.lock"].replace(b'version = "2.0.0"', b'version = "9.0.0"', 1)
+        with self.assertRaisesRegex(release.ReleaseError, "workspace package versions"):
+            release.validate_version_stamps(files)
+
+        files = {
+            path: (self.repo.root / path).read_bytes()
+            for path in release.VERSION_STAMP_PATHS
+        }
+        files[".codeflow/manifest.json"] = files[".codeflow/manifest.json"].replace(
+            b'"scaffold_version": "2.0.0"', b'"scaffold_version": "9.0.0"'
+        )
+        with self.assertRaisesRegex(release.ReleaseError, "manifest stamp"):
+            release.validate_version_stamps(files)
 
 
 class AuthorizationTests(unittest.TestCase):

@@ -2,9 +2,18 @@ name: release source authority
 
 on:
   workflow_call:
+    inputs:
+      plan:
+        description: cargo-dist plan JSON for the requested run
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: codeflow-release-publication
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -13,17 +22,39 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Verify merged candidate and existing host state
-        if: github.event_name != 'pull_request'
+      - name: Verify dry-run remains non-publishing
+        if: github.event.inputs.tag == 'dry-run'
+        env:
+          PLAN_JSON: ${{ inputs.plan }}
+        run: |
+          printf '%s' "$PLAN_JSON" | jq -e '.ci.github.pr_run_mode == "plan"' >/dev/null
+          echo "Dry-run plan accepted; no tag, draft, asset or release was changed."
+
+      - name: Verify merged candidate and stage reviewed draft
+        if: github.event.inputs.tag != 'dry-run'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PLAN_JSON: ${{ inputs.plan }}
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
         run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+          echo "::add-mask::$GIT_CONFIG_VALUE_0"
           git fetch origin main --tags
+          unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
           authority=$(python3 scripts/release.py verify-dispatch --candidate-ref "$GITHUB_SHA" --main-ref origin/main)
           printf '%s\n' "$authority"
           tag=$(printf '%s' "$authority" | jq -r .tag)
           candidate=$(printf '%s' "$authority" | jq -r .candidate)
+          plan_tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
+          if [ "$tag" != "$REQUESTED_TAG" ] || [ "$plan_tag" != "$tag" ] || [ "$candidate" != "$GITHUB_SHA" ]; then
+            echo "::error::Requested tag, cargo-dist plan and verified candidate disagree."
+            exit 1
+          fi
           python3 scripts/release.py release-notes \
             --tag "$tag" --candidate "$candidate" --output /tmp/release-notes.md
 
