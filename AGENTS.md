@@ -64,8 +64,7 @@ it as non-trivial.
 | Present a complex result for interactive review | `/cf-present` — when one coherent visual surface and anchored feedback materially improve a substantial explanation, comparison, plan, decision, evidence set, diff, or review; author **this session's** subject in the catalog (runtime owns chrome and Comment); keep simple answers in chat; never treat the utility as product UI or durable documentation; never clone the design-exploration board |
 | Repository guide lifecycle | `/cf-docs-portal` inside the orchestrated flow — opt-in source-linked utility docs; no Comment; preserve Markdown authority and local edits; explicit whole-runtime transfer; verify evidence and rendered experience |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
-| Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
-| Release policy, impact or publication | Project-owned release instructions, with `cf-ship/references/release-policy.md` for assessment and authority; `/cf-customize` offers adoption, never automatic publication |
+| Ship or assess releases | `/cf-ship` — docs/PR gates and `references/release-policy.md`; the project's policy governs releases |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |

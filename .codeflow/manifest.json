@@ -11,7 +11,7 @@
     ".agents/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "b7be0ad21fd374295f366cfe5a2764c7c57df2d3271ff3b1a9e38edc6a9e9ede",
+      "sha256": "85699f740a34c2328c9d1edf19579b26e45786a38825b1e1fa53637dc445c505",
       "exec": false
     },
     ".agents/skills/cf-delegate/SKILL.md": {
@@ -425,7 +425,7 @@
     ".claude/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "b7be0ad21fd374295f366cfe5a2764c7c57df2d3271ff3b1a9e38edc6a9e9ede",
+      "sha256": "85699f740a34c2328c9d1edf19579b26e45786a38825b1e1fa53637dc445c505",
       "exec": false
     },
     ".claude/skills/cf-delegate/SKILL.md": {
@@ -893,7 +893,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "2cf143e08fc267a4d13a4c88f668b4af39aeacdaa310dfbfb6a6009cdcecb474",
+      "sha256": "80ca2a93c55e39994fe577a3d91346313f9e48bddb80d2d1a9c203ee10b004b0",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
@@ -917,7 +917,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "b2c2f639f2e6b5c187115711641fbdd28900bf108276bdcf833102f141fbb93e",
+      "sha256": "8cec825af764c3a9aca8147abaa006d83cb4c6a8ee6a7da934068f4cede41562",
       "exec": false
     },
     "CLAUDE.md": {
