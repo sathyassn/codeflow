@@ -67,6 +67,14 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
+For an evaluator-pinned CodeFlow executable, a login shell can reset `PATH`.
+Set any task-scoped candidate `PATH` in the actual launched shell after login
+startup, then check the public command resolution and executable SHA-256 in
+the child environment. Probe a generated hook in that same environment and
+retain its outcome; this binds the probed invocation, not every future hook.
+A parent-shell lookup or absolute top-level CLI invocation alone does not
+bind bare `codeflow` in hooks. Do not change the user's global installation.
+
 Invoke the Claude primary using the selector and default effort from
 `../../cf-model-orchestrator/resources/current-ensemble.json`; workers take
 escalation. When
@@ -111,7 +119,12 @@ id in a fresh state directory — records are never edited.
 Collect delegated worker results before the primary returns its final answer.
 For peer-dependent turns, verify a supported public foreground native return
 within the host turn; an intended wait flag is not proof. Never call plugin-internal
-scripts or cached private paths. A worker that resumes the primary
+scripts or cached private paths. Keep host-side monitoring in that accepted
+foreground turn: do not use Claude Bash `run_in_background` watchers or rely on
+their task notifications to resume it. A notification can enter as a new,
+unarmed `UserPromptSubmit` and be rejected. A persistent native peer process
+behind the dedicated pane is permitted; collect its result in-turn. A worker
+that resumes the primary
 after its terminal result can emit an unsolicited second Stop; schema-v2 cannot
 correlate that continuation and deliberately poisons the run. A terminal
 message saying work is still running is incomplete, not a successful handoff.

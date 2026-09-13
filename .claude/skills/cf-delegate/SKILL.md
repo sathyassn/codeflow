@@ -105,8 +105,8 @@ The plugin's commands cover both modes:
 - **Multi-round:** `/codex:transfer` — a persistent codex thread for the
   back-and-forth; follow-ups resume it instead of starting fresh.
 
-Collect required Codex peer in-turn via public foreground or qualified native
-fallback; `--wait` alone is not proof.
+Collect peer in-turn via public foreground/qualified native fallback; no host
+`run_in_background` watcher. See `resources/claude-turn-completion.md`.
 
 Start every delegated plugin prompt with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
