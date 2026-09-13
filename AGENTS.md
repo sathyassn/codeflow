@@ -454,13 +454,11 @@ to reason from, not a rote checklist.
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` must be green
   before push (workspace lints: clippy all = deny, pedantic = warn). Edition
   2021, workspace-managed dependency versions in the root `Cargo.toml`.
-- **This repo lands via PRs only (ADR-0006):** push a feature branch, open a PR
-  from the template; a **human** merges on green CI — agents never merge to a
-  protected branch. `codeflow integrate` remains a shipped product capability
-  (the offline/no-remote sanctioned path) but is retired for this repo's
-  day-to-day landings. CodeFlow release work additionally follows
-  `docs/releasing.md`; never substitute consumer guidance, move tags, or
-  publish from an ordinary task branch.
+- **This repo lands only through PRs (ADR-0006):** use a feature branch, the PR
+  template, green CI and a human merge; agents never merge protected branches.
+  `codeflow integrate` remains shipped for offline/no-remote use, not this
+  repo's daily path. Releases follow `docs/releasing.md`; ordinary task branches
+  never publish or move tags.
 - **Remote branch protection is unavailable here and not pursued** (private +
   GitHub Free → `codeflow remote protect` returns 403). The operative boundary on
   this repo is server-side CI plus the local git-hook / git-guard plane plus

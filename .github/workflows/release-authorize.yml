@@ -32,7 +32,7 @@ jobs:
           gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
             | jq 'add' > /tmp/release-reviews.json
           printf '{}\n' > /tmp/release-permissions.json
-          for login in $(jq -r '[.[].user.login] | unique[]' /tmp/release-reviews.json); do
+          for login in $(jq -r '[.[] | select(.user.type == "User") | .user.login] | unique[]' /tmp/release-reviews.json); do
             permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .permission)
             jq --arg login "$login" --arg permission "$permission" \
               '. + {($login): $permission}' /tmp/release-permissions.json > /tmp/release-permissions.next

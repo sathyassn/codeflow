@@ -388,6 +388,37 @@ class AuthorizationTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "exact head"):
             release.verify_review_data(pull, [approval], {"reviewer": "read"}, self.candidate, "owner/repo")
 
+    def test_bot_review_is_irrelevant_when_current_human_approval_exists(self) -> None:
+        pull = {
+            "state": "closed",
+            "merged": True,
+            "merged_by": {"login": "maintainer", "type": "User"},
+            "user": {"login": "candidate-author", "type": "User"},
+            "head": {"sha": self.candidate, "repo": {"full_name": "owner/repo"}},
+            "base": {"repo": {"full_name": "owner/repo"}},
+        }
+        approval = {
+            "id": 1,
+            "state": "APPROVED",
+            "commit_id": self.candidate,
+            "submitted_at": "2026-02-03T00:00:00Z",
+            "user": {"login": "reviewer", "type": "User"},
+        }
+        bot = {
+            "id": 2,
+            "state": "CHANGES_REQUESTED",
+            "commit_id": self.candidate,
+            "submitted_at": "2026-02-04T00:00:00Z",
+            "user": {"login": "release-bot", "type": "Bot"},
+        }
+        release.verify_review_data(
+            pull,
+            [approval, bot],
+            {"reviewer": "write"},
+            self.candidate,
+            "owner/repo",
+        )
+
     def test_moving_branch_without_merged_head_is_not_authority(self) -> None:
         command(self.repo.root, "git", "switch", "-q", "chore/release-codeflow")
         self.repo.write("CHANGELOG.md", (self.repo.root / "CHANGELOG.md").read_text() + "stale\n")

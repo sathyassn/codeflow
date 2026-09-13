@@ -142,6 +142,7 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "github.event.pull_request.merged == true",
         "github.event.pull_request.head.ref == 'chore/release-codeflow'",
         "collaborators/${login}/permission",
+        "select(.user.type == \"User\")",
         ".parents[1].sha == $head",
         "scripts/release.py authorize-event",
         "gh workflow run release.yml",
@@ -165,6 +166,7 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "commits/${candidate}/pulls",
         "pulls/${pr_number}",
         "collaborators/${login}/permission",
+        "select(.user.type == \"User\")",
     ] {
         assert!(
             authority.contains(required),
