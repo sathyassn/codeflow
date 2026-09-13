@@ -109,7 +109,9 @@ id in a fresh state directory — records are never edited.
 ## Sequential turns
 
 Collect delegated worker results before the primary returns its final answer.
-Prefer foreground workers on this adapter. A worker that resumes the primary
+For peer-dependent turns, verify a supported public foreground native return
+within the host turn; an intended wait flag is not proof. Never call plugin-internal
+scripts or cached private paths. A worker that resumes the primary
 after its terminal result can emit an unsolicited second Stop; schema-v2 cannot
 correlate that continuation and deliberately poisons the run. A terminal
 message saying work is still running is incomplete, not a successful handoff.

@@ -105,6 +105,9 @@ The plugin's commands cover both modes:
 - **Multi-round:** `/codex:transfer` — a persistent codex thread for the
   back-and-forth; follow-ups resume it instead of starting fresh.
 
+Collect required Codex peer in-turn via public foreground or qualified native
+fallback; `--wait` alone is not proof.
+
 Start every delegated plugin prompt with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
 model orchestrator or delegate back to the host lineage (Claude).` Cross-family
@@ -178,13 +181,11 @@ Deliver the armed file with `herdr pane send-text` then Enter as that skill
 names; do not `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
 completion signal.
 
-- **Turn detection is the lifecycle, not the pane.** `init` creates an
-  owner-only state directory outside every Git worktree and generates the
-  task settings that wire `SessionStart`, `UserPromptSubmit`, `Stop`, and
+- **Turn detection is the lifecycle, not the pane.** `init` creates owner-only
+  state outside every Git worktree and wires `SessionStart`, `UserPromptSubmit`, `Stop`, and
   `StopFailure` to `codeflow hook delegate-turn --state-dir`. The generated
-  settings file is **immutable** — every later call revalidates it against
-  exactly (run id, state-dir spelling) and rejects any difference. Arming
-  records the SHA-256 of canonical UTF-8 prompt bytes with internal LF line
+  settings file is **immutable** and bound to run id and state-dir spelling;
+  mismatches are rejected. Arming records the SHA-256 of canonical UTF-8 prompt bytes with internal LF line
   endings, no terminal line break, and no other control characters; `arm` rejects
   empty or other noncanonical input before durable turn state is created.
   Normalize once before arming, then
@@ -196,11 +197,11 @@ completion signal.
   terminal, `11` poison/unsafe, `124` timeout, `130` interrupt. Restarts,
   mis-correlated events, and interrupted waits after acceptance poison the
   run; recovery is a new run id in a fresh state directory. Turns are
-  sequential — one outstanding armed turn per run; arm the next turn id in
-  the same session after each terminal result. Use the shipped
-  [turn lifecycle adapter](resources/claude-turn-completion.md) for the exact
-  contract; do not improvise a different parser or signal protocol, and do
-  not scrape transcripts or treat a visually stable pane as completion.
+  sequential — one outstanding armed turn per run; arm a new id in the same
+  session after each terminal result. Use the shipped
+  [turn lifecycle adapter](resources/claude-turn-completion.md) for exact
+  mechanics; never improvise a parser, scrape transcripts, or use pane
+  stability as completion.
 - **Sibling Stop-hook preflight.** Before delivery, enumerate the effective
   Stop-hook set from every source the session loads (user/project/local
   settings, enabled plugins, task settings). Reject any sibling Stop hook
