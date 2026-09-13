@@ -51,6 +51,7 @@ it as non-trivial.
 | Repository guide lifecycle | `/cf-docs-portal` inside the orchestrated flow — opt-in source-linked utility docs; no Comment; preserve Markdown authority and local edits; explicit whole-runtime transfer; verify evidence and rendered experience |
 | Build when the duo is proven unavailable | `/cf-develop` — the solo fallback: build → fresh-context independent review (`cf-reviewer` where available) → verify, bounded rework |
 | Land finished work | `/cf-ship` — capability/ADR/doc updates + PR through the gates |
+| Release policy, impact or publication | Project-owned release instructions, with `cf-ship/references/release-policy.md` for assessment and authority; `/cf-customize` offers adoption, never automatic publication |
 | Set up or extend the stack | `/cf-stack` — detect the stack, write test/lint config, record standards |
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |
@@ -115,13 +116,13 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   …) are blocked unless the project opts them in — a team can allow specific
   trailers, require a ticket reference, or require `Signed-off-by` (DCO) via
   `policy.json`.
-- **Breaking changes are a judgment call, made every commit.** Before each
-  commit, ask whether it changes anything a consumer depends on — API, CLI flags,
-  config schema, file formats, defaults, or managed-file semantics. If yes, mark
-  the subject `type!:` and add a `BREAKING CHANGE:` footer stating the migration
-  path; that footer is what drives the major version bump. A `policy.json`
-  `breaking_watch_paths` glob warns when a declared contract surface is touched
-  unmarked, but the glob only nudges — detection is yours, not the gate's.
+- **Breaking changes require compatibility judgment, every commit.** Assess
+  API, CLI flags, config, formats, defaults and managed instructions against
+  their accepted contract. An incompatible change requires `type!:` and a
+  `BREAKING CHANGE:` migration footer; a compatible addition does not become
+  breaking merely because it touches an interface. Follow the project's one
+  release-impact input and version calculator. `breaking_watch_paths` warns
+  about touched surfaces, not proven breaks; independent review checks meaning.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
@@ -155,8 +156,9 @@ cf-method, "Why the git boundary is remote"). The rules, compressed:
   evidence in `## Testing`: the pasted test-summary output, the coverage
   number, the new tests it adds, and what was NOT tested — "tests pass" as
   prose is a claim, not evidence, and is not reviewable. Docs-only PRs say
-  so in one line plus the doc checks run. Type and breaking-change come
-  from the conventional commits, not the body.
+  so in one line plus the doc checks run. Conventional markers describe the
+  commits; any project-required release-impact explanation must agree with the
+  authoritative release input, not become another version calculator.
 - When a gate blocks you, fix the cause — never bypass (`--no-verify`, editing
   hooks, exporting gate tokens). Gates exist only where mistakes are
   irreversible or invisible.

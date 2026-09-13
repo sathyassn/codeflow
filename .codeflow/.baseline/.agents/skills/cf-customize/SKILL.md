@@ -245,6 +245,14 @@ confirms the final content.
   compatible profile or honor a recorded decline until its material re-offer
   event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
   automatically; a setup walkthrough does not authorize method adoption.
+- **Release authority** — load `cf-ship/references/release-policy.md`. Discover
+  the existing release units, version and curated-note sources, one impact
+  input/calculator, candidate/verification commands and publication authority.
+  Reuse a coherent process; otherwise offer a complete project-specific
+  opt-in starting process and verify it on disposable fixtures. Preserve
+  independent package, schema and skill versions, calendar/deployment schemes,
+  and separate deployment approval. Do not install CodeFlow's own release
+  pipeline or make its scaffold manifest the consuming product's version.
 - **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer

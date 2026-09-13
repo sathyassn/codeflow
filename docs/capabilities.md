@@ -527,7 +527,7 @@ name: scaffold-customize
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-009]
+epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010]
 adrs: [ADR-0025, ADR-0044]
 ```
 
@@ -566,6 +566,12 @@ authorities before proposing changes. It preserves credible native layouts and
 does not treat an external tracker or foreign tasks directory as reason to
 duplicate status or force a CodeFlow workgraph; pre-init cwd, fixed paths, and
 collisions remain explicit onboarding decisions.
+Release customization discovers the project's existing units, version and
+curated-note sources, single calculator, candidate checks and publication
+authority. It reuses that process or offers a verified opt-in starting process;
+independent package/version domains and calendar schemes remain project-owned.
+The shared release-policy reference routes customization, shipping and review
+without turning CodeFlow scaffold metadata into the consumer's version.
 
 ## CAP-013 — model-binding-evaluation
 
@@ -575,7 +581,7 @@ name: model-binding-evaluation
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-008]
+epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060]
 ```
 
@@ -586,6 +592,12 @@ requirement IDs, source-marker traceability, balanced regression/capability
 cases, exact fixture overlays, a native-interactive run protocol, and a
 standard-library tool for deterministic validation, materialization, scoring,
 baseline comparison, and fail-closed cleanup.
+The `release-policy` diagnostic pack tests compatibility judgment, misleading
+commit labels, compatible/no-release counterexamples, independent version
+domains, project-owned tool/adoption choices and stale or conflicting
+publication evidence. Deterministic suite/grader checks are distinct from
+retained native trials; this focused pack does not qualify a model binding or
+prove universal impact detection.
 
 The kit separates durable doctrine from fast-changing bindings. A
 source-controlled harness catalog marks a harness `capability-supported` only
