@@ -85,52 +85,33 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         dist.get("pr-run-mode").and_then(toml::Value::as_str),
         Some("plan")
     );
-    let authority_permissions = dist
-        .get("github-custom-job-permissions")
-        .and_then(toml::Value::as_table)
-        .and_then(|jobs| jobs.get("release-plan-authority"))
-        .and_then(toml::Value::as_table)
-        .expect("release authority custom-job permissions must be explicit");
-    assert_eq!(
-        authority_permissions
-            .get("actions")
-            .and_then(toml::Value::as_str),
-        Some("read")
-    );
-    assert_eq!(
-        authority_permissions
-            .get("contents")
-            .and_then(toml::Value::as_str),
-        Some("write")
-    );
-    assert_eq!(
-        authority_permissions
-            .get("pull-requests")
-            .and_then(toml::Value::as_str),
-        Some("read")
-    );
-    assert_eq!(
-        authority_permissions
-            .get("checks")
-            .and_then(toml::Value::as_str),
-        Some("read")
-    );
-    let recheck_permissions = dist
-        .get("github-custom-job-permissions")
-        .and_then(toml::Value::as_table)
-        .and_then(|jobs| jobs.get("release-main-recheck"))
-        .and_then(toml::Value::as_table)
-        .expect("release recheck custom-job permissions must be explicit");
-    assert_eq!(
-        recheck_permissions
-            .get("actions")
-            .and_then(toml::Value::as_str),
-        Some("read")
-    );
     assert!(
         dist.get("host-jobs").is_none(),
         "cargo-dist 0.32 host jobs do not gate its host job; authority must be a local artifact"
     );
+}
+
+#[test]
+fn custom_release_jobs_have_exact_scoped_permissions() {
+    let raw = fs::read_to_string(workspace_root().join("dist-workspace.toml"))
+        .expect("dist-workspace.toml must be readable");
+    let config: toml::Value = toml::from_str(&raw).expect("distribution config must be TOML");
+    let jobs = config["dist"]["github-custom-job-permissions"]
+        .as_table()
+        .expect("custom-job permissions must be explicit");
+    let authority = jobs["release-plan-authority"]
+        .as_table()
+        .expect("authority permissions must be a table");
+    assert_eq!(authority["actions"].as_str(), Some("read"));
+    assert_eq!(authority["contents"].as_str(), Some("write"));
+    assert_eq!(authority["pull-requests"].as_str(), Some("read"));
+    assert_eq!(authority["checks"].as_str(), Some("read"));
+    let recheck = jobs["release-main-recheck"]
+        .as_table()
+        .expect("main recheck permissions must be a table");
+    assert_eq!(recheck["actions"].as_str(), Some("read"));
+    assert_eq!(recheck["contents"].as_str(), Some("write"));
+    assert_eq!(recheck["checks"].as_str(), Some("read"));
 }
 
 #[test]
