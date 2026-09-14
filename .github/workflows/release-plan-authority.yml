@@ -68,8 +68,11 @@ jobs:
           gh api --paginate --slurp \
             "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?filter=all&per_page=100" \
             > /tmp/authority-checks.json
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=${GITHUB_SHA}&per_page=100" \
+            > /tmp/authority-runs.json
           python3 scripts/release.py verify-checks --state /tmp/authority-checks.json \
-            --source "$GITHUB_SHA"
+            --runs-state /tmp/authority-runs.json --source "$GITHUB_SHA"
           python3 scripts/release.py host-state --repository "$GITHUB_REPOSITORY" \
             --drafts-visible > /tmp/release-host-state.json
           python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \

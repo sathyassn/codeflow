@@ -232,6 +232,8 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         "merge_commit_sha == env.GITHUB_SHA",
         "scripts/release.py verify-authority",
         "check-runs?filter=all&per_page=100",
+        "actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=",
+        "--runs-state /tmp/authority-runs.json",
         "scripts/release.py verify-publication",
         "scripts/release.py host-state",
         "scripts/release.py verify-host-state",
@@ -255,6 +257,10 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         .expect("main recheck workflow must be readable");
     assert!(recheck.contains("scripts/release.py verify-publication"));
     assert!(recheck.contains("scripts/release.py verify-checks"));
+    assert!(
+        recheck.contains("actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=")
+    );
+    assert!(recheck.contains("--runs-state /tmp/authority-runs.json"));
     assert!(recheck.contains("--source \"$GITHUB_SHA\""));
     assert!(recheck.contains("--main-source \"$main_sha\""));
     assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));

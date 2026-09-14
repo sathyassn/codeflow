@@ -71,7 +71,7 @@ named human release decision.
 - [ ] The deliberately dispatched plan authority records `GITHUB_SHA` on
       `main`, checks current actor/rerunner permission, ordinary merged-PR
       provenance, source/version/notes and the configured latest exact-source
-      GitHub Actions release-state, aggregate, Rust, Windows, secret-scan, and
+      GitHub Actions main-push release-state, aggregate, Rust, Windows, secret-scan, and
       security-review checks. Its write-scoped token can see draft releases;
       read-scoped PR checks make no draft-absence claim. It fails closed on
       wrong tag, source, public release, foreign draft, or draft assets. It may

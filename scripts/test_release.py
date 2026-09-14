@@ -764,7 +764,9 @@ class PublicationTests(unittest.TestCase):
 
     def test_required_checks_are_successful_on_exact_source(self) -> None:
         state = self.repo.root / "checks.json"
+        runs_state = self.repo.root / "runs.json"
         source = self.repo.target
+        suite_id = 700
         good = [
             {
                 "id": index,
@@ -773,13 +775,27 @@ class PublicationTests(unittest.TestCase):
                 "status": "completed",
                 "conclusion": "success",
                 "app": {"slug": "github-actions"},
+                "check_suite": {"id": suite_id},
             }
             for index, name in enumerate(
                 release.load_config(self.repo.config)["required_publication_checks"], 1
             )
         ]
+        successful_push = {
+            "id": 10,
+            "run_number": 10,
+            "run_attempt": 1,
+            "check_suite_id": suite_id,
+            "event": "push",
+            "head_branch": "main",
+            "head_sha": source,
+            "path": ".github/workflows/codeflow-ci.yml",
+            "status": "completed",
+            "conclusion": "success",
+        }
         state.write_text(json.dumps([{"check_runs": good}]))
-        args = self.repo.args(state=state, source=source)
+        runs_state.write_text(json.dumps([{"workflow_runs": [successful_push]}]))
+        args = self.repo.args(state=state, runs_state=runs_state, source=source)
         release.verify_checks(args)
         good[1]["head_sha"] = "f" * 40
         state.write_text(json.dumps([{"check_runs": good}]))
@@ -789,6 +805,58 @@ class PublicationTests(unittest.TestCase):
         good.append({**good[1], "id": 99, "conclusion": "failure"})
         state.write_text(json.dumps([{"check_runs": good}]))
         with self.assertRaisesRegex(release.ReleaseError, "latest trusted"):
+            release.verify_checks(args)
+
+    def test_pr_checks_cannot_replace_main_push_or_hide_a_newer_failure(self) -> None:
+        state = self.repo.root / "checks.json"
+        runs_state = self.repo.root / "runs.json"
+        source = self.repo.target
+        names = release.load_config(self.repo.config)["required_publication_checks"]
+        checks = [
+            {
+                "id": index,
+                "name": name,
+                "head_sha": source,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "github-actions"},
+                "check_suite": {"id": 800},
+            }
+            for index, name in enumerate(names, 1)
+        ]
+        state.write_text(json.dumps([{"check_runs": checks}]))
+        pr_run = {
+            "id": 20,
+            "run_number": 20,
+            "run_attempt": 1,
+            "check_suite_id": 800,
+            "event": "pull_request",
+            "head_branch": "main",
+            "head_sha": source,
+            "path": ".github/workflows/codeflow-ci.yml",
+            "status": "completed",
+            "conclusion": "success",
+        }
+        runs_state.write_text(json.dumps([{"workflow_runs": [pr_run]}]))
+        args = self.repo.args(state=state, runs_state=runs_state, source=source)
+        with self.assertRaisesRegex(release.ReleaseError, "main-push workflow run"):
+            release.verify_checks(args)
+        old_success = {
+            **pr_run,
+            "id": 21,
+            "run_number": 21,
+            "check_suite_id": 801,
+            "event": "push",
+        }
+        new_failure = {
+            **old_success,
+            "id": 22,
+            "run_number": 22,
+            "check_suite_id": 802,
+            "conclusion": "failure",
+        }
+        runs_state.write_text(json.dumps([{"workflow_runs": [old_success, new_failure]}]))
+        with self.assertRaisesRegex(release.ReleaseError, "not successful"):
             release.verify_checks(args)
 
     def test_publication_rejects_a_selected_snapshot_after_main_changes(self) -> None:

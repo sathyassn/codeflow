@@ -857,6 +857,7 @@ def write_release_notes(args: argparse.Namespace) -> None:
 
 def verify_checks(args: argparse.Namespace) -> None:
     pages = load_json(args.state)
+    run_pages = load_json(args.runs_state)
     required = load_config(args.config).get("required_publication_checks")
     if (
         not isinstance(pages, list)
@@ -871,6 +872,35 @@ def verify_checks(args: argparse.Namespace) -> None:
         if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
             fail("publication check page is malformed")
         runs.extend(page["check_runs"])
+    workflow_runs: list[Any] = []
+    if not isinstance(run_pages, list):
+        fail("publication workflow-run inventory is malformed")
+    for page in run_pages:
+        if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
+            fail("publication workflow-run page is malformed")
+        workflow_runs.extend(page["workflow_runs"])
+    candidates = [
+        run
+        for run in workflow_runs
+        if isinstance(run, dict)
+        and run.get("event") == "push"
+        and run.get("head_branch") == "main"
+        and run.get("head_sha") == args.source
+        and run.get("path") == ".github/workflows/codeflow-ci.yml"
+        and isinstance(run.get("id"), int)
+        and isinstance(run.get("run_number"), int)
+        and isinstance(run.get("run_attempt"), int)
+        and isinstance(run.get("check_suite_id"), int)
+    ]
+    if not candidates:
+        fail("selected source lacks its codeflow-ci main-push workflow run")
+    selected = max(
+        candidates,
+        key=lambda run: (run["run_number"], run["run_attempt"], run["id"]),
+    )
+    if selected.get("status") != "completed" or selected.get("conclusion") != "success":
+        fail("latest codeflow-ci main-push workflow run is not successful")
+    suite_id = selected["check_suite_id"]
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
         if (
@@ -878,6 +908,7 @@ def verify_checks(args: argparse.Namespace) -> None:
             or run.get("name") not in required
             or run.get("head_sha") != args.source
             or (run.get("app") or {}).get("slug") != "github-actions"
+            or (run.get("check_suite") or {}).get("id") != suite_id
             or not isinstance(run.get("id"), int)
         ):
             continue
@@ -1095,6 +1126,7 @@ def parser() -> argparse.ArgumentParser:
 
     checks = sub.add_parser("verify-checks")
     checks.add_argument("--state", type=Path, required=True)
+    checks.add_argument("--runs-state", type=Path, required=True)
     checks.add_argument("--source", required=True)
     checks.set_defaults(func=verify_checks)
 

@@ -167,7 +167,7 @@ and blocks claiming that platform's release qualification.
    into this repository's main. Contributor forks remain valid. No static
    allowlist or second-human role is implied.
 4. The supported local-artifact job checks source/version/notes, the latest
-   exact-source GitHub Actions results for `release state`, `codeflow gates`,
+   exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
    Rust, Windows, secret scan, and security review, plus write-visible host collisions,
    then creates or resumes only an exact empty draft.
    The supported global-artifact job rechecks main after platform builds.
