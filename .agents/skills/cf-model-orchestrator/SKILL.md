@@ -31,14 +31,14 @@ role bindings it reports. An absent or empty file keeps the managed defaults;
 an invalid or drifted active selection blocks preflight without partial
 application or silent fallback. The project file may reference binding IDs
 only—it never owns raw selectors, worker routes, or commands.
-Harness-specific agents are adapters, not alternate sources of truth.
+Harness adapters are not alternate sources of truth.
 For a multi-task plan or a possible dependency/decision change, also read
 [resources/task-graph.md](resources/task-graph.md). When choosing or reviewing
 test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead. Required staged routes keep startup concise.
+path instead. Staged routes keep startup concise.
 
 ## Outcome modes
 
@@ -202,7 +202,7 @@ produces design.
    - Use `cf-delegate` for the preferred/fallback native lanes, lifecycle,
      sibling Stop-hook preflight, exact-byte delivery, and bounded cleanup. Use
      `cf-herdr` when `HERDR_ENV=1` and its degraded TTY route otherwise. Before
-     every Claude worker launch, load capability-routing's required
+     every Claude worker or same-session reviewer launch, load capability-routing's
      `claude-turn-completion.md` foreground-return contract.
    - Use only the ensemble's recorded same-family fallback after native
      preflight. Keep primary effort at its default and worker escalation with

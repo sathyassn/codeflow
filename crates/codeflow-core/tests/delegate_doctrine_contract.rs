@@ -17,6 +17,7 @@ const DELEGATE_SKILL: &str = "assets/base/claude/skills/cf-delegate/SKILL.md";
 const ADAPTER: &str = "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md";
 const CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
 const CUSTOMIZE: &str = "assets/base/agents/skills/cf-customize/SKILL.md";
+const DEVELOP: &str = "assets/base/agents/skills/cf-develop/SKILL.md";
 const ORCHESTRATOR: &str = "assets/base/agents/skills/cf-model-orchestrator/SKILL.md";
 const ROUTING: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md";
@@ -401,6 +402,28 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
             "do not use Claude Bash `run_in_background` watchers",
             "work is still running is incomplete",
             "schema-v2 cannot correlate that continuation",
+        ],
+    );
+}
+
+#[test]
+fn lifecycle_tracked_claude_reviewers_return_in_foreground() {
+    assert_contains(
+        ORCHESTRATOR,
+        &[
+            "Claude worker or same-session reviewer launch",
+            "claude-turn-completion.md",
+            "foreground-return contract",
+        ],
+    );
+    assert_contains(
+        DEVELOP,
+        &[
+            "For lifecycle-tracked Claude runs",
+            "invoke `cf-reviewer` in the foreground",
+            "`run_in_background: false` when offered",
+            "collect its actual verdict before the primary turn ends",
+            "never defer it to a later callback or bypass review",
         ],
     );
 }

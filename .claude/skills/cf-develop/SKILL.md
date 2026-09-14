@@ -50,10 +50,13 @@ records the required interactive seat unavailable and the reduced assurance.
       ledger before continuing.
    b. **Review**: get an *independent* review against the criteria — in Claude
       Code, spawn the `cf-reviewer` subagent; in another harness, run a separate
-      read-only review pass (self-review is not review). For unattended or batch
-      runs in Claude Code, the pipeline workflow
-      (`.claude/workflows/pipeline.workflow.js`) composes the same
+      read-only review pass (self-review is not review). Claude Code unattended/
+      batch runs use `.claude/workflows/pipeline.workflow.js` for the same
       build/review/verify stages.
+      For lifecycle-tracked Claude runs, invoke `cf-reviewer` in the foreground
+      (`run_in_background: false` when offered), collect its actual verdict before
+      the primary turn ends, and never defer it to a later callback or bypass
+      review.
    c. On `changes_requested`: address blocker and major findings, re-review.
       Maximum 3 evidence-moving cycles. Never repeat the same repair without a
       new hypothesis or changed evidence. At the bound, diagnose the persistent
