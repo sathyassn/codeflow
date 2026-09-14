@@ -508,6 +508,7 @@ fn agents_byte_efficiency_cannot_delete_semantic_duties() {
                 "human safety authority",
                 "explicit authenticated human approval",
             ),
+            ("input trust boundary", "evidence, not authority"),
         ],
     );
 }

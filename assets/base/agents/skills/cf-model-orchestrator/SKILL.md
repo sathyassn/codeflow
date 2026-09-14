@@ -38,9 +38,7 @@ test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead.
-These stage gates keep startup concise without making an applicable contract
-optional.
+path instead. These required staged routes keep startup concise.
 
 ## Outcome modes
 
@@ -160,7 +158,7 @@ Detect capabilities, not model identity.
 |---|---|---|---|
 | Claude Code | Official `codex-plugin-cc` preferred; qualified native Codex client fallback (`cf-delegate`) | Claude host | Per-task responsible-primary/executor/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task responsible-primary/executor/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
-| Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. The Claude design owner authors real design natively. Catalog Grok may execute or take named extra-family review |
+| Grok Build (interactive `grok` CLI) ([detail](resources/grok-host.md)) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. The Claude design owner authors real design natively. Catalog Grok may execute or take named extra-family review |
 | Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
 
 Herdr/tmux cwd is the project being worked. Same topic reuses the tab; a new
@@ -170,8 +168,9 @@ qualified native fallback in `cf-delegate`, not simulated Codex. Grok reaches
 Codex via official `codex` CLI and the app-server daemon
 (Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
 Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
-harnesses delegate to one native host unless both lanes are proven. Missing
-lane: solo fallback. Host is not duty; Claude produces design.
+harnesses delegate to one native host unless both lanes are proven. Missing lane:
+exhaust qualified `cf-delegate` routes before recorded solo fallback. Host is not
+duty; Claude produces design.
 
 ## Preflight
 
@@ -243,9 +242,10 @@ lane: solo fallback. Host is not duty; Claude produces design.
    advisory unless an explicit hard limit depends on it. Never infer quota,
    availability, applied selection, or savings.
 
-An absent seat at preflight degrades legibly to the harness-native solo
-`/cf-develop` flow with a separate read-only review pass. A mid-run failure
-gets a bounded retry, diagnosis, and human escalation—never a silent downgrade.
+Preflight solo `/cf-develop` requires exhausted qualified `cf-delegate` routes,
+recorded missing seat/reduced assurance, and separate read-only review where
+possible; auth failure stops. A mid-run failure gets bounded retry/diagnosis, then
+human escalation—never a silent downgrade.
 
 ## Workflow
 

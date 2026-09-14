@@ -269,7 +269,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "e8c237b8fdc25a0f69b5586e8bbe2704234ddb17235f222320a5eaac5365799a",
+      "sha256": "456be0136159f3fe2f03a2046d0d0bc4b131113faedf6e173fc84c0783f93fee",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/capability-routing.md": {
@@ -689,7 +689,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "e8c237b8fdc25a0f69b5586e8bbe2704234ddb17235f222320a5eaac5365799a",
+      "sha256": "456be0136159f3fe2f03a2046d0d0bc4b131113faedf6e173fc84c0783f93fee",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/capability-routing.md": {
@@ -929,7 +929,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "aeb15e85cc41e0b7aed4c9230528a60c426d6c2d4fab8a4020f189c2bd928ee6",
+      "sha256": "bb7dca1b55aa68a9a5b5fcd1bc6dcff14abf06d207d0af9914819e7480f29e8f",
       "exec": false
     },
     "CLAUDE.md": {
