@@ -178,6 +178,7 @@ jobs:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
     permissions:
+      "actions": "read"
       "checks": "read"
       "contents": "write"
       "pull-requests": "read"
@@ -240,6 +241,7 @@ jobs:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
     permissions:
+      "actions": "read"
       "checks": "read"
       "contents": "write"
   # Determines if we should publish/announce

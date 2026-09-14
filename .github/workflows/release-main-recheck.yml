@@ -6,6 +6,7 @@ on:
         required: true
         type: string
 permissions:
+  actions: read
   contents: write
   checks: read
 jobs:

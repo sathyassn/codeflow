@@ -93,6 +93,12 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         .expect("release authority custom-job permissions must be explicit");
     assert_eq!(
         authority_permissions
+            .get("actions")
+            .and_then(toml::Value::as_str),
+        Some("read")
+    );
+    assert_eq!(
+        authority_permissions
             .get("contents")
             .and_then(toml::Value::as_str),
         Some("write")
@@ -106,6 +112,18 @@ fn distribution_config_keeps_supported_targets_and_installers() {
     assert_eq!(
         authority_permissions
             .get("checks")
+            .and_then(toml::Value::as_str),
+        Some("read")
+    );
+    let recheck_permissions = dist
+        .get("github-custom-job-permissions")
+        .and_then(toml::Value::as_table)
+        .and_then(|jobs| jobs.get("release-main-recheck"))
+        .and_then(toml::Value::as_table)
+        .expect("release recheck custom-job permissions must be explicit");
+    assert_eq!(
+        recheck_permissions
+            .get("actions")
             .and_then(toml::Value::as_str),
         Some("read")
     );
@@ -149,7 +167,16 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         .next()
         .expect("authority call must precede global packaging");
     assert!(custom_call.contains("\"contents\": \"write\""));
+    assert!(custom_call.contains("\"actions\": \"read\""));
     assert!(custom_call.contains("\"pull-requests\": \"read\""));
+    let recheck_call = workflow
+        .split("  custom-release-main-recheck:\n")
+        .nth(1)
+        .expect("generated main recheck call must exist")
+        .split("\n  # Determines if we should publish")
+        .next()
+        .expect("main recheck must precede hosting");
+    assert!(recheck_call.contains("\"actions\": \"read\""));
     let post_announce = workflow
         .split("  custom-release-post-announce:\n")
         .nth(1)
@@ -222,6 +249,7 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
     let authority = fs::read_to_string(root.join(".github/workflows/release-plan-authority.yml"))
         .expect("plan authority workflow must be readable");
     for required in [
+        "actions: read",
         "test \"$GITHUB_REF\" = refs/heads/main",
         "git/ref/heads/main",
         "test \"$GITHUB_SHA\" = \"$main_sha\"",
@@ -255,6 +283,7 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
 
     let recheck = fs::read_to_string(root.join(".github/workflows/release-main-recheck.yml"))
         .expect("main recheck workflow must be readable");
+    assert!(recheck.contains("actions: read"));
     assert!(recheck.contains("scripts/release.py verify-publication"));
     assert!(recheck.contains("scripts/release.py verify-checks"));
     assert!(

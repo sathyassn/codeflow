@@ -40,10 +40,12 @@ install-updater = false
 "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 
 [dist.github-custom-job-permissions.release-plan-authority]
+actions = "read"
 contents = "write"
 pull-requests = "read"
 checks = "read"
 
 [dist.github-custom-job-permissions.release-main-recheck]
+actions = "read"
 contents = "write"
 checks = "read"
