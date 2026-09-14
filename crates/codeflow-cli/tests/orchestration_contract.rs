@@ -681,27 +681,6 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
             "AGENTS template lost duo entry-point marker: {required}"
         );
     }
-    let normalized_agents = normalize_whitespace(&agents);
-    for (owner, contract, alternate) in [
-        ("orchestrator", &skill, "else a separate read-only pass"),
-        (
-            "AGENTS",
-            &normalized_agents,
-            "otherwise a separate read-only pass",
-        ),
-    ] {
-        assert!(
-            contract.contains("fresh-context independent review")
-                && contract.contains(alternate)
-                && contract.contains("self-review is not review"),
-            "{owner} solo fallback lost its unconditional independent-review floor"
-        );
-        assert!(
-            !contract.contains("review where possible"),
-            "{owner} solo fallback made independent review optional"
-        );
-    }
-
     for required in [
         "## Routing gate",
         "Before repository or external research",
@@ -712,6 +691,30 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         assert!(
             claude.contains(required),
             "CLAUDE template lost early routing marker: {required}"
+        );
+    }
+}
+
+#[test]
+fn solo_fallback_requires_fresh_context_independent_review() {
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+
+    for (owner, contract, alternate) in [
+        ("orchestrator", &skill, "else a separate read-only pass"),
+        ("AGENTS", &agents, "otherwise a separate read-only pass"),
+    ] {
+        assert!(
+            contract.contains("fresh-context independent review")
+                && contract.contains(alternate)
+                && contract.contains("self-review is not review"),
+            "{owner} solo fallback lost its unconditional independent-review floor"
+        );
+        assert!(
+            !contract.contains("review where possible"),
+            "{owner} solo fallback made independent review optional"
         );
     }
 }
