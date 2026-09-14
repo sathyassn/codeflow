@@ -23,7 +23,11 @@ and decide; `codeflow` verifies the result deterministically.
 3. Author lint configuration tailored to the project (clippy workspace lints,
    eslint + config, ruff, ...). Respect existing config: tighten or extend,
    never silently replace. Wire the lint command into the test config's `full`
-   mode if the project gates on it.
+   mode if the project gates on it. Where the existing stack supports a
+   compiler or type checker, discover and reuse its accepted command and wire
+   it into the appropriate mode. Do not mandate TypeScript, a validator
+   library, redundant tooling, stricter compiler migration, or a language/stack
+   change; dynamic stacks keep their native checks.
 4. Read the orchestrator's `resources/verification-selection.md`. Configure a
    project-owned property/generative, mutation, or architecture fitness command
    only when repository evidence activates its trigger. Put routine checks in

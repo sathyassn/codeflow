@@ -1238,10 +1238,10 @@
       "statement": "Outputs are audience-shaped, evidence-backed, explicit about limitations and N/A, and preserve material disagreement.",
       "sources": [
         {
-          "path": "AGENTS.md",
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
           "markers": [
-            "Shape the deliverable",
-            "never cut key information to condense"
+            "Shape deliverables for their audience and medium",
+            "never cut key information merely to condense"
           ]
         },
         {
@@ -1259,7 +1259,7 @@
       "statement": "Substantial prose is reviewed in its full project, audience, medium, and task context; preserves technical meaning and credible documented voice; removes unsupported certainty, sycophancy, inflation, and obstructive formatting without fabricating personality or applying lexical, punctuation, list, or emoji blacklists.",
       "sources": [
         {
-          "path": "AGENTS.md",
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
           "markers": [
             "verified truth and policy outrank",
             "documented voice/examples",
@@ -1283,7 +1283,7 @@
       "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects.",
       "sources": [
         {
-          "path": "AGENTS.md",
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
           "markers": [
             "Presentation is contextual and proportionate",
             "scope and detail fit the explanation",

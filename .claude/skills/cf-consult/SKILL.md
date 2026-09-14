@@ -71,12 +71,15 @@ counts as independent cross-lineage review.
      under `../cf-model-orchestrator/resources/capability-routing.md`; never
      invoke a foreign worker as its reasoning seat. See
      <https://code.claude.com/docs/en/permission-modes>.
-3. The named vendor's CLI missing, the plugin surface absent, or auth failing
-   → tell the user the remedy (`codex login`; install the plugin from a Claude
-   Code session; install `claude`/`herdr`, or `tmux` on the degraded path)
-   and **stop, loudly** — never
-   automate auth, and never quietly substitute your own vendor for the
-   missing one.
+3. A missing or incompatible preferred plugin/CLI is a lane failure, not yet a
+   vendor-seat failure. Exhaust the qualified native alternatives permitted by
+   `cf-delegate`, preserving the same read-only scope, provenance, sandbox, and
+   lifecycle checks. An authentication failure still stops for operator action:
+   state the exact remedy (`codex login`; plugin installation from Claude Code;
+   install/login for `claude`, plus `herdr` or degraded `tmux`) and never
+   automate login. After every qualified other-vendor route is unavailable,
+   report the unavailable seat and reduced assurance. Never substitute the
+   host's own vendor or label same-family scrutiny as cross-lineage review.
 4. Synthesize: compare the second opinion against your own analysis point by
    point, citing where you **agree** and **disagree** and why — with your own
    evidence (file:line, command output). Label each finding `axis: standards`

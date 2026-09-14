@@ -154,6 +154,9 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
+    let capability_routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
 
     for required in [
         "Detect capabilities, not model identity.",
@@ -161,11 +164,10 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Codex App or interactive Codex CLI",
         "Grok Build (interactive `grok` CLI)",
         "Other harness, including Hermes",
-        "Claude design owner produces direction and real design execution",
         "never a silent third vote",
         "Name extra families on trigger if available",
         "strongest capable permitted reasoning route",
-        "Consult canaries in grok-host.md",
+        "[detail](resources/grok-host.md)",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -192,6 +194,11 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
             "orchestrator lost required behavior marker: {required}"
         );
     }
+    assert!(
+        capability_routing
+            .contains("The Claude design owner produces direction and real design implementation"),
+        "capability routing lost Claude's design execution ownership"
+    );
 }
 
 #[test]
@@ -432,7 +439,7 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
     let normalized = normalize_whitespace(&skill);
 
     for required in [
-        "Both models independently research, analyze, and plan",
+        "Both families independently research, analyze, and plan",
         "Claude and Codex research, analyze, identify risks, and draft a plan in parallel before seeing the other's conclusions.",
         "Give both seats the same immutable brief and repository scope.",
         "an implementation plan and test strategy;",
@@ -506,7 +513,8 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     for required in [
         "unless the brief already fixes a clear direction, compares 2–3 viable options",
         "When the brief already dictates one clear design direction, record that constraint and why option exploration was waived.",
-        "independent inspection without self-review → Claude-judgment-primary integrated verdict",
+        "a lineage different from the actual author's reviews it independently. Self-review is never independent.",
+        "The Claude judgment primary owns integrated Claude judgment.",
         "they do not replace the required other-lineage review or primary judgment.",
         "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
     ] {
@@ -569,12 +577,12 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
 
     for required in [
         "then the best current external sources",
-        "Steelman the rejected option before the decision stands",
-        "Think independently — not a yes-man.",
-        "Agreement without examination is a failure mode",
-        "Think in depth, not at the surface.",
-        "Decide by options and horizons.",
-        "unfinished CI job is missing evidence",
+        "steelman the strongest alternative",
+        "Challenge decisions independently.",
+        "Evidence and honest analysis outrank agreement",
+        "trace causes and consequences across affected domains",
+        "compare short- and long-term routes",
+        "An unfinished CI job is missing evidence",
         "Honor a red check.",
         "Write only what earns its keep.",
         "every material complexity maps to a current requirement",
@@ -582,7 +590,7 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
         "brittle under-design, not simplicity",
         "Shape the deliverable.",
         "check what it affects upstream and downstream",
-        "ADRs and the ledger are never edited",
+        "accepted ADRs and the ledger are append-only",
     ] {
         assert!(
             agents.contains(required),
@@ -602,22 +610,24 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     let claude = read("assets/base/CLAUDE.md.tmpl").replace("\r\n", "\n");
     let ensemble =
         read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
+    let capability_routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ));
+    let herdr = normalize_whitespace(&read("assets/base/agents/skills/cf-herdr/SKILL.md"));
+    let claude_completion = normalize_whitespace(&read(
+        "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md",
+    ));
 
     for required in [
         "Use the duo for every non-trivial repository task.",
         "## Outcome modes",
-        "**Research / analysis:**",
-        "**Plan / design:**",
+        "**Research/analysis:**",
+        "**Plan/design:**",
         "**Implementation:**",
-        "**Review / verification:**",
-        "**Substantive documentation:**",
-        "--model <selector> --effort <effort> --permission-mode bypassPermissions",
-        "spawn workers at escalation effort",
+        "**Review/verification:**",
+        "**Substantive docs:**",
         "/codex:rescue --model <primary-selector> --effort <primary-default>",
-        "do not inherit an unobserved user default",
-        "Make `autoMode.classifyAllShell` effective at user scope",
-        "repeated `--settings` flags are not a supported merge contract",
-        "Consult and no-edit review stay",
+        "an unobserved user default is not selection evidence",
         "session in auto mode under the same fail-closed sandbox",
         "not plan or bypass",
         "public network and live search are enabled",
@@ -626,6 +636,24 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         assert!(
             skill.contains(required),
             "stage/autonomy contract lost marker: {required}"
+        );
+    }
+    assert!(
+        capability_routing.contains("spawns same-family workers at that effort"),
+        "capability routing lost worker-effort ownership"
+    );
+    assert!(
+        herdr.contains("--model <selector> --effort <effort> --permission-mode bypassPermissions"),
+        "Herdr lost its Claude production launch contract"
+    );
+    for required in [
+        "Consult and no-edit review keep",
+        "Make `autoMode.classifyAllShell` effective at user scope",
+        "repeated `--settings` flags are not a supported composition mechanism",
+    ] {
+        assert!(
+            claude_completion.contains(required),
+            "Claude turn-completion contract lost autonomy marker: {required}"
         );
     }
     for required in [
@@ -653,7 +681,6 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
             "AGENTS template lost duo entry-point marker: {required}"
         );
     }
-
     for required in [
         "## Routing gate",
         "Before repository or external research",
@@ -664,6 +691,30 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         assert!(
             claude.contains(required),
             "CLAUDE template lost early routing marker: {required}"
+        );
+    }
+}
+
+#[test]
+fn solo_fallback_requires_fresh_context_independent_review() {
+    let skill = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+
+    for (owner, contract, alternate) in [
+        ("orchestrator", &skill, "else a separate read-only pass"),
+        ("AGENTS", &agents, "otherwise a separate read-only pass"),
+    ] {
+        assert!(
+            contract.contains("fresh-context independent review")
+                && contract.contains(alternate)
+                && contract.contains("self-review is not review"),
+            "{owner} solo fallback lost its unconditional independent-review floor"
+        );
+        assert!(
+            !contract.contains("review where possible"),
+            "{owner} solo fallback made independent review optional"
         );
     }
 }
@@ -845,6 +896,9 @@ fn project_organization_has_one_authority_and_honest_closeout() {
 fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
     let full_agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
     let minimal_agents = normalize_whitespace(&read("assets/base/AGENTS.minimal.md.tmpl"));
+    let lifecycle = normalize_whitespace(&read(
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    ));
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-editorial-review/SKILL.md",
     ));
@@ -852,6 +906,12 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
         "assets/base/agents/skills/cf-editorial-review/references/editorial-smells.md",
     ));
 
+    assert!(
+        full_agents.contains(
+            "verified truth, policy, technical meaning, project voice, and accessibility"
+        ) && full_agents.contains("`cf-editorial-review`"),
+        "full entry contract lost its compact editorial route"
+    );
     for required in [
         "verified truth and policy outrank CodeFlow philosophy",
         "documented voice/examples",
@@ -859,8 +919,8 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
         "never fabricate personality",
     ] {
         assert!(
-            full_agents.contains(required),
-            "full contract lost editorial principle: {required}"
+            lifecycle.contains(required),
+            "workflow lifecycle lost editorial principle: {required}"
         );
     }
     for required in [
@@ -909,8 +969,9 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(delegate.contains("codeflow delegate init"));
     assert!(delegate.contains("StopFailure"));
     assert!(delegate.contains("--until terminal"));
+    assert!(delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT"));
     assert!(
-        delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
+        delegate.contains("For consult/no-edit, use the same launch with --permission-mode auto")
     );
     assert!(delegate.contains("Launch with default effort"));
     assert!(delegate.contains("workers take escalation"));

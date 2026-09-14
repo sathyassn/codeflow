@@ -162,9 +162,8 @@ CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"  # prints generated settings.json
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
-  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
-# consult / no-edit review (keep auto):
-# claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json
+  "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
+# For consult/no-edit, use the same launch with --permission-mode auto.
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
 codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
 tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
@@ -174,9 +173,9 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --t
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
-When `HERDR_ENV=1`, start Claude in the named Herdr tab per `cf-herdr`
-(include `--settings` and the selected model/effort; production
-`bypassPermissions`, consult auto).
+When `HERDR_ENV=1`, use the named Herdr tab per `cf-herdr`, including the
+launch-local task environment and `--settings`; use the selected model/effort,
+production `bypassPermissions`, consult auto.
 Deliver the armed file with `herdr pane send-text` then Enter as that skill
 names; do not `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
 completion signal.

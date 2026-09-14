@@ -68,6 +68,14 @@ limit that cannot be evaluated without that signal. Cost and remaining usage
 may break a tie among capable routes; they never excuse a weaker quality gate,
 prove savings, or silently replace another criterion.
 
+Propagate current observed unavailability into every later worker choice in the
+same task. When a native error or canary proves an exact selector/route
+unavailable, record that exclusion and give it to the primary that dispatches
+workers so it does not choose the known-unavailable route again. Scope the
+exclusion to its evidenced harness, account/bucket, selector/route, and
+freshness; do not infer that sibling models or another account are unavailable.
+A materially fresh native signal may clear or replace the exclusion.
+
 A change to the responsible primary or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
 work continues. A same-seat trigger-based effort escalation, including direct
@@ -154,6 +162,16 @@ needed, with `description`, `prompt`, permitted `model`, and `effort`; the
 owning Claude primary invokes that named `subagent_type`. In an existing
 session, verify a supported definition is loaded before invoking it. Never
 invent a missing Agent argument or install a permanent fleet of worker roles.
+
+Before launching any Claude worker, **read and follow**
+`.claude/skills/cf-delegate/resources/claude-turn-completion.md`, especially
+"Sequential turns." The dispatch must keep worker collection inside the
+accepted foreground turn: collect the worker result before the primary returns,
+do not use background Bash watchers or task notifications as completion, and do
+not accept a terminal response that says work is still running. If the harness
+cannot provide that supported foreground return, the route is unavailable for
+this dispatch; use another bounded native route and preserve the existing
+Stop-hook and lifecycle safety policy unchanged.
 
 Keep the primary at its default effort. Inspect effective
 [effort precedence](https://code.claude.com/docs/en/model-config):

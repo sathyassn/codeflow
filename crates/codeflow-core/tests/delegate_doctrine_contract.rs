@@ -17,6 +17,8 @@ const DELEGATE_SKILL: &str = "assets/base/claude/skills/cf-delegate/SKILL.md";
 const ADAPTER: &str = "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md";
 const CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
 const CUSTOMIZE: &str = "assets/base/agents/skills/cf-customize/SKILL.md";
+const DEVELOP: &str = "assets/base/agents/skills/cf-develop/SKILL.md";
+const HERDR: &str = "assets/base/agents/skills/cf-herdr/SKILL.md";
 const ORCHESTRATOR: &str = "assets/base/agents/skills/cf-model-orchestrator/SKILL.md";
 const ROUTING: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md";
@@ -79,9 +81,17 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
             ],
         );
     }
-    for asset in [CONSULT, CUSTOMIZE, ORCHESTRATOR] {
+    for asset in [CONSULT, CUSTOMIZE] {
         assert_contains(asset, &[LIFECYCLE_ARROW, "bounded cleanup"]);
     }
+    assert_contains(
+        ORCHESTRATOR,
+        &[
+            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "exact-byte delivery",
+            "bounded cleanup",
+        ],
+    );
     // The lifecycle replaced the legacy signal protocol: no shipped skill may
     // reintroduce `tmux wait-for` as the work protocol.
     for asset in [DELEGATE_SKILL, ADAPTER, CONSULT, ORCHESTRATOR] {
@@ -137,13 +147,20 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
             ],
         );
     }
-    for asset in [DELEGATE_SKILL, ADAPTER, ORCHESTRATOR, CONSULT] {
+    for asset in [DELEGATE_SKILL, ADAPTER, CONSULT] {
         assert_contains(asset, &["user scope"]);
         assert!(
             !read(asset).contains("user or CLI scope"),
             "{asset} incorrectly promises lifecycle settings composition through repeated CLI flags"
         );
     }
+    assert_contains(
+        ORCHESTRATOR,
+        &[
+            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "foreground-return contract",
+        ],
+    );
 }
 
 #[test]
@@ -349,6 +366,111 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     for template in [AGENTS_TMPL, AGENTS_MINIMAL_TMPL] {
         assert_contains(template, &[provenance]);
     }
+}
+
+#[test]
+fn consult_exhausts_qualified_fallback_without_weakening_auth_or_lineage() {
+    assert_contains(
+        CONSULT,
+        &[
+            "missing or incompatible preferred plugin/CLI is a lane failure",
+            "Exhaust the qualified native alternatives",
+            "authentication failure still stops for operator action",
+            "After every qualified other-vendor route is unavailable",
+            "Never substitute the host's own vendor",
+        ],
+    );
+}
+
+#[test]
+fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
+    assert_contains(
+        ROUTING,
+        &[
+            "Propagate current observed unavailability into every later worker choice",
+            "do not infer that sibling models or another account are unavailable",
+            "Before launching any Claude worker, **read and follow**",
+            "claude-turn-completion.md",
+            "collect the worker result before the primary returns",
+            "preserve the existing Stop-hook and lifecycle safety policy unchanged",
+        ],
+    );
+    assert_contains(
+        ADAPTER,
+        &[
+            "## Sequential turns",
+            "Collect delegated worker results before the primary returns",
+            "do not use Claude Bash `run_in_background` watchers",
+            "work is still running is incomplete",
+            "schema-v2 cannot correlate that continuation",
+        ],
+    );
+}
+
+#[test]
+fn tracked_claude_launch_uses_scoped_synchronous_task_mode() {
+    assert_contains(
+        DELEGATE_SKILL,
+        &[
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude",
+            "For consult/no-edit, use the same launch with --permission-mode auto",
+            "launch-local task environment",
+        ],
+    );
+    assert_contains(
+        ADAPTER,
+        &[
+            "For every schema-v2 Claude process, set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` after its login shell initializes and before Claude starts",
+            "never add it to global settings, generic project presets, or the immutable generated task settings",
+            "no `run_in_background` control on the Agent tool",
+            "background Bash tasks, background subagents, and Ctrl+B are disabled",
+            "servers or watchers in separate owned panes",
+            "independent host-owned native sessions may still run in parallel",
+            "bounded named-child canary",
+            "reviewer result before that armed turn's `Stop`",
+            "A task notification, `UserPromptSubmit`, backgrounded Agent, requested environment value, or launch string is not proof",
+        ],
+    );
+    assert!(
+        !read(ADAPTER).contains("run_in_background: false"),
+        "the Agent tool does not expose a foreground launch flag"
+    );
+    assert_contains(
+        HERDR,
+        &[
+            "Tracked Claude only: set after shell init in its dedicated pane",
+            "herdr pane run",
+            "export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+            "verify `1`",
+            "Close the dedicated tracked-Claude pane after its lifecycle ends",
+        ],
+    );
+    assert!(
+        !read(HERDR).contains("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 herdr agent start"),
+        "the Herdr client environment is not guaranteed to reach its daemon-spawned child"
+    );
+}
+
+#[test]
+fn lifecycle_tracked_claude_reviewers_return_in_foreground() {
+    assert_contains(
+        ORCHESTRATOR,
+        &[
+            "Claude worker or same-session reviewer launch",
+            "claude-turn-completion.md",
+            "foreground-return contract",
+        ],
+    );
+    assert_contains(
+        DEVELOP,
+        &[
+            "For lifecycle-tracked Claude runs",
+            "invoke `cf-reviewer` in the foreground",
+            "`run_in_background: false` when offered",
+            "collect its actual verdict before the primary turn ends",
+            "never defer it to a later callback or bypass review",
+        ],
+    );
 }
 
 #[test]
