@@ -1,7 +1,16 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-13-release-policy-v1",
+  "requirements_version": "2026-09-13-release-policy-v4",
   "requirements": [
+    {
+      "id": "CF-REL-004",
+      "level": "hard",
+      "statement": "When the project adopts same-work-PR release preparation, reconcile notes and coupled versions before opening/updating that PR against the current target and verified public baseline. Pending changes are not counted per PR; preserve other pending work, distinguish withdrawals from wording edits, and never repurpose a tagged or published identity. CI validates rather than silently creating repair PRs. Publication reads the reviewed source without a source-heading date change or bookkeeping commit.",
+      "sources": [{
+        "path": ".agents/skills/cf-ship/references/release-policy.md",
+        "markers": ["## Keep pending metadata in the work PR", "verified", "clean merge", "truthful explanation"]
+      }]
+    },
     {
       "id": "CF-REL-001",
       "level": "hard",
