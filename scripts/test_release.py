@@ -285,6 +285,56 @@ class PendingVersionTests(unittest.TestCase):
             ["check --workspace", "build --locked -p codeflow-cli"],
         )
 
+    def test_sync_retries_after_an_interrupted_build_without_committing_state(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "recover interrupted build")])
+        lock = self.repo.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('version = "2.0.1"', 'version = "9.9.9"', 1))
+        before_head = command(self.repo.root, "git", "rev-parse", "HEAD")
+        before_changelog = (self.repo.root / "CHANGELOG.md").read_bytes()
+        calls = self.repo.root / "cargo-call-count"
+        cargo = self.repo.root / "fake-cargo"
+        self.repo.write(
+            "fake-cargo",
+            "#!/bin/sh\n"
+            f"count_file={calls}\n"
+            "count=0\n"
+            "test ! -f \"$count_file\" || count=$(sed -n '1p' \"$count_file\")\n"
+            "count=$((count + 1))\n"
+            "printf '%s\\n' \"$count\" > \"$count_file\"\n"
+            "test \"$count\" -ne 2\n",
+        )
+        cargo.chmod(0o755)
+        binary = self.repo.root / "target/debug/codeflow"
+        binary.parent.mkdir(parents=True)
+        self.repo.write(
+            "target/debug/codeflow",
+            "#!/usr/bin/env python3\n"
+            "from pathlib import Path\n"
+            "import sys\n"
+            "if sys.argv[1:] == ['--version']:\n"
+            "    print('codeflow 2.0.1')\n"
+            "elif sys.argv[1:] == ['update']:\n"
+            "    path = Path('Cargo.lock')\n"
+            "    path.write_text(path.read_text().replace('9.9.9', '2.0.1'))\n"
+            "else:\n"
+            "    raise SystemExit(2)\n",
+        )
+        binary.chmod(0o755)
+        with self.assertRaisesRegex(release.ReleaseError, "command failed"):
+            release.sync(self.repo.args(cargo=str(cargo)))
+        self.assertEqual(command(self.repo.root, "git", "rev-parse", "HEAD"), before_head)
+        self.assertEqual((self.repo.root / "CHANGELOG.md").read_bytes(), before_changelog)
+        self.assertNotEqual(len(set(release.version_stamp_values({
+            path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS
+        }).values())), 1)
+        release.sync(self.repo.args(cargo=str(cargo)))
+        self.assertEqual(
+            release.validate_version_stamps(
+                {path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS}
+            ),
+            "2.0.1",
+        )
+
     def test_published_section_must_match_exact_public_source(self) -> None:
         self.repo.write(
             "CHANGELOG.md",
