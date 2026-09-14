@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 import fnmatch
 import hashlib
@@ -240,10 +241,16 @@ def discover_host_state(
                 "tag": item["tag_name"],
                 "draft": item.get("draft"),
                 "prerelease": item.get("prerelease"),
+                "name": item.get("name"),
                 "target": item.get("target_commitish"),
                 "body": item.get("body"),
                 "assets": [
-                    {"name": asset.get("name"), "size": asset.get("size"), "digest": asset.get("digest")}
+                    {
+                        "name": asset.get("name"),
+                        "size": asset.get("size"),
+                        "state": asset.get("state"),
+                        "digest": asset.get("digest"),
+                    }
                     for asset in item.get("assets", [])
                     if isinstance(asset, dict)
                 ],
@@ -372,14 +379,20 @@ def resolve_baseline(
         ):
             fail(f"{tag} exists without a verified public release; resolve that attempt first")
     if state["drafts_visible"]:
-        for item in releases:
-            tag = str(item.get("tag", "")) if isinstance(item, dict) else ""
-            if (
-                isinstance(item, dict)
-                and item.get("draft") is True
-                and STABLE_TAG.fullmatch(tag)
-                and semver(tag) > semver(baseline.version)
-            ):
+        drafts = [
+            item
+            for item in releases
+            if isinstance(item, dict)
+            and item.get("draft") is True
+            and STABLE_TAG.fullmatch(str(item.get("tag", "")))
+        ]
+        draft_counts = Counter(str(item["tag"]) for item in drafts)
+        duplicates = sorted(tag for tag, count in draft_counts.items() if count > 1)
+        if duplicates:
+            fail(f"duplicate draft releases are ambiguous: {', '.join(duplicates)}")
+        for item in drafts:
+            tag = str(item.get("tag", ""))
+            if semver(tag) > semver(baseline.version):
                 if (tag, item.get("target")) != (allowed_tag, allowed_source):
                     fail(f"draft {tag} is an unresolved publication attempt")
                 if item.get("assets"):
@@ -702,36 +715,34 @@ def check_pr(args: argparse.Namespace) -> None:
     for entry in before_entries:
         if entry in added:
             added.remove(entry)
-    # Pair same-label replacements without guessing whether prose is "similar".
-    edited_labels = False
-    for impact in IMPACT_ORDER:
-        old = [entry for entry in removed if entry[0] == impact]
-        new = [entry for entry in added if entry[0] == impact]
-        for _ in range(min(len(old), len(new))):
-            removed.remove(old.pop())
-            added.remove(new.pop())
-            edited_labels = True
     declared_additions = [entry for entry in added if not (adopting and entry[1].startswith("legacy:"))]
     added_impact = max(
         (item[0] for item in declared_additions),
         key=lambda item: IMPACT_ORDER[item],
         default="none",
     )
-    if fields["impact"] != added_impact:
+    removed_labels = Counter(item[0] for item in removed)
+    added_labels = Counter(item[0] for item in declared_additions)
+    labels_balanced = bool(removed) and removed_labels == added_labels
+    docs_only_refinement = (
+        fields["impact"] == "none"
+        and labels_balanced
+        and all(path == "CHANGELOG.md" or path.startswith("docs/") for path in paths)
+    )
+    if fields["impact"] != added_impact and not docs_only_refinement:
         fail(
             f"declared impact {fields['impact']} must equal newly added changelog impact "
             f"{added_impact}"
         )
-    if edited_labels and fields["impact"] == "none":
-        eligible = all(path == "CHANGELOG.md" or path.startswith("docs/") for path in paths)
-        if not eligible:
-            fail("no-impact pending-note refinement is limited to documentation changes")
+    if added_impact == "major" and is_placeholder(fields.get("migration", "")):
+        fail("an added major entry requires migration guidance")
     if fields["impact"] != "none":
         if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
             fail("non-none impact requires curated changelog change and evidence")
-    if (
-        removed or semver(after["version"]) < semver(before["version"])
-    ) and is_placeholder(fields.get("withdrawal", "")):
+    label_removed = any(removed_labels[label] > added_labels[label] for label in removed_labels)
+    if (label_removed or semver(after["version"]) < semver(before["version"])) and is_placeholder(
+        fields.get("withdrawal", "")
+    ):
         fail("removing pending content or lowering target requires withdrawal rationale")
     print(
         json.dumps(
@@ -818,6 +829,10 @@ def check_state(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "ok", **result}, sort_keys=True))
 
 
+def show_host_state(args: argparse.Namespace) -> None:
+    print(json.dumps(get_host_state(args), sort_keys=True))
+
+
 def release_notes(root: Path, ref: str, tag: str, source: str) -> str:
     text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
     section = next(
@@ -856,17 +871,28 @@ def verify_checks(args: argparse.Namespace) -> None:
         if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
             fail("publication check page is malformed")
         runs.extend(page["check_runs"])
-    passed = {
-        run.get("name")
-        for run in runs
-        if isinstance(run, dict)
-        and run.get("head_sha") == args.source
-        and run.get("status") == "completed"
-        and run.get("conclusion") == "success"
-    }
-    missing = [name for name in required if name not in passed]
-    if missing:
-        fail(f"selected source lacks successful required checks: {', '.join(missing)}")
+    latest: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if (
+            not isinstance(run, dict)
+            or run.get("name") not in required
+            or run.get("head_sha") != args.source
+            or (run.get("app") or {}).get("slug") != "github-actions"
+            or not isinstance(run.get("id"), int)
+        ):
+            continue
+        name = str(run["name"])
+        if name not in latest or run["id"] > latest[name]["id"]:
+            latest[name] = run
+    blocked = [
+        name
+        for name in required
+        if name not in latest
+        or latest[name].get("status") != "completed"
+        or latest[name].get("conclusion") != "success"
+    ]
+    if blocked:
+        fail(f"selected source lacks latest trusted successful checks: {', '.join(blocked)}")
     print(json.dumps({"status": "verified", "checks": required}, sort_keys=True))
 
 
@@ -921,7 +947,7 @@ def verify_authority(args: argparse.Namespace) -> None:
         and (pull.get("merged_by") or {}).get("type") == "User"
     ]
     if not matches:
-        fail("selected main source lacks an ordinary human-merged same-repository PR")
+        fail("selected main source lacks an ordinary human-merged PR into this repository")
     print(json.dumps({"status": "authorized", "source": args.source}, sort_keys=True))
 
 
@@ -935,8 +961,35 @@ def sha256(path: Path) -> str:
 
 def verify_host_state(args: argparse.Namespace) -> None:
     state = load_json(args.state)
+    if not isinstance(state, dict):
+        fail("publication state must be an object")
     expected_notes = args.notes.read_text(encoding="utf-8").strip()
-    tag_target, release = state.get("tag_target"), state.get("release")
+    if state.get("schema_version") == 1:
+        if state.get("drafts_visible") is not True:
+            fail("publication attempt requires write-visible draft inventory")
+        matches = [
+            item
+            for item in state.get("releases", [])
+            if isinstance(item, dict) and item.get("tag") == args.tag
+        ]
+        if len(matches) > 1:
+            fail(f"duplicate releases for {args.tag} are ambiguous")
+        item = matches[0] if matches else None
+        tag_target = state.get("tags", {}).get(args.tag)
+        release = (
+            {
+                "draft": item.get("draft"),
+                "tag_name": item.get("tag"),
+                "name": item.get("name"),
+                "target_commitish": item.get("target"),
+                "body": item.get("body"),
+                "assets": item.get("assets"),
+            }
+            if item
+            else None
+        )
+    else:
+        tag_target, release = state.get("tag_target"), state.get("release")
     if tag_target is not None and tag_target != args.source:
         fail("existing tag does not target selected source")
     if release is None:
@@ -1026,6 +1079,10 @@ def parser() -> argparse.ArgumentParser:
     state.add_argument("--ref", default="HEAD")
     add_host_args(state)
     state.set_defaults(func=check_state)
+
+    inventory = sub.add_parser("host-state")
+    add_host_args(inventory)
+    inventory.set_defaults(func=show_host_state)
 
     publication = sub.add_parser("verify-publication")
     publication.add_argument("--source", required=True)

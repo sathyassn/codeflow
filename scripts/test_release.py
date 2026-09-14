@@ -96,7 +96,14 @@ class Repository:
                 "impact": "major",
                 "id": "pre-policy-v3",
             },
-            "required_publication_checks": ["release state", "codeflow gates"],
+            "required_publication_checks": [
+                "release state",
+                "codeflow gates",
+                "rust (format + test + clippy)",
+                "windows (build + test + clippy)",
+                "secret scan",
+                "security review",
+            ],
             "watched_contract_paths": ["docs/releasing.md", "assets/**"],
         }
         self.write(".release/config.json", json.dumps(value, indent=2) + "\n")
@@ -456,6 +463,13 @@ class BaselineTests(unittest.TestCase):
         baseline = release.resolve_baseline(self.config, state, cwd=self.repo.root)
         self.assertEqual(baseline.version, "2.0.0")
 
+    def test_write_visible_duplicate_drafts_are_ambiguous(self) -> None:
+        source = "b" * 40
+        draft = {"tag": "v3.0.0", "draft": True, "target": source, "assets": []}
+        state = self.state({}, [draft, dict(draft)])
+        with self.assertRaisesRegex(release.ReleaseError, "duplicate draft"):
+            release.resolve_baseline(self.config, state, cwd=self.repo.root)
+
     def test_bootstrap_preserves_distinct_tag_and_published_source(self) -> None:
         baseline = release.resolve_baseline(
             self.config, json.loads(self.repo.host.read_text()), cwd=self.repo.root
@@ -550,6 +564,27 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("docs: claim none")
         with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
             self.run_check(base, head, self.repo.body("none"))
+
+    def test_new_major_cannot_hide_behind_a_same_label_rewrite(self) -> None:
+        self.repo.pending("3.0.0", [("major", "existing break")])
+        base = self.repo.commit("feat!: existing break")
+        self.repo.pending(
+            "3.0.0",
+            [("patch", "existing break was narrowed"), ("major", "new hidden break")],
+        )
+        head = self.repo.commit("fix: mix reclassification and new break")
+        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+            self.run_check(
+                base,
+                head,
+                self.repo.body("patch", withdrawal="Existing break was narrowed."),
+            )
+        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+            self.run_check(
+                base,
+                head,
+                self.repo.body("major", withdrawal="Existing break was narrowed."),
+            )
 
     def test_feat_then_exact_revert_can_be_net_none(self) -> None:
         base = self.repo.target
@@ -655,6 +690,19 @@ class PullRequestTests(unittest.TestCase):
             ),
         )
 
+    def test_major_note_refinement_still_requires_migration_guidance(self) -> None:
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        base = self.repo.commit("feat!: pending break")
+        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        head = self.repo.commit("docs: clarify breaking note")
+        with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+            self.run_check(base, head, self.repo.body("none", contract="not-applicable"))
+        self.run_check(
+            base,
+            head,
+            self.repo.body("none", contract="not-applicable", migration="docs/migrate.md"),
+        )
+
     def test_actual_unreleased_and_staged_section_can_adopt_new_model(self) -> None:
         old = (
             "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- new guidance\n\n"
@@ -718,8 +766,17 @@ class PublicationTests(unittest.TestCase):
         state = self.repo.root / "checks.json"
         source = self.repo.target
         good = [
-            {"name": name, "head_sha": source, "status": "completed", "conclusion": "success"}
-            for name in ["release state", "codeflow gates"]
+            {
+                "id": index,
+                "name": name,
+                "head_sha": source,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "github-actions"},
+            }
+            for index, name in enumerate(
+                release.load_config(self.repo.config)["required_publication_checks"], 1
+            )
         ]
         state.write_text(json.dumps([{"check_runs": good}]))
         args = self.repo.args(state=state, source=source)
@@ -727,6 +784,11 @@ class PublicationTests(unittest.TestCase):
         good[1]["head_sha"] = "f" * 40
         state.write_text(json.dumps([{"check_runs": good}]))
         with self.assertRaisesRegex(release.ReleaseError, "codeflow gates"):
+            release.verify_checks(args)
+        good[1]["head_sha"] = source
+        good.append({**good[1], "id": 99, "conclusion": "failure"})
+        state.write_text(json.dumps([{"check_runs": good}]))
+        with self.assertRaisesRegex(release.ReleaseError, "latest trusted"):
             release.verify_checks(args)
 
     def test_publication_rejects_a_selected_snapshot_after_main_changes(self) -> None:
@@ -770,6 +832,34 @@ class PublicationTests(unittest.TestCase):
             state.write_text(json.dumps(changed))
             with self.subTest(changed=changed), self.assertRaises(release.ReleaseError):
                 release.verify_host_state(args)
+
+    def test_publication_attempt_uses_one_write_visible_paginated_inventory(self) -> None:
+        source = "c" * 40
+        notes = self.repo.root / "notes.md"
+        notes.write_text("reviewed\n")
+        state = self.repo.root / "state.json"
+        draft = {
+            "tag": "v3.0.0",
+            "draft": True,
+            "prerelease": False,
+            "name": "v3.0.0",
+            "target": source,
+            "body": "reviewed",
+            "assets": [],
+        }
+        inventory = {
+            "schema_version": 1,
+            "drafts_visible": True,
+            "tags": {"v3.0.0": source},
+            "releases": [draft],
+        }
+        state.write_text(json.dumps(inventory))
+        args = argparse.Namespace(state=state, source=source, tag="v3.0.0", notes=notes)
+        release.verify_host_state(args)
+        inventory["releases"].append(dict(draft))
+        state.write_text(json.dumps(inventory))
+        with self.assertRaisesRegex(release.ReleaseError, "duplicate releases"):
+            release.verify_host_state(args)
 
     def test_release_notes_strip_internal_markers_and_bind_source(self) -> None:
         self.repo.pending("2.0.1", [("patch", "reviewed fix")])

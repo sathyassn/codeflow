@@ -22,7 +22,11 @@
   "release_unit": "codeflow",
   "required_publication_checks": [
     "release state",
-    "codeflow gates"
+    "codeflow gates",
+    "rust (format + test + clippy)",
+    "windows (build + test + clippy)",
+    "secret scan",
+    "security review"
   ],
   "schema_version": 2,
   "watched_contract_paths": [

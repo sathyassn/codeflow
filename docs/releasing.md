@@ -166,8 +166,9 @@ and blocks claiming that platform's release qualification.
    still equal current main and be the result of an ordinary PR human-merged
    into this repository's main. Contributor forks remain valid. No static
    allowlist or second-human role is implied.
-4. The supported local-artifact job checks source/version/notes, the exact-source
-   `release state` and `codeflow gates` checks, and write-visible host collisions,
+4. The supported local-artifact job checks source/version/notes, the latest
+   exact-source GitHub Actions results for `release state`, `codeflow gates`,
+   Rust, Windows, secret scan, and security review, plus write-visible host collisions,
    then creates or resumes only an exact empty draft.
    The supported global-artifact job rechecks main after platform builds.
    Failed or cancelled guards block host and announce. This narrows but cannot

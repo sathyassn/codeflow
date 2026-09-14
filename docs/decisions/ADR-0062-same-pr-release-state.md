@@ -43,7 +43,8 @@ tag-only workflow on `main`. Both the actor and rerunning actor must be GitHub
 Users with current write, maintain, or admin permission. The selected
 `GITHUB_SHA` must still be current main, come from an ordinary PR human-merged
 into this repository's main (including a contributor fork), pass the
-exact-source `release state` and `codeflow gates` checks, match the pending
+latest exact-source GitHub Actions release-state, aggregate, Rust, Windows,
+secret-scan, and security-review checks, match the pending
 version and notes,
 and have no conflicting host state. The supported cargo-dist local and global
 custom jobs enforce those checks; failed or cancelled guards block hosting.
