@@ -117,23 +117,24 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
             "codeflow test --mode essential --strict",
         ],
     );
-    assert_contains(
+    // Projects may extend their PR template without changing the shared scaffold.
+    // Both still owe the same evidence contract.
+    for path in [
         "assets/base/ci/pull_request_template.md",
-        &[
-            "git log --oneline",
-            "git diff --stat",
-            "Do not write from the last",
-            "measured TOTAL from the project's command",
-            "name revision, command, metric, and scope",
-            "CI PASS alone is insufficient",
-        ],
-    );
-    let asset = read("assets/base/ci/pull_request_template.md");
-    let live = read(".github/pull_request_template.md");
-    assert_eq!(
-        asset, live,
-        "live PR template must match assets/base/ci/pull_request_template.md"
-    );
+        ".github/pull_request_template.md",
+    ] {
+        assert_contains(
+            path,
+            &[
+                "git log --oneline",
+                "git diff --stat",
+                "Do not write from the last",
+                "measured TOTAL from the project's command",
+                "name revision, command, metric, and scope",
+                "CI PASS alone is insufficient",
+            ],
+        );
+    }
 }
 
 #[test]

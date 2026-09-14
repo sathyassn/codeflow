@@ -10,9 +10,11 @@
        it — no jargon, no internal shorthand; say what it means for the user.
      - Evidence over claims, numbers over adjectives.
 
-     Type and breaking-change are NOT re-declared here. They come from your
-     conventional commits — `type(scope): …` and the `!` / `BREAKING CHANGE:`
-     footer — which drive the version bump and the CHANGELOG.
+     Follow the project's release policy for impact declarations and notes.
+     Conventional commits — `type(scope): …` and the `!` / `BREAKING CHANGE:`
+     footer — must agree with its authoritative release input. They calculate
+     versions only if that project uses a commit-driven release tool; do not
+     introduce a second calculator alongside fragments or another policy.
 
      Delete unused tables and `## Notes` when empty. Keep evidence gaps explicit;
      blank placeholders and invented numbers are not completed evidence. -->

@@ -1,21 +1,38 @@
 # Releasing codeflow
 
 How a codeflow release is cut, and how a project that *consumes* codeflow should
-think about its own versioning. Decision record: ADR-0012 (supersedes ADR-0010).
+think about its own versioning. Decision record: ADR-0062 (supersedes the
+release-state portions of ADR-0012 and ADR-0061).
 Use [the release checklist](release-checklist.md) as the evidence-bearing
 approval record for every run of this procedure.
 
 ## codeflow's own releases
 
-Version source of truth: `Cargo.toml [workspace.package] version` (all three
-crates inherit it via `version.workspace = true`). Releases are conventional-commit
-driven and human-gated. Two tools do the work:
+Version source of truth: the reviewed impact annotations adjacent to entries in
+the one undated pending CHANGELOG section. The cumulative target is the latest
+verified public version bumped once by the highest remaining pending impact.
+`Cargo.toml [workspace.package] version` and the lock/scaffold stamps must
+match. Conventional markers are conservative mismatch tripwires, not another
+calculator.
 
-- **git-cliff** derives the next SemVer **and** the changelog from the
-  Conventional Commits the commit-msg gate already enforces — reading git history
-  only, so it never publishes or runs `cargo package`.
+One publisher remains:
+
 - **cargo-dist** builds four target binaries plus shell and PowerShell
-  installers and publishes the GitHub Release, triggered by the version tag.
+  installers and is the only tag, release, and artifact publisher. Its
+  generated workflow runs only by explicit human dispatch on `main`.
+
+PRs carry one `Release impact` section. `scripts/release.py check-pr` compares
+the declaration with the current target, actual proposed merge tree, pending
+annotations, coupled stamps, and conventional-marker floor. It checks known
+contradictions and watched contracts; it does not infer compatibility. Put one
+`codeflow:release-impact patch|minor|major` HTML marker directly before
+each new pending entry. A withdrawal removes the affected entry/marker and
+explains in the PR body why the remaining net contract permits the lower target.
+
+Use a plain `revert:` only when the resulting change has no shipped release
+impact. A revert that changes supported behavior or a public contract must use
+the `fix:`, `feat:`, or breaking marker that describes the resulting release,
+with matching PR impact and curated pending notes.
 
 ### Cross-build toolchain
 
@@ -127,47 +144,54 @@ Keep native macOS, Linux and Windows execution claims separate from cross-target
 type checking. Missing native platform or installer evidence remains explicit
 and blocks claiming that platform's release qualification.
 
-### The runbook
+### Same-PR preparation and deliberate publication
 
-Prerequisite: install the release-pinned git-cliff version
-(`cargo install git-cliff --version 2.13.1 --locked`, or the matching prebuilt
-binary from <https://github.com/orhun/git-cliff/releases>).
+1. Add curated notes and adjacent impact markers to the normal work PR's
+   undated pending version section. Run
+   `python3 scripts/release.py sync --repository sathyassn/codeflow`. It
+   discovers public state read-only, calculates from the latest verified public
+   release, and updates coupled stamps through Cargo and `codeflow update`
+   only when needed. It never pushes, opens a PR, tags, or publishes.
+   Read-scoped PR/main checks cannot see GitHub draft releases and do not claim
+   that they can; draft absence is checked later inside the write-scoped,
+   read-only-in-behavior publisher guards.
+2. Refresh against the current target before merge. PR CI checks the actual
+   proposed merge tree, not conflict absence. Main-push CI repeats the state
+   check without writing. Without strict branch protection a stale clean merge
+   remains possible, so the human merger must require the fresh check.
+3. When evidence is complete, a human with current write, maintain, or admin
+   permission explicitly dispatches cargo-dist's generated Release workflow
+   with `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor
+   must both be GitHub Users with effective permission. `GITHUB_SHA` must
+   still equal current main and be the result of an ordinary PR human-merged
+   into this repository's main. Contributor forks remain valid. No static
+   allowlist or second-human role is implied.
+4. The supported local-artifact job checks source/version/notes, the latest
+   exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
+   Rust, Windows, secret scan, and security review, plus write-visible host collisions,
+   then creates or resumes only an exact empty draft.
+   The supported global-artifact job rechecks main after platform builds.
+   Failed or cancelled guards block host and announce. This narrows but cannot
+   atomically close the small scheduler/API race before hosting; changed main
+   fails and requires deliberate redispatch. Its concurrency group covers the
+   authority job, not the whole generated workflow, so operate one deliberate
+   publication at a time; no-clobber and partial-attempt checks remain the
+   safety boundary if runs overlap.
+5. cargo-dist uploads without `--clobber` and announces last. Its
+   post-announce verifier compares tag/source and every asset name, size, and
+   SHA-256 digest to the same-run files.
 
-```sh
-# 1. Refresh remote truth and choose an explicit remote-tracking base: latest
-#    main for a standalone release, or the accepted integration candidate after
-#    every required task has landed. Verify it is the reviewed commit.
-git fetch --prune --tags origin
-BASE=origin/main  # or origin/integration/EPC-NNN-<slug>
-EXPECTED="<reviewed-commit-sha>"
-test "$(git rev-parse "$BASE^{commit}")" = "$EXPECTED"
-git switch -c chore/release "$BASE"
+The bootstrap preserves v2.1's historical public-source/tag mismatch as two
+facts. Later baselines advance automatically only from a stable public release
+with an exact-source marker and asset digests. A stable-looking prerelease,
+draft, or tag without a verified public release is not a baseline.
 
-# 2. Compute the next version from the conventional commits since the last tag:
-NEXT=$(git cliff --bumped-version)        # current history resolves to v3.0.0
-echo "$NEXT"
+If publication stops, never move/delete its tag or overwrite assets. No tag or
+release means reverify current main and redispatch. An exact empty draft or
+exact tag-only attempt may resume. A draft with assets, mismatched draft, or tag
+with another source needs explicit recovery. A public version is spent forever.
+Material work and withdrawals remain blocked while an attempt is unresolved.
 
-# 3. Bump the single workspace version (all three crates inherit it):
-#    edit Cargo.toml -> [workspace.package] version = "<NEXT without the leading v>"
-#    then refresh the lockfile:
-cargo build
-
-# 4. Generate a review aid; do not write it over the curated changelog:
-git cliff --unreleased --tag "$NEXT" > /tmp/codeflow-release-notes.md
-
-# 5. Promote the curated Unreleased body in CHANGELOG.md to a dated release,
-#    restore an empty Unreleased section above it, and reconcile the draft.
-#    Preserve human-written migrations and comparison links; rerunning this
-#    procedure must not duplicate a release section.
-
-# 6. Commit and open a PR:
-git commit -am "chore(release): $NEXT"
-git push -u origin chore/release   # then open the PR
-```
-
-- A **human merges** the release PR when required checks are evidenced green
-  (ADR-0006/0007; an infra-killed duplicate job is not a failed check) — agents never
-  merge to `main`.
 - **Before tagging, re-verify the harness-parity claims** against the
   currently installed harness versions — these surfaces move fast, and
   ADR-0008/ADR-0013/ADR-0014 and docs/adoption.md's cross-harness section pin
@@ -209,25 +233,27 @@ git push -u origin chore/release   # then open the PR
     macOS/Linux architecture and the PowerShell installer on Windows; confirm
     WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
 
-  Record new verification in a current ADR/release note and update
-  docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
-- After merge, tag the release; the tag drives cargo-dist:
+Record new verification in a current ADR/release note and update
+docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
 
-  ```sh
-  git tag -a "$NEXT" -m "CodeFlow $NEXT" && git push origin "$NEXT"
-  ```
+The generated release workflow uses the repository's scoped `GITHUB_TOKEN`; it
+does not provision a PAT or publication credential. Hosted settings can still
+prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
+Treat a zero-step or permission failure as absent evidence and repair the
+repository setting—never bypass the source and publication guards.
 
-  A real tag push triggers `.github/workflows/release.yml` — **no PAT or bot
-  needed**.
+### Historical bridge into v3
 
-### Why not release-plz / a bot?
-
-release-plz was evaluated and removed (ADR-0012): it is publish-centric and
-cannot `cargo package` this unpublished binary workspace. If full PR-bot
-automation (a bot opens the release PR for you) is wanted later, **release-please**
-fits — it has no crates.io coupling, unlike release-plz — but it needs a Personal
-Access Token so its tag triggers cargo-dist. Until then, the runbook above is the
-reliable, verifiable path.
+The live `v2.1.0` tag remains at
+`d70c6f17d4bf199a545c843856b3ded4681aff20` and is the immutable historical
+comparison point. The published `source.tar.gz` independently identifies
+commit `3c3efdb91009361e18b0fabad699b5e875d4e4dd` and has SHA-256
+`1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb`.
+The release target and published source agree with each other, not with the
+current tag. The bootstrap records all three facts, does not move the tag, and
+accepts the already-staged `3.0.0` pending section. After that version is
+published, the verified public release—not this bootstrap record—becomes the
+automatic baseline.
 
 ## Versioning in a project that consumes codeflow
 
@@ -240,7 +266,7 @@ conventional, any of these has clean input:
 | Situation | Reasonable choice |
 |---|---|
 | Rust crate, published to crates.io | `release-plz` (the standard) or `cargo-release` |
-| Rust binaries, not published | `git-cliff` + `cargo-dist` — what codeflow itself uses |
+| Rust binaries, not published | `git-cliff` + `cargo-dist`, or an equivalent reviewed policy |
 | Any language, PR-based automation | `release-please` |
 | Changelog only | `git-cliff` or `conventional-changelog` |
 

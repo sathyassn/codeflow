@@ -6,6 +6,7 @@ name: codeflow-ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main, master]
 
@@ -13,6 +14,40 @@ permissions:
   contents: read
 
 jobs:
+  release-impact:
+    name: release impact
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Validate reviewed release intent
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin "$BASE_REF"
+          python3 scripts/release.py check-pr \
+            --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY
+
+  release-state:
+    name: release state
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Validate merged release state without writes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/release.py check-state --ref "$GITHUB_SHA"
+
   gates:
     name: codeflow gates
     runs-on: ubuntu-latest

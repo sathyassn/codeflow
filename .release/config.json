@@ -1,0 +1,45 @@
+{
+  "bootstrap": {
+    "comparison": {
+      "commit": "d70c6f17d4bf199a545c843856b3ded4681aff20",
+      "tag": "v2.1.0"
+    },
+    "published": {
+      "changelog_sha256": "56aeff28b413cfe728288982218bf376a2a9b3ed40407f8ca156cbb7474b2e52",
+      "release_target_commit": "3c3efdb91009361e18b0fabad699b5e875d4e4dd",
+      "source_archive_sha256": "1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb",
+      "source_commit": "3c3efdb91009361e18b0fabad699b5e875d4e4dd",
+      "version": "2.1.0"
+    }
+  },
+  "legacy_pending_group": {
+    "id": "pre-policy-v3",
+    "impact": "major",
+    "sha256": "2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e",
+    "version": "3.0.0"
+  },
+  "main_branch": "main",
+  "release_unit": "codeflow",
+  "required_publication_checks": [
+    "release state",
+    "codeflow gates",
+    "rust (format + test + clippy)",
+    "windows (build + test + clippy)",
+    "secret scan",
+    "security review"
+  ],
+  "schema_version": 2,
+  "watched_contract_paths": [
+    ".github/workflows/**",
+    ".codeflow/**",
+    "assets/**",
+    "Cargo.lock",
+    "Cargo.toml",
+    "CHANGELOG.md",
+    "crates/codeflow-cli/src/**",
+    "crates/codeflow-core/src/**",
+    "dist-workspace.toml",
+    "docs/adoption.md",
+    "docs/releasing.md"
+  ]
+}

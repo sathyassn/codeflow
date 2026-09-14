@@ -31,6 +31,9 @@ or one obvious local check.
 
 ## Workflows
 
+- For release policy, impact or publication, follow AGENTS.md's release route
+  and the project-owned authority; do not create a Claude-specific versioning
+  process or treat a normal merge as publication approval.
 - `/cf-model-orchestrator` is the host-neutral Claude+Codex default for every
   non-trivial repository task, including research, analysis, planning, design,
   review, substantive docs, implementation, and verification. In this Claude

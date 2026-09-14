@@ -52,11 +52,13 @@ all of it. What `--standard` adds is the *method*: the develop-loop skills, the
 reviewer agents, the traceability spine, and project machinery. Enforcement is
 the floor; the tiers scale project-management.
 
-A team may relax specific rules by editing `.codeflow/policy.json` if it
-deliberately chooses to, but that is **not recommended**: conventional-commit
-discipline is load-bearing for codeflow's versioning and changelog automation —
-git-cliff derives the version bump and the CHANGELOG from the commit history, so
-softening the commit rules quietly breaks it.
+A team may deliberately change specific rules in `.codeflow/policy.json`, but
+first assess their consumers: weakening commit discipline can break a
+commit-driven release process. The consuming project owns its release units,
+version calculator, changelog and publication approval; installing CodeFlow
+does not install its repository release pipeline or make scaffold metadata the
+project's version. Discover that policy before release work; propose missing
+automation for adoption rather than silently enabling publication.
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ task/ spike/ experiment/ integration/`. Pick by work intent.
@@ -68,12 +70,13 @@ softening the commit rules quietly breaks it.
   Other git-trailer footers are blocked unless the project opts them in — a team
   can allow specific trailers, require a ticket reference, or require
   `Signed-off-by` (DCO) via `policy.json`.
-- **Breaking changes:** before each commit, ask whether it changes anything a
-  consumer depends on (API, CLI flags, config schema, file formats, defaults,
-  managed-file semantics). If yes, mark `type!:` and add a `BREAKING CHANGE:`
-  footer with the migration path — the footer drives the major bump. A
-  `policy.json` `breaking_watch_paths` glob warns on an unmarked touch of a
-  declared surface, but detection is a judgment call, not a gate.
+- **Breaking changes:** assess compatibility of API, CLI flags, config,
+  formats, defaults and managed instructions before each commit. An actual
+  incompatible change requires `type!:` and a `BREAKING CHANGE:` migration
+  footer. Touching an interface is not automatically breaking. Follow the
+  project's release policy and reconcile any required impact explanation with
+  its authoritative input. `breaking_watch_paths` warns about touched surfaces;
+  independent review checks the meaning, not just the commit label.
 - **No AI attribution, ever:** no `Co-Authored-By` AI trailers, no "Generated
   with …" lines, no robot emoji — in commit messages and PR bodies.
 - **No emoji** in commit subjects or PR bodies.

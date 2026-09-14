@@ -76,6 +76,12 @@ itself a blocker finding — return changes_requested.
    the same diff (capability entry for a closing FEAT epic, architecture.md when
    an ADR declares architecture impact, spec frozen at ship); commit subjects
    follow `type(scope): description` with no AI attribution and no emoji.
+   For release impact, apply the project's adopted policy and
+   `.claude/skills/cf-ship/references/release-policy.md`. Challenge the actual
+   compatibility/guarantee change, release unit, authoritative input and
+   migration evidence; a `docs:` label or touched path is not a classification.
+   Verify candidate/source identity and fresh human publication authority when
+   publication is in scope. Do not impose CodeFlow's own versioning tools.
 7. Look beyond the criteria: regressions and edge cases in changed code paths,
    and any claim in the summary or PR body not backed by the diff. Where the
    changed path is performance-, scale-, or concurrency-sensitive, inspect

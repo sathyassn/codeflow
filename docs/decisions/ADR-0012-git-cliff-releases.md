@@ -3,7 +3,7 @@ id: ADR-0012
 title: version + changelog via git-cliff (replacing release-plz); cargo-dist releases
 date: 2026-07-05
 status: accepted
-superseded_by: null
+superseded_by: ADR-0061
 architecture_impact: none
 ---
 
