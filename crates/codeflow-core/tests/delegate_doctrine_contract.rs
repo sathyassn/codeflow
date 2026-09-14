@@ -79,9 +79,17 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
             ],
         );
     }
-    for asset in [CONSULT, CUSTOMIZE, ORCHESTRATOR] {
+    for asset in [CONSULT, CUSTOMIZE] {
         assert_contains(asset, &[LIFECYCLE_ARROW, "bounded cleanup"]);
     }
+    assert_contains(
+        ORCHESTRATOR,
+        &[
+            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "exact-byte delivery",
+            "bounded cleanup",
+        ],
+    );
     // The lifecycle replaced the legacy signal protocol: no shipped skill may
     // reintroduce `tmux wait-for` as the work protocol.
     for asset in [DELEGATE_SKILL, ADAPTER, CONSULT, ORCHESTRATOR] {
@@ -137,13 +145,20 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
             ],
         );
     }
-    for asset in [DELEGATE_SKILL, ADAPTER, ORCHESTRATOR, CONSULT] {
+    for asset in [DELEGATE_SKILL, ADAPTER, CONSULT] {
         assert_contains(asset, &["user scope"]);
         assert!(
             !read(asset).contains("user or CLI scope"),
             "{asset} incorrectly promises lifecycle settings composition through repeated CLI flags"
         );
     }
+    assert_contains(
+        ORCHESTRATOR,
+        &[
+            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "foreground-return contract",
+        ],
+    );
 }
 
 #[test]
@@ -349,6 +364,45 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     for template in [AGENTS_TMPL, AGENTS_MINIMAL_TMPL] {
         assert_contains(template, &[provenance]);
     }
+}
+
+#[test]
+fn consult_exhausts_qualified_fallback_without_weakening_auth_or_lineage() {
+    assert_contains(
+        CONSULT,
+        &[
+            "missing or incompatible preferred plugin/CLI is a lane failure",
+            "Exhaust the qualified native alternatives",
+            "authentication failure still stops for operator action",
+            "After every qualified other-vendor route is unavailable",
+            "Never substitute the host's own vendor",
+        ],
+    );
+}
+
+#[test]
+fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
+    assert_contains(
+        ROUTING,
+        &[
+            "Propagate current observed unavailability into every later worker choice",
+            "do not infer that sibling models or another account are unavailable",
+            "Before launching any Claude worker, **read and follow**",
+            "claude-turn-completion.md",
+            "collect the worker result before the primary returns",
+            "preserve the existing Stop-hook and lifecycle safety policy unchanged",
+        ],
+    );
+    assert_contains(
+        ADAPTER,
+        &[
+            "## Sequential turns",
+            "Collect delegated worker results before the primary returns",
+            "do not use Claude Bash `run_in_background` watchers",
+            "work is still running is incomplete",
+            "schema-v2 cannot correlate that continuation",
+        ],
+    );
 }
 
 #[test]

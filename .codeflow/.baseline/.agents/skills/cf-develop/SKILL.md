@@ -1,11 +1,13 @@
 ---
 name: cf-develop
-description: Build planned work through a build → review → verify loop with bounded rework. Use when implementing a feature or change that already has acceptance criteria.
+description: Implements a planned feature or change through a build → review → verify loop. Use when acceptance criteria are settled and implementation is authorized, either inside cf-model-orchestrator or as its recorded solo fallback after a required interactive seat is unavailable. Do not use as an alternate entry point for non-trivial work.
 ---
 
 # cf-develop — build, review, verify
 
-Drive the planned work to done.
+Drive the planned implementation stage to done. For non-trivial work this skill
+supports `cf-model-orchestrator`; it runs alone only after orchestrator preflight
+records the required interactive seat unavailable and the reduced assurance.
 
 1. Locate the work and its acceptance criteria (epic, task, spec, or the user's
    prompt). No stated criteria → stop and run the clarity gate from `cf-plan`
@@ -31,7 +33,12 @@ Drive the planned work to done.
       tests where they carry the risk; preserve
       justified reuse, modular boundaries, and explicit
       failure handling while adding no speculative behavior, abstraction, or
-      dependency. Use small
+      dependency. Apply the quality contract's existing-stack typed-interface
+      and runtime trust-boundary rule: preserve useful types, justify material
+      unchecked/broad bypasses, validate untrusted external values at the
+      boundary, and test accepted invalid-input behavior. Do not add redundant
+      wrappers or validators or force a stricter compiler, dependency, language,
+      or stack migration merely for compliance. Use small
       conventional commits. When a remote
       is configured, push the branch after each committed unit so work survives a
       machine failure — backup, not a merge (`--force-with-lease` if you rewrote

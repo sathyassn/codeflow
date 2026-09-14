@@ -92,10 +92,12 @@
       "id": "cf-develop",
       "scent": ["implement", "acceptance"],
       "should_trigger": [
-        "Implement the feature that already has acceptance criteria"
+        "Implement the feature that already has acceptance criteria",
+        "Build the planned feature through its acceptance-backed implementation loop"
       ],
       "should_not_trigger": [
-        "Write a brief for an epic, not a feature change"
+        "Write a brief for an epic, not a feature change",
+        "Start planned work without the orchestrator or settled criteria"
       ]
     },
     {
