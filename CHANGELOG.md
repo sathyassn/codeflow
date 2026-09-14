@@ -24,6 +24,11 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact patch -->
+- **Release migration detection.** Historical `[Unreleased]` comparison links
+  no longer cause existing pending notes to be counted as new PR changes.
+  Migration handling still requires an actual unreleased section heading.
+
 <!-- codeflow:release-impact minor -->
 - **Same-work-PR release state (ADR-0062).** Normal work PRs now carry the
   curated pending note, impact annotation, and cumulative version stamps they
