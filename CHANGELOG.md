@@ -25,6 +25,12 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Opt-in Claude context policy.** Repository-owned settings select a
+  1M window and 50-percent compaction target. Customization explains effective
+  window limits, consumer overrides and manual-versus-automatic evidence;
+  generic settings presets and immutable delegated-run settings are unchanged.
+
+<!-- codeflow:release-impact patch -->
 - **Instruction workflow consistency.** Required stage references preserve
   planning, safety and review duties while clarifying mature-task reuse,
   docs-only recovery, qualified worker fallback and meaningful type/runtime

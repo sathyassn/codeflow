@@ -424,6 +424,63 @@ mod tests {
     }
 
     #[test]
+    fn top_level_env_is_consumer_owned_and_preserved_wholesale() {
+        let user = r#"{
+            "env": {
+                "KEEP_PROJECT_VALUE": "yes",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000"
+            }
+        }"#;
+        let incoming = r#"{
+            "env": {
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+            }
+        }"#;
+
+        let mut report = vec![];
+        let merged = merge_settings(user, incoming, &mut report).unwrap();
+        let actual: Value = serde_json::from_str(&merged).unwrap();
+        let expected: Value = serde_json::from_str(user).unwrap();
+
+        assert_eq!(actual["env"], expected["env"]);
+        assert!(report
+            .iter()
+            .any(|line| line == "settings: preserved user value for \"env\""));
+    }
+
+    #[test]
+    fn absent_and_non_object_env_are_not_silently_rewritten() {
+        let mut absent_report = vec![];
+        let absent = merge_settings("{}", PRESET, &mut absent_report).unwrap();
+        let absent: Value = serde_json::from_str(&absent).unwrap();
+        assert!(absent.get("env").is_none());
+
+        let malformed = r#"{"env": ["not", "a", "string map"]}"#;
+        let mut malformed_report = vec![];
+        let merged = merge_settings(malformed, PRESET, &mut malformed_report).unwrap();
+        let merged: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(merged["env"], serde_json::json!(["not", "a", "string map"]));
+    }
+
+    #[test]
+    fn project_env_is_idempotent_across_generic_updates() {
+        let user = r#"{
+            "env": {
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+            }
+        }"#;
+        let mut first_report = vec![];
+        let once = merge_settings(user, PRESET, &mut first_report).unwrap();
+        let mut second_report = vec![];
+        let twice = merge_settings(&once, PRESET, &mut second_report).unwrap();
+
+        assert_eq!(once, twice);
+        assert!(second_report.is_empty());
+    }
+
+    #[test]
     fn removes_stale_codeflow_hooks_only() {
         let user = r#"{
             "hooks": {

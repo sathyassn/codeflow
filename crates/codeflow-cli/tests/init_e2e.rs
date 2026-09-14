@@ -253,6 +253,18 @@ fn assert_engine_placeholders_rendered(root: &Path) {
 /// the managed regions regenerate to byte-identical content.
 fn assert_update_round_trips(root: &Path) {
     let agents_before = read(root, "AGENTS.md");
+    let settings_path = root.join(".claude/settings.json");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&read(root, ".claude/settings.json")).unwrap();
+    settings["env"] = serde_json::json!({
+        "KEEP_PROJECT_VALUE": "opaque",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000"
+    });
+    std::fs::write(
+        &settings_path,
+        format!("{}\n", serde_json::to_string_pretty(&settings).unwrap()),
+    )
+    .expect("write consumer-owned settings env");
     let settings_before = read(root, ".claude/settings.json");
     let selected_binding = r#"{
   "schema_version": 1,
@@ -291,7 +303,7 @@ fn assert_update_round_trips(root: &Path) {
     assert_eq!(
         normalize_crlf(&read(root, ".claude/settings.json")),
         normalize_crlf(&settings_before),
-        "settings merge did not round-trip"
+        "settings merge did not preserve the consumer-owned env across repeated updates"
     );
     assert_eq!(
         read(root, ".codeflow/model-selection.json"),

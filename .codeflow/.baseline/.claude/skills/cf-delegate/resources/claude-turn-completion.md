@@ -26,6 +26,14 @@ transcripts, and it makes zero tmux calls — waiting is pure file polling.
    flags are not a supported composition mechanism — then prove the composed
    boundary with the preflight canary.
 
+A consuming project may opt into a context-window/compaction environment in its
+ordinary `.claude/settings.json`. Never copy that `env` into the immutable task
+settings or add another `--settings` flag. Before arming, verify the effective
+model window and environment through a public native surface; requested values
+are not applied evidence. A manual compact tests continuity, not the automatic
+threshold, and any compact restart poisons this run: recover with a new run id
+and state directory.
+
 ## Tracked synchronous task mode
 
 For every schema-v2 Claude process, set

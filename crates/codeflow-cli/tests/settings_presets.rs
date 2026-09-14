@@ -68,6 +68,10 @@ fn settings_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings")
 }
 
+fn normalized(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The preset files actually shipped, derived from the directory listing —
 /// every invariant test iterates this, so a newly dropped-in preset is
 /// covered the moment it lands, not only once someone remembers a constant.
@@ -149,6 +153,75 @@ fn presets_parse_as_json() {
     for name in preset_files() {
         let value = load(&name);
         assert!(value.is_object(), "{name}: top level must be an object");
+    }
+}
+
+#[test]
+fn repository_context_policy_is_exact_and_generic_presets_stay_opt_in() {
+    let path = settings_dir().join("../../../.claude/settings.json");
+    let bytes =
+        std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let repository: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        repository["env"],
+        serde_json::json!({
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+        })
+    );
+
+    for name in preset_files() {
+        assert!(
+            load(&name).get("env").is_none(),
+            "{name}: a consuming project must opt into the context policy"
+        );
+    }
+}
+
+#[test]
+fn context_policy_guidance_pins_scope_effect_and_lifecycle_caution() {
+    let root = settings_dir().join("../../..");
+    let customize = normalized(
+        &std::fs::read_to_string(root.join("assets/base/agents/skills/cf-customize/SKILL.md"))
+            .unwrap(),
+    );
+    let policy = normalized(
+        &std::fs::read_to_string(
+            root.join("assets/base/agents/skills/cf-customize/references/claude-context-policy.md"),
+        )
+        .unwrap(),
+    );
+    let adapter = normalized(
+        &std::fs::read_to_string(
+            root.join("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md"),
+        )
+        .unwrap(),
+    );
+
+    assert!(customize.contains("references/claude-context-policy.md"));
+    for marker in [
+        "This is project customization, not a generic CodeFlow default",
+        "effective 1M window",
+        "200K-limited session remains 200K",
+        "roughly 100K",
+        "environment controls outrank corresponding command, flag, or settings choices",
+        "percentage override applies to qualifying main and subagent sessions",
+        "preserves the whole value and does not deep-merge incoming keys",
+        "inspect without printing sensitive values",
+        "Present only the proposed non-secret context-key delta and any conflicts",
+        "A malformed object is a reported configuration error",
+        "configured value, or requested launch is not runtime evidence",
+        "manual compaction/resume check",
+        "does not prove the automatic threshold",
+    ] {
+        assert!(policy.contains(marker), "context policy lost: {marker}");
+    }
+    for marker in [
+        "Never copy that `env` into the immutable task settings",
+        "requested values are not applied evidence",
+        "any compact restart poisons this run",
+    ] {
+        assert!(adapter.contains(marker), "adapter lost: {marker}");
     }
 }
 
