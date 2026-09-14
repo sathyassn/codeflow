@@ -38,7 +38,7 @@ test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead. These required staged routes keep startup concise.
+path instead. Required staged routes keep startup concise.
 
 ## Outcome modes
 
@@ -169,8 +169,8 @@ Codex via official `codex` CLI and the app-server daemon
 (Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
 Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
 harnesses delegate to one native host unless both lanes are proven. Missing lane:
-exhaust qualified `cf-delegate` routes before recorded solo fallback. Host is not
-duty; Claude produces design.
+exhaust qualified routes before recorded solo fallback. Host is not duty; Claude
+produces design.
 
 ## Preflight
 
@@ -243,8 +243,9 @@ duty; Claude produces design.
    availability, applied selection, or savings.
 
 Preflight solo `/cf-develop` requires exhausted qualified `cf-delegate` routes,
-recorded missing seat/reduced assurance, and separate read-only review where
-possible; auth failure stops. A mid-run failure gets bounded retry/diagnosis, then
+recorded missing seat/reduced assurance, and fresh-context independent review:
+`cf-reviewer` when available, else a separate read-only pass; self-review is not
+review. Auth failure stops; a mid-run failure gets bounded retry/diagnosis, then
 human escalation—never a silent downgrade.
 
 ## Workflow
