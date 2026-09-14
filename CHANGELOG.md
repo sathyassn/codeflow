@@ -25,6 +25,13 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Workflow verification and guard boundaries.** Catalog and workflow checks
+  cover the shipped instruction surface. Prepared reference transactions fail
+  closed when an active local check cannot read or evaluate its input; docs
+  distinguish installed local safeguards from actual remote enforcement and
+  preserve the qualified interactive-only delegation policy.
+
+<!-- codeflow:release-impact patch -->
 - **Opt-in Claude context policy.** Repository-owned settings select a
   1M window and 50-percent compaction target. Customization explains effective
   window limits, consumer overrides and manual-versus-automatic evidence;

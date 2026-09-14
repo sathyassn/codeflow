@@ -16,10 +16,11 @@
 //! file. The repo is its own first consumer, so the shipped manifest and the
 //! shipped mirrors must stay honest here first.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use codeflow_core::scaffold::{DirSource, ScaffoldManifest};
+use codeflow_core::scaffold::{DirSource, ManifestEntry, Ownership, ScaffoldManifest, Tier};
+use pulldown_cmark::{Event, Parser, Tag};
 
 /// Repo root, resolved from this crate's manifest dir (`crates/codeflow-core`).
 /// Same locator the manifest unit test uses (`env!("CARGO_MANIFEST_DIR")` up two
@@ -111,6 +112,413 @@ fn dir_names(dir: &Path) -> BTreeSet<String> {
         }
     }
     names
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CatalogMetadata {
+    name: String,
+    description: String,
+}
+
+fn catalog_metadata(document: &str) -> Result<CatalogMetadata, String> {
+    let mut lines = document.lines();
+    if lines.next() != Some("---") {
+        return Err("missing opening YAML frontmatter delimiter".to_string());
+    }
+    let mut yaml = String::new();
+    let mut closed = false;
+    for line in lines {
+        if line == "---" {
+            closed = true;
+            break;
+        }
+        yaml.push_str(line);
+        yaml.push('\n');
+    }
+    if !closed {
+        return Err("missing closing YAML frontmatter delimiter".to_string());
+    }
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(&yaml).map_err(|error| format!("malformed YAML: {error}"))?;
+    let mapping = value
+        .as_mapping()
+        .ok_or_else(|| "frontmatter must be a YAML mapping".to_string())?;
+    let required = |field: &str| {
+        mapping
+            .get(serde_yaml::Value::String(field.to_string()))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("missing or empty string `{field}`"))
+    };
+    Ok(CatalogMetadata {
+        name: required("name")?,
+        description: required("description")?,
+    })
+}
+
+fn catalog_entry(dest: &str) -> Option<(&'static str, String)> {
+    for prefix in [".claude/skills/", ".agents/skills/"] {
+        if let Some(name) = dest
+            .strip_prefix(prefix)
+            .and_then(|path| path.strip_suffix("/SKILL.md"))
+            .filter(|path| !path.contains('/'))
+        {
+            return Some(("skill", name.to_string()));
+        }
+    }
+    dest.strip_prefix(".claude/agents/")
+        .and_then(|path| path.strip_suffix(".md"))
+        .filter(|path| !path.contains('/'))
+        .map(|name| ("agent", name.to_string()))
+}
+
+fn relative_markdown_references(document: &str) -> Vec<String> {
+    Parser::new(document)
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                let target = dest_url.trim();
+                if target.starts_with('#')
+                    || target.starts_with('/')
+                    || target.contains("://")
+                    || target.starts_with("mailto:")
+                {
+                    return None;
+                }
+                let end = target.find(['#', '?']).unwrap_or(target.len());
+                let path = &target[..end];
+                (!path.is_empty()).then(|| path.replace('\\', "/"))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn resolve_installed_reference(parent: &Path, reference: &str) -> Option<String> {
+    let parent = parent.to_string_lossy().replace('\\', "/");
+    let reference = reference.replace('\\', "/");
+    if reference.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<&str> = parent
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    for part in reference.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+#[test]
+fn catalog_frontmatter_parser_supports_yaml_scalars_and_rejects_bad_metadata() {
+    for (label, document, expected) in [
+        (
+            "plain",
+            "---\nname: cf-plain\ndescription: Plain description\n---\n",
+            ("cf-plain", "Plain description"),
+        ),
+        (
+            "quoted",
+            "---\nname: \"cf-quoted\"\ndescription: 'Quoted description'\n---\n",
+            ("cf-quoted", "Quoted description"),
+        ),
+        (
+            "literal block",
+            "---\nname: cf-literal\ndescription: |\n  First line.\n  Second line.\n---\n",
+            ("cf-literal", "First line.\nSecond line."),
+        ),
+        (
+            "folded block",
+            "---\nname: cf-folded\ndescription: >\n  First line.\n  Second line.\n---\n",
+            ("cf-folded", "First line. Second line."),
+        ),
+    ] {
+        let parsed = catalog_metadata(document).unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert_eq!(parsed.name, expected.0, "{label}");
+        assert_eq!(parsed.description, expected.1, "{label}");
+    }
+
+    for (label, document) in [
+        ("no frontmatter", "# heading\n"),
+        ("unclosed", "---\nname: cf-test\ndescription: test\n"),
+        ("malformed", "---\nname: [\ndescription: test\n---\n"),
+        ("missing name", "---\ndescription: test\n---\n"),
+        (
+            "empty description",
+            "---\nname: cf-test\ndescription: ''\n---\n",
+        ),
+    ] {
+        assert!(catalog_metadata(document).is_err(), "{label}");
+    }
+}
+
+fn catalog_validation_problems(base: &Path, manifest: &ScaffoldManifest) -> (usize, Vec<String>) {
+    let mut names: BTreeMap<(&str, String), String> = BTreeMap::new();
+    let mut problems = Vec::new();
+    let mut catalog_entries = 0usize;
+
+    for entry in &manifest.entries {
+        let Some((kind, expected_name)) = catalog_entry(&entry.dest) else {
+            continue;
+        };
+        catalog_entries += 1;
+        let source_path = base.join(&entry.src);
+        let document = match std::fs::read_to_string(&source_path) {
+            Ok(document) => document,
+            Err(error) => {
+                problems.push(format!(
+                    "{}: cannot read catalog source: {error}",
+                    entry.src
+                ));
+                continue;
+            }
+        };
+        let metadata = match catalog_metadata(&document) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                problems.push(format!("{}: {error}", entry.src));
+                continue;
+            }
+        };
+        if metadata.name != expected_name {
+            problems.push(format!(
+                "{}: metadata name {:?} does not match installed {kind} name {expected_name:?}",
+                entry.src, metadata.name
+            ));
+        }
+        let key = (kind, metadata.name.clone());
+        if let Some(previous) = names.insert(key.clone(), entry.src.clone()) {
+            if previous != entry.src {
+                problems.push(format!(
+                    "duplicate {} catalog name {:?}: {previous} and {}",
+                    key.0, key.1, entry.src
+                ));
+            }
+        }
+
+        for reference in relative_markdown_references(&document) {
+            let Some(dest_parent) = Path::new(&entry.dest).parent() else {
+                problems.push(format!("{}: catalog destination has no parent", entry.dest));
+                continue;
+            };
+            let Some(referenced_dest) = resolve_installed_reference(dest_parent, &reference) else {
+                problems.push(format!(
+                    "{}: linked reference {reference:?} escapes the installed repository root",
+                    entry.src
+                ));
+                continue;
+            };
+            let shipped = manifest.entries.iter().find(|candidate| {
+                candidate.dest == referenced_dest
+                    && entry
+                        .tiers
+                        .iter()
+                        .all(|tier| candidate.tiers.contains(tier))
+            });
+            let Some(shipped) = shipped else {
+                problems.push(format!(
+                    "{}: linked reference {reference:?} is not shipped beside {} for every tier",
+                    entry.src, entry.dest
+                ));
+                continue;
+            };
+            if !base.join(&shipped.src).is_file() {
+                problems.push(format!(
+                    "{}: linked destination {referenced_dest} maps to missing source {}",
+                    entry.src, shipped.src
+                ));
+            }
+        }
+    }
+    problems.sort();
+    problems.dedup();
+    (catalog_entries, problems)
+}
+
+fn catalog_manifest_entry(src: &str, dest: &str, tiers: Vec<Tier>) -> ManifestEntry {
+    ManifestEntry {
+        src: src.to_string(),
+        dest: dest.to_string(),
+        ownership: Ownership::Managed,
+        tiers,
+        exec: false,
+        template: false,
+        preset: None,
+        region: None,
+    }
+}
+
+fn assert_catalog_problem(problems: &[String], expected: &str) {
+    assert!(
+        problems.iter().any(|problem| problem.contains(expected)),
+        "missing {expected:?} in {problems:?}"
+    );
+}
+
+#[test]
+fn shipped_catalog_metadata_and_linked_references_are_valid_and_manifested() {
+    let root = repo_root();
+    let assets_dir = root.join("assets");
+    let base = assets_dir.join("base");
+    let manifest =
+        ScaffoldManifest::load(&DirSource::new(&assets_dir)).expect("shipped manifest loads");
+    let (catalog_entries, problems) = catalog_validation_problems(&base, &manifest);
+    assert!(
+        catalog_entries > 0,
+        "expected shipped skill and agent catalogs"
+    );
+    assert!(
+        problems.is_empty(),
+        "shipped catalog metadata/reference errors:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn catalog_validation_reports_mutated_metadata_references_and_tier_coverage() {
+    assert_eq!(
+        Some(".claude/skills/cf-two/SKILL.md".to_string()),
+        resolve_installed_reference(Path::new(".claude/skills/cf-one"), r"..\cf-two\SKILL.md")
+    );
+    assert_eq!(
+        None,
+        resolve_installed_reference(Path::new(".claude/skills/cf-one"), "../../../../outside.md")
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    let one = base.join("agents/skills/cf-one/SKILL.md");
+    let two = base.join("agents/skills/cf-two/SKILL.md");
+    std::fs::create_dir_all(one.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(two.parent().unwrap()).unwrap();
+    let one_document = "---\nname: cf-one\ndescription: First skill\n---\n\
+Read [the sibling skill](../cf-two/SKILL.md#usage).\n\
+`[example only](missing-example.md)`\n";
+    let two_document = "---\nname: cf-two\ndescription: Second skill\n---\n";
+    std::fs::write(&one, one_document).unwrap();
+    std::fs::write(&two, two_document).unwrap();
+    let manifest = ScaffoldManifest {
+        schema_version: 1,
+        entries: vec![
+            catalog_manifest_entry(
+                "agents/skills/cf-one/SKILL.md",
+                ".claude/skills/cf-one/SKILL.md",
+                vec![Tier::Standard, Tier::Full],
+            ),
+            catalog_manifest_entry(
+                "agents/skills/cf-two/SKILL.md",
+                ".claude/skills/cf-two/SKILL.md",
+                vec![Tier::Standard, Tier::Full],
+            ),
+        ],
+    };
+    assert_eq!(
+        (2, Vec::new()),
+        catalog_validation_problems(base, &manifest)
+    );
+
+    std::fs::write(
+        &one,
+        one_document.replace("name: cf-one", "name: wrong-name"),
+    )
+    .unwrap();
+    let (_, problems) = catalog_validation_problems(base, &manifest);
+    assert_catalog_problem(&problems, "does not match");
+
+    std::fs::write(
+        &one,
+        one_document.replace("../cf-two/SKILL.md#usage", "missing.md"),
+    )
+    .unwrap();
+    let (_, problems) = catalog_validation_problems(base, &manifest);
+    assert_catalog_problem(&problems, "is not shipped");
+
+    std::fs::write(&one, one_document).unwrap();
+    let mut missing_tier = manifest.clone();
+    missing_tier.entries[1].tiers = vec![Tier::Standard];
+    let (_, problems) = catalog_validation_problems(base, &missing_tier);
+    assert_catalog_problem(&problems, "for every tier");
+
+    let duplicate_source = base.join("other/cf-two/SKILL.md");
+    std::fs::create_dir_all(duplicate_source.parent().unwrap()).unwrap();
+    std::fs::write(&duplicate_source, two_document).unwrap();
+    let mut duplicate = manifest.clone();
+    duplicate.entries.push(catalog_manifest_entry(
+        "other/cf-two/SKILL.md",
+        ".agents/skills/cf-two/SKILL.md",
+        vec![Tier::Standard, Tier::Full],
+    ));
+    let (_, problems) = catalog_validation_problems(base, &duplicate);
+    assert_catalog_problem(&problems, "duplicate skill catalog name");
+
+    std::fs::write(
+        &one,
+        one_document.replace("../cf-two/SKILL.md#usage", "../../../../outside.md"),
+    )
+    .unwrap();
+    let (_, problems) = catalog_validation_problems(base, &manifest);
+    assert_catalog_problem(&problems, "escapes the installed repository root");
+}
+
+#[test]
+fn every_manifest_catalog_artifact_matches_live_and_baseline_copies() {
+    let root = repo_root();
+    let assets_dir = root.join("assets");
+    let base = assets_dir.join("base");
+    let manifest =
+        ScaffoldManifest::load(&DirSource::new(&assets_dir)).expect("shipped manifest loads");
+    let mut compared = 0usize;
+    let mut problems = Vec::new();
+    for entry in &manifest.entries {
+        if !entry.dest.starts_with(".claude/skills/")
+            && !entry.dest.starts_with(".agents/skills/")
+            && !entry.dest.starts_with(".claude/agents/")
+        {
+            continue;
+        }
+        compared += 1;
+        let source = base.join(&entry.src);
+        let expected = match std::fs::read(&source) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                problems.push(format!("{}: cannot read source: {error}", entry.src));
+                continue;
+            }
+        };
+        for copy in [
+            root.join(&entry.dest),
+            root.join(".codeflow/.baseline").join(&entry.dest),
+        ] {
+            match std::fs::read(&copy) {
+                Ok(actual) if actual == expected => {}
+                Ok(_) => problems.push(format!(
+                    "{} -> {}: byte drift",
+                    entry.src,
+                    rel(&root, &copy)
+                )),
+                Err(error) => problems.push(format!(
+                    "{} -> {}: cannot read copy: {error}",
+                    entry.src,
+                    rel(&root, &copy)
+                )),
+            }
+        }
+    }
+    assert!(compared > 0, "expected manifest catalog artifacts");
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "manifest-derived catalog source/live/baseline drift:\n  {}",
+        problems.join("\n  ")
+    );
 }
 
 #[test]

@@ -211,16 +211,19 @@ human-merge-only. The integration branch is not a backdoor — its content reach
 The git standards are enforced in layers, and the layers are not equal. Local git
 hooks and the `git-guard` PreToolUse hook are **fast feedback** — they catch the
 normal ways work goes wrong in-session, before a push, but an agent on the local host
-can in principle edit or skip them. CI and remote branch protection are the
-**authoritative perimeter**: server-enforced, so that same agent cannot bypass them
-(arm it with `codeflow remote protect`). The local layer is convenience; the remote
-layer is the real boundary.
+can edit or skip them. Required CI and remote rules form a server-side boundary
+only when configured and enforced for the actor's permissions.
+`codeflow remote protect` configures supported rules; verify availability and
+success, not just scaffold files.
+Inspect required checks, bypass rights and actual results before claiming an
+**authoritative perimeter**. Local checks remain required defense in depth.
 
-That asymmetry is what makes the override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
-tokens) safe to exist: they are a human-terminal convenience, not authentication, and
-are contained precisely because the boundary that matters is remote. Setting one
-in-session to slip past a local gate is laundering — the gate stands in for the remote
-check it mirrors, so defeating it locally proves nothing.
+Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are not authentication or
+proof of safety. They establish no remote boundary; agents must never set them
+to slip past a local gate. That is laundering even
+when remote protection is unavailable. Report the missing boundary, retain the
+project's safety and review duties, and do not imply local checks replace
+server-side enforcement.
 
 ## When an ADR is warranted — Tier-3 triggers
 

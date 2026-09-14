@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Organic prompts for description-trigger checks. Grade by whether the named skill description should match, not by agent self-report. Negatives must share non-scent description words and omit the skill's scent.",
+  "notes": "Organic prompts for lexical description-trigger diagnostics. Grade by whether the named skill description should match, not by agent self-report. Negatives must share non-scent description words and omit the skill's scent. These checks do not establish runtime routing or model qualification.",
   "skills": [
     {
       "id": "cf-docs-portal",
@@ -48,7 +48,9 @@
       "should_trigger": [
         "Turn this brief into an epic and tasks",
         "Write the spec after the duo settled the plan",
-        "Allocating an epic, spec, or ADR after discovery"
+        "Allocating an epic, spec, or ADR after discovery",
+        "Plan this research-only technical choice into an evidence-grounded spec, and stop before implementation",
+        "Material discovery invalidated the agreed spec, so return to planning and revise the task before more code"
       ],
       "should_not_trigger": [
         "Implement TSK-014",
@@ -93,11 +95,14 @@
       "scent": ["implement", "acceptance"],
       "should_trigger": [
         "Implement the feature that already has acceptance criteria",
-        "Build the planned feature through its acceptance-backed implementation loop"
+        "Build the planned feature through its acceptance-backed implementation loop",
+        "Implement the mature planned feature with settled acceptance criteria while reusing its existing architecture",
+        "Implement the authorized change with settled acceptance criteria after recording that the required interactive seat is unavailable and assurance is reduced"
       ],
       "should_not_trigger": [
         "Write a brief for an epic, not a feature change",
-        "Start planned work without the orchestrator or settled criteria"
+        "Start planned work without the orchestrator or settled criteria",
+        "Review the completed documentation and report its failing check without editing it"
       ]
     },
     {
@@ -114,7 +119,8 @@
       "id": "cf-reviewer",
       "scent": ["evaluator", "acceptance"],
       "should_trigger": [
-        "Independent evaluator for completed work against acceptance criteria"
+        "Independent evaluator for completed work against acceptance criteria",
+        "Independently evaluate the completed documentation against its acceptance criteria and return a read-only changes-requested verdict for the failing check"
       ],
       "should_not_trigger": [
         "Write production code rather than a verdict"

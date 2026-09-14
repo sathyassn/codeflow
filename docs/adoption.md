@@ -593,14 +593,16 @@ copied into consuming projects by `init` or `update`.
 
 ## Enforcement planes — who catches what
 
-One policy (`.codeflow/policy.json`), four planes — and all four install from
-`--minimal` up: enforcement is the floor, not a standard-tier feature (ADR-0019).
+One policy (`.codeflow/policy.json`), four complementary planes. Minimal installs
+the local floor and CI scaffold, not remote branch protection (ADR-0019).
 Git hooks are harness-agnostic (any agent or human — including Codex); the
 in-session PreToolUse guards (`git-guard` + `exec-guard`) are a fast bonus for
 Claude and, through a byte-compatible payload, an **interactive** Codex session
-(ADR-0008); CI re-runs the gates as the perimeter; remote branch protection is
-the server-side backstop. Local planes are feedback — CI and remote are the
-authoritative line (charter §6.5).
+(ADR-0008). Other harnesses need their qualified event contract. CI re-runs the
+checks; configured remote rules can require their results. The matrix describes
+available coverage, not proof that every plane is active. Verify hook execution,
+harness trust, policy severity, CI results, and actual remote rules and bypass
+permissions. Local checks are required feedback, but remain editable.
 
 | Protection | git hooks | in-session guard | CI | remote |
 |---|---|---|---|---|
@@ -620,6 +622,12 @@ and the protected-base check live in the Claude layer and CI, not the hooks.
 to the git-hook plane only** — the git-guard never trusts them, because an agent
 in a session cannot prove it is a human. `reference-transaction` needs git ≥
 2.28; on older git it is absent and protection falls back to the other planes.
+With active protection, an unreadable or unevaluable prepared transaction
+blocks rather than silently skipping the check. The current input contract is
+UTF-8: non-UTF-8 input also blocks, including remote-only transactions; valid
+UTF-8 remote-only input retains its fast path. Inspect the reported cause and
+tool/backend compatibility; do not disable the guard or automatically convert
+repository storage to evade it.
 
 ### How far the discipline reaches across harnesses
 
@@ -627,33 +635,33 @@ codeflow has two kinds of thing: **enforcement** (gates that block) and
 **guidance** (instructions and skills that inform). They reach different
 distances, so be precise about what a given harness actually gets:
 
-- **Enforcement is universal — it binds *any* harness (and a human).** The git
+- **Git hooks and CI are harness-neutral.** The git
   client hooks and CI are harness-agnostic: they act on git operations and PRs,
   not on which tool produced them. So conventional-commit format, the secret
   scan, no-AI-attribution, branch/push/protected-merge rules, and the test gate
-  apply to Claude Code, Codex, a future CLI, or a human at a terminal, equally.
-  This is the authoritative floor; nothing opts out of it.
-- **In-session guards are Claude + interactive Codex.** The PreToolUse
+  run for Claude Code, Codex, a future CLI, or a human when the relevant hooks
+  and CI execute. Installed files do not make these checks unbypassable.
+- **In-session guards require qualified harness integration.** The PreToolUse
   `git-guard`/`exec-guard` add fast, pre-git feedback. They are wired for Claude
   (`.claude/settings.json`) and, via a byte-compatible payload, an **interactive**
-  Codex session (`.codex/hooks.json`, ADR-0008). Headless `codex exec` does not
-  fire PreToolUse hooks — it is bound by the git-hook plane + CI instead. That
-  guard gap is one reason headless execution is no longer a sanctioned
-  cross-model transport (ADR-0018): the consult/delegate/duo flows run
-  interactive-only, where the guards live.
+  Codex session (`.codex/hooks.json`, ADR-0008); the Grok adapter has its own
+  qualified event contract. Historical headless hook gaps motivated ADR-0018,
+  but are not a universal claim about every current harness. The
+  consult/delegate/duo flows remain interactive-only independently of whether
+  a headless mode can run hooks.
 - **Guidance (AGENTS.md + the `cf-*` skills) is Claude + Codex.** Both read the
   repo `AGENTS.md` operating contract; the skills ship to `.claude/skills/`
   (Claude) and `.agents/skills/` (Codex). The **workflow** runtime
   (`pipeline.workflow.js`) is Claude-Code-only.
 - **A harness codeflow does not specifically integrate** (for example Google's
-  Antigravity `agy`) is **still bound by the git-hook plane + CI** — because those
+  Antigravity `agy`) can still receive the git-hook plane + CI because those
   are harness-agnostic — but does **not** receive the in-session guards, the
   skills, or (verified on `agy` 1.0.15) the `AGENTS.md` instructions. Its reliable
-  boundary is enforcement, not guidance.
+  coverage is the configured, verified hook/CI plane, not assumed guidance.
 
-The one-line version: **codeflow *enforces* the same rules on every harness (git
-hooks + CI); it *guides* Claude and Codex.** Any tool that touches the repo is
-disciplined; the richer in-session help is where the integrations are.
+The one-line version: CodeFlow shares policy across harness-neutral checks;
+native guidance and in-session guards depend on the installed integration.
+Missing planes are disclosed without relaxing safety or review duties.
 
 **Verified against:** codex-cli 0.144.3 and Claude Code 2.1.220 on 2026-08-02
 (with earlier hook-specific evidence retained by ADR-0008, ADR-0013, and
@@ -661,12 +669,14 @@ ADR-0014). These surfaces (hook payload contracts, config schemas) move fast on
 both sides; the release checklist
 ([docs/releasing.md](releasing.md)) re-verifies them before each codeflow tag.
 
-## Delegation quickstart (optional)
+## Delegation quickstart
 
-Cross-vendor consult and delegation is opt-in (ADR-0005; transport refined by
-ADR-0059—interactive-only, preferred lanes with qualified native fallback). One-time setup: authenticate
-Codex manually, enable `codex@openai-codex` in Claude Code, and install the
-Claude CLI plus tmux for the reverse lane. Codeflow never automates auth.
+Standard/full projects use the duo for non-trivial work; standalone consults
+are available when an outside opinion is useful. Minimal does not install the
+method. Transport remains interactive-only, with preferred lanes and qualified
+native fallback (ADR-0059). One-time setup: authenticate Codex manually, enable
+`codex@openai-codex` in Claude Code, and install the Claude CLI with Herdr
+(tmux as the documented degraded host) for the reverse lane. Codeflow never automates auth.
 `codeflow doctor` reports inspectable prerequisites; retain a scoped
 interactive canary in each direction.
 
@@ -690,11 +700,16 @@ interactive canary in each direction.
 When a repo is driven through OpenAI's Codex CLI instead of Claude, protection
 comes from two layers, and it helps to be precise about which does what.
 
-- **The git-hook plane binds Codex unconditionally.** It is harness-agnostic —
-  a Codex `git push --force origin main` against protected `main` is refused by
+- **The git-hook plane is harness-agnostic when installed and executed.**
+  A Codex `git push --force origin main` against protected `main` is refused by
   the `pre-push` shim (`codeflow pre-push: BLOCKED — policy rule
   git.push_to_protected`) exactly as any agent's would be. Verified live on
-  codex-cli 0.142.5. This needs no Codex configuration.
+  codex-cli 0.142.5. This needs no Codex configuration, but local hook files and
+  Git configuration remain editable; it is not an unbypassable boundary.
+  An active prepared-transaction check that cannot read or evaluate its input
+  blocks the transaction. Inspect the reported cause and repository/toolchain
+  compatibility before retrying; preserve work and repair the supported path,
+  rather than disabling the hook or automatically converting repository storage.
 - **The in-session PreToolUse guards are an interactive-Codex bonus.** The
   scaffold ships a `.codex/` starter (part of the enforcement floor, from
   `--minimal` up): `hooks.json`
@@ -716,11 +731,16 @@ interactive `codex` session once to trust the CodeFlow hooks. **Note:** in testi
 on codex-cli 0.142.5, headless `codex exec` did not run project PreToolUse hooks
 even with `--dangerously-bypass-hook-trust` and the layer trusted — so treat the
 in-session guards as an interactive-session safeguard, and rely on the git-hook
-plane (which always applies) for headless Codex runs. codeflow's own flows no
+plane where Git invokes the installed hooks. codeflow's own flows no
 longer produce headless runs: ADR-0018 makes cross-model transport
 interactive-only (consult/delegate/duo never shell out to `codex exec`), so a
-headless Codex run happens only when a user starts one — and the git-hook
-plane + CI still bind it.
+headless Codex run is outside those flows. Do not generalize that historical
+Codex observation to every harness: Claude's
+[programmatic-mode documentation](https://code.claude.com/docs/en/headless)
+states that ordinary noninteractive sessions load project hooks, while bare
+mode skips their automatic discovery. This does not authorize headless
+CodeFlow work. In every mode, verify actual local hook execution and any
+required CI/remote rules rather than inferring protection from installed files.
 
 A Codex-primary session can host the full duo, not only a consult. The host
 owns orchestration and routes production by the qualified capability binding,

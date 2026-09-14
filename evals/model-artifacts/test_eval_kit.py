@@ -207,6 +207,23 @@ class SuiteContractTests(unittest.TestCase):
     def test_shipped_suite_is_valid(self) -> None:
         self.assertEqual([], eval_kit.validate_suite(project_root()))
 
+    def test_full_selection_covers_every_registered_case_and_trial(self) -> None:
+        _, cases_doc, _ = eval_kit.suite_documents()
+        all_case_ids = {case["id"] for case in cases_doc["cases"]}
+        expected_full = {
+            (case_id, trial)
+            for case_id in all_case_ids
+            for trial in range(1, cases_doc["full_trials"] + 1)
+        }
+        self.assertEqual(
+            expected_full,
+            eval_kit.expected_trial_pairs("full", cases_doc),
+        )
+        self.assertEqual(
+            {(case["id"], 1) for case in cases_doc["cases"] if case["canary"]},
+            eval_kit.expected_trial_pairs("canary", cases_doc),
+        )
+
     def test_composed_release_pack_is_ordered_and_unique(self) -> None:
         cases = eval_kit.resolve_pack("release-smoke")
         self.assertEqual(len(cases), len(set(cases)))
