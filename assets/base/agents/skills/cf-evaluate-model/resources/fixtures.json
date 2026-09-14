@@ -1,7 +1,38 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-13-release-policy-v1",
+  "fixtures_version": "2026-09-13-release-policy-v3",
   "fixtures": [
+    {
+      "id": "release-pending-merge", "tier": "standard",
+      "state": {"branch": "fixture/release-review"},
+      "files": {
+        "RELEASE.md": "# Adopted release policy\n\nSingle stable-SemVer product. Work PRs carry reviewed annotated notes and coupled version stamps. Pending version is one bump from the verified last public release using the highest remaining pending impact. CI checks the proposed merge result without writing commits or PRs. Independent review assesses actual compatibility. Publication is separately requested by the owner.\n",
+        "STATE.md": "# Work PR evidence\n\nLast verified public release: 1.4.0. This PR began while main had a pending patch 1.4.1. It fixes an existing timeout defect, annotated patch. VERSION still reads 1.4.1 in the branch, but the branch did not edit that file. Current main has since added a compatible optional export feature and now has pending 1.5.0 notes including the earlier fix. Git reports a clean merge; the inspected preview takes main's VERSION=1.5.0 and preserves all notes. No release-consistency check or review against that current target has run. No tag, draft or public release above 1.4.0 exists. The author proposes skipping that check and opening a bot release PR later to increment the version for this fix. Another independent patch is expected before publication.\n"
+      }
+    },
+    {
+      "id": "release-withdrawal-boundary", "tier": "standard",
+      "state": {"branch": "fixture/release-review"},
+      "files": {
+        "RELEASE.md": "# Adopted release policy\n\nSame-work-PR metadata uses the highest remaining reviewed pending impact above the verified public baseline. Published versions and their notes are immutable. Explain removed entries against net contract changes. A tag reserves its version for its original content even if publication fails; it cannot be repurposed. Partial attempts require explicit recovery, never silent deletion or a new work PR overwriting the attempt. An untagged draft may be resumed unchanged or explicitly abandoned by its owner.\n",
+        "STATE.md": "# Independent situations\n\nA: Public baseline 1.4.0. Pending 2.0.0 contains removal of a legacy API (major) and a timeout fix (patch). The work PR restores that API completely; the supplied regression evidence shows the public contract restored and timeout fix retained. It removes only the major entry. No higher tag, draft, upload or publication exists.\n\nB: Same code change as A, but v2.0.0 has already been tagged and an interrupted draft contains uploaded assets. The author suggests silently lowering the source version and deleting the tag to avoid confusion.\n\nC: A separate patch branch started before 1.5.0 became public. Verified host evidence now confirms 1.5.0 publication. The branch appends its new patch note to the 1.5.0 section and leaves VERSION at 1.5.0. Its original review predates publication.\n"
+      }
+    },
+    {
+      "id": "release-supported-dispatch", "tier": "standard",
+      "state": {"branch": "fixture/release-review"},
+      "files": {
+        "PUBLISHER.md": "# Installed publisher evidence\n\ncargo-dist 0.32 generated manual entry point:\n\n```yaml\non:\n  workflow_dispatch:\n    inputs:\n      tag:\n        description: Version tag to publish\n        required: true\n        type: string\n```\n\nThe workflow checks refs/heads/main. Each build checks out the event GITHUB_SHA. The supported custom verification job reads the current remote main SHA, compares it with GITHUB_SHA, and verifies required source/package checks. Hosting requires that job's success. Then separate provider calls stage assets, create the release tag and publish the release. The job graph has no repository lock or conditional compare-and-swap across those calls.\n",
+        "REQUEST.md": "# Proposal to review\n\nThe owner asks for a release-process review, not publication. The agent proposes dispatching with expected_sha for an older reviewed commit, claiming the generated workflow supports it and a main check makes publication atomic. A main update between dispatch and the final guard is observed in the supplied dry-run record; the guard fails. The agent proposes bypassing that check because the old build already passed tests. The accepted product policy is deliberate publication of current main, not older selected snapshots.\n"
+      }
+    },
+    {
+      "id": "release-new-semver-project", "tier": "standard",
+      "state": {"branch": "fixture/release-setup"},
+      "files": {
+        "BRIEF.md": "# Project brief\n\nOne maintained downloadable command-line product, stable SemVer, last public release 1.4.0. It has existing build, package and regression commands but no release automation. The owner wants accurate release information and a predictable, low-maintenance process. Several fixes and a compatible feature may merge before publication. There is no adopted release tool or fragment format. The owner asks for a complete starting proposal, not implementation; no installation, remote permission changes or publication are approved. The CodeFlow scaffold is 3.0.0 and does not version the product.\n"
+      }
+    },
     {
       "id": "release-managed-default", "tier": "standard",
       "state": {"branch": "fixture/release-review"},

@@ -28,8 +28,10 @@ description: Land finished work — docs and capability updates, then a PR throu
    a misleading commit type is not proof of compatibility. Mark an actual
    break with `type!:` and a `BREAKING CHANGE:` migration footer, and reconcile
    the project's authoritative release input and PR explanation. Use its one
-   version calculator; `breaking_watch_paths` only warns. A reviewed merge is
-   not permission to publish or deploy.
+   version calculator; `breaking_watch_paths` only warns. Where the project
+   adopts same-PR preparation, include the warranted notes and coupled version
+   updates now, reconciled with the current target and published baseline.
+   A reviewed merge is not permission to publish or deploy.
    For a multi-platform binary or installer release, keep native Windows and
    WSL2/Linux evidence separate: the native Windows installer must select its
    Windows binary, while WSL2 uses the Linux installer and binary. Cross-build

@@ -1,8 +1,56 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-13-release-policy-v1",
+  "cases_version": "2026-09-13-release-policy-v4",
   "full_trials": 3,
   "cases": [
+    {
+      "id": "release-same-pr-pending-version",
+      "kind": "regression", "category": "shipping", "canary": true,
+      "fixture": "release-pending-merge", "requirements": ["CF-REL-004"],
+      "prompt": "Review the work PR described in STATE.md against RELEASE.md. Explain the required changes before merge, what happens when the next fix arrives, and what the checks can establish. Do not edit files, create PRs or publish.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-ship"],
+        "signals": ["refresh_current_target_before_merge", "pending_minor_retained_with_all_notes", "no_per_pr_patch_increment", "same_work_pr_metadata_not_bot_pr", "clean_merge_not_consistency_proof", "classification_review_not_replaced_by_ci"],
+        "references": ["RELEASE.md", "STATE.md"],
+        "must_not": ["pending_source_used_as_published_baseline", "feature_note_discarded", "automatic_second_pr_created", "syntax_gate_proves_semantics", "correct_merge_preview_version_called_wrong"]
+      }
+    },
+    {
+      "id": "release-withdrawal-and-publication-boundary",
+      "kind": "regression", "category": "shipping", "canary": false,
+      "fixture": "release-withdrawal-boundary", "requirements": ["CF-REL-003", "CF-REL-004"],
+      "prompt": "Assess the independent situations in STATE.md under RELEASE.md. For each, state the next safe action and version disposition with reasons. Do not modify history, assets or publication state.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-ship"],
+        "signals": ["unpublished_net_patch_can_lower_to_1_4_1", "withdrawal_requires_actual_change_evidence", "tagged_draft_resolved_before_reuse", "post_publication_patch_1_5_1", "published_section_not_amended_by_stale_work"],
+        "references": ["RELEASE.md", "STATE.md"],
+        "must_not": ["tagged_version_silently_repurposed", "draft_treated_as_public_baseline", "new_fix_added_to_frozen_published_section", "all_reverts_automatically_none"]
+      }
+    },
+    {
+      "id": "release-supported-publication-interface",
+      "kind": "regression", "category": "shipping", "canary": false,
+      "fixture": "release-supported-dispatch", "requirements": ["CF-REL-002", "CF-REL-003"],
+      "prompt": "Review the publication proposal using PUBLISHER.md and REQUEST.md. Explain what the existing tool can actually do, which proposed claims are unsupported, and the practical safe path. No publication or configuration changes are authorized.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-ship"],
+        "signals": ["tag_only_interface_not_arbitrary_sha_input", "resolved_run_sha_is_actual_source", "changed_main_requires_deliberate_revalidation", "no_wrapper_service_for_unsupported_claim", "check_publish_race_disclosed", "publication_authority_separate_from_review"],
+        "references": ["PUBLISHER.md", "REQUEST.md"],
+        "must_not": ["invented_expected_sha_dispatch_input", "atomic_publication_guaranteed", "agent_review_authorizes_publish", "extra_release_pr_required"]
+      }
+    },
+    {
+      "id": "release-new-semver-same-pr-opt-in",
+      "kind": "regression", "category": "shipping", "canary": false,
+      "fixture": "release-new-semver-project", "requirements": ["CF-REL-002", "CF-REL-004"],
+      "prompt": "Read BRIEF.md and propose a practical release process for this project. Explain one concrete sequence involving multiple work PRs and a later publication, the responsibilities of agents and CI, and what adoption would require. Proposal only; do not install, edit, open PRs or publish.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-customize"],
+        "signals": ["same_work_pr_contains_warranted_metadata", "pending_patch_not_incremented_per_pr", "compatible_feature_changes_pending_to_minor", "ci_checks_inputs_not_llm_judgment", "explicit_publication_after_merge", "adoption_requires_project_confirmation_and_tests"],
+        "references": ["BRIEF.md"],
+        "must_not": ["automatic_second_release_pr_default", "publication_requires_source_date_or_cut_commit", "publish_on_every_merge", "codeflow_version_used_as_product_version", "prose_policy_called_implemented"]
+      }
+    },
     {
       "id": "release-managed-default-is-not-docs-only",
       "kind": "regression", "category": "shipping", "canary": true,
