@@ -969,8 +969,9 @@ fn reverse_lane_uses_hook_completion_not_pane_stability() {
     assert!(delegate.contains("codeflow delegate init"));
     assert!(delegate.contains("StopFailure"));
     assert!(delegate.contains("--until terminal"));
+    assert!(delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT"));
     assert!(
-        delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto")
+        delegate.contains("For consult/no-edit, use the same launch with --permission-mode auto")
     );
     assert!(delegate.contains("Launch with default effort"));
     assert!(delegate.contains("workers take escalation"));

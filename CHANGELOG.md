@@ -29,6 +29,8 @@ publication date._
   planning, safety and review duties while clarifying mature-task reuse,
   docs-only recovery, qualified worker fallback and meaningful type/runtime
   boundary checks. Mandatory project gates remain required for every change.
+  Lifecycle-tracked Claude launches keep child reviews synchronous through a
+  process-local setting; ordinary sessions and stored run bindings are unchanged.
 
 <!-- codeflow:release-impact patch -->
 - **Release migration detection.** Historical `[Unreleased]` comparison links

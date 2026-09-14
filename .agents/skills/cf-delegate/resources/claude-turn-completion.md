@@ -26,6 +26,23 @@ transcripts, and it makes zero tmux calls — waiting is pure file polling.
    flags are not a supported composition mechanism — then prove the composed
    boundary with the preflight canary.
 
+## Tracked synchronous task mode
+
+For every schema-v2 Claude process, set
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` after its login shell initializes and
+before Claude starts. Keep this environment launch-local: never add it to global
+settings, generic project presets, or the immutable generated task settings.
+Interactive fork mode otherwise forces subagents into the background and offers
+no `run_in_background` control on the Agent tool. This environment keeps task
+returns synchronous so the tracked turn can collect the actual child result.
+
+The tradeoff is scoped to that Claude process: background Bash tasks, background
+subagents, and Ctrl+B are disabled. Put servers or watchers in separate owned
+panes; independent host-owned native sessions may still run in parallel. Before
+relying on the lane, run a bounded named-child canary and observe its reviewer
+result before that armed turn's `Stop`. A task notification, `UserPromptSubmit`,
+backgrounded Agent, requested environment value, or launch string is not proof.
+
 ## Sibling Stop-hook preflight
 
 Before launching, the operator enumerates the effective Stop-hook set from
@@ -49,9 +66,8 @@ CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE"
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
-  "claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
-# consult / no-edit review (keep auto):
-# claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode auto --settings $STATE/settings.json
+  "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
+# For consult/no-edit, use the same launch with --permission-mode auto.
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until ready --timeout-seconds 120
 printf '%s' "$PROMPT" > "$RUN_TMP/turn-1.prompt"   # outside the repo

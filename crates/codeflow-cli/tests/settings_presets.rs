@@ -153,6 +153,19 @@ fn presets_parse_as_json() {
 }
 
 #[test]
+fn universal_presets_do_not_force_tracked_claude_task_mode() {
+    for name in preset_files() {
+        let path = settings_dir().join(&name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !text.contains("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"),
+            "{name}: synchronous task mode belongs to the tracked process launch, not a universal preset"
+        );
+    }
+}
+
+#[test]
 fn every_hook_command_is_a_known_codeflow_hook() {
     for name in preset_files() {
         let value = load(&name);
