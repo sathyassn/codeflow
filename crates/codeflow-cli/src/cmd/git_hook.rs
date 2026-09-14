@@ -99,10 +99,10 @@ pub fn run(args: &GitHookArgs) -> i32 {
         ),
         StageName::ReferenceTransaction => unreachable!("handled above"),
         StageName::PrePush => {
-            let stdin = match read_hook_input(std::io::stdin(), "pre-push") {
+            let stdin = match read_hook_input(std::io::stdin()) {
                 Ok(stdin) => stdin,
-                Err(note) => {
-                    eprintln!("{note}");
+                Err(error) => {
+                    eprintln!("{}", degraded_hook_input_note("pre-push", &error));
                     String::new()
                 }
             };
@@ -196,16 +196,35 @@ fn current_branch(root: &Path) -> Option<String> {
 /// Handle `git-hook reference-transaction <state>`. Exit 1 on the `prepared`
 /// state cancels the transaction; every other path exits 0.
 fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
+    run_reference_transaction_with_reader(root, args, std::io::stdin())
+}
+
+fn run_reference_transaction_with_reader(
+    root: &std::path::Path,
+    args: &[String],
+    reader: impl Read,
+) -> i32 {
     // Only the `prepared` phase can cancel a transaction; `committed`/`aborted`
     // are notifications. Bail before touching stdin or policy.
     if args.first().map(String::as_str) != Some("prepared") {
         return 0;
     }
-    let stdin = match read_hook_input(std::io::stdin(), "reference-transaction") {
+    let stdin = match read_hook_input(reader) {
         Ok(stdin) => stdin,
-        Err(note) => {
-            eprintln!("{note}");
-            return 0;
+        Err(error) => {
+            // An explicitly inactive policy has nothing to protect. Otherwise
+            // unreadable prepared input leaves the transaction unclassifiable,
+            // so Git must cancel it instead of silently moving a protected ref.
+            let (policy, _armed) = Policy::load_effective(root);
+            if !policy.git.local_ref_protection.is_active()
+                && !policy.git.delete_protected.is_active()
+            {
+                return 0;
+            }
+            eprintln!(
+                "codeflow reference-transaction: could not read reference-transaction input ({error}) — operation blocked while ref protection is active"
+            );
+            return 1;
         }
     };
     // Fast path: no local-branch update in this transaction (e.g. a fetch that
@@ -228,21 +247,25 @@ fn run_reference_transaction(root: &std::path::Path, args: &[String]) -> i32 {
             1,
         ),
         Err(e) => {
-            eprintln!("codeflow reference-transaction: warning: {e} — check skipped");
-            0
+            eprintln!(
+                "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"
+            );
+            1
         }
     }
 }
 
-fn read_hook_input(mut reader: impl Read, stage: &str) -> Result<String, String> {
+fn read_hook_input(mut reader: impl Read) -> std::io::Result<String> {
     let mut input = String::new();
-    reader.read_to_string(&mut input).map_err(|error| {
-        format!(
-            "codeflow {stage}: warning: could not read hook stdin ({error}) — \
-             ref checks degraded; server-side CI remains authoritative"
-        )
-    })?;
+    reader.read_to_string(&mut input)?;
     Ok(input)
+}
+
+fn degraded_hook_input_note(stage: &str, error: &std::io::Error) -> String {
+    format!(
+        "codeflow {stage}: warning: could not read hook stdin ({error}) — \
+         ref checks degraded; server-side CI remains authoritative"
+    )
 }
 
 fn commit_msg(
@@ -321,11 +344,66 @@ mod tests {
     }
 
     #[test]
-    fn stdin_failure_note_names_degraded_stage() {
-        for stage in ["pre-push", "reference-transaction"] {
-            let note = read_hook_input(FailingReader, stage).unwrap_err();
-            assert!(note.contains(stage), "{note}");
-            assert!(note.contains("ref checks degraded"), "{note}");
+    fn pre_push_stdin_failure_note_remains_degraded_and_nonblocking() {
+        let error = read_hook_input(FailingReader).unwrap_err();
+        let note = degraded_hook_input_note("pre-push", &error);
+        assert!(note.contains("pre-push"), "{note}");
+        assert!(note.contains("ref checks degraded"), "{note}");
+    }
+
+    #[test]
+    fn prepared_reference_transaction_stdin_failure_blocks_when_policy_is_active() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            1,
+            run_reference_transaction_with_reader(
+                dir.path(),
+                &["prepared".to_string()],
+                FailingReader,
+            )
+        );
+    }
+
+    #[test]
+    fn prepared_reference_transaction_stdin_failure_passes_when_policy_is_inactive() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            r#"{"git":{"local_ref_protection":"off","delete_protected":"off"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            0,
+            run_reference_transaction_with_reader(
+                dir.path(),
+                &["prepared".to_string()],
+                FailingReader,
+            )
+        );
+    }
+
+    struct PanicReader;
+
+    impl Read for PanicReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            panic!("notification phase must not read stdin")
+        }
+    }
+
+    #[test]
+    fn reference_transaction_notification_phases_do_not_read_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        for phase in ["committed", "aborted"] {
+            assert_eq!(
+                0,
+                run_reference_transaction_with_reader(
+                    dir.path(),
+                    &[phase.to_string()],
+                    PanicReader,
+                ),
+                "{phase}"
+            );
         }
     }
 }

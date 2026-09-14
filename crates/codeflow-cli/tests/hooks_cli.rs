@@ -61,6 +61,10 @@ fn codeflow() -> Command {
 }
 
 fn run_with_stdin(cmd: &mut Command, stdin: &str) -> Output {
+    run_with_stdin_bytes(cmd, stdin.as_bytes())
+}
+
+fn run_with_stdin_bytes(cmd: &mut Command, stdin: &[u8]) -> Output {
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -71,7 +75,7 @@ fn run_with_stdin(cmd: &mut Command, stdin: &str) -> Output {
         .stdin
         .as_mut()
         .expect("stdin piped")
-        .write_all(stdin.as_bytes())
+        .write_all(stdin)
         .expect("stdin written");
     child.wait_with_output().expect("binary exits")
 }
@@ -122,6 +126,24 @@ fn write_policy(dir: &Path, json: &str) {
     let cf = dir.join(".codeflow");
     std::fs::create_dir_all(&cf).unwrap();
     std::fs::write(cf.join("policy.json"), json).unwrap();
+}
+
+fn wire_reference_transaction_hook(dir: &Path) {
+    let hook = dir.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }
 
 fn guard_payload(command: &str, cwd: &Path) -> String {
@@ -733,21 +755,7 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
     git(dir.path(), &["commit", "-m", "feat: ff"]);
     git(dir.path(), &["checkout", "main"]);
 
-    let hook = dir.path().join(".git/hooks/reference-transaction");
-    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
-    std::fs::write(
-        &hook,
-        format!(
-            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
-            env!("CARGO_BIN_EXE_codeflow")
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    wire_reference_transaction_hook(dir.path());
 
     // ff-merge onto protected main is now refused at the git layer.
     let ff = Command::new("git")
@@ -784,6 +792,91 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
         ff_human.status.success(),
         "human override passes the git layer: {}",
         String::from_utf8_lossy(&ff_human.stderr)
+    );
+}
+
+#[test]
+fn reference_transaction_invalid_utf8_blocks_but_pre_push_remains_nonblocking() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+
+    let prepared = run_with_stdin_bytes(
+        codeflow()
+            .args(["git-hook", "reference-transaction", "prepared"])
+            .current_dir(dir.path()),
+        &[0xff],
+    );
+    let prepared_stderr = String::from_utf8_lossy(&prepared.stderr);
+    assert_eq!(prepared.status.code(), Some(1), "{prepared_stderr}");
+    assert!(
+        prepared_stderr.contains("could not read reference-transaction input"),
+        "{prepared_stderr}"
+    );
+    for misleading in ["warning", "check skipped", "ref checks degraded"] {
+        assert!(
+            !prepared_stderr.contains(misleading),
+            "fatal diagnostic contains {misleading:?}: {prepared_stderr}"
+        );
+    }
+
+    let pre_push = run_with_stdin_bytes(
+        codeflow()
+            .args(["git-hook", "pre-push", "origin", "example.invalid"])
+            .current_dir(dir.path()),
+        &[0xff],
+    );
+    let pre_push_stderr = String::from_utf8_lossy(&pre_push.stderr);
+    assert_eq!(pre_push.status.code(), Some(0), "{pre_push_stderr}");
+    assert!(
+        pre_push_stderr.contains("ref checks degraded"),
+        "{pre_push_stderr}"
+    );
+}
+
+#[test]
+fn reference_transaction_non_utf8_remote_input_respects_active_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let input = b"0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/remotes/origin/topic-\xff\n";
+    let run = || {
+        run_with_stdin_bytes(
+            codeflow()
+                .args(["git-hook", "reference-transaction", "prepared"])
+                .current_dir(dir.path()),
+            input,
+        )
+    };
+    let active = run();
+    assert_eq!(active.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&active.stderr)
+        .contains("operation blocked while ref protection is active"));
+
+    std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.path().join(".codeflow/policy.json"),
+        r#"{"git":{"local_ref_protection":"off","delete_protected":"off"}}"#,
+    )
+    .unwrap();
+    let inactive = run();
+    assert_eq!(inactive.status.code(), Some(0));
+    assert!(inactive.stderr.is_empty());
+}
+
+#[test]
+fn reference_transaction_valid_remote_only_input_remains_nonblocking() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "reference-transaction", "prepared"])
+            .current_dir(dir.path()),
+        "0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/remotes/origin/main\n",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -918,6 +1011,99 @@ fn real_wired_reference_transaction_blocks_reset_hard_and_branch_delete_on_prote
         "branch -D of a protected branch is refused"
     );
     assert!(String::from_utf8_lossy(&del.stderr).contains("git.delete_protected"));
+}
+
+#[test]
+fn real_wired_reference_transaction_fails_closed_when_reftable_cannot_be_evaluated() {
+    let dir = tempfile::tempdir().unwrap();
+    let init = Command::new("git")
+        .args(["init", "--ref-format=reftable", "-b", "main"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap();
+    if !init.status.success() {
+        let stderr = String::from_utf8_lossy(&init.stderr);
+        let unsupported = stderr.contains("ref-format")
+            && (stderr.contains("unknown option")
+                || stderr.contains("unknown ref storage format")
+                || stderr.contains("unsupported ref storage format"));
+        if unsupported {
+            eprintln!(
+                "skipping reftable hook regression: installed git lacks --ref-format=reftable: {stderr}"
+            );
+            return;
+        }
+        panic!("reftable repository setup failed unexpectedly: {stderr}");
+    }
+    git(dir.path(), &["config", "user.email", "t@example.com"]);
+    git(dir.path(), &["config", "user.name", "t"]);
+    std::fs::write(dir.path().join("base.txt"), "base\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: init"]);
+    let original = Command::new("git")
+        .args(["rev-parse", "refs/heads/main"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap();
+    assert!(original.status.success());
+    wire_reference_transaction_hook(dir.path());
+
+    let delete = Command::new("git")
+        .args(["update-ref", "-d", "refs/heads/main"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&delete.stderr);
+    assert!(
+        !delete.status.success(),
+        "an unevaluable protected-ref transaction must fail closed: {stderr}"
+    );
+    if stderr.contains("could not evaluate protected-ref transaction") {
+        for misleading in ["warning", "check skipped", "ref checks degraded"] {
+            assert!(
+                !stderr.contains(misleading),
+                "fatal diagnostic contains {misleading:?}: {stderr}"
+            );
+        }
+    } else {
+        assert!(
+            stderr.contains("git.delete_protected"),
+            "a backend with reftable support must enforce the ordinary protected-delete rule: {stderr}"
+        );
+    }
+
+    let retained = Command::new("git")
+        .args(["rev-parse", "refs/heads/main"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap();
+    assert!(
+        retained.status.success(),
+        "protected ref was deleted despite hook failure"
+    );
+    assert_eq!(retained.stdout, original.stdout);
 }
 
 #[test]
