@@ -11,7 +11,13 @@
     ".agents/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "85699f740a34c2328c9d1edf19579b26e45786a38825b1e1fa53637dc445c505",
+      "sha256": "9df5e371fe495ba719d32cbe10f2498479b7fc586feb160505f97fe894d1f187",
+      "exec": false
+    },
+    ".agents/skills/cf-customize/references/claude-context-policy.md": {
+      "src": "agents/skills/cf-customize/references/claude-context-policy.md",
+      "ownership": "managed",
+      "sha256": "a18d18a3a659ec0e1414db58e784e8d55e8df8a45b936bf3cac1cbc6edd601b0",
       "exec": false
     },
     ".agents/skills/cf-delegate/SKILL.md": {
@@ -23,7 +29,7 @@
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "483d2549b5f937f53edf27081ff6d4cd8ccf2c51363c644087cde961d0ba2d62",
+      "sha256": "147186d7003a0869d48e4d644954593ae6160935e686394e142e3aef284e9894",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/native-fallback.md": {
@@ -431,7 +437,13 @@
     ".claude/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "85699f740a34c2328c9d1edf19579b26e45786a38825b1e1fa53637dc445c505",
+      "sha256": "9df5e371fe495ba719d32cbe10f2498479b7fc586feb160505f97fe894d1f187",
+      "exec": false
+    },
+    ".claude/skills/cf-customize/references/claude-context-policy.md": {
+      "src": "agents/skills/cf-customize/references/claude-context-policy.md",
+      "ownership": "managed",
+      "sha256": "a18d18a3a659ec0e1414db58e784e8d55e8df8a45b936bf3cac1cbc6edd601b0",
       "exec": false
     },
     ".claude/skills/cf-delegate/SKILL.md": {
@@ -443,7 +455,7 @@
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "483d2549b5f937f53edf27081ff6d4cd8ccf2c51363c644087cde961d0ba2d62",
+      "sha256": "147186d7003a0869d48e4d644954593ae6160935e686394e142e3aef284e9894",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/native-fallback.md": {

@@ -632,10 +632,16 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 # cf-customize: the post-init customization walk-through (tool preflight +
-# project-artifact tailoring). A single SKILL.md, no resources.
+# project-artifact tailoring), with opt-in context policy guidance.
 [[entry]]
 src = "agents/skills/cf-customize/SKILL.md"
 dest = ".claude/skills/cf-customize/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-customize/references/claude-context-policy.md"
+dest = ".claude/skills/cf-customize/references/claude-context-policy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -995,6 +1001,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-customize/SKILL.md"
 dest = ".agents/skills/cf-customize/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-customize/references/claude-context-policy.md"
+dest = ".agents/skills/cf-customize/references/claude-context-policy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
