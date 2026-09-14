@@ -49,4 +49,4 @@ jobs:
           python3 scripts/release.py verify-published-assets \
             --state /tmp/published-state.json \
             --artifacts-dir /tmp/release-artifacts \
-            --candidate "$GITHUB_SHA" --tag "$tag"
+            --source "$GITHUB_SHA" --tag "$tag"

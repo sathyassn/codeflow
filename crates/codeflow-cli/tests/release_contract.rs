@@ -68,6 +68,13 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         Some("./release-plan-authority")
     );
     assert_eq!(
+        dist.get("global-artifacts-jobs")
+            .and_then(toml::Value::as_array)
+            .and_then(|jobs| jobs.first())
+            .and_then(toml::Value::as_str),
+        Some("./release-main-recheck")
+    );
+    assert_eq!(
         dist.get("post-announce-jobs")
             .and_then(toml::Value::as_array)
             .and_then(|jobs| jobs.first())
@@ -78,28 +85,33 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         dist.get("pr-run-mode").and_then(toml::Value::as_str),
         Some("plan")
     );
-    let authority_permissions = dist
-        .get("github-custom-job-permissions")
-        .and_then(toml::Value::as_table)
-        .and_then(|jobs| jobs.get("release-plan-authority"))
-        .and_then(toml::Value::as_table)
-        .expect("release authority custom-job permissions must be explicit");
-    assert_eq!(
-        authority_permissions
-            .get("contents")
-            .and_then(toml::Value::as_str),
-        Some("write")
-    );
-    assert_eq!(
-        authority_permissions
-            .get("pull-requests")
-            .and_then(toml::Value::as_str),
-        Some("read")
-    );
     assert!(
         dist.get("host-jobs").is_none(),
         "cargo-dist 0.32 host jobs do not gate its host job; authority must be a local artifact"
     );
+}
+
+#[test]
+fn custom_release_jobs_have_exact_scoped_permissions() {
+    let raw = fs::read_to_string(workspace_root().join("dist-workspace.toml"))
+        .expect("dist-workspace.toml must be readable");
+    let config: toml::Value = toml::from_str(&raw).expect("distribution config must be TOML");
+    let jobs = config["dist"]["github-custom-job-permissions"]
+        .as_table()
+        .expect("custom-job permissions must be explicit");
+    let authority = jobs["release-plan-authority"]
+        .as_table()
+        .expect("authority permissions must be a table");
+    assert_eq!(authority["actions"].as_str(), Some("read"));
+    assert_eq!(authority["contents"].as_str(), Some("write"));
+    assert_eq!(authority["pull-requests"].as_str(), Some("read"));
+    assert_eq!(authority["checks"].as_str(), Some("read"));
+    let recheck = jobs["release-main-recheck"]
+        .as_table()
+        .expect("main recheck permissions must be a table");
+    assert_eq!(recheck["actions"].as_str(), Some("read"));
+    assert_eq!(recheck["contents"].as_str(), Some("write"));
+    assert_eq!(recheck["checks"].as_str(), Some("read"));
 }
 
 #[test]
@@ -113,6 +125,8 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         "workflow_dispatch:",
         "custom-release-plan-authority:",
         "uses: ./.github/workflows/release-plan-authority.yml",
+        "custom-release-main-recheck:",
+        "uses: ./.github/workflows/release-main-recheck.yml",
         "plan: ${{ needs.plan.outputs.val }}",
         "gh release upload",
         "gh release edit",
@@ -134,7 +148,16 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         .next()
         .expect("authority call must precede global packaging");
     assert!(custom_call.contains("\"contents\": \"write\""));
+    assert!(custom_call.contains("\"actions\": \"read\""));
     assert!(custom_call.contains("\"pull-requests\": \"read\""));
+    let recheck_call = workflow
+        .split("  custom-release-main-recheck:\n")
+        .nth(1)
+        .expect("generated main recheck call must exist")
+        .split("\n  # Determines if we should publish")
+        .next()
+        .expect("main recheck must precede hosting");
+    assert!(recheck_call.contains("\"actions\": \"read\""));
     let post_announce = workflow
         .split("  custom-release-post-announce:\n")
         .nth(1)
@@ -149,10 +172,27 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
         .next()
         .expect("host job must precede announce");
     assert!(host.contains("- custom-release-plan-authority"));
+    assert!(host.contains("- custom-release-main-recheck"));
     assert!(host.contains("needs.custom-release-plan-authority.result == 'skipped'"));
     assert!(host.contains("needs.custom-release-plan-authority.result == 'success'"));
-    assert!(!host.contains("result == 'failure'"));
-    assert!(!host.contains("result == 'cancelled'"));
+    assert!(host.contains("needs.custom-release-main-recheck.result == 'skipped'"));
+    assert!(host.contains("needs.custom-release-main-recheck.result == 'success'"));
+    for blocked in ["failure", "cancelled"] {
+        assert!(
+            !host.contains(&format!("result == '{blocked}'")),
+            "a {blocked} authority or recheck must block hosting"
+        );
+    }
+    let announce = workflow
+        .split("  announce:\n")
+        .nth(1)
+        .expect("generated announce job must exist")
+        .split("\n  custom-release-post-announce:")
+        .next()
+        .expect("announce must precede post-announce verification");
+    assert!(announce.contains("needs.host.result == 'success'"));
+    assert!(!announce.contains("needs.host.result == 'failure'"));
+    assert!(!announce.contains("needs.host.result == 'cancelled'"));
     let custom = workflow
         .split("  custom-release-plan-authority:\n")
         .nth(1)
@@ -177,56 +217,34 @@ fn generated_release_workflow_uses_cargo_dist_platform_matrix() {
 }
 
 #[test]
-fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary() {
+fn release_workflows_keep_same_pr_and_current_main_boundary() {
     let root = workspace_root();
-    let candidate = fs::read_to_string(root.join(".github/workflows/release-candidate.yml"))
-        .expect("candidate workflow must be readable");
-    for required in [
-        "group: codeflow-release-candidate",
-        "refs/heads/chore/release-codeflow",
-        "cargo install git-cliff --version 2.13.1 --locked",
-        "cargo install cargo-dist --version 0.32.0 --locked",
-        "persist-credentials: false",
-        "GIT_CONFIG_COUNT=1",
-        "GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
-        "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
-        "python3 scripts/release.py guard-refresh",
-        "python3 scripts/release.py finalize",
-        "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1",
-    ] {
-        assert!(
-            candidate.contains(required),
-            "candidate workflow is missing {required}"
-        );
-    }
-
-    let authorize = fs::read_to_string(root.join(".github/workflows/release-authorize.yml"))
-        .expect("authorization workflow must be readable");
-    for required in [
-        "pull_request_target:",
-        "github.event.pull_request.merged == true",
-        "github.event.pull_request.head.ref == 'chore/release-codeflow'",
-        "collaborators/${login}/permission",
-        "select(.user.type == \"User\")",
-        "pull-requests: read",
-        ".parents[1].sha == $head",
-        "scripts/release.py authorize-event",
-        "gh workflow run release.yml",
-        "-f tag=",
-        "git/ref/heads/chore/release-codeflow",
-        "refs/heads/chore/release-codeflow",
-    ] {
-        assert!(
-            authorize.contains(required),
-            "authorization workflow is missing {required}"
-        );
-    }
+    assert!(!root
+        .join(".github/workflows/release-candidate.yml")
+        .exists());
+    assert!(!root
+        .join(".github/workflows/release-authorize.yml")
+        .exists());
+    assert!(!root.join("cliff.toml").exists());
 
     let authority = fs::read_to_string(root.join(".github/workflows/release-plan-authority.yml"))
         .expect("plan authority workflow must be readable");
     for required in [
-        "scripts/release.py verify-dispatch",
-        "scripts/release.py verify-review",
+        "actions: read",
+        "test \"$GITHUB_REF\" = refs/heads/main",
+        "git/ref/heads/main",
+        "test \"$GITHUB_SHA\" = \"$main_sha\"",
+        "GITHUB_TRIGGERING_ACTOR",
+        "collaborators/${login}/permission",
+        "commits/${GITHUB_SHA}/pulls",
+        "pulls/${pr_number}",
+        "merge_commit_sha == env.GITHUB_SHA",
+        "scripts/release.py verify-authority",
+        "check-runs?filter=all&per_page=100",
+        "actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=",
+        "--runs-state /tmp/authority-runs.json",
+        "scripts/release.py verify-publication",
+        "scripts/release.py host-state",
         "scripts/release.py verify-host-state",
         "scripts/release.py release-notes",
         "gh release create",
@@ -235,19 +253,28 @@ fn release_candidate_and_authorization_workflows_keep_human_exact_head_boundary(
         "github.event.inputs.tag != 'dry-run'",
         "plan_tag=",
         "REQUESTED_TAG:",
-        "commits/${candidate}/pulls",
-        "pulls/${pr_number}",
-        "collaborators/${login}/permission",
-        "select(.user.type == \"User\")",
-        "GIT_CONFIG_COUNT=1",
-        "unset auth GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
         "pull-requests: read",
+        "checks: read",
     ] {
         assert!(
             authority.contains(required),
             "plan authority workflow is missing {required}"
         );
     }
+
+    let recheck = fs::read_to_string(root.join(".github/workflows/release-main-recheck.yml"))
+        .expect("main recheck workflow must be readable");
+    assert!(recheck.contains("actions: read"));
+    assert!(recheck.contains("scripts/release.py verify-publication"));
+    assert!(recheck.contains("scripts/release.py verify-checks"));
+    assert!(
+        recheck.contains("actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=")
+    );
+    assert!(recheck.contains("--runs-state /tmp/authority-runs.json"));
+    assert!(recheck.contains("--source \"$GITHUB_SHA\""));
+    assert!(recheck.contains("--main-source \"$main_sha\""));
+    assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));
+    assert!(recheck.contains("collaborators/${login}/permission"));
 
     let published = fs::read_to_string(root.join(".github/workflows/release-post-announce.yml"))
         .expect("post-announce verification workflow must be readable");

@@ -3,7 +3,7 @@ id: ADR-0061
 title: automate release candidates while keeping publication human-authorized
 date: 2026-09-13
 status: accepted
-superseded_by: null
+superseded_by: ADR-0062
 architecture_impact: docs/releasing.md — one maintained candidate PR and exact-source publication guards replace the manual release branch and tag push
 ---
 

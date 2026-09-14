@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""CodeFlow's repository-local release candidate and authorization checks.
-
-This intentionally implements CodeFlow's one-unit release policy, not a
-general release engine.  git-cliff remains the version calculator and
-cargo-dist remains the publisher.
-"""
-
+"""Repository-owned same-PR release-state sync and verification."""
 from __future__ import annotations
 
 import argparse
-import datetime as dt
+from collections import Counter
+from dataclasses import dataclass
 import fnmatch
 import hashlib
 import json
@@ -21,12 +16,17 @@ import sys
 import tomllib
 from typing import Any, NoReturn
 
-
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = ROOT / ".release" / "config.json"
-DEFAULT_RECORD = ROOT / ".release" / "candidate.json"
+DEFAULT_CONFIG = ROOT / ".release/config.json"
 IMPACT_ORDER = {"none": 0, "patch": 1, "minor": 2, "major": 3}
 PLACEHOLDERS = {"", "n/a", "none", "todo", "tbd", "-"}
+STABLE_TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
+IMPACT_MARKER = re.compile(
+    r"<!--\s*codeflow:release-impact\s+(none|patch|minor|major)"
+    r"(?:\s+legacy-group=([a-z0-9][a-z0-9.-]*)\s+sha256=([0-9a-f]{64}))?\s*-->"
+)
+LEGACY_END = "<!-- codeflow:legacy-group-end -->"
+SOURCE_MARKER = "<!-- codeflow-release-source: {source} -->"
 
 
 class ReleaseError(RuntimeError):
@@ -37,9 +37,7 @@ def fail(message: str) -> NoReturn:
     raise ReleaseError(message)
 
 
-def run(
-    args: list[str], *, cwd: Path = ROOT, check: bool = True
-) -> subprocess.CompletedProcess[str]:
+def run(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
@@ -53,34 +51,33 @@ def git(*args: str, cwd: Path = ROOT, check: bool = True) -> str:
     return run(["git", *args], cwd=cwd, check=check).stdout.strip()
 
 
-def load_json(path: Path) -> dict[str, Any]:
+def load_json(path: Path) -> Any:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         fail(f"cannot read {path}: {error}")
-    if not isinstance(value, dict):
-        fail(f"{path} must contain a JSON object")
-    return value
-
-
-def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    config = load_json(path)
-    if config.get("schema_version") != 1 or config.get("release_unit") != "codeflow":
-        fail("release config must be schema v1 for the codeflow release unit")
-    for key in ["main_branch", "candidate_branch", "comparison", "published"]:
-        if key not in config:
+    value = load_json(path)
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != 2
+        or value.get("release_unit") != "codeflow"
+    ):
+        fail("release config must be schema v2 for codeflow")
+    for key in ["main_branch", "bootstrap", "watched_contract_paths"]:
+        if key not in value:
             fail(f"release config is missing {key}")
-    return config
+    if not isinstance(value["bootstrap"], dict):
+        fail("release bootstrap must be an object")
+    return value
 
 
 def normalize_value(value: str) -> str:
     value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] == "`":
+    marker = chr(96)
+    if len(value) >= 2 and value[0] == value[-1] == marker:
         value = value[1:-1].strip()
     return value
 
@@ -97,31 +94,46 @@ def parse_release_impact(body: str) -> dict[str, str]:
     next_heading = re.search(r"(?m)^## ", body[start:])
     section = body[start : start + next_heading.start()] if next_heading else body[start:]
     fields: dict[str, str] = {}
-    for match in re.finditer(r"(?m)^- ([A-Za-z ]+):\s*(.+?)\s*$", section):
+    for match in re.finditer(r"(?m)^- ([A-Za-z ]+):[ \t]*(.*?)[ \t]*$", section):
         key = match.group(1).strip().casefold().replace(" ", "_")
         if key in fields:
-            fail(f"Release impact field {match.group(1)} is duplicated")
+            fail(f"release impact field {match.group(1)} is duplicated")
         fields[key] = normalize_value(match.group(2))
-    required = ["unit", "impact", "rationale", "evidence", "contract"]
-    for key in required:
-        if key not in fields or (key in {"rationale", "evidence"} and is_placeholder(fields[key])):
-            fail(f"Release impact field {key} is required and must be substantive")
-    if fields["unit"] != "codeflow":
-        fail("Release impact unit must be codeflow")
-    if fields["impact"] not in IMPACT_ORDER:
-        fail("Release impact must be none, patch, minor, or major")
+    for key in ["unit", "impact", "rationale", "evidence", "contract"]:
+        if key not in fields or (
+            key in {"rationale", "evidence"} and is_placeholder(fields[key])
+        ):
+            fail(f"release impact field {key} is required and substantive")
+    if fields["unit"] != "codeflow" or fields["impact"] not in IMPACT_ORDER:
+        fail("release unit/impact must be codeflow and none, patch, minor, or major")
     if fields["contract"] not in {"not-applicable", "compatible", "breaking"}:
-        fail("Release impact contract must be not-applicable, compatible, or breaking")
+        fail("release contract must be not-applicable, compatible, or breaking")
     return fields
 
 
+def semver(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value)
+    if not match:
+        fail(f"unsupported stable release version: {value}")
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def bump(version: str, impact: str) -> str:
+    major, minor, patch = semver(version)
+    if impact == "major":
+        return f"{major + 1}.0.0"
+    if impact == "minor":
+        return f"{major}.{minor + 1}.0"
+    if impact == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    return version.removeprefix("v")
+
+
 def commit_impact(base: str, head: str, *, cwd: Path = ROOT) -> str:
+    """Return a conservative conventional-marker floor, never a version."""
     raw = git("log", "--no-merges", "--format=%s%x1f%b%x1e", f"{base}..{head}", cwd=cwd)
     impact = "none"
     for entry in raw.split("\x1e"):
-        # git terminates each formatted record with our separator and then its
-        # own newline. Remove only that record boundary; body whitespace stays
-        # intact for BREAKING CHANGE detection.
         entry = entry.lstrip("\r\n")
         if not entry.strip():
             continue
@@ -141,280 +153,368 @@ def commit_impact(base: str, head: str, *, cwd: Path = ROOT) -> str:
     return impact
 
 
-def changed_paths(base: str, head: str, *, cwd: Path = ROOT) -> list[str]:
-    raw = git("diff", "--name-only", f"{base}...{head}", "--", cwd=cwd)
-    return [line for line in raw.splitlines() if line]
+def file_at_ref(ref: str, path: str, *, cwd: Path) -> bytes:
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    if result.returncode != 0:
+        fail(f"{ref} is missing required release file {path}")
+    return result.stdout
+
+
+def changed_paths(base: str, head: str, *, cwd: Path) -> list[str]:
+    return [
+        line
+        for line in git("diff", "--name-only", f"{base}...{head}", "--", cwd=cwd).splitlines()
+        if line
+    ]
 
 
 def matches_any(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
-def check_pr(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    if args.body_file:
-        body = args.body_file.read_text(encoding="utf-8")
-    else:
-        body = os.environ.get(args.body_env, "")
-    fields = parse_release_impact(body)
-    derived = commit_impact(args.base, args.head, cwd=args.root)
-    if fields["impact"] != derived:
-        fail(
-            f"declared impact {fields['impact']} contradicts landed conventional "
-            f"markers ({derived})"
-        )
-    paths = changed_paths(args.base, args.head, cwd=args.root)
-    watched = sorted(
-        path for path in paths if matches_any(path, config["watched_contract_paths"])
-    )
-    if watched and fields["contract"] == "not-applicable":
-        fail("watched contract changes require a compatible or breaking assessment")
-    if fields["contract"] == "breaking" and fields["impact"] != "major":
-        fail("a breaking contract assessment requires major impact")
-    if fields["impact"] == "major":
-        migration = fields.get("migration", "")
-        if is_placeholder(migration):
-            fail("major impact requires substantive migration guidance")
-    if fields["impact"] != "none":
-        if "CHANGELOG.md" not in paths:
-            fail("non-none impact requires a curated CHANGELOG.md change")
-        if "changelog" not in fields["evidence"].casefold():
-            fail("non-none impact evidence must identify the curated changelog entry")
-    print(
-        json.dumps(
-            {"status": "ok", "declared": fields["impact"], "watched": watched},
-            sort_keys=True,
-        )
-    )
-
-
-def semver(value: str) -> tuple[int, int, int]:
-    match = re.fullmatch(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value)
-    if not match:
-        fail(f"unsupported release version: {value}")
-    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
-
-
-def object_exists(value: str, *, cwd: Path) -> bool:
-    return run(["git", "cat-file", "-e", f"{value}^{{commit}}"], cwd=cwd, check=False).returncode == 0
-
-
-def validate_provenance(config: dict[str, Any], *, cwd: Path) -> None:
-    comparison = config["comparison"]
-    actual = git("rev-parse", f"{comparison['tag']}^{{commit}}", cwd=cwd)
-    if actual != comparison["commit"]:
-        fail(
-            f"comparison tag {comparison['tag']} resolves to {actual}, expected "
-            f"{comparison['commit']}; do not move or silently repair the tag"
-        )
-    published = config["published"]
-    if not object_exists(published["source_commit"], cwd=cwd):
-        fail("verified published source commit is absent from this repository")
-    if not re.fullmatch(r"[0-9a-f]{64}", published["source_archive_sha256"]):
-        fail("published source archive SHA-256 must be a distinct 64-hex checksum")
-
-
-def workspace_version(path: Path) -> str:
+def github_json(endpoint: str, *, cwd: Path) -> Any:
+    result = run(["gh", "api", endpoint], cwd=cwd)
     try:
-        value = tomllib.loads(path.read_text(encoding="utf-8"))["workspace"]["package"][
-            "version"
-        ]
-    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot read workspace version: {error}")
-    if not isinstance(value, str):
-        fail("workspace version must be a string")
-    semver(value)
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"GitHub returned malformed state for {endpoint}: {error}")
+
+
+def github_pages(endpoint: str, *, cwd: Path) -> list[Any]:
+    result = run(["gh", "api", "--paginate", "--slurp", endpoint], cwd=cwd)
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"GitHub returned malformed paginated state for {endpoint}: {error}")
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        fail(f"GitHub pagination shape is invalid for {endpoint}")
+    return [item for page in pages for item in page]
+
+
+def discover_host_state(
+    repository: str, *, cwd: Path, drafts_visible: bool = False
+) -> dict[str, Any]:
+    if not repository:
+        try:
+            raw = run(["gh", "repo", "view", "--json", "nameWithOwner"], cwd=cwd).stdout
+            repository = json.loads(raw)["nameWithOwner"]
+        except (ReleaseError, json.JSONDecodeError, KeyError, TypeError) as error:
+            fail(f"cannot determine GitHub repository: {error}")
+    try:
+        releases = github_pages(f"repos/{repository}/releases?per_page=100", cwd=cwd)
+        refs = github_pages(f"repos/{repository}/git/matching-refs/tags/v", cwd=cwd)
+    except ReleaseError as error:
+        fail(f"published state unavailable; authenticate gh or pass --host-state: {error}")
+    if not isinstance(releases, list) or not isinstance(refs, list):
+        fail("GitHub release/tag inventory is malformed")
+    tags: dict[str, str] = {}
+    for item in refs:
+        ref = item.get("ref") if isinstance(item, dict) else None
+        tag = ref.removeprefix("refs/tags/") if isinstance(ref, str) else ""
+        if STABLE_TAG.fullmatch(tag):
+            obj = item.get("object") if isinstance(item, dict) else None
+            for _ in range(5):
+                if not isinstance(obj, dict):
+                    break
+                object_type, sha = obj.get("type"), obj.get("sha")
+                if object_type == "commit":
+                    break
+                if object_type != "tag" or not isinstance(sha, str):
+                    obj = None
+                    break
+                peeled = github_json(f"repos/{repository}/git/tags/{sha}", cwd=cwd)
+                obj = peeled.get("object") if isinstance(peeled, dict) else None
+            else:
+                obj = None
+            sha = obj.get("sha") if isinstance(obj, dict) and obj.get("type") == "commit" else None
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+                fail(f"cannot resolve stable tag {tag}")
+            tags[tag] = sha
+    compact = []
+    for item in releases:
+        if not isinstance(item, dict) or not STABLE_TAG.fullmatch(str(item.get("tag_name", ""))):
+            continue
+        compact.append(
+            {
+                "tag": item["tag_name"],
+                "draft": item.get("draft"),
+                "prerelease": item.get("prerelease"),
+                "name": item.get("name"),
+                "target": item.get("target_commitish"),
+                "body": item.get("body"),
+                "assets": [
+                    {
+                        "name": asset.get("name"),
+                        "size": asset.get("size"),
+                        "state": asset.get("state"),
+                        "digest": asset.get("digest"),
+                    }
+                    for asset in item.get("assets", [])
+                    if isinstance(asset, dict)
+                ],
+            }
+        )
+    return {
+        "schema_version": 1,
+        "drafts_visible": drafts_visible,
+        "tags": tags,
+        "releases": compact,
+    }
+
+
+def get_host_state(args: argparse.Namespace) -> dict[str, Any]:
+    if getattr(args, "host_state", None):
+        value = load_json(args.host_state)
+    else:
+        repository = getattr(args, "repository", "") or os.getenv("GITHUB_REPOSITORY", "")
+        value = discover_host_state(
+            repository,
+            cwd=args.root,
+            drafts_visible=getattr(args, "drafts_visible", False),
+        )
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != 1
+        or not isinstance(value.get("drafts_visible"), bool)
+        or not isinstance(value.get("tags"), dict)
+        or not isinstance(value.get("releases"), list)
+    ):
+        fail("host state must be schema v1 with tag and release inventories")
     return value
 
 
-def replace_workspace_version(path: Path, version: str) -> None:
-    text = path.read_text(encoding="utf-8")
-    section = re.search(r"(?ms)^\[workspace\.package\]\s*$.*?(?=^\[|\Z)", text)
-    if not section:
-        fail("Cargo.toml lacks [workspace.package]")
-    replacement, count = re.subn(
-        r'(?m)^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"', section.group(0)
+@dataclass(frozen=True)
+class Baseline:
+    version: str
+    tag: str
+    source: str
+    comparison_commit: str
+
+
+def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
+    published = config["bootstrap"].get("published")
+    comparison = config["bootstrap"].get("comparison")
+    if not isinstance(published, dict) or not isinstance(comparison, dict):
+        fail("bootstrap must record published and distinct comparison provenance")
+    version, tag = str(published.get("version", "")), comparison.get("tag")
+    commit, source = comparison.get("commit"), published.get("source_commit")
+    if tag != f"v{version}" or not isinstance(commit, str) or not isinstance(source, str):
+        fail("bootstrap version, comparison tag, and source are malformed")
+    semver(version)
+    actual = git("rev-parse", f"{tag}^{{commit}}", cwd=cwd)
+    if actual != commit:
+        fail(f"bootstrap tag {tag} resolves to {actual}, expected {commit}; never move it")
+    checksum = str(published.get("source_archive_sha256", ""))
+    if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        fail("bootstrap archive checksum must be 64 lowercase hex characters")
+    return Baseline(version, tag, source, commit)
+
+
+def resolve_baseline(
+    config: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    cwd: Path,
+    allow_attempt: tuple[str, str] | None = None,
+) -> Baseline:
+    bootstrap = validate_bootstrap(config, cwd=cwd)
+    tags, releases = state["tags"], state["releases"]
+    bootstrap_release = next(
+        (
+            item
+            for item in releases
+            if isinstance(item, dict)
+            and item.get("tag") == bootstrap.tag
+            and item.get("draft") is False
+            and item.get("prerelease") is False
+        ),
+        None,
     )
-    if count != 1:
-        fail("[workspace.package] must contain exactly one version")
-    path.write_text(text[: section.start()] + replacement + text[section.end() :], encoding="utf-8")
+    expected_target = config["bootstrap"]["published"].get("release_target_commit")
+    if (
+        bootstrap_release is None
+        or tags.get(bootstrap.tag) != bootstrap.comparison_commit
+        or bootstrap_release.get("target") != expected_target
+    ):
+        fail("live host state does not prove the recorded public bootstrap release")
+    public = [bootstrap]
+    for item in releases:
+        if not isinstance(item, dict):
+            fail("host release inventory has a malformed entry")
+        tag = item.get("tag")
+        if (
+            not isinstance(tag, str)
+            or not STABLE_TAG.fullmatch(tag)
+            or item.get("draft") is not False
+            or item.get("prerelease") is not False
+        ):
+            continue
+        version = tag.removeprefix("v")
+        if semver(version) <= semver(bootstrap.version):
+            continue
+        source = tags.get(tag)
+        if not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source):
+            fail(f"public {tag} lacks immutable peeled-tag source identity")
+        if SOURCE_MARKER.format(source=source) not in str(item.get("body") or ""):
+            fail(f"public {tag} lacks the exact-source marker")
+        assets = item.get("assets")
+        if not isinstance(assets, list) or not assets:
+            fail(f"public {tag} lacks verified assets")
+        if any(
+            not isinstance(asset, dict)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(asset.get("digest", "")))
+            for asset in assets
+        ):
+            fail(f"public {tag} has an asset without SHA-256 identity")
+        public.append(Baseline(version, tag, source, source))
+    baseline = max(public, key=lambda item: semver(item.version))
+    allowed_tag, allowed_source = allow_attempt or ("", "")
+    for tag, target in tags.items():
+        if (
+            STABLE_TAG.fullmatch(tag)
+            and semver(tag) > semver(baseline.version)
+            and (tag, target) != (allowed_tag, allowed_source)
+        ):
+            fail(f"{tag} exists without a verified public release; resolve that attempt first")
+    if state["drafts_visible"]:
+        drafts = [
+            item
+            for item in releases
+            if isinstance(item, dict)
+            and item.get("draft") is True
+            and STABLE_TAG.fullmatch(str(item.get("tag", "")))
+        ]
+        draft_counts = Counter(str(item["tag"]) for item in drafts)
+        duplicates = sorted(tag for tag, count in draft_counts.items() if count > 1)
+        if duplicates:
+            fail(f"duplicate draft releases are ambiguous: {', '.join(duplicates)}")
+        for item in drafts:
+            tag = str(item.get("tag", ""))
+            if semver(tag) > semver(baseline.version):
+                if (tag, item.get("target")) != (allowed_tag, allowed_source):
+                    fail(f"draft {tag} is an unresolved publication attempt")
+                if item.get("assets"):
+                    fail(f"draft {tag} already has assets; refuse a concurrent or rebuilt upload")
+    return baseline
 
 
-def changelog_parts(text: str) -> tuple[re.Match[str], int, str]:
-    unreleased = re.search(r"(?m)^## \[Unreleased\]\s*$", text)
-    if not unreleased:
-        fail("CHANGELOG.md lacks an Unreleased section")
-    next_heading = re.search(r"(?m)^## \[", text[unreleased.end() :])
-    if not next_heading:
-        fail("CHANGELOG.md lacks a version section after Unreleased")
-    end = unreleased.end() + next_heading.start()
-    body = text[unreleased.end() : end].strip()
-    return unreleased, end, body
+@dataclass(frozen=True)
+class ChangelogSection:
+    version: str
+    date: str | None
+    start: int
+    body_start: int
+    end: int
+    body: str
 
 
-def promote_changelog(path: Path, tag: str, date: str) -> None:
-    text = path.read_text(encoding="utf-8")
-    unreleased, body_end, body = changelog_parts(text)
-    if not body:
-        fail("no curated Unreleased notes exist; no release candidate is needed")
-    version = tag.removeprefix("v")
-    version_heading = re.search(
-        rf"(?m)^## \[{re.escape(version)}\](?: - (?P<date>\d{{4}}-\d{{2}}-\d{{2}}))?\s*$",
-        text,
+def changelog_sections(
+    text: str, *, allow_legacy_unreleased: bool = False
+) -> list[ChangelogSection]:
+    if not allow_legacy_unreleased and re.search(r"(?m)^## \[Unreleased\]\s*$", text):
+        fail("CHANGELOG.md uses [Unreleased]; use one undated pending version")
+    headings = list(
+        re.finditer(r"(?m)^## \[(\d+\.\d+\.\d+)\](?: - (\d{4}-\d{2}-\d{2}))?\s*$", text)
     )
-    empty_unreleased = text[: unreleased.end()] + "\n\n"
-    if version_heading:
-        # The staged v3 section predates automation.  Its date remains the
-        # candidate-cut date; new curated notes are prepended without replacing
-        # the existing reviewed prose.
-        rest = text[body_end:]
-        heading_in_rest = re.search(
-            rf"(?m)^## \[{re.escape(version)}\](?: - \d{{4}}-\d{{2}}-\d{{2}})?\s*$", rest
-        )
-        if not heading_in_rest:
-            fail(f"cannot locate staged {tag} section after Unreleased")
-        insertion = heading_in_rest.end()
-        rest = rest[:insertion] + "\n\n" + body + rest[insertion:]
-        result = empty_unreleased + rest.lstrip("\n")
-    else:
-        rest = text[body_end:].lstrip("\n")
-        result = (
-            empty_unreleased
-            + f"## [{version}] - {date}\n\n"
-            + body
-            + "\n\n"
-            + rest
-        )
-    path.write_text(result.rstrip() + "\n", encoding="utf-8")
-
-
-def release_notes(root: Path, tag: str, candidate: str) -> str:
-    version = tag.removeprefix("v")
-    text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    heading = re.search(
-        rf"(?m)^## \[{re.escape(version)}\](?: - \d{{4}}-\d{{2}}-\d{{2}})?\s*$",
-        text,
-    )
-    if not heading:
-        fail(f"CHANGELOG.md lacks the reviewed {tag} section")
-    next_heading = re.search(r"(?m)^## \[", text[heading.end() :])
-    end = heading.end() + next_heading.start() if next_heading else len(text)
-    body = text[heading.end() : end].strip()
-    if not body:
-        fail(f"CHANGELOG.md {tag} section has no curated notes")
-    return f"{body}\n\n<!-- codeflow-release-candidate: {candidate} -->\n"
-
-
-def write_release_notes(args: argparse.Namespace) -> None:
-    notes = release_notes(args.root, args.tag, args.candidate)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(notes, encoding="utf-8")
-    print(json.dumps({"status": "prepared", "output": str(args.output)}))
-
-
-def cliff_version(executable: str, *, cwd: Path) -> str:
-    result = run([executable, "--bumped-version"], cwd=cwd)
-    matches = re.findall(r"\bv\d+\.\d+\.\d+\b", result.stdout)
-    if len(matches) != 1:
-        fail("git-cliff must report exactly one stable bumped version")
-    return matches[0]
-
-
-def tag_exists(tag: str, *, cwd: Path) -> bool:
-    return run(["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"], cwd=cwd, check=False).returncode == 0
-
-
-def latest_stable_tag(*, cwd: Path) -> tuple[str, str]:
-    raw = git("tag", "--merged", "HEAD", "--list", "v*", "--sort=-version:refname", cwd=cwd)
-    for tag in raw.splitlines():
-        if re.fullmatch(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", tag):
-            return tag, git("rev-parse", f"{tag}^{{commit}}", cwd=cwd)
-    fail("no reachable stable release tag exists")
-
-
-def find_recorded_merge(record: dict[str, Any], main_ref: str, config: dict[str, Any], *, cwd: Path) -> str:
-    source = record.get("source_commit")
-    matches: list[str] = []
-    for line in git("rev-list", "--merges", "--parents", main_ref, cwd=cwd).splitlines():
-        values = line.split()
-        if len(values) != 3 or values[1] != source:
-            continue
-        merge, candidate = values[0], values[2]
-        if git("rev-parse", f"{merge}^{{tree}}", cwd=cwd) != git("rev-parse", f"{candidate}^{{tree}}", cwd=cwd):
-            continue
-        try:
-            at_candidate = load_record_at_ref(candidate, config["candidate_record"], cwd=cwd)
-            verify_ref_candidate(candidate, config, at_candidate, cwd=cwd)
-        except ReleaseError:
-            continue
-        if at_candidate == record:
-            matches.append(merge)
-    if len(matches) != 1:
-        fail("pending candidate record is not bound to one exact equal-tree main merge")
-    return matches[0]
-
-
-def prepare(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    if args.record.exists():
-        prior = load_json(args.record)
-        prior_tag = prior.get("tag")
-        if prior.get("status") == "candidate" and isinstance(prior_tag, str) and not tag_exists(prior_tag, cwd=args.root):
-            find_recorded_merge(prior, "HEAD", config, cwd=args.root)
-            print(
-                json.dumps(
-                    {
-                        "status": "pending-publication",
-                        "tag": prior_tag,
-                        "message": "publish or explicitly resolve this candidate before preparing another",
-                    }
-                )
+    if not headings:
+        fail("CHANGELOG.md has no stable version sections")
+    sections = []
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        sections.append(
+            ChangelogSection(
+                heading.group(1),
+                heading.group(2),
+                heading.start(),
+                heading.end(),
+                end,
+                text[heading.end() : end].strip(),
             )
-            return
-    changelog = args.root / "CHANGELOG.md"
-    _, _, notes = changelog_parts(changelog.read_text(encoding="utf-8"))
-    if not notes:
-        print(json.dumps({"status": "none"}))
-        return
-    comparison_tag, comparison_commit = latest_stable_tag(cwd=args.root)
-    if commit_impact(comparison_commit, "HEAD", cwd=args.root) == "none":
-        print(json.dumps({"status": "none", "reason": "no release-impacting commits"}))
-        return
-    validate_provenance(config, cwd=args.root)
-    tag = cliff_version(args.git_cliff, cwd=args.root)
-    if semver(tag) <= semver(comparison_tag):
-        fail(f"git-cliff result {tag} does not advance reachable {comparison_tag}")
-    current = workspace_version(args.root / "Cargo.toml")
-    next_version = tag.removeprefix("v")
-    if semver(current) > semver(next_version):
-        fail(f"workspace {current} is ahead of git-cliff result {next_version}")
-    if current != next_version:
-        replace_workspace_version(args.root / "Cargo.toml", next_version)
-    date = args.date or dt.date.today().isoformat()
-    promote_changelog(changelog, tag, date)
-    record = {
-        "schema_version": 1,
-        "status": "prepared",
-        "release_unit": "codeflow",
-        "version": next_version,
-        "tag": tag,
-        "candidate_date": date,
-        "source_commit": git("rev-parse", "HEAD", cwd=args.root),
-        "source_tree": git("rev-parse", "HEAD^{tree}", cwd=args.root),
-        "comparison": {"tag": comparison_tag, "commit": comparison_commit},
-        "published_provenance": config["published"],
-        "generated_files": {},
-    }
-    write_json(args.record, record)
-    print(json.dumps({"status": "prepared", "tag": tag, "version": next_version}))
+        )
+    versions = [semver(section.version) for section in sections]
+    if versions != sorted(versions, reverse=True) or len(set(versions)) != len(versions):
+        fail("CHANGELOG.md sections must be unique and newest-first")
+    return sections
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def section_markers(section: ChangelogSection, config: dict[str, Any]) -> list[str]:
+    matches = list(IMPACT_MARKER.finditer(section.body))
+    legacy = [match for match in matches if match.group(2)]
+    if legacy:
+        policy = config.get("legacy_pending_group")
+        end = section.body.find(LEGACY_END, legacy[0].end())
+        legacy_bytes = section.body[legacy[0].end() : end].strip().encode()
+        actual_digest = hashlib.sha256(legacy_bytes).hexdigest()
+        if (
+            len(legacy) != 1
+            or not isinstance(policy, dict)
+            or end < 0
+            or section.version != policy.get("version")
+            or legacy[0].group(1) != policy.get("impact")
+            or legacy[0].group(2) != policy.get("id")
+            or legacy[0].group(3) != policy.get("sha256")
+            or actual_digest != policy.get("sha256")
+        ):
+            fail("legacy marker is not the bounded bootstrap group")
+        ordinary_body = section.body[: legacy[0].start()] + section.body[end + len(LEGACY_END) :]
+        ordinary = list(IMPACT_MARKER.finditer(ordinary_body))
+    else:
+        ordinary_body = section.body
+        ordinary = matches
+    bullets = list(re.finditer(r"(?m)^- \S", ordinary_body))
+    if len(ordinary) != len(bullets):
+        fail("each pending changelog entry needs one adjacent impact marker")
+    for marker, bullet in zip(ordinary, bullets, strict=True):
+        if not re.fullmatch(r"\s*", ordinary_body[marker.end() : bullet.start()]):
+            fail("impact marker must be directly adjacent to its changelog entry")
+    return [match.group(1) for match in matches]
+
+
+def annotated_entries(section: ChangelogSection, config: dict[str, Any]) -> list[tuple[str, str]]:
+    section_markers(section, config)
+    body = section.body
+    legacy = next((match for match in IMPACT_MARKER.finditer(body) if match.group(2)), None)
+    entries: list[tuple[str, str]] = []
+    if legacy is not None:
+        end = body.index(LEGACY_END, legacy.end())
+        entries.append((legacy.group(1), f"legacy:{legacy.group(2)}:{legacy.group(3)}"))
+        body = body[: legacy.start()] + body[end + len(LEGACY_END) :]
+    markers = list(IMPACT_MARKER.finditer(body))
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(body)
+        entry = body[marker.end() : end].strip()
+        if not entry.startswith("- "):
+            fail("impact marker is not followed by a changelog entry")
+        entries.append((marker.group(1), entry))
+    return entries
+
+
+def expected_pending(
+    text: str, baseline: Baseline, config: dict[str, Any], *, strict: bool = True
+) -> tuple[str, ChangelogSection | None, list[str]]:
+    sections = changelog_sections(text)
+    if baseline.version not in {section.version for section in sections}:
+        fail(f"CHANGELOG.md lacks published baseline {baseline.version}")
+    pending = [
+        section for section in sections if semver(section.version) > semver(baseline.version)
+    ]
+    if len(pending) > 1:
+        fail("CHANGELOG.md has more than one section above the published baseline")
+    if not pending:
+        return baseline.version, None, []
+    section = pending[0]
+    if section.date is not None:
+        fail("pending version heading must be undated")
+    impacts = section_markers(section, config)
+    highest = max(impacts, key=lambda item: IMPACT_ORDER[item], default="none")
+    expected = bump(baseline.version, highest)
+    if expected == baseline.version:
+        fail("none-only work must not create a pending section")
+    if strict and section.version != expected:
+        fail(f"pending heading {section.version} disagrees with cumulative target {expected}")
+    return expected, section, impacts
 
 
 VERSION_STAMP_PATHS = [
@@ -427,392 +527,562 @@ VERSION_STAMP_PATHS = [
 ]
 
 
-def validate_version_stamps(files: dict[str, bytes]) -> str:
+def version_stamp_values(files: dict[str, bytes]) -> dict[str, str]:
     try:
-        cargo = tomllib.loads(files["Cargo.toml"].decode("utf-8"))
-        cargo_version = cargo["workspace"]["package"]["version"]
-        lock = tomllib.loads(files["Cargo.lock"].decode("utf-8"))
-        project = tomllib.loads(files[".codeflow/project.toml"].decode("utf-8"))
+        cargo = tomllib.loads(files["Cargo.toml"].decode())["workspace"]["package"]["version"]
+        lock = tomllib.loads(files["Cargo.lock"].decode())
+        project = tomllib.loads(files[".codeflow/project.toml"].decode())
         manifest = json.loads(files[".codeflow/manifest.json"])
     except (KeyError, UnicodeDecodeError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
-        fail(f"cannot parse coupled version stamps: {error}")
-    if not isinstance(cargo_version, str):
-        fail("workspace version must be a string")
-    semver(cargo_version)
+        fail(f"cannot parse coupled stamps: {error}")
+    if not isinstance(cargo, str):
+        fail("workspace package version is not a string")
     own = {
         package["name"]: package["version"]
         for package in lock.get("package", [])
         if package.get("name") in {"codeflow-cli", "codeflow-core", "codeflow-present"}
     }
-    if set(own.values()) != {cargo_version} or len(own) != 3:
-        fail(f"workspace package versions disagree: Cargo={cargo_version}, lock={own}")
-    scaffold = project.get("scaffold_version")
-    if scaffold != cargo_version:
-        fail(f"managed scaffold stamp {scaffold!r} disagrees with {cargo_version}")
-    manifest_scaffold = manifest.get("scaffold_version") if isinstance(manifest, dict) else None
-    if manifest_scaffold != cargo_version:
-        fail(f"managed manifest stamp {manifest_scaffold!r} disagrees with {cargo_version}")
-    marker = f"<!-- codeflow:managed:begin scaffold={cargo_version} -->".encode()
+    if len(own) != 3:
+        fail(f"workspace lock is missing package stamps: {own}")
+    values = {"Cargo.toml": cargo, **{f"Cargo.lock:{name}": value for name, value in own.items()}}
+    for name, value in [
+        (".codeflow/project.toml", project.get("scaffold_version")),
+        (".codeflow/manifest.json", manifest.get("scaffold_version")),
+    ]:
+        if not isinstance(value, str):
+            fail(f"{name} scaffold stamp is not a string")
+        values[name] = value
     for name in ["AGENTS.md", "CLAUDE.md"]:
-        if marker not in files[name]:
-            fail(f"{name} managed version stamp disagrees with {cargo_version}")
-    return cargo_version
+        markers = re.findall(rb"<!-- codeflow:managed:begin scaffold=(\d+\.\d+\.\d+) -->", files[name])
+        if len(markers) != 1:
+            fail(f"{name} must contain exactly one managed scaffold stamp")
+        values[name] = markers[0].decode()
+    for value in values.values():
+        semver(value)
+    return values
 
 
-def version_stamps(root: Path) -> dict[str, str]:
-    version = validate_version_stamps(
-        {path: (root / path).read_bytes() for path in VERSION_STAMP_PATHS}
+def validate_version_stamps(files: dict[str, bytes]) -> str:
+    values = version_stamp_values(files)
+    versions = set(values.values())
+    if len(versions) != 1:
+        fail(f"coupled version stamps disagree: {values}")
+    cargo = values["Cargo.toml"]
+    return cargo
+
+
+def validate_release_tree(
+    ref: str,
+    config: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    cwd: Path,
+    allow_attempt: tuple[str, str] | None = None,
+) -> dict[str, Any]:
+    baseline = resolve_baseline(config, state, cwd=cwd, allow_attempt=allow_attempt)
+    changelog = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode()
+    validate_published_sections(changelog, baseline, config, cwd=cwd)
+    version, pending, impacts = expected_pending(
+        changelog, baseline, config
     )
-    return {"workspace": version, "scaffold": version}
-
-
-def diff_paths(source: str, *, cwd: Path) -> list[str]:
-    raw = git("diff", "--name-only", source, "--", cwd=cwd)
-    untracked = git("ls-files", "--others", "--exclude-standard", cwd=cwd)
-    return sorted({line for line in (raw + "\n" + untracked).splitlines() if line})
-
-
-def finalize(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    record = load_json(args.record)
-    if record.get("status") != "prepared":
-        fail("candidate must be in prepared state before finalization")
-    if git("rev-parse", "HEAD", cwd=args.root) != record.get("source_commit"):
-        fail("candidate source changed during preparation")
-    stamps = version_stamps(args.root)
-    if stamps["workspace"] != record.get("version"):
-        fail("candidate version disagrees with regenerated version stamps")
-    _, _, unreleased = changelog_parts((args.root / "CHANGELOG.md").read_text(encoding="utf-8"))
-    if unreleased:
-        fail("candidate changelog still contains Unreleased notes")
-    paths = diff_paths(record["source_commit"], cwd=args.root)
-    record_rel = args.record.relative_to(args.root).as_posix()
-    for path in paths:
-        if path == record_rel:
-            continue
-        if not matches_any(path, config["generated_allowlist"]):
-            fail(f"candidate preparation changed non-generated path: {path}")
-    if "CHANGELOG.md" not in paths:
-        fail("candidate must promote the curated changelog")
-    generated = {
-        path: sha256(args.root / path)
-        for path in sorted(paths)
-        if path != record_rel and (args.root / path).is_file()
-    }
-    record["status"] = "candidate"
-    record["generated_files"] = generated
-    write_json(args.record, record)
-    verify_worktree_candidate(args.root, config, record, args.record)
-    print(json.dumps({"status": "candidate", "tag": record["tag"], "files": len(generated)}))
-
-
-def file_at_ref(ref: str, path: str, *, cwd: Path) -> bytes:
-    result = subprocess.run(
-        ["git", "show", f"{ref}:{path}"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    if result.returncode != 0:
-        fail(f"{ref} is missing recorded candidate file {path}")
-    return result.stdout
-
-
-def load_record_at_ref(ref: str, record_path: str, *, cwd: Path) -> dict[str, Any]:
-    raw = file_at_ref(ref, record_path, cwd=cwd)
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as error:
-        fail(f"candidate record at {ref} is invalid: {error}")
-    if not isinstance(value, dict):
-        fail("candidate record at ref must be a JSON object")
-    return value
-
-
-def verify_ref_candidate(ref: str, config: dict[str, Any], record: dict[str, Any], *, cwd: Path) -> None:
-    if record.get("schema_version") != 1 or record.get("status") != "candidate":
-        fail("candidate record must be finalized schema v1")
-    version = record.get("version")
-    if not isinstance(version, str) or record.get("tag") != f"v{version}":
-        fail("candidate tag must be exactly v plus its stable version")
-    semver(version)
-    source = record.get("source_commit")
-    if not isinstance(source, str) or not object_exists(source, cwd=cwd):
-        fail("candidate source commit is missing")
-    if record.get("source_tree") != git("rev-parse", f"{source}^{{tree}}", cwd=cwd):
-        fail("candidate source tree does not match its source commit")
-    if record.get("published_provenance") != config["published"]:
-        fail("candidate published provenance differs from reviewed configuration")
-    comparison = record.get("comparison")
-    if not isinstance(comparison, dict) or set(comparison) != {"tag", "commit"}:
-        fail("candidate comparison must contain only tag and commit")
-    if git("rev-parse", f"{comparison['tag']}^{{commit}}", cwd=cwd) != comparison["commit"]:
-        fail("candidate comparison tag and commit disagree")
-    if run(["git", "merge-base", "--is-ancestor", comparison["commit"], source], cwd=cwd, check=False).returncode != 0:
-        fail("candidate comparison is not reachable from its source")
-    generated_files = record.get("generated_files")
-    if not isinstance(generated_files, dict) or "CHANGELOG.md" not in generated_files:
-        fail("candidate generated files must include the curated changelog")
-    for path, digest in generated_files.items():
-        if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            fail("candidate generated file entries must be path-to-SHA-256 strings")
-        if not matches_any(path, config["generated_allowlist"]):
-            fail(f"candidate record contains non-allowlisted generated path: {path}")
-    changed = set(git("diff", "--name-only", source, ref, "--", cwd=cwd).splitlines())
-    expected = set(generated_files) | {config["candidate_record"]}
-    if changed != expected:
-        fail(f"candidate changed paths disagree with record: changed={sorted(changed)}, expected={sorted(expected)}")
-    for path, expected_hash in generated_files.items():
-        actual = hashlib.sha256(file_at_ref(ref, path, cwd=cwd)).hexdigest()
-        if actual != expected_hash:
-            fail(f"candidate file {path} was edited after generation")
-    actual_version = validate_version_stamps(
+    stamped = validate_version_stamps(
         {path: file_at_ref(ref, path, cwd=cwd) for path in VERSION_STAMP_PATHS}
     )
-    if actual_version != version:
-        fail("candidate coupled version stamps disagree with its record")
-    changelog = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode("utf-8")
-    _, _, unreleased = changelog_parts(changelog)
-    if unreleased or not re.search(rf"(?m)^## \[{re.escape(version)}\](?: - \d{{4}}-\d{{2}}-\d{{2}})?$", changelog):
-        fail("candidate changelog version or Unreleased state disagrees with its record")
+    if stamped != version:
+        fail(f"coupled stamps {stamped} disagree with pending target {version}")
+    return {
+        "baseline": baseline.version,
+        "version": version,
+        "tag": f"v{version}",
+        "pending": pending is not None,
+        "impacts": impacts,
+    }
 
 
-def verify_worktree_candidate(root: Path, config: dict[str, Any], record: dict[str, Any], record_path: Path) -> None:
-    if record.get("schema_version") != 1 or record.get("status") != "candidate":
-        fail("candidate record must be finalized schema v1")
-    source = record.get("source_commit")
-    paths = set(diff_paths(str(source), cwd=root))
-    record_rel = record_path.relative_to(root).as_posix()
-    expected = set(record.get("generated_files", {})) | {record_rel}
-    if paths != expected:
-        fail(f"candidate worktree paths disagree with record: changed={sorted(paths)}, expected={sorted(expected)}")
-    for path, expected_hash in record.get("generated_files", {}).items():
-        actual = sha256(root / path)
-        if actual != expected_hash:
-            fail(f"candidate worktree file {path} changed after finalization")
+def merge_tree(base: str, head: str, *, cwd: Path) -> str:
+    result = run(["git", "merge-tree", "--write-tree", base, head], cwd=cwd, check=False)
+    if result.returncode != 0:
+        fail(f"proposed merge is not clean: {result.stderr.strip() or result.stdout.strip()}")
+    tree = result.stdout.splitlines()[0] if result.stdout else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", tree):
+        fail("git did not produce a proposed merge tree")
+    return tree
 
 
-def guard_refresh(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    exists = run(["git", "rev-parse", "--verify", f"{args.ref}^{{commit}}"], cwd=args.root, check=False)
-    if exists.returncode != 0:
-        print(json.dumps({"status": "absent"}))
+def section_bytes(text: str, version: str) -> str:
+    section = next(
+        (item for item in changelog_sections(text) if item.version == version), None
+    )
+    if section is None:
+        fail(f"CHANGELOG.md lacks section {version}")
+    return text[section.start : section.end].rstrip()
+
+
+def published_snapshot(
+    text: str, through: str, *, allow_legacy_unreleased: bool = False
+) -> str:
+    sections = []
+    for section in changelog_sections(
+        text, allow_legacy_unreleased=allow_legacy_unreleased
+    ):
+        if semver(section.version) <= semver(through):
+            raw = text[section.start : section.end].rstrip()
+            raw = re.sub(r"\n(?:\[[^\]]+\]: [^\n]+\n?)+\Z", "", raw).rstrip()
+            sections.append(raw)
+    return "\n\n".join(sections)
+
+
+def validate_published_sections(
+    text: str, baseline: Baseline, config: dict[str, Any], *, cwd: Path
+) -> None:
+    bootstrap_version = str(config["bootstrap"]["published"].get("version", ""))
+    current = published_snapshot(text, baseline.version)
+    if baseline.version == bootstrap_version:
+        expected = config["bootstrap"]["published"].get("changelog_sha256")
+        if not isinstance(expected, str) or hashlib.sha256(current.encode()).hexdigest() != expected:
+            fail("published changelog sections differ from the bounded historical bootstrap")
         return
-    record_path = config["candidate_record"]
-    record = load_record_at_ref(args.ref, record_path, cwd=args.root)
-    verify_ref_candidate(args.ref, config, record, cwd=args.root)
-    print(json.dumps({"status": "clean", "tag": record["tag"]}))
+    source_text = file_at_ref(baseline.source, "CHANGELOG.md", cwd=cwd).decode()
+    source = published_snapshot(
+        source_text, baseline.version, allow_legacy_unreleased=True
+    )
+    if not source or current != source:
+        fail("published changelog sections differ from their exact public source")
 
 
-def merged_candidate(candidate_ref: str, main_ref: str, config: dict[str, Any], *, cwd: Path) -> dict[str, Any]:
-    candidate = git("rev-parse", f"{candidate_ref}^{{commit}}", cwd=cwd)
-    record = load_record_at_ref(candidate, config["candidate_record"], cwd=cwd)
-    verify_ref_candidate(candidate, config, record, cwd=cwd)
-    if record.get("source_commit") != git("rev-parse", f"{candidate}^", cwd=cwd):
-        fail("candidate must be a single generated commit directly above its recorded source")
-    matches: list[str] = []
-    for line in git("rev-list", "--merges", "--parents", main_ref, cwd=cwd).splitlines():
-        values = line.split()
-        if len(values) == 3 and values[2] == candidate:
-            matches.append(values[0])
-    if len(matches) != 1:
-        fail("candidate head must be the unique second parent of a main merge commit")
-    merge = matches[0]
-    parents = git("show", "-s", "--format=%P", merge, cwd=cwd).split()
-    if parents != [record["source_commit"], candidate]:
-        fail("main merge parents do not match candidate source and reviewed head")
-    if git("rev-parse", f"{merge}^{{tree}}", cwd=cwd) != git("rev-parse", f"{candidate}^{{tree}}", cwd=cwd):
-        fail("main merge tree differs from the reviewed candidate tree")
-    tag = record["tag"]
-    if tag_exists(tag, cwd=cwd):
-        target = git("rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=cwd)
-        if target != candidate:
-            fail(f"existing {tag} targets {target}, not reviewed candidate {candidate}")
-    return {"candidate": candidate, "merge": merge, "tag": tag, "record": record}
+def check_pr(args: argparse.Namespace) -> None:
+    config, state = load_config(args.config), get_host_state(args)
+    target = git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=args.root)
+    base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
+    head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
+    if base != target or git("merge-base", base, head, cwd=args.root) != base:
+        fail("PR base is stale relative to current target; refresh and recompute")
+    body = (
+        args.body_file.read_text(encoding="utf-8")
+        if args.body_file
+        else os.getenv(args.body_env, "")
+    )
+    fields = parse_release_impact(body)
+    floor = commit_impact(base, head, cwd=args.root)
+    if IMPACT_ORDER[fields["impact"]] < IMPACT_ORDER[floor]:
+        changed = set(changed_paths(base, head, cwd=args.root))
+        metadata = set(VERSION_STAMP_PATHS) | {"CHANGELOG.md", ".release/config.json"}
+        if fields["impact"] != "none" or changed - metadata:
+            fail(f"declared impact {fields['impact']} is below marker floor {floor}")
+    paths = changed_paths(base, head, cwd=args.root)
+    watched = sorted(
+        path for path in paths if matches_any(path, config["watched_contract_paths"])
+    )
+    if watched and fields["contract"] == "not-applicable":
+        fail("watched contract changes require compatible or breaking assessment")
+    if fields["contract"] == "breaking" and fields["impact"] != "major":
+        fail("breaking contract requires major impact")
+    if fields["impact"] == "major" and is_placeholder(fields.get("migration", "")):
+        fail("major impact requires migration guidance")
+    proposed = merge_tree(base, head, cwd=args.root)
+    after = validate_release_tree(proposed, config, state, cwd=args.root)
+    baseline = resolve_baseline(config, state, cwd=args.root)
+    before_text = file_at_ref(base, "CHANGELOG.md", cwd=args.root).decode()
+    after_text = file_at_ref(proposed, "CHANGELOG.md", cwd=args.root).decode()
+    adopting = "[Unreleased]" in before_text and "legacy-group=" in after_text
+    if adopting:
+        before = {"version": after["version"]}
+        comparable_before = re.sub(r"(?m)^## \[Unreleased\]\s*$", "", before_text)
+    else:
+        before = validate_release_tree(base, config, state, cwd=args.root)
+        comparable_before = before_text
+    for section in changelog_sections(comparable_before):
+        if (
+            semver(section.version) <= semver(baseline.version)
+            and section_bytes(comparable_before, section.version)
+            != section_bytes(after_text, section.version)
+        ):
+            fail("published changelog sections are frozen; label a true erratum outside them")
+    before_section = next(
+        (item for item in changelog_sections(comparable_before) if semver(item.version) > semver(baseline.version)),
+        None,
+    )
+    after_section = next(
+        (item for item in changelog_sections(after_text) if semver(item.version) > semver(baseline.version)),
+        None,
+    )
+    before_entries = annotated_entries(before_section, config) if before_section and not adopting else []
+    after_entries = annotated_entries(after_section, config) if after_section else []
+    removed, added = list(before_entries), list(after_entries)
+    for entry in after_entries:
+        if entry in removed:
+            removed.remove(entry)
+    for entry in before_entries:
+        if entry in added:
+            added.remove(entry)
+    declared_additions = [entry for entry in added if not (adopting and entry[1].startswith("legacy:"))]
+    added_impact = max(
+        (item[0] for item in declared_additions),
+        key=lambda item: IMPACT_ORDER[item],
+        default="none",
+    )
+    removed_labels = Counter(item[0] for item in removed)
+    added_labels = Counter(item[0] for item in declared_additions)
+    labels_balanced = bool(removed) and removed_labels == added_labels
+    docs_only_refinement = (
+        fields["impact"] == "none"
+        and labels_balanced
+        and all(path == "CHANGELOG.md" or path.startswith("docs/") for path in paths)
+    )
+    if fields["impact"] != added_impact and not docs_only_refinement:
+        fail(
+            f"declared impact {fields['impact']} must equal newly added changelog impact "
+            f"{added_impact}"
+        )
+    if added_impact == "major" and is_placeholder(fields.get("migration", "")):
+        fail("an added major entry requires migration guidance")
+    if fields["impact"] != "none":
+        if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
+            fail("non-none impact requires curated changelog change and evidence")
+    label_removed = any(removed_labels[label] > added_labels[label] for label in removed_labels)
+    if (label_removed or semver(after["version"]) < semver(before["version"])) and is_placeholder(
+        fields.get("withdrawal", "")
+    ):
+        fail("removing pending content or lowering target requires withdrawal rationale")
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "declared": fields["impact"],
+                "version": after["version"],
+                "watched": watched,
+            },
+            sort_keys=True,
+        )
+    )
 
 
-def authorize_event(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
+def replace_workspace_version(path: Path, version: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    section = re.search(r"(?ms)^\[workspace\.package\]\s*$.*?(?=^\[|\Z)", text)
+    if not section:
+        fail("Cargo.toml lacks [workspace.package]")
+    replacement, count = re.subn(
+        r'(?m)^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"', section.group(0)
+    )
+    if count != 1:
+        fail("workspace package must contain exactly one version")
+    path.write_text(text[: section.start()] + replacement + text[section.end() :], encoding="utf-8")
+
+
+def validate_metadata_paths(root: Path) -> None:
+    """Keep the fixed sync destinations inside the selected repository."""
+    repository = root.resolve()
+    for relative in ["CHANGELOG.md", *VERSION_STAMP_PATHS]:
+        destination = root / relative
+        try:
+            resolved_parent = destination.parent.resolve(strict=True)
+            resolved = destination.resolve(strict=True)
+        except OSError as error:
+            fail(f"cannot resolve release metadata path {relative}: {error}")
+        if not resolved_parent.is_relative_to(repository) or not resolved.is_relative_to(repository):
+            fail(f"release metadata path escapes repository: {relative}")
+
+
+def sync(args: argparse.Namespace) -> None:
+    # Resolve and validate every metadata input before the first write.
+    config, state = load_config(args.config), get_host_state(args)
+    baseline = resolve_baseline(config, state, cwd=args.root)
+    validate_metadata_paths(args.root)
+    changelog = args.root / "CHANGELOG.md"
+    text = changelog.read_text(encoding="utf-8")
+    validate_published_sections(text, baseline, config, cwd=args.root)
+    version, pending, _ = expected_pending(text, baseline, config, strict=False)
+    files = {path: (args.root / path).read_bytes() for path in VERSION_STAMP_PATHS}
+    values = version_stamp_values(files)
+    current = version if set(values.values()) == {version} else None
+    synced_text = text
+    if pending is not None and pending.version != version:
+        heading = text[pending.start : pending.body_start]
+        synced_text = (
+            text[: pending.start]
+            + heading.replace(f"[{pending.version}]", f"[{version}]", 1)
+            + text[pending.body_start :]
+        )
+    if synced_text != text:
+        changelog.write_text(synced_text, encoding="utf-8")
+    if current != version:
+        replace_workspace_version(args.root / "Cargo.toml", version)
+        run([args.cargo, "check", "--workspace"], cwd=args.root)
+        run([args.cargo, "build", "--locked", "-p", "codeflow-cli"], cwd=args.root)
+        binary = args.root / "target/debug" / ("codeflow.exe" if os.name == "nt" else "codeflow")
+        if run([str(binary), "--version"], cwd=args.root).stdout.strip() != f"codeflow {version}":
+            fail("rebuilt updater version disagrees with pending target")
+        run([str(binary), "update"], cwd=args.root)
+        stamped = validate_version_stamps(
+            {path: (args.root / path).read_bytes() for path in VERSION_STAMP_PATHS}
+        )
+        if stamped != version:
+            fail(f"sync left stamps at {stamped}, expected {version}")
+    print(json.dumps({"status": "synchronized", "baseline": baseline.version, "version": version}, sort_keys=True))
+
+
+def check_state(args: argparse.Namespace) -> None:
+    result = validate_release_tree(
+        args.ref, load_config(args.config), get_host_state(args), cwd=args.root
+    )
+    print(json.dumps({"status": "ok", **result}, sort_keys=True))
+
+
+def show_host_state(args: argparse.Namespace) -> None:
+    print(json.dumps(get_host_state(args), sort_keys=True))
+
+
+def release_notes(root: Path, ref: str, tag: str, source: str) -> str:
+    text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
+    section = next(
+        (item for item in changelog_sections(text) if item.version == tag.removeprefix("v")),
+        None,
+    )
+    if section is None or not section.body:
+        fail(f"CHANGELOG.md lacks curated notes for {tag}")
+    body = IMPACT_MARKER.sub("", section.body)
+    body = body.replace(LEGACY_END, "")
+    body = re.sub(r"(?m)^_Staging evidence:.*_\s*$", "", body)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return f"{body}\n\n{SOURCE_MARKER.format(source=source)}\n"
+
+
+def write_release_notes(args: argparse.Namespace) -> None:
+    args.output.write_text(
+        release_notes(args.root, args.ref, args.tag, args.source), encoding="utf-8"
+    )
+    print(json.dumps({"status": "prepared", "output": str(args.output)}))
+
+
+def verify_checks(args: argparse.Namespace) -> None:
+    pages = load_json(args.state)
+    run_pages = load_json(args.runs_state)
+    required = load_config(args.config).get("required_publication_checks")
+    if (
+        not isinstance(pages, list)
+        or not isinstance(required, list)
+        or not required
+        or len(set(required)) != len(required)
+        or any(not isinstance(name, str) or not name for name in required)
+    ):
+        fail("publication check inventory or configured requirements are malformed")
+    runs: list[Any] = []
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
+            fail("publication check page is malformed")
+        runs.extend(page["check_runs"])
+    workflow_runs: list[Any] = []
+    if not isinstance(run_pages, list):
+        fail("publication workflow-run inventory is malformed")
+    for page in run_pages:
+        if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
+            fail("publication workflow-run page is malformed")
+        workflow_runs.extend(page["workflow_runs"])
+    candidates = [
+        run
+        for run in workflow_runs
+        if isinstance(run, dict)
+        and run.get("event") == "push"
+        and run.get("head_branch") == "main"
+        and run.get("head_sha") == args.source
+        and run.get("path") == ".github/workflows/codeflow-ci.yml"
+        and isinstance(run.get("id"), int)
+        and isinstance(run.get("run_number"), int)
+        and isinstance(run.get("run_attempt"), int)
+        and isinstance(run.get("check_suite_id"), int)
+    ]
+    if not candidates:
+        fail("selected source lacks its codeflow-ci main-push workflow run")
+    selected = max(
+        candidates,
+        key=lambda run: (run["run_number"], run["run_attempt"], run["id"]),
+    )
+    if selected.get("status") != "completed" or selected.get("conclusion") != "success":
+        fail("latest codeflow-ci main-push workflow run is not successful")
+    suite_id = selected["check_suite_id"]
+    latest: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if (
+            not isinstance(run, dict)
+            or run.get("name") not in required
+            or run.get("head_sha") != args.source
+            or (run.get("app") or {}).get("slug") != "github-actions"
+            or (run.get("check_suite") or {}).get("id") != suite_id
+            or not isinstance(run.get("id"), int)
+        ):
+            continue
+        name = str(run["name"])
+        if name not in latest or run["id"] > latest[name]["id"]:
+            latest[name] = run
+    blocked = [
+        name
+        for name in required
+        if name not in latest
+        or latest[name].get("status") != "completed"
+        or latest[name].get("conclusion") != "success"
+    ]
+    if blocked:
+        fail(f"selected source lacks latest trusted successful checks: {', '.join(blocked)}")
+    print(json.dumps({"status": "verified", "checks": required}, sort_keys=True))
+
+
+def verify_publication(args: argparse.Namespace) -> None:
+    config, state = load_config(args.config), get_host_state(args)
+    if not state["drafts_visible"]:
+        fail("publication verification requires write-visible draft inventory")
+    source = git("rev-parse", f"{args.source}^{{commit}}", cwd=args.root)
+    main = (
+        args.main_source
+        if args.main_source
+        else git("rev-parse", f"{args.main_ref}^{{commit}}", cwd=args.root)
+    )
+    if not re.fullmatch(r"[0-9a-f]{40}", main):
+        fail("current main source is malformed")
+    if source != main:
+        fail("selected snapshot is no longer current main; redispatch")
+    result = validate_release_tree(
+        source, config, state, cwd=args.root, allow_attempt=(args.tag, source)
+    )
+    if not result["pending"] or args.tag != result["tag"]:
+        fail("requested tag does not match selected main pending state")
+    print(json.dumps({"status": "authorized", "source": source, "tag": args.tag}, sort_keys=True))
+
+
+def verify_authority(args: argparse.Namespace) -> None:
     event = load_json(args.event)
-    event_pull = event.get("pull_request")
-    if event.get("action") != "closed" or not isinstance(event_pull, dict) or event_pull.get("merged") is not True:
-        fail("publication authorization requires a merged pull_request_target event")
-    pull = load_json(args.pull)
-    try:
-        reviews = json.loads(args.reviews.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot read review evidence: {error}")
-    if not isinstance(reviews, list):
-        fail("review evidence must be a JSON array")
+    users = load_json(args.users)
     permissions = load_json(args.permissions)
-    head_sha = pull.get("head", {}).get("sha")
-    verify_review_data(pull, reviews, permissions, head_sha, args.repository)
-    if pull.get("base", {}).get("ref") != config["main_branch"]:
-        fail("release candidate was not merged into configured main")
-    if pull.get("head", {}).get("ref") != config["candidate_branch"]:
-        fail("only the configured release candidate branch can authorize publication")
-    merged_by = pull.get("merged_by") or {}
-    if merged_by.get("type") != "User" or not merged_by.get("login"):
-        fail("release candidate must be merged by an identified human GitHub user")
-    merge_sha = pull.get("merge_commit_sha")
-    if merge_sha != event_pull.get("merge_commit_sha") or head_sha != event_pull.get("head", {}).get("sha"):
-        fail("fresh pull request state disagrees with the triggering event")
-    if git("rev-parse", "HEAD", cwd=args.root) != merge_sha:
-        fail("authorization checkout is not the event's exact merge commit")
-    result = merged_candidate(head_sha, "HEAD", config, cwd=args.root)
-    if result["merge"] != merge_sha:
-        fail("event merge commit disagrees with the verified candidate merge")
-    print(json.dumps({"status": "authorized", "candidate": head_sha, "tag": result["tag"]}, sort_keys=True))
+    pulls = load_json(args.pulls)
+    if not all(isinstance(value, dict) for value in [event, users, permissions]) or not isinstance(pulls, list):
+        fail("authority fixtures are malformed")
+    if event.get("event_name") != "workflow_dispatch" or event.get("ref") != "refs/heads/main":
+        fail("publication requires explicit workflow_dispatch on main")
+    for role in ["actor", "triggering_actor"]:
+        login = event.get(role)
+        if (
+            not isinstance(login, str)
+            or users.get(login) != "User"
+            or permissions.get(login) not in {"write", "maintain", "admin"}
+        ):
+            fail(f"{role} must be a GitHub User with current write, maintain, or admin permission")
+    matches = [
+        pull
+        for pull in pulls
+        if isinstance(pull, dict)
+        and pull.get("merged_at")
+        and pull.get("state") == "closed"
+        and (pull.get("base") or {}).get("ref") == "main"
+        and ((pull.get("base") or {}).get("repo") or {}).get("full_name") == args.repository
+        and pull.get("merge_commit_sha") == args.source
+        and (pull.get("merged_by") or {}).get("type") == "User"
+    ]
+    if not matches:
+        fail("selected main source lacks an ordinary human-merged PR into this repository")
+    print(json.dumps({"status": "authorized", "source": args.source}, sort_keys=True))
 
 
-def verify_dispatch(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
-    result = merged_candidate(args.candidate_ref, args.main_ref, config, cwd=args.root)
-    print(json.dumps({"status": "authorized", "candidate": result["candidate"], "tag": result["tag"]}, sort_keys=True))
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def verify_host_state(args: argparse.Namespace) -> None:
     state = load_json(args.state)
-    candidate = args.candidate
+    if not isinstance(state, dict):
+        fail("publication state must be an object")
     expected_notes = args.notes.read_text(encoding="utf-8").strip()
-    tag_target = state.get("tag_target")
-    release = state.get("release")
-    if tag_target is not None and tag_target != candidate:
-        fail("existing release tag does not target the authorized candidate")
+    if state.get("schema_version") == 1:
+        if state.get("drafts_visible") is not True:
+            fail("publication attempt requires write-visible draft inventory")
+        matches = [
+            item
+            for item in state.get("releases", [])
+            if isinstance(item, dict) and item.get("tag") == args.tag
+        ]
+        if len(matches) > 1:
+            fail(f"duplicate releases for {args.tag} are ambiguous")
+        item = matches[0] if matches else None
+        tag_target = state.get("tags", {}).get(args.tag)
+        release = (
+            {
+                "draft": item.get("draft"),
+                "tag_name": item.get("tag"),
+                "name": item.get("name"),
+                "target_commitish": item.get("target"),
+                "body": item.get("body"),
+                "assets": item.get("assets"),
+            }
+            if item
+            else None
+        )
+    else:
+        tag_target, release = state.get("tag_target"), state.get("release")
+    if tag_target is not None and tag_target != args.source:
+        fail("existing tag does not target selected source")
     if release is None:
         print(json.dumps({"status": "fresh" if tag_target is None else "resume-tag"}))
         return
-    if not isinstance(release, dict):
-        fail("hosting release state must be null or an object")
-    if release.get("draft") is not True:
-        fail("release already exists publicly; publication will not overwrite it")
-    assets = release.get("assets", [])
-    if not isinstance(assets, list):
-        fail("hosting asset state must be a list")
-    if assets:
-        fail("partial draft contains assets whose bytes cannot be proven here; refuse overwrite")
-    if release.get("tag_name") != args.tag or release.get("name") != args.tag:
-        fail("existing empty draft does not match the authorized release tag and title")
-    if release.get("target_commitish") != candidate:
-        fail("existing empty draft does not target the authorized candidate")
-    body = release.get("body")
-    if not isinstance(body, str) or body.strip() != expected_notes:
-        fail("existing empty draft does not contain the exact reviewed release notes")
+    if not isinstance(release, dict) or release.get("draft") is not True:
+        fail("release is public; verify it separately and never overwrite")
+    if not isinstance(release.get("assets", []), list) or release.get("assets"):
+        fail("partial draft assets cannot be proven byte-identical; refuse overwrite")
+    if (
+        release.get("tag_name") != args.tag
+        or release.get("name") != args.tag
+        or release.get("target_commitish") != args.source
+    ):
+        fail("empty draft identity disagrees with selected release")
+    if not isinstance(release.get("body"), str) or release["body"].strip() != expected_notes:
+        fail("empty draft notes disagree with reviewed notes")
     print(json.dumps({"status": "resume-draft"}))
 
 
 def verify_published_assets(args: argparse.Namespace) -> None:
     state = load_json(args.state)
-    if state.get("tag_target") != args.candidate:
-        fail("published tag does not resolve to the exact candidate")
     release = state.get("release")
-    if not isinstance(release, dict):
-        fail("published release metadata is missing")
+    if state.get("tag_target") != args.source:
+        fail("published tag does not resolve to selected source")
     if (
-        release.get("draft") is not False
+        not isinstance(release, dict)
+        or release.get("draft") is not False
         or release.get("tag_name") != args.tag
-        or release.get("target_commitish") != args.candidate
+        or release.get("target_commitish") != args.source
     ):
-        fail("published release identity does not match the exact candidate")
-
+        fail("published release identity disagrees with selected source")
     expected: dict[str, dict[str, Any]] = {}
-    try:
-        entries = sorted(args.artifacts_dir.iterdir())
-    except OSError as error:
-        fail(f"cannot inspect staged release artifacts: {error}")
-    for path in entries:
+    for path in sorted(args.artifacts_dir.iterdir()):
         if path.name.endswith("-dist-manifest.json"):
             continue
         if path.is_symlink() or not path.is_file():
-            fail(f"staged release artifact is not a regular file: {path.name}")
-        expected[path.name] = {
-            "size": path.stat().st_size,
-            "digest": f"sha256:{sha256(path)}",
-        }
+            fail(f"artifact is not a regular file: {path.name}")
+        expected[path.name] = {"size": path.stat().st_size, "digest": f"sha256:{sha256(path)}"}
     if not expected:
-        fail("staged release artifact set is empty")
-
-    assets = release.get("assets")
-    if not isinstance(assets, list):
-        fail("published release assets are missing")
+        fail("artifact set is empty")
     actual: dict[str, dict[str, Any]] = {}
-    for asset in assets:
-        if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
-            fail("published release asset metadata is malformed")
-        name = asset["name"]
-        if name in actual:
-            fail(f"published release asset name is duplicated: {name}")
-        if asset.get("state") != "uploaded":
-            fail(f"published release asset is not uploaded: {name}")
-        actual[name] = {"size": asset.get("size"), "digest": asset.get("digest")}
+    if not isinstance(release.get("assets"), list):
+        fail("published assets are missing")
+    for asset in release["assets"]:
+        if (
+            not isinstance(asset, dict)
+            or not isinstance(asset.get("name"), str)
+            or asset["name"] in actual
+            or asset.get("state") != "uploaded"
+        ):
+            fail("published asset metadata is malformed, duplicate, or incomplete")
+        actual[asset["name"]] = {"size": asset.get("size"), "digest": asset.get("digest")}
     if actual != expected:
-        fail(
-            "published release assets disagree with the same-run staged files: "
-            f"expected={expected}, actual={actual}"
-        )
+        fail(f"published assets disagree with same-run files: expected={expected}, actual={actual}")
     print(json.dumps({"status": "verified", "tag": args.tag, "assets": len(actual)}))
 
 
-def verify_review_data(
-    pull: dict[str, Any],
-    reviews: list[Any],
-    permissions: dict[str, Any],
-    candidate: str,
-    repository: str,
-) -> None:
-    if pull.get("merged") is not True or pull.get("state") != "closed":
-        fail("candidate pull request is not merged")
-    head = pull.get("head") or {}
-    base = pull.get("base") or {}
-    head_repo = (head.get("repo") or {}).get("full_name")
-    base_repo = (base.get("repo") or {}).get("full_name")
-    if head_repo != repository or base_repo != repository:
-        fail("release candidate must originate in the same repository")
-    if head.get("sha") != candidate:
-        fail("pull request head is not the exact candidate commit")
-    merged_by = pull.get("merged_by") or {}
-    if merged_by.get("type") != "User" or not merged_by.get("login"):
-        fail("candidate must be merged by an identified human GitHub user")
-    decisive: dict[str, dict[str, Any]] = {}
-    author = (pull.get("user") or {}).get("login")
-    for item in reviews:
-        if not isinstance(item, dict) or item.get("state") not in {
-            "APPROVED",
-            "CHANGES_REQUESTED",
-            "DISMISSED",
-        }:
-            continue
-        user = item.get("user") or {}
-        login = user.get("login")
-        if user.get("type") != "User" or not login or login == author:
-            continue
-        if permissions.get(login) not in {"write", "maintain", "admin"}:
-            continue
-        current = decisive.get(login)
-        ordering = (item.get("submitted_at") or "", int(item.get("id") or 0))
-        prior = ((current or {}).get("submitted_at") or "", int((current or {}).get("id") or 0))
-        if current is None or ordering > prior:
-            decisive[login] = item
-    blocking = sorted(login for login, item in decisive.items() if item["state"] == "CHANGES_REQUESTED")
-    if blocking:
-        fail(f"latest eligible review still requests changes: {', '.join(blocking)}")
-    approvals = [
-        item
-        for item in decisive.values()
-        if item["state"] == "APPROVED" and item.get("commit_id") == candidate
-    ]
-    if not approvals:
-        fail("candidate needs a current eligible human approval on its exact head")
-
-
-def verify_review(args: argparse.Namespace) -> None:
-    pull = load_json(args.pull)
-    try:
-        reviews = json.loads(args.reviews.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot read review evidence: {error}")
-    if not isinstance(reviews, list):
-        fail("review evidence must be a JSON array")
-    permissions = load_json(args.permissions)
-    verify_review_data(pull, reviews, permissions, args.candidate, args.repository)
-    print(json.dumps({"status": "approved", "candidate": args.candidate}))
+def add_host_args(value: argparse.ArgumentParser) -> None:
+    value.add_argument("--host-state", type=Path)
+    value.add_argument("--repository", default="")
+    value.add_argument("--drafts-visible", action="store_true")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -824,49 +1094,61 @@ def parser() -> argparse.ArgumentParser:
     check = sub.add_parser("check-pr")
     check.add_argument("--base", required=True)
     check.add_argument("--head", required=True)
+    check.add_argument("--target-ref", required=True)
     source = check.add_mutually_exclusive_group(required=True)
     source.add_argument("--body-file", type=Path)
     source.add_argument("--body-env")
+    add_host_args(check)
     check.set_defaults(func=check_pr)
 
-    prep = sub.add_parser("prepare")
-    prep.add_argument("--record", type=Path, default=DEFAULT_RECORD)
-    prep.add_argument("--git-cliff", default="git-cliff")
-    prep.add_argument("--date")
-    prep.set_defaults(func=prepare)
+    prepare = sub.add_parser("sync")
+    prepare.add_argument("--cargo", default="cargo")
+    add_host_args(prepare)
+    prepare.set_defaults(func=sync)
 
-    finish = sub.add_parser("finalize")
-    finish.add_argument("--record", type=Path, default=DEFAULT_RECORD)
-    finish.set_defaults(func=finalize)
+    state = sub.add_parser("check-state")
+    state.add_argument("--ref", default="HEAD")
+    add_host_args(state)
+    state.set_defaults(func=check_state)
 
-    guard = sub.add_parser("guard-refresh")
-    guard.add_argument("--ref", required=True)
-    guard.set_defaults(func=guard_refresh)
+    inventory = sub.add_parser("host-state")
+    add_host_args(inventory)
+    inventory.set_defaults(func=show_host_state)
 
-    event = sub.add_parser("authorize-event")
-    event.add_argument("--event", type=Path, required=True)
-    event.add_argument("--pull", type=Path, required=True)
-    event.add_argument("--reviews", type=Path, required=True)
-    event.add_argument("--permissions", type=Path, required=True)
-    event.add_argument("--repository", required=True)
-    event.set_defaults(func=authorize_event)
+    publication = sub.add_parser("verify-publication")
+    publication.add_argument("--source", required=True)
+    current_main = publication.add_mutually_exclusive_group(required=True)
+    current_main.add_argument("--main-ref")
+    current_main.add_argument("--main-source")
+    publication.add_argument("--tag", required=True)
+    add_host_args(publication)
+    publication.set_defaults(func=verify_publication)
 
-    review = sub.add_parser("verify-review")
-    review.add_argument("--pull", type=Path, required=True)
-    review.add_argument("--reviews", type=Path, required=True)
-    review.add_argument("--permissions", type=Path, required=True)
-    review.add_argument("--candidate", required=True)
-    review.add_argument("--repository", required=True)
-    review.set_defaults(func=verify_review)
+    checks = sub.add_parser("verify-checks")
+    checks.add_argument("--state", type=Path, required=True)
+    checks.add_argument("--runs-state", type=Path, required=True)
+    checks.add_argument("--source", required=True)
+    checks.set_defaults(func=verify_checks)
 
-    dispatch = sub.add_parser("verify-dispatch")
-    dispatch.add_argument("--candidate-ref", default="HEAD")
-    dispatch.add_argument("--main-ref", default="origin/main")
-    dispatch.set_defaults(func=verify_dispatch)
+    authority = sub.add_parser("verify-authority")
+    authority.add_argument("--event", type=Path, required=True)
+    authority.add_argument("--users", type=Path, required=True)
+    authority.add_argument("--permissions", type=Path, required=True)
+    authority.add_argument("--pulls", type=Path, required=True)
+    authority.add_argument("--repository", required=True)
+    authority.add_argument("--source", required=True)
+    authority.set_defaults(func=verify_authority)
+
+    notes = sub.add_parser("release-notes")
+    notes.add_argument("--ref", default="HEAD")
+    notes.add_argument("--source", required=True)
+    notes.add_argument("--tag", required=True)
+    notes.add_argument("--output", type=Path, required=True)
+    notes.set_defaults(func=write_release_notes)
 
     host = sub.add_parser("verify-host-state")
     host.add_argument("--state", type=Path, required=True)
-    host.add_argument("--candidate", required=True)
+    host.add_argument("--source", required=True)
     host.add_argument("--tag", required=True)
     host.add_argument("--notes", type=Path, required=True)
     host.set_defaults(func=verify_host_state)
@@ -874,16 +1156,9 @@ def parser() -> argparse.ArgumentParser:
     published = sub.add_parser("verify-published-assets")
     published.add_argument("--state", type=Path, required=True)
     published.add_argument("--artifacts-dir", type=Path, required=True)
-    published.add_argument("--candidate", required=True)
+    published.add_argument("--source", required=True)
     published.add_argument("--tag", required=True)
     published.set_defaults(func=verify_published_assets)
-
-    notes = sub.add_parser("release-notes")
-    notes.add_argument("--candidate", required=True)
-    notes.add_argument("--tag", required=True)
-    notes.add_argument("--output", type=Path, required=True)
-    notes.set_defaults(func=write_release_notes)
-
     return value
 
 
@@ -892,11 +1167,9 @@ def main() -> int:
     args.root = args.root.resolve()
     if not args.config.is_absolute():
         args.config = args.root / args.config
-    if hasattr(args, "record") and not args.record.is_absolute():
-        args.record = args.root / args.record
     try:
         args.func(args)
-    except (ReleaseError, OSError, ValueError) as error:
+    except (ReleaseError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"release error: {error}", file=sys.stderr)
         return 2
     return 0

@@ -4,9 +4,35 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+An undated version section above the latest verified public release is pending
+source state, not a claim that the version is available. The public release
+records the actual publication date; published sections and their impact
+annotations are frozen.
+
+## [3.0.0]
+
+_Staging evidence: this section was first staged on 2026-08-02; that was not a
+publication date._
 
 ### Added
+
+<!-- codeflow:release-impact minor -->
+- **Consumer-owned same-work-PR release guidance.** cf-ship offers a compact
+  starter only when a project lacks a compatible release process, preserves
+  adopted tools and independent version domains, and adds four scoped release
+  diagnostics without turning CodeFlow metadata into product version authority.
+
+### Changed
+
+<!-- codeflow:release-impact minor -->
+- **Same-work-PR release state (ADR-0062).** Normal work PRs now carry the
+  curated pending note, impact annotation, and cumulative version stamps they
+  require. Read-only host discovery advances from the latest verified public
+  release, while cargo-dist remains the sole explicitly dispatched publisher;
+  the candidate branch, follow-up release PR, and git-cliff authority are
+  retired without moving the historical v2.1 tag.
+
+<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
   full projects receive cf-estimate: anchored four-grade classification,
@@ -158,8 +184,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or `axis: spec` (both when both apply). An operator-unattended TTY overlay
   may skip routine approval clicks when the operator asks not to babysit,
   without amending harness-boundary ADRs or granting consults write access.
-
-## [3.0.0] - 2026-08-02
 
 > **Breaking migrations.** Before installing v3:
 >
@@ -836,6 +860,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exact fingerprint.** The historical line demonstrated scanner behavior and
   contained no credential; `.gitleaksignore` suppresses only that immutable
   finding rather than weakening a rule.
+
+<!-- codeflow:legacy-group-end -->
 
 ## [2.1.0] - 2026-07-12
 
