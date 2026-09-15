@@ -330,17 +330,16 @@ git-hook plane, CI, and an independent review before anything lands.
 
 ## Guardrails
 
-- **Never automate vendor auth.** The user runs `codex login` (or logs in to
-  `claude`) by hand, on a single account per side. Degrade legibly on missing
-  or 401 — never paper over it.
-- **Every delegate prompt carries caps.** Explicit file scope, a step budget,
-  and "surface ambiguity as a blocker, never guess." Unbounded handoffs are how
-  quota and scope both blow out.
-- **Synthesize, never paste.** A delegate's finding is an input, not your
-  conclusion. Re-derive it, cite the file:line or command output yourself, and
-  say plainly where you agree and disagree before reporting it as fact. An
-  unverified delegate claim is an unverifiable claim — a defect by this repo's
-  own rule.
+- **Never automate vendor auth.** The user logs in manually, one account per
+  side; degrade legibly on missing/401.
+- **Every delegate prompt narrows authority and data.** Name purpose, permitted
+  actions/files/resources/data/processors/destinations/effects and step budget;
+  ambiguity blocks—never guess. Send only necessary minimized data to an
+  approved processor; route qualification is not data authority. An
+  already-authorized scoped handoff needs no new approval; the lead verifies
+  effects and claims.
+- **Synthesize, never paste.** A finding is input, not conclusion: re-derive and
+  cite it, state agreement/disagreement; unverified remains unverifiable.
 - **Stay within ToS.** This process-boundary composition is sanctioned (OpenAI
   ships the plugin itself); the single-account, manual-auth, degrade-on-401
   posture is what keeps it there.

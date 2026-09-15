@@ -606,6 +606,46 @@ fn design_review_and_security_roles_cannot_silently_drift() {
 }
 
 #[test]
+fn responsible_autonomy_has_detailed_quality_and_security_owners() {
+    let quality = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    ));
+    let security = normalize_whitespace(&read("assets/base/claude/agents/cf-security-reviewer.md"));
+
+    for required in [
+        "Apply authority to effects, not tool verbs",
+        "the authorized instance/count of unchanged safe steps without re-asking",
+        "an identical tuple is not a standing grant",
+        "Use personal or confidential data only when necessary and authorized",
+        "A qualified provider or route is not blanket authority",
+        "Missing a required hard control withholds that risky lane",
+        "same idempotency key where supported",
+        "A compensating action reduces harm but is not guaranteed reversal",
+        "preserve the minimum protected evidence",
+    ] {
+        assert!(
+            quality.contains(required),
+            "quality contract lost responsible-autonomy duty: {required}"
+        );
+    }
+
+    for required in [
+        "necessary and authorized before it reaches a provider/tool",
+        "prompt, URL, log, screenshot, trace, feedback, Git record, or peer",
+        "Route qualification is not data authority",
+        "purpose, action, resource, data, destination/recipient, and side effects",
+        "GET/read may disclose or mutate",
+        "Inspect uncertain non-idempotent outcomes before retry",
+        "preserve bounded incident evidence",
+    ] {
+        assert!(
+            security.contains(required),
+            "security reviewer lost responsible-autonomy duty: {required}"
+        );
+    }
+}
+
+#[test]
 fn always_loaded_reasoning_and_output_contract_survives_refactors() {
     let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
 

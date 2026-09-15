@@ -21,10 +21,11 @@
 //! - **`privilege_escalation` = warn, deliberately NOT block.** sudo/su/doas/
 //!   pkexec, shell `-c` chains, `LD_PRELOAD`/PATH injection. A hook that exited 2
 //!   here would override even an explicit human approval, because a `PreToolUse`
-//!   deny wins unconditionally — including over the settings `ask` tier that
-//!   exists precisely to prompt a human before a sudo runs. The exec-guard
-//!   therefore only surfaces feedback on stderr; the `ask` tier owns the
-//!   decision. Set it to `block` in `policy.json` to harden a specific repo.
+//!   deny wins unconditionally. The guard therefore advises on stderr; the agent
+//!   obtains applicable task authority in the authenticated conversation and
+//!   observes effective harness controls. Some production modes show no
+//!   permission prompt. Set `block` in `policy.json` to harden a specific repo;
+//!   authorization never relaxes the catastrophic floor above.
 //!
 //! [`network`](crate::security::network) and [`tmp`](crate::security::tmp) are
 //! intentionally NOT wired here: v1 network semantics conflict with the v2 PR
@@ -92,6 +93,11 @@ fn dangerous_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
 }
 
 fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
+    let enforcement = if level == PolicyLevel::Block {
+        "configured policy denies this action"
+    } else {
+        "the default warn policy advises only"
+    };
     Violation::new(
         "security.privilege_escalation",
         level,
@@ -101,7 +107,7 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
             reason = verdict.reason,
             pat = verdict.pattern,
         ),
-        "privilege escalation is prompted by the settings `ask` tier — approve it there if a human intends it; the exec-guard only advises (policy security.privilege_escalation)".to_string(),
+        format!("privilege escalation needs applicable operator authority; {enforcement}; the effective harness may show no permission prompt (policy security.privilege_escalation)"),
     )
 }
 
@@ -153,8 +159,8 @@ mod tests {
 
     #[test]
     fn test_privilege_warns_not_blocks_by_default() {
-        // sudo produces a WARN under the default posture — feedback, not a veto,
-        // because the settings `ask` tier owns the human prompt for sudo.
+        // sudo produces advice, not a veto; task authority and technical harness
+        // prompting are separate, and some production modes show no prompt.
         let v = evaluate("sudo apt-get install foo", &SecuritySection::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.privilege_escalation");
@@ -163,6 +169,9 @@ mod tests {
             !any_blocking(&v),
             "privilege escalation must not block by default"
         );
+        assert!(v[0].remedy.contains("default warn policy advises only"));
+        assert!(v[0].remedy.contains("may show no permission prompt"));
+        assert!(!v[0].remedy.contains("approve it there"));
     }
 
     #[test]
@@ -174,6 +183,8 @@ mod tests {
         assert_eq!(v[0].rule, "security.privilege_escalation");
         assert_eq!(v[0].level, PolicyLevel::Block);
         assert!(any_blocking(&v));
+        assert!(v[0].remedy.contains("configured policy denies"));
+        assert!(!v[0].remedy.contains("advises only"));
     }
 
     #[test]

@@ -167,3 +167,28 @@ fn dogfood_codex_config_matches_the_shipped_posture() {
     }
     assert!(dogfood.get("sandbox_mode").is_none());
 }
+
+#[test]
+fn customization_distinguishes_technical_permissions_from_task_authority() {
+    let cfg = shipped_config();
+    assert_eq!(cfg["approval_policy"].as_str(), Some("never"));
+
+    let customize =
+        std::fs::read_to_string(root().join("assets/base/agents/skills/cf-customize/SKILL.md"))
+            .expect("read cf-customize");
+    let normalized = customize.split_whitespace().collect::<Vec<_>>().join(" ");
+    for required in [
+        "no prompts/OS sandbox",
+        "guards, hooks, and CI remain floors, not task authority",
+        "settings alone neither authorize external communication nor protect arbitrary PII/public queries",
+        "operator authority in the authenticated conversation without a global mode change",
+        "approval never waives an agent-blocked floor",
+        "missing required hard control withholds that risky lane, not safe work",
+        "durability pushes (backup, not merge)",
+    ] {
+        assert!(
+            normalized.contains(required),
+            "customization lost permission/authority distinction: {required}"
+        );
+    }
+}
