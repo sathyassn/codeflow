@@ -207,8 +207,9 @@ Material work and withdrawals remain blocked while an attempt is unresolved.
     what the installed Claude Code expects.
   - The host-neutral duo contract test passes, and both native interactive
     lanes complete a scoped canary with the task's required MCP tools:
-    Claude Code → Codex through the enabled official plugin, and Codex →
-    Claude through task-scoped tmux with Stop/StopFailure hook completion.
+    Claude Code → Codex through the enabled official plugin or qualified native
+    fallback, and Codex → Claude through task-scoped Herdr (tmux degraded)
+    with the qualified tracked Stop/StopFailure lifecycle.
     Record versions, exact commands, and observed tool access. Do not accept
     auth status output in place of a working interactive session.
   - The current ensemble record names only bindings qualified for this release;

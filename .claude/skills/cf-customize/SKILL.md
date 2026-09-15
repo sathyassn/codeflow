@@ -5,15 +5,13 @@ description: Tailor a CodeFlow scaffold to its consuming project. Verify both in
 
 # cf-customize — tailor a scaffolded project to itself
 
-`codeflow init` scaffolds the generic surface; this fills in the project. Init
-seeds one-liners, generic templates, and warn-level defaults — the reasoning
-about *this* project's purpose, its tools, and where its gates should sit is left
-for a thinking session. That is this skill: the reasoning-layer companion to
-`init`, not a mechanical command.
+`codeflow init` seeds generic one-liners, templates, and warn-level defaults.
+This skill is its evidence-driven reasoning companion: it tailors *this*
+project's purpose, tools, and gate placement in a thinking session, not
+mechanically.
 
-Two jobs, run in this order: **Part A** verifies the tools the project's flows
-need and offers to fix what is missing; **Part B** fills the project-owned
-artifacts still sitting at template defaults.
+Run two jobs in order: **Part A** verifies required flow tools and offers fixes;
+**Part B** fills project-owned artifacts still at template defaults.
 
 ## How to run it
 
@@ -282,6 +280,8 @@ confirms the final content.
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;
   keep fast-aging version pins out of shared doctrine.
+  Claude context/compaction: read
+  [policy](references/claude-context-policy.md).
 - **Presentation utility** — leave `.codeflow/present/config.toml` and primitive
   tokens absent unless the project explicitly wants different closed-session
   retention or a one-way adaptation of project primitives into `cf-present`.

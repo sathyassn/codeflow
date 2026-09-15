@@ -36,7 +36,8 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
         HERDR,
         &[
             "HERDR_ENV",
-            "named tab",
+            "herdr tab create",
+            "--label \"cf/<repo>/<work>/<kind>/<nn>\"",
             "Never send keys to `$HERDR_PANE_ID`",
             "cf-<repo>-<work>-<k><nn>",
             "`idle` or `done` is **not**",

@@ -232,6 +232,10 @@ fn init_minimal_installs_the_four_plane_floor_and_not_the_method() {
         !exists(&root, ".claude/skills"),
         "minimal must not install .claude/skills"
     );
+    assert!(!exists(
+        &root,
+        ".agents/skills/cf-customize/references/claude-context-policy.md"
+    ));
     assert!(
         !exists(&root, "project-management"),
         "minimal must not install project-management"
@@ -265,6 +269,15 @@ fn init_standard_adds_the_method_and_not_pm() {
         exists(&root, ".agents/skills/cf-method/SKILL.md"),
         "cross-harness mirror ships at standard"
     );
+    for artifact in [
+        ".claude/skills/cf-customize/references/claude-context-policy.md",
+        ".agents/skills/cf-customize/references/claude-context-policy.md",
+    ] {
+        assert!(
+            exists(&root, artifact),
+            "standard must install context policy reference {artifact}"
+        );
+    }
 
     // Project-management is NOT — that is the full tier (boundary #5).
     assert!(

@@ -24,6 +24,34 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact patch -->
+- **Workflow verification and guard boundaries.** Catalog and workflow checks
+  cover the shipped instruction surface. Prepared reference transactions fail
+  closed when an active local check cannot read or evaluate its input; docs
+  distinguish installed local safeguards from actual remote enforcement and
+  preserve the qualified interactive-only delegation policy. The README now
+  states the proportional workflow and hook-conditional recall boundaries
+  without unsupported comparisons to other development approaches.
+
+<!-- codeflow:release-impact patch -->
+- **Opt-in Claude context policy.** Repository-owned settings select a
+  1M window and 50-percent compaction target. Customization explains effective
+  window limits, consumer overrides and manual-versus-automatic evidence;
+  generic settings presets and immutable delegated-run settings are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **Instruction workflow consistency.** Required stage references preserve
+  planning, safety and review duties while clarifying mature-task reuse,
+  docs-only recovery, qualified worker fallback and meaningful type/runtime
+  boundary checks. Mandatory project gates remain required for every change.
+  Lifecycle-tracked Claude launches keep child reviews synchronous through a
+  process-local setting; ordinary sessions and stored run bindings are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **Release migration detection.** Historical `[Unreleased]` comparison links
+  no longer cause existing pending notes to be counted as new PR changes.
+  Migration handling still requires an actual unreleased section heading.
+
 <!-- codeflow:release-impact minor -->
 - **Same-work-PR release state (ADR-0062).** Normal work PRs now carry the
   curated pending note, impact annotation, and cumulative version stamps they

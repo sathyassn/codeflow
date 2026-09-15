@@ -51,6 +51,19 @@ fn develop_and_quality_contract_require_a_failing_symptom_command() {
 }
 
 #[test]
+fn develop_is_an_orchestrated_stage_or_recorded_solo_fallback() {
+    assert_contains(
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        &[
+            "inside cf-model-orchestrator",
+            "recorded solo fallback",
+            "Do not use as an alternate entry point",
+            "records the required interactive seat unavailable",
+        ],
+    );
+}
+
+#[test]
 fn task_graph_prefers_a_narrow_complete_path() {
     assert_contains(
         "assets/base/agents/skills/cf-model-orchestrator/resources/task-graph.md",
@@ -135,6 +148,21 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
             ],
         );
     }
+}
+
+#[test]
+fn ship_returns_failures_to_their_owner_without_waiving_configured_gates() {
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[
+            "every mandatory project, CodeFlow, CI, and adopted-policy gate is green",
+            "including for docs-only changes",
+            "not invented code coverage or product behavior",
+            "Return only to the failed owner",
+            "Never restart the whole lifecycle",
+            "already-frozen specs remain historical",
+        ],
+    );
 }
 
 #[test]

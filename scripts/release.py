@@ -684,7 +684,7 @@ def check_pr(args: argparse.Namespace) -> None:
     baseline = resolve_baseline(config, state, cwd=args.root)
     before_text = file_at_ref(base, "CHANGELOG.md", cwd=args.root).decode()
     after_text = file_at_ref(proposed, "CHANGELOG.md", cwd=args.root).decode()
-    adopting = "[Unreleased]" in before_text and "legacy-group=" in after_text
+    adopting = bool(re.search(r"(?m)^## \[Unreleased\]\s*$", before_text)) and "legacy-group=" in after_text
     if adopting:
         before = {"version": after["version"]}
         comparable_before = re.sub(r"(?m)^## \[Unreleased\]\s*$", "", before_text)

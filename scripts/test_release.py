@@ -542,6 +542,42 @@ class PullRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "below marker floor|must equal"):
             self.run_check(base, head, self.repo.body("none"))
 
+    def legacy_pending_changelog(self) -> str:
+        backlog = "- historical backlog"
+        digest = release.hashlib.sha256(backlog.encode()).hexdigest()
+        config = json.loads(self.repo.config.read_text())
+        config["legacy_pending_group"]["sha256"] = digest
+        self.repo.config.write_text(json.dumps(config))
+        return (
+            "# Changelog\n\n## [3.0.0]\n\n"
+            "<!-- codeflow:release-impact minor -->\n- existing feature\n\n"
+            f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
+            f"{backlog}\n<!-- codeflow:legacy-group-end -->\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n\n"
+            "[Unreleased]: https://example.invalid/compare/v2.0.0...HEAD\n"
+        )
+
+    def test_historical_unreleased_link_is_not_a_new_migration(self) -> None:
+        self.repo.write("CHANGELOG.md", self.legacy_pending_changelog())
+        self.repo.write_stamps("3.0.0")
+        base = self.repo.commit("chore: existing migration")
+        self.repo.write("planning.md", "Plan future work.\n")
+        head = self.repo.commit("docs: record plan")
+        self.run_check(base, head, self.repo.body("none"))
+
+    def test_historical_link_does_not_hide_new_impact(self) -> None:
+        changelog = self.legacy_pending_changelog()
+        self.repo.write("CHANGELOG.md", changelog)
+        self.repo.write_stamps("3.0.0")
+        base = self.repo.commit("chore: existing migration")
+        self.repo.write("CHANGELOG.md", changelog.replace(
+            "## [3.0.0]\n", "## [3.0.0]\n\n<!-- codeflow:release-impact patch -->\n- repair\n", 1
+        ))
+        head = self.repo.commit("docs: describe repair")
+        self.run_check(base, head, self.repo.body("patch"))
+        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+            self.run_check(base, head, self.repo.body("none"))
+
     def test_declared_impact_must_equal_new_annotation(self) -> None:
         base = self.repo.target
         self.repo.pending("2.0.1", [("patch", "small fix")])

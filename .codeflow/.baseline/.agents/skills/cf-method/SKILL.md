@@ -10,46 +10,49 @@ The scarce resources are clear inputs and verified outputs, not supervised
 middles. Instructions tell, workflows do, gates verify — and a gate exists only
 where a mistake is irreversible or invisible.
 
+For every non-trivial task, read
+[references/workflow-lifecycle.md](references/workflow-lifecycle.md) after the
+orchestrator selects the outcome mode. It is the required transition map for
+composing research, planning, design, implementation, review, documentation,
+repair, and ship stages without turning them into one fixed ceremony.
+
 ## Choosing process weight
 
-Match machinery to the work; escalate only when the lighter rung fails. Every
-rung that builds code carries an independent review pass — the `cf-reviewer`
-subagent in Claude Code; a separate read-only interactive review pass on any
-other harness, never headless (cf-develop carries the same branch) — review is
-a stage, not a courtesy, and self-review is not review. Selecting the stage set
-is itself an orchestration decision, orthogonal to weight: the rungs below set
-how much *process*. The duo is the default for every non-trivial repository task
-and is host-neutral: both models independently research/analyze/plan; Claude
-leads design; the active host assigns each task a producer and cross-lineage
-reviewer by verified capability; the qualified Claude judgment primary owns
-integrated Claude judgment. Solo is only the
-legible degradation when a required interactive seat is unavailable
-(`cf-model-orchestrator`). Research- or planning-only work stops after its
-jointly settled artifact. Make the weight call inside the orchestrator and
-materialize it with `cf-plan`, not mid-build.
+Match machinery to the work; escalate only when the lighter rung fails. The
+orchestrator selects stages and weight separately. The host-neutral duo remains
+the default for non-trivial work: independent Claude and Codex planning, Claude
+design and integrated judgment, capability-based production, and
+author-relative cross-lineage review. Solo is only a recorded degradation after
+an interactive seat is unavailable. Research- or planning-only work stops after
+its settled artifact. Make the weight call inside the orchestrator and
+materialize durable planning with `cf-plan`, not mid-build.
+
+Mature accepted work does not restart open-ended discovery or re-interview
+settled intent. Perform a compact currency, acceptance, dependency, and anchor
+check, reuse the approved records and evidence, and continue at the applicable
+stage. Return to planning only for a material change to outcome, scope,
+authority, acceptance/interface, dependency or decision graph, security
+boundary, or irreversible tradeoff; ordinary reversible detail inside an
+approved node remains execution evidence.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Interactive `/cf-model-orchestrator` loop** for non-trivial work — the
-  default path: parallel discovery → versioned dual-approved result; when edits
-  are in scope, continue through routed production, producer verification,
-  cross-lineage unit review, and integrated Claude-judgment-primary review, with
-  bounded rework.
-- **Inline `/cf-develop` loop** for the solo fallback: build → independent
-  review → verify, with bounded rework.
+- **Interactive `/cf-model-orchestrator` loop** for non-trivial work — parallel
+  discovery, versioned joint settlement, then only the stages the outcome needs.
+- **Inline `/cf-develop` loop** supports an orchestrated implementation; used
+  alone, it is the recorded solo fallback: build → independent review → verify.
 - **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`, Claude Code) for
   unattended, batch, or parallel fan-out runs. Its assurance preset is
   explicitly single-vendor; it never claims the interactive duo's dual approval.
   (Workflows are a Claude-Code runtime; on another harness this rung is
   unavailable—use that harness's native task composition.)
-- **Custom ad-hoc workflow** (Claude Code) when no preset fits — for genuinely
-  novel orchestration (a one-off audit sweep, a migration), not a shortcut around
-  the review stage. Presets are defaults, not constraints.
+- **Custom ad-hoc workflow** (Claude Code) for genuinely novel orchestration,
+  not a shortcut around review.
 - **Integration-branch flow** for a multi-task body of work — an epic of serial
   and/or parallel tasks lands task-by-task on a shared `integration/<epic>`
   branch, not on `main`, and the human reviews one final PR. See "Managing a
   body of work" below.
-- **Stage and model composition lives in the invocation args** (`args.stages`,
-  `args.models`) — never hardcoded into the workflow file.
+- **Stage/model composition** lives in invocation args (`args.stages`,
+  `args.models`), never hardcoded into a workflow.
 
 ## Planning an epic
 
@@ -208,20 +211,23 @@ human-merge-only. The integration branch is not a backdoor — its content reach
 The git standards are enforced in layers, and the layers are not equal. Local git
 hooks and the `git-guard` PreToolUse hook are **fast feedback** — they catch the
 normal ways work goes wrong in-session, before a push, but an agent on the local host
-can in principle edit or skip them. CI and remote branch protection are the
-**authoritative perimeter**: server-enforced, so that same agent cannot bypass them
-(arm it with `codeflow remote protect`). The local layer is convenience; the remote
-layer is the real boundary.
+can edit or skip them. Required CI and remote rules form a server-side boundary
+only when configured and enforced for the actor's permissions.
+`codeflow remote protect` configures supported rules; verify availability and
+success, not just scaffold files.
+Inspect required checks, bypass rights and actual results before claiming an
+**authoritative perimeter**. Local checks remain required defense in depth.
 
-That asymmetry is what makes the override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
-tokens) safe to exist: they are a human-terminal convenience, not authentication, and
-are contained precisely because the boundary that matters is remote. Setting one
-in-session to slip past a local gate is laundering — the gate stands in for the remote
-check it mirrors, so defeating it locally proves nothing.
+Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are not authentication or
+proof of safety. They establish no remote boundary; agents must never set them
+to slip past a local gate. That is laundering even
+when remote protection is unavailable. Report the missing boundary, retain the
+project's safety and review duties, and do not imply local checks replace
+server-side enforcement.
 
 ## When an ADR is warranted — Tier-3 triggers
 
-ADRs are append-only and written at the moment of decision, when context is
+Accepted ADRs are append-only and finalized at the moment of decision, when context is
 loaded — the cheapest possible "why" capture, and the best-value reading for a
 fresh session. But ADR over-production is its own swamp. Write one only at a
 **Tier-3 decision point**:
@@ -242,6 +248,9 @@ decision (stated as fact), consequences (honest about costs), and
 `architecture_impact`. The impact field is load-bearing — when it is not
 `none`, update `docs/architecture.md` **in the same PR**. ADRs are never edited
 after acceptance; a reversal is a new ADR plus `superseded_by` on the old one.
+An unpublished draft may be revised while its decision is unresolved; it gains
+append-only authority only when accepted. Do not mislabel exploratory notes as
+an accepted decision.
 
 ## Capability registry discipline
 
@@ -310,8 +319,11 @@ Downgrade is never destructive: stop managing, do not delete.
   it; stored views rot by design.
 - **ADR inflation.** One ADR per task devalues the record. Tier-3 triggers
   only.
-- **Doc drift by separate ceremony.** Docs updated "later, in a docs pass"
-  rot. Docs mutate only inside the ship flow, in the same PR as the code.
+- **Doc drift after implementation.** Authoritative docs made stale by code
+  updated "later, in a docs pass" rot; synchronize them in that work's ship
+  flow and same PR. Standalone documentation, planning records, draft ADRs, and
+  contemporaneous evidence remain owned by their applicable stages and do not
+  require a fictional code change.
 - **Speculative artifacts.** New agents, skills, commands, or templates are
   added when usage proves the need — never because they might help.
 - **Assumption-driven building.** Guessing an operator-owned outcome or safety

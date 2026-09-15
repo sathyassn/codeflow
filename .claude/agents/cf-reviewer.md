@@ -32,6 +32,14 @@ itself a blocker finding — return changes_requested.
    accepting one-off styling, state logic, or a new higher-order abstraction.
    Require the plan's proportionate `DESIGN_INTENT` record for a material
    product, UX, UI, interaction, or visual-design change.
+   Inspect the existing stack's meaningful type contracts and material
+   type-check bypasses (unchecked casts, broad escape types, suppressed checks,
+   or equivalents) at the affected boundary. Verify that external/runtime data
+   is parsed and validated despite any static shape, with invalid, absent, and
+   unexpected values handled and tested. Require a concrete consequence, not a
+   type-style nit: trusted internal invariants need no redundant wrappers or
+   validators, and this review never mandates a dependency, stricter compiler,
+   language, or stack migration.
 3. For each criterion, verify it in the code and record evidence: file:line plus
    one sentence on how it is satisfied. No evidence means not verified.
    For substantial documentation or user-facing copy, read and apply

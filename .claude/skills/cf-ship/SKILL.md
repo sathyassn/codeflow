@@ -5,16 +5,27 @@ description: Land finished work — docs and capability updates, then a PR throu
 
 # cf-ship — land finished work
 
-1. Preconditions: the independent review verdict is `approved`; `codeflow test`
-   and `codeflow validate --docs` are green. Anything missing → back to
-   `cf-develop`.
+1. Preconditions: the applicable independent review verdict is `approved` and
+   every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
+   `codeflow test` and `codeflow validate --docs` remain required wherever the
+   installed/project ship gate requires them, including for docs-only changes;
+   report such a run as repository-gate evidence, not invented code coverage or
+   product behavior. Skip only genuinely inapplicable optional categories with
+   an explicit N/A and never turn “not run” into pass. Return only to the failed
+   owner: `cf-plan` for a materially changed contract, the responsible primary/
+   executor via `cf-develop` for an implementation defect, independent review
+   for a review gap, or the docs/evidence owner for documentation and PR-evidence
+   gaps. Never restart the whole lifecycle or force every failure through
+   development.
 2. Same-PR doc mutations (this is how docs stay true):
    - a capability entry created or updated — status, `verified_by` test tags,
      epic and ADR links (required at full tier; keep `verified_by` non-empty so
      `validate --docs` stays clean — it does not gate epic close);
    - an ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
-   - a spec frozen (`status: implemented`); epic and task statuses updated.
+   - an approved spec transitioned to frozen (`status: implemented`) when its
+     consuming work ships; already-frozen specs remain historical; epic and
+     task statuses updated through their applicable change control.
 3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
    If `.codeflow/docs-portal.json` exists and this change materially affects
    authoritative docs, relationships, version context, portal configuration,

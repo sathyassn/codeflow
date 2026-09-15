@@ -80,31 +80,30 @@ Never steal a name that does not start with `cf-`.
 
 ## Create or resume
 
-**Resume** only when all of these hold: the tab label matches
-`cf/<repo>/<work>/<kind>/<nn>` for this work; the agent's pane `cwd` equals
-the intended worktree (`$PWD`); this run created the tab or is a follow-up of
-the same work in that cwd; and the prior turn was harvested (lifecycle
-terminal or native thread result). Idle or done after harvest means the seat
-can take the *next* prompt — it is not proof the prior turn completed. Do not
-prompt an idle `cf-…` agent in a different cwd. Do not mint `…-cl02` for a
-same-work follow-up unless the first agent is gone or poisoned.
+**Resume** only a same-work tab: its label matches
+`cf/<repo>/<work>/<kind>/<nn>`, pane `cwd` is `$PWD`, this run created it or it
+is a same-cwd follow-up, and its prior turn was harvested (lifecycle terminal
+or native thread result). Idle/done after harvest permits the *next* prompt;
+it does not prove prior completion. Never prompt a different-cwd `cf-…` agent
+or mint `…-cl02` for a same-work follow-up unless the first is gone/poisoned.
 
-**Create** a named tab otherwise, on the **existing workspace for this project
-folder** (the cwd being worked — never another repo's space). Create a
-workspace only when none exists for that project cwd:
+**Create** otherwise in the existing workspace for project `$PWD` (never
+another repo); create that workspace only when none exists:
 
 ```bash
 created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" \
   --label "cf/<repo>/<work>/<kind>/<nn>" --cwd "$PWD" --no-focus)
 pane_id=$(printf '%s' "$created" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
+# Tracked Claude only: set after shell init in its dedicated pane; verify `1`.
+herdr pane run "$pane_id" 'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; echo $CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'
 herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> \
   --pane "$pane_id" -- <native-args>
 ```
 
-Native args after `--` are kind-specific. Take selector and default effort
-from the current ensemble. Escalation effort is for same-family workers, not
-the launched primary:
+Native args after `--` are kind-specific. Use the ensemble's primary
+selector/effort; workers own escalation. Close the dedicated tracked-Claude
+pane after its lifecycle ends.
 
 - Claude: `--model <selector> --effort <effort> --permission-mode bypassPermissions`
 - Codex: `--model <selector> -c model_reasoning_effort="<effort>" --ask-for-approval never --sandbox danger-full-access`
