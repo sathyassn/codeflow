@@ -3,24 +3,23 @@
 The AI-development discipline layer you install into any repo: one Rust binary
 (`codeflow`) that scaffolds, enforces, verifies, and remembers — while Claude
 Code (or any harness) does the developing. Policy lives in one config
-(`.codeflow/policy.json`) and is enforced across four planes, so the same rules
-bind any agent or human.
+(`.codeflow/policy.json`) and can reach four complementary protection planes.
+Installed files alone do not make those planes effective; verify the relevant
+hooks, harness integration, CI requirements, and remote rules.
 
 ## Why codeflow
 
-- **Vs. a bare coding harness** (Claude Code or Codex alone) — discipline lasts
-  only as long as you remember to apply it, and none of it survives the
-  session: no durable decision record, no cross-session traceability, no
-  enforcement once the conversation ends. codeflow adds a capability → epic →
-  ADR spine (linted by `codeflow validate --docs`), four enforcement planes
-  reading one `.codeflow/policy.json`, and an automatically captured recall
-  corpus (ledger + session summaries).
-- **Vs. spec-driven frameworks** (Spec Kit, OpenSpec, BMAD) — those prescribe a
-  per-change authoring ceremony: a spec, plan, and task breakdown for each unit
-  of work. codeflow is a discipline layer instead, with a graduation ladder
-  (trivial or conversational work needs no artifact at all) and a **living**
-  `docs/capabilities.md` registry of what the system does, not a disposable
-  per-change spec.
+- **Integrated, proportional discipline** — codeflow connects a living
+  `docs/capabilities.md` registry, architecture and decision records, shared
+  policy, staged workflows, and project recall. Full tier adds durable epics,
+  tasks, and specs plus referential checks for work that outlives sessions;
+  accepted external trackers and approved plans keep their authority. Trivial
+  or conversational work needs no new artifact, and non-trivial work uses only
+  the stages its outcome warrants.
+- **Durable, conditional recall** — the ledger and repository records provide
+  cross-session traceability. Session summaries are captured automatically only
+  when a supported harness's SessionEnd hook is installed and actually executes;
+  without that event, externalize decisions, progress, and evidence as you go.
 - **When not to use it** — a scratch or throwaway repo (`--minimal`, or skip
   it), or a team that wants a full workflow framework rather than guardrails;
   codeflow is deliberately not a harness, agent framework, or runtime model
@@ -113,7 +112,13 @@ auto-detection does not recursively guess package boundaries or commands.
 
 ## Enforcement planes
 
-One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent-human-merge-boundary.md), [ADR-0008](docs/decisions/ADR-0008-harness-parity-and-exec-guard.md)):
+One policy, four available planes (charter §6.5;
+[ADR-0007](docs/decisions/ADR-0007-agent-human-merge-boundary.md),
+[ADR-0008](docs/decisions/ADR-0008-harness-parity-and-exec-guard.md)). Minimal
+init scaffolds local hooks, in-session settings, and CI while preserving an
+existing hook manager; it does not configure remote branch protection. Verify
+hook execution, harness trust and event support, required CI results, and actual
+remote rules, permissions, and bypasses before claiming effective coverage:
 
 - **Git client hooks** — harness-agnostic, five shims: `pre-commit` (secret
   scan, protected-branch commit), `commit-msg` (conventional format, no AI
@@ -126,15 +131,18 @@ One policy, four planes (charter §6.5; [ADR-0007](docs/decisions/ADR-0007-agent
   emoji in `gh pr create` bodies) and `exec-guard` (destructive commands block,
   privilege escalation warns). Wired for Claude via `.claude/settings.json` and,
   through a byte-compatible payload, for an interactive Codex session via
-  `.codex/hooks.json` (ADR-0008). Codex-driven work is bound unconditionally by
-  the git-hook plane above; the in-session guards are an interactive-Codex bonus
-  (headless `codex exec` is not a sanctioned peer transport). The scaffolded
+  `.codex/hooks.json` (ADR-0008). Codex-driven work receives the git-hook plane
+  where those hooks are installed and executed; the in-session guards are an
+  interactive-Codex bonus (headless `codex exec` is not a sanctioned peer
+  transport). The scaffolded
   Claude and Codex settings also enable fail-closed workspace autonomy, public
   research/tool access, live search, and guarded escalation; see ADR-0025.
-- **CI** — re-runs the gates as the authoritative perimeter; PR-content checks
-  are CI-plane by design (a git hook never sees a PR).
-- **Remote branch protection** — the server-side backstop (`codeflow remote
-  protect`).
+- **CI** — re-runs the gates; PR-content checks are CI-plane by design (a git
+  hook never sees a PR). CI becomes a merge gate when the remote requires its
+  result.
+- **Remote branch protection** — the configured server-side backstop. Where the
+  provider and permissions support it, `codeflow remote protect` applies the
+  supported rules; inspect the actual rules and bypass access.
 
 Protected-branch merges land via a PR **merged by a human**, or `codeflow
 integrate`; an agent never merges into protected. A human can override the git

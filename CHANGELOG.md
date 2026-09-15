@@ -29,7 +29,9 @@ publication date._
   cover the shipped instruction surface. Prepared reference transactions fail
   closed when an active local check cannot read or evaluate its input; docs
   distinguish installed local safeguards from actual remote enforcement and
-  preserve the qualified interactive-only delegation policy.
+  preserve the qualified interactive-only delegation policy. The README now
+  states the proportional workflow and hook-conditional recall boundaries
+  without unsupported comparisons to other development approaches.
 
 <!-- codeflow:release-impact patch -->
 - **Opt-in Claude context policy.** Repository-owned settings select a

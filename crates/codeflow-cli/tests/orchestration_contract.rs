@@ -502,6 +502,40 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
 }
 
 #[test]
+fn readme_distinguishes_installed_and_effective_discipline() {
+    let readme = normalize_whitespace(&read("README.md"));
+
+    for required in [
+        "Integrated, proportional discipline",
+        "Full tier adds durable epics, tasks, and specs plus referential checks",
+        "Trivial or conversational work needs no new artifact",
+        "Session summaries are captured automatically only when a supported harness's SessionEnd hook is installed and actually executes",
+        "Installed files alone do not make those planes effective",
+        "Minimal init scaffolds local hooks, in-session settings, and CI while preserving an existing hook manager; it does not configure remote branch protection",
+        "Verify hook execution, harness trust and event support, required CI results, and actual remote rules, permissions, and bypasses",
+        "Codex-driven work receives the git-hook plane where those hooks are installed and executed",
+        "CI becomes a merge gate when the remote requires its result",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README lost an installed-versus-effective or proportionality qualifier: {required}"
+        );
+    }
+
+    for unsupported in [
+        "none of it survives the session",
+        "those prescribe a per-change authoring ceremony",
+        "re-runs the gates as the authoritative perimeter",
+        "Codex-driven work is bound unconditionally by the git-hook plane",
+    ] {
+        assert!(
+            !readme.contains(unsupported),
+            "README reintroduced an unsupported categorical claim: {unsupported}"
+        );
+    }
+}
+
+#[test]
 fn design_review_and_security_roles_cannot_silently_drift() {
     let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
     let reviewer = read("assets/base/claude/agents/cf-reviewer.md");
