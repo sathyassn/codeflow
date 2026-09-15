@@ -25,6 +25,14 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Responsible autonomy contract.** Managed instructions now bind
+  consequential effects to explicit authority, minimize private data, preserve
+  ordinary authorized work, and stop only the affected risky lane when
+  authority or a required control is unclear. Detailed quality, security,
+  delegation, customization, and exec-guard guidance distinguishes task
+  authority from harness enforcement without changing default policy.
+
+<!-- codeflow:release-impact patch -->
 - **Workflow verification and guard boundaries.** Catalog and workflow checks
   cover the shipped instruction surface. Prepared reference transactions fail
   closed when an active local check cannot read or evaluate its input; docs

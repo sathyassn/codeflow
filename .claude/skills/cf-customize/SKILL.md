@@ -15,17 +15,14 @@ Run two jobs in order: **Part A** verifies required flow tools and offers fixes;
 
 ## How to run it
 
-1. **Analyze first, propose second — the default.** Produce one prioritized
-   report of what is missing (Part A) and what is still generic (Part B) *before*
-   touching anything. Then walk the fixes interactively, one at a time.
-2. **On a working branch.** Do the work on `chore/codeflow-customize` (or another
-   `chore/` branch), scoped commits, and land it through a PR like any change —
-   never on a protected branch. Push the branch for durability as you go (backup,
-   not a merge).
-3. **Idempotent.** Safe to run at init *and* to re-run post-init — e.g. after a
-   `codeflow update` ships new defaults (like the `security_review` / `dep_audit`
-   gate levels) that need a project decision. A section already tailored is left
-   alone; only what is still at a default is proposed.
+1. **Analyze before editing.** Report missing Part A and generic Part B items in
+   priority order, then walk fixes interactively one at a time.
+2. **Use a working branch.** Use `chore/codeflow-customize` or another `chore/`
+   branch, scoped commits, durability pushes (backup, not merge), and a PR—never
+   a protected branch.
+3. **Stay idempotent.** At init or after update, leave tailored sections alone
+   and propose only defaults that still need a project decision (including new
+   `security_review` / `dep_audit` levels).
 
 ## Part A — flow-aware tool preflight
 
@@ -82,14 +79,17 @@ Then verify and **offer** remediation — never install silently.
       `defaultMode: auto` and `autoMode`, so use the user-level setting for a
       lifecycle session (its one immutable CLI settings file carries the
       hooks), then prove the composed boundary with a live canary.
-    - `.codex/config.toml`: `default_permissions` selects the guarded workspace
-      profile, no legacy `sandbox_mode` shadows it, public network and live web
-      search are enabled, `approval_policy = "never"` (no approval prompts), and
-      production launch adds `--sandbox danger-full-access` (OS sandbox off;
-      git-guard, exec-guard, git hooks, and CI remain the floor). Confirm the
-      consult/`workspace-write` profile still denies workspace key/certificate
-      files and `~/.codex/auth.json`. `ignore_default_excludes = false` keeps
-      Codex's secret-bearing environment filter active even in production.
+    - `.codex/config.toml`: guarded workspace default, no legacy `sandbox_mode`,
+      public network/live search. Production combines `approval_policy = "never"`
+      and `--sandbox danger-full-access`: no prompts/OS sandbox; guards, hooks,
+      and CI remain floors, not task authority. Consult `workspace-write` still
+      denies workspace keys/certificates and `~/.codex/auth.json`;
+      `ignore_default_excludes = false` retains secret-environment filtering.
+      Verify the effective boundary: settings alone neither authorize external
+      communication nor protect arbitrary PII/public queries. Obtain needed
+      operator authority in the authenticated conversation without a global
+      mode change; approval never waives an agent-blocked floor. A missing
+      required hard control withholds that risky lane, not safe work.
   - **Research and task tools** — live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every

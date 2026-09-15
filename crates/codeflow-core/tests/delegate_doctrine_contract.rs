@@ -474,6 +474,22 @@ fn lifecycle_tracked_claude_reviewers_return_in_foreground() {
 }
 
 #[test]
+fn delegate_prompts_narrow_authority_and_data_without_reasking_safe_handoffs() {
+    assert_contains(
+        DELEGATE_SKILL,
+        &[
+            "Every delegate prompt narrows authority and data",
+            "actions/files/resources/data/processors/destinations/effects",
+            "ambiguity blocks—never guess",
+            "Send only necessary minimized data to an approved processor",
+            "route qualification is not data authority",
+            "already-authorized scoped handoff needs no new approval",
+            "the lead verifies effects and claims",
+        ],
+    );
+}
+
+#[test]
 fn native_fallback_keeps_authority_and_claim_boundaries() {
     let fallback = "assets/base/claude/skills/cf-delegate/resources/native-fallback.md";
     assert_contains(DELEGATE_SKILL, &["resources/native-fallback.md"]);
