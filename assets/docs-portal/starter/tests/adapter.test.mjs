@@ -215,7 +215,7 @@ test("browser evidence binds actual dist bytes and known source providers", () =
   const directory = "docs/Mixed Case + café";
   assert.equal(pinnedSourceUrl("https://github.com/acme/repo.git", commit, directory, "directory"), `https://github.com/acme/repo/tree/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9`);
   assert.equal(pinnedSourceUrl("https://gitlab.com/acme/repo", commit, directory, "directory"), `https://gitlab.com/acme/repo/-/tree/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9`);
-  assert.equal(pinnedSourceUrl("https://bitbucket.org/acme/repo", commit, directory, "directory"), `https://bitbucket.org/acme/repo/src/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9`);
+  assert.equal(pinnedSourceUrl("https://bitbucket.org/acme/repo", commit, directory, "directory"), `https://bitbucket.org/acme/repo/src/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9/`);
   assert.equal(pinnedSourceUrl("https://git.example.com/acme/repo", commit, source), null);
   assert.equal(pinnedSourceUrl("https://git.example.com/acme/repo", commit, directory, "directory"), null);
   assert.throws(() => pinnedSourceUrl("https://github.com/acme/repo", commit, source, "archive"), /unsupported repository source target/);
@@ -1926,10 +1926,10 @@ test("generated strict-ID previews are source-grounded and keyboard-native", asy
 });
 
 test("pinned source links use known provider routes and fall back visibly", async () => {
-  for (const [repositoryUrl, expectedFile, expectedDirectory] of [
+  for (const [repositoryUrl, expectedFile, expectedDirectory, directoryTerminator = ""] of [
     ["https://github.com/example/repository", "/blob/", "/tree/"],
     ["https://gitlab.com/example/repository", "/-/blob/", "/-/tree/"],
-    ["https://bitbucket.org/example/repository", "/src/", "/src/"],
+    ["https://bitbucket.org/example/repository", "/src/", "/src/", "\\/"],
     ["https://source.example/repository", null, null],
   ]) {
     const root = await portalFixture();
@@ -1958,7 +1958,7 @@ test("pinned source links use known provider routes and fall back visibly", asyn
       } else {
         assert.match(output, new RegExp(`${expectedFile.replaceAll("/", "\\/")}${commit}\\/docs\\/guide%20%28one%29\\.md`));
         assert.match(output, new RegExp(`${expectedFile.replaceAll("/", "\\/")}${commit}\\/docs\\/excluded\\.md`));
-        assert.match(output, new RegExp(`${expectedDirectory.replaceAll("/", "\\/")}${commit}\\/docs\\/Mixed%20Case%20%2B%20caf%C3%A9\\?plain=1#readme`));
+        assert.match(output, new RegExp(`${expectedDirectory.replaceAll("/", "\\/")}${commit}\\/docs\\/Mixed%20Case%20%2B%20caf%C3%A9${directoryTerminator}\\?plain=1#readme`));
         assert.match(output, new RegExp(`${expectedDirectory.replaceAll("/", "\\/")}${commit}\\/docs\\/Mixed%20Case%20%2B%20caf%C3%A9`));
         assert.match(output, /Excluded reference/);
       }

@@ -682,7 +682,7 @@ export function pinnedSourceUrl(repositoryUrl, commit, sourcePath, target = "fil
   const host = repository.hostname.toLowerCase();
   if (host === "github.com") return `${root}/${target === "directory" ? "tree" : "blob"}/${commit}/${encodedPath}`;
   if (host === "gitlab.com") return `${root}/-/${target === "directory" ? "tree" : "blob"}/${commit}/${encodedPath}`;
-  if (host === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}`;
+  if (host === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}${target === "directory" ? "/" : ""}`;
   return null;
 }
 
