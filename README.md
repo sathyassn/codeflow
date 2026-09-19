@@ -100,6 +100,7 @@ ordinary task execution and adds no model-running CLI command.
 | `spec new --for <id>` | Allocate the next `SPC-NNN`, scaffold it, and link it from an epic or task |
 | `task new` | Allocate the next independent `TSK-NNN` under an epic or with an explicit standalone rationale |
 | `work start <task-id>` | Read-only proof that durable planning is anchored and its parent/spec/dependency graph is ready |
+| `estimate check <forecast.json>` | Read-only check of a project-owned forecast's explicit allocations and pinned evidence; schedules nothing, writes nothing, and makes no estimate itself; `--json` emits the versioned report (ADR-0057) |
 | `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal — the host launches the harness and delivers the prompt (ADR-0036) |
 
 `codeflow test setup` with no options detects only stack markers at the project
