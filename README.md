@@ -28,27 +28,27 @@ hooks, harness integration, CI requirements, and remote rules.
 
 ## Install
 
-Prebuilt binary (macOS arm64/x64, Linux x64, Windows x64) — the shell or
-PowerShell installer from the
-latest release (works once codeflow's releases are public; for private/early
-access use the checkout build below or `gh release download`):
+The latest verified published release is v2.1.0: macOS arm64/x64 and Linux x64
+archives with a shell installer, and no Windows archive or PowerShell
+installer. The workspace on `main` is the pending 3.0.0 source, whose release
+targets add Windows x64 and a PowerShell installer; no 3.0.0 assets exist until
+a release is published. The anonymous installer works once codeflow's releases
+are public; for private or early access use the `gh release download` path in
+the adoption guide or the checkout build below:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-```powershell
-irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex
-```
-
-Or from a checkout, with a Rust toolchain:
+Or build the pending source from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-On native Windows, use the PowerShell installer from the release or build with
-Cargo. Git for Windows is required. WSL2 uses the Linux installer and is the
+On native Windows, build with Cargo: the PowerShell installer is a pending
+3.0.0 release target, not a published asset. Git for Windows is required.
+WSL2 uses the Linux installer and is the
 preferred Windows route for Linux-native tooling or Claude sandboxing. See the
 platform-assurance section in the adoption guide before high-blast-radius work.
 

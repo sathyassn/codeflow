@@ -6,34 +6,37 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-`codeflow` is a single binary. Install the prebuilt build (macOS arm64/x64,
-Linux x64, Windows x64) with the shell or PowerShell installer from the latest
-release. These anonymous one-liners work once codeflow's releases are public;
-while the repo is private, use the checkout build or the `gh release download`
-path below (both authenticate as a collaborator):
+`codeflow` is a single binary. The latest verified published release is
+v2.1.0. Its assets are `.tar.xz` archives with `.sha256` files for
+`aarch64-apple-darwin`, `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`,
+a `sha256.sum`, the shell installer, and a source archive. It has no Windows
+archive and no PowerShell installer. The workspace on `main` is the pending
+3.0.0 source; its distribution targets add `x86_64-pc-windows-msvc` and a
+PowerShell installer, but no 3.0.0 assets exist until a release is published.
+
+The anonymous installer one-liner works once codeflow's releases are public;
+while the repo is private, use the `gh release download` path or the checkout
+build below (both authenticate as a collaborator):
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-```powershell
-irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex
-```
-
-Or build from a checkout, with a Rust toolchain:
+Or build the pending 3.0.0 source from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-To grab a specific platform tarball directly (e.g. to pin a version or script the
-install), use `gh`:
+To install one published platform archive directly (to pin a version or script
+the install), use `gh`. This example pins the published legacy v2.1.0 release;
+substitute `x86_64-apple-darwin` or `x86_64-unknown-linux-gnu` for the other
+published archives. Each archive unpacks to a directory of the same name
+containing the `codeflow` binary:
 
 ```sh
-# platform also includes x86_64-pc-windows-msvc (.zip containing codeflow.exe)
-# aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-gnu
 A=codeflow-cli-aarch64-apple-darwin
-gh release download v3.0.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
+gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
 tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
 install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 ```
