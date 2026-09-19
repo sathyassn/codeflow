@@ -301,10 +301,10 @@ so commit source edits before building:
 
 ```sh
 cd docs-portal
-npm run deps:install        # locked install; dependency lifecycle scripts stay disabled
-npm run check               # adapter tests, page derivation, Astro check
-npm run build               # derive pages and evidence, then the production build
-npm run preview             # serve dist/ on a loopback port until interrupted
+npm run deps:install   # locked install, dependency scripts off
+npm run check          # adapter tests, derivation, Astro check
+npm run build          # derive pages and evidence, build site
+npm run preview        # serve dist/ on loopback until stopped
 cd ..
 codeflow validate --portal docs-portal
 ```

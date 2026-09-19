@@ -167,9 +167,9 @@ the Node version pinned in `docs-portal/.node-version` (24.18.0):
 
 ```sh
 cd docs-portal
-npm run deps:install   # locked install; dependency lifecycle scripts stay disabled
-npm run build          # derive pages and evidence, then build the site
-npm run preview        # serve the built site on a loopback port
+npm run deps:install   # locked install, dependency scripts off
+npm run build          # derive pages and evidence, build site
+npm run preview        # serve the built site on loopback
 ```
 
 The guide names the exact commit it was built from and carries no release
