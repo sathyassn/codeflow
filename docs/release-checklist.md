@@ -42,6 +42,12 @@ named human release decision.
 - [ ] Hosted PR/issue/review text, releases and assets, Actions logs/artifacts,
       Pages, and packages have an explicit audited or removed disposition. An
       ordinary branch scan does not prove those provider-owned surfaces safe.
+- [ ] Private vulnerability reporting is enabled before `SECURITY.md`'s channel
+      or a public release is advertised: open the repository's Security tab
+      while logged out or as a non-maintainer and confirm **Report a
+      vulnerability** is visible. An API 404 leaves the feature state
+      unverified; it is evidence of neither enabled nor disabled. `SECURITY.md`
+      must never point reporters at a channel the repository has not enabled.
 - [ ] Presentation document/token/history schemas match the Rust contracts and
       adversarial fixtures; service request/auth/bootstrap/sandbox/export
       matrices, crash recovery, concurrent feedback, retention, and

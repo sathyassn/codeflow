@@ -28,27 +28,27 @@ hooks, harness integration, CI requirements, and remote rules.
 
 ## Install
 
-Prebuilt binary (macOS arm64/x64, Linux x64, Windows x64) — the shell or
-PowerShell installer from the
-latest release (works once codeflow's releases are public; for private/early
-access use the checkout build below or `gh release download`):
+The latest verified published release is v2.1.0: macOS arm64/x64 and Linux x64
+archives with a shell installer, and no Windows archive or PowerShell
+installer. The workspace on `main` is the pending 3.0.0 source, whose release
+targets add Windows x64 and a PowerShell installer; no 3.0.0 assets exist until
+a release is published. The anonymous installer works once codeflow's releases
+are public; for private or early access use the `gh release download` path in
+the adoption guide or the checkout build below:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-```powershell
-irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex
-```
-
-Or from a checkout, with a Rust toolchain:
+Or build the pending source from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-On native Windows, use the PowerShell installer from the release or build with
-Cargo. Git for Windows is required. WSL2 uses the Linux installer and is the
+On native Windows, build with Cargo: the PowerShell installer is a pending
+3.0.0 release target, not a published asset. Git for Windows is required.
+WSL2 uses the Linux installer and is the
 preferred Windows route for Linux-native tooling or Claude sandboxing. See the
 platform-assurance section in the adoption guide before high-blast-radius work.
 
@@ -100,6 +100,7 @@ ordinary task execution and adds no model-running CLI command.
 | `spec new --for <id>` | Allocate the next `SPC-NNN`, scaffold it, and link it from an epic or task |
 | `task new` | Allocate the next independent `TSK-NNN` under an epic or with an explicit standalone rationale |
 | `work start <task-id>` | Read-only proof that durable planning is anchored and its parent/spec/dependency graph is ready |
+| `estimate check <forecast.json>` | Read-only check of a project-owned forecast's explicit allocations and pinned evidence; schedules nothing, writes nothing, and makes no estimate itself; `--json` emits the versioned report (ADR-0057) |
 | `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal — the host launches the harness and delivers the prompt (ADR-0036) |
 
 `codeflow test setup` with no options detects only stack markers at the project
@@ -156,6 +157,27 @@ never honors and blocks agents from setting in-session.
 - [docs/product.md](docs/product.md) — what codeflow is for and its non-goals
 - [docs/release-checklist.md](docs/release-checklist.md) — evidence required for every release
 - [docs/decisions/](docs/decisions/) — ADRs (the record of why)
+
+### Repository guide
+
+The same documents can be read as a layered, searchable guide with source
+links, altitude tabs, and Markdown twins. It is generated locally from
+`docs-portal/` and is not a hosted website: GitHub renders the Markdown above,
+and nothing publishes the generated HTML. From a clean committed checkout, with
+the Node version pinned in `docs-portal/.node-version` (24.18.0):
+
+```sh
+cd docs-portal
+npm run deps:install   # locked install, dependency scripts off
+npm run build          # derive pages and evidence, build site
+npm run preview        # serve the built site on loopback
+```
+
+The guide names the exact commit it was built from and carries no release
+version, because the source is the pending 3.0.0 while v2.1.0 remains the
+latest verified published release. See
+[reading the CodeFlow guide locally](docs/adoption.md#reading-the-codeflow-guide-locally)
+for the check, validate, preview, and cleanup details.
 
 ## Contributing
 

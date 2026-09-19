@@ -12,13 +12,15 @@ One Rust binary installs the AI-development discipline layer into any
 repository: it scaffolds the rules, enforces them while agents work, verifies
 the result, and remembers why — while the harness does the developing.
 
-```text
-SCAFFOLD ────────► ENFORCE ─────────────► VERIFY ─────────► REMEMBER
-init · update      git hooks · guards     codeflow test     ledger · records
-seed the rules     · ci — one policy      · validate        · recall
-                   source
-
-         the harness (Claude Code, Codex, Grok Build, …) does the developing
+```cf-stage
+SCAFFOLD | init · update — seed the rules @accent
+->
+ENFORCE | git hooks · guards · ci — one policy source
+->
+VERIFY | codeflow test · validate
+->
+REMEMBER | ledger · records · recall @positive
+caption: the harness (Claude Code, Codex, Grok Build, …) does the developing
 ```
 
 The consuming repo is its own first consumer, so `assets/` is as much the
@@ -31,13 +33,15 @@ A three-crate Cargo workspace builds one binary with the scaffold and
 presentation renderer embedded; enforcement is structural — four planes read
 one policy source, so no single harness is a required trust anchor.
 
-```text
-crates/codeflow-cli ────── thin clap dispatcher (21 subcommands)
-        │ calls
-crates/codeflow-core ───── scaffold · enforcement · records/knowledge · support
-crates/codeflow-present ── bounded local review sessions (ADR-0049)
-        ▲ embeds
-assets/ ────── base scaffold · docs-portal starter ── rust-embed → one binary
+```cf-stage
+crates/codeflow-core | scaffold · enforcement · records/knowledge · support @accent
+crates/codeflow-present | bounded local review sessions (ADR-0049)
+assets/ | base scaffold · docs-portal starter
+->
+crates/codeflow-cli | thin clap dispatcher over 22 subcommands · rust-embed folds assets/ in
+->
+codeflow | one binary with the scaffold and presentation renderer embedded @positive
+caption: the cli calls core and present; the scaffold this repository ships is the scaffold it runs under
 ```
 
 ```cf-stage
@@ -54,10 +58,10 @@ caption: local planes are fast feedback — CI and remote protection are the aut
 
 `codeflow-core` owns the discipline engine, `codeflow-present` owns bounded
 local review sessions, and `codeflow-cli` is a thin dispatcher: `main.rs` is a
-clap command surface over 21 subcommands
+clap command surface over 22 subcommands
 (`init`, `update`, `hook`, `git-hook`, `orient`, `test`, `validate`, `ci`,
 `status`, `integrate`, `doctor`, `policy`, `recall`, `remote`, `epic`, `task`,
-`spec`, `work`, `delegate`, `present`, `portal`) — most a small handler in `cmd/` that
+`spec`, `work`, `delegate`, `estimate`, `present`, `portal`) — most a small handler in `cmd/` that
 calls into core, while `init`/`update` dispatch inline in `main.rs` to the
 scaffold module; `embedded.rs` embeds `assets/` via rust-embed (debug builds
 read `assets/` from disk for instant scaffold iteration).

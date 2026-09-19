@@ -35,6 +35,14 @@ publication date._
 - **Committed portal directory links.** Repository guides preserve relative
   links to committed directories as exact-source provider tree URLs while
   retaining visible provenance on unknown providers and fail-closed path rules.
+- **Locally usable repository guide.** README and the adoption guide document
+  the locked install, check, build, preview, and validate path for the derived
+  `docs-portal/` guide from a clean checkout on Node 24.18.0, distinguish the
+  pending 3.0.0 source from the published v2.1.0 release, and state the actual
+  CI Node roles. The dogfood portal configuration replaces the pending release
+  label with the exact built-from commit, and the release checklist gates
+  advertising the private vulnerability-reporting channel on a visibly
+  verified route.
 
 <!-- codeflow:release-impact patch -->
 - **Documentation portal dependency security.** The bundled portal pins
