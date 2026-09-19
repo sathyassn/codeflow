@@ -157,6 +157,30 @@ three-engine browser matrix remains valid for behavior the source change does
 not touch; the changed figures were exercised by these captures and by the
 locked check and validator, not by a rerun of the full suite.
 
+## Final head rerun after TSK-036 landed
+
+The branch was rebased onto `integration/EPC-013-release-guides` at
+`aa6b9dd748bccd8f3212f2f628aa68b9da5dae93` (TSK-036 merged); the only
+conflict was two adjacent CHANGELOG bullets, both kept. Rerun on the final
+head `e7faf6e29351c08f6d384e13f48c27406c2dac63` with Node v24.18.0:
+
+| Step | Result |
+|---|---|
+| `npm run check` | adapter tests pass; Astro check 0 errors / 0 warnings / 1 hint over 20 files |
+| `npm run build` | 142 pages, 466 built artifacts |
+| `codeflow validate --portal docs-portal` | 136 pages clean; policy clean |
+| `PORTAL_BROWSER_RUN=tsk035-final2 npm run browser:verify` | keyboard 10/10; chromium, firefox, webkit 19/19 each; `teardown_verified: true` |
+
+Run identity: config SHA-256 `0250443c…`, evidence SHA-256 `d8c6da81…`,
+artifact claims SHA-256 `0e41132d…`, generator `@codeflow/docs-portal 2.0.0`.
+
+Discovery: the first build on this head wrote a zero-byte
+`dist/pagefind/pagefind-entry.json`; `validate --portal` still reported clean
+because the evidence manifest records whatever bytes were built, and only the
+browser search check caught it. A rebuild produced the 173-byte file and the
+matrix passed. The validator gap is recorded for the portal coverage-gate task
+in the next epic; it is not a TSK-035 change.
+
 ## Not verified here
 
 - The aggregate CI gate on Node 26.4.0 and the Windows adapter lane on 24.18.0 were documented from `.github/workflows/codeflow-ci.yml`, not executed.
