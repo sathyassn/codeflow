@@ -179,6 +179,105 @@ fn normalized(value: &str) -> String {
 }
 
 #[test]
+fn responsible_autonomy_pack_is_bounded_paired_and_replayable() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let expected = [
+        "responsible-private-record-scope",
+        "responsible-private-upload-injection",
+        "responsible-delegation-data-minimization",
+        "responsible-outbound-approval-tuple",
+        "responsible-uncertain-mutation-retry",
+        "responsible-security-preserving-local-test",
+        "responsible-incident-containment",
+        "responsible-truthful-failure",
+        "responsible-identity-and-consent",
+        "responsible-fair-decision",
+    ];
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "responsible-autonomy")
+        .expect("responsible-autonomy pack");
+    assert_eq!(pack["cases"], serde_json::json!(expected));
+
+    let case_by_id: BTreeMap<_, _> = cases["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .filter_map(|case| case["id"].as_str().map(|id| (id, case)))
+        .collect();
+    let fixture_by_id: BTreeMap<_, _> = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures")
+        .iter()
+        .filter_map(|fixture| fixture["id"].as_str().map(|id| (id, fixture)))
+        .collect();
+    for id in expected {
+        let case = case_by_id
+            .get(id)
+            .unwrap_or_else(|| panic!("missing case {id}"));
+        let fixture = fixture_by_id
+            .get(id)
+            .unwrap_or_else(|| panic!("missing fixture {id}"));
+        assert_eq!(fixture["tier"], "standard", "{id}: tier drift");
+        assert_eq!(case["fixture"], id, "{id}: fixture drift");
+        assert!(
+            !case["expected"]["signals"]
+                .as_array()
+                .expect("signals")
+                .is_empty(),
+            "{id}: useful completion is unobservable"
+        );
+        assert!(
+            !case["expected"]["must_not"]
+                .as_array()
+                .expect("must_not")
+                .is_empty(),
+            "{id}: unsafe arm is unobservable"
+        );
+    }
+
+    let bounded_direct = BTreeSet::from([
+        "responsible-outbound-approval-tuple",
+        "responsible-uncertain-mutation-retry",
+        "responsible-truthful-failure",
+        "responsible-identity-and-consent",
+    ]);
+    for id in expected {
+        let routes = case_by_id[id]["expected"]["routes"]
+            .as_array()
+            .expect("routes");
+        let expected_routes = if bounded_direct.contains(id) {
+            serde_json::json!(["cf-model-orchestrator", "direct"])
+        } else {
+            serde_json::json!(["cf-model-orchestrator"])
+        };
+        assert_eq!(routes, expected_routes.as_array().expect("expected routes"));
+    }
+
+    for id in [
+        "responsible-outbound-approval-tuple",
+        "responsible-uncertain-mutation-retry",
+    ] {
+        let files = fixture_by_id[id]["files"]
+            .as_object()
+            .expect("fixture files");
+        assert_eq!(files["tools/fake-endpoint.json"],
+            "{\n  \"url\": null,\n  \"setup_required\": \"fixture owner supplies the allocated loopback URL before launch\"\n}\n");
+        assert!(files.contains_key("tools/fake_client.py"));
+        assert!(files.contains_key("tools/CLIENT.md"));
+    }
+    let security = fixture_by_id["responsible-security-preserving-local-test"]["files"]
+        .as_object()
+        .expect("security fixture files");
+    assert!(security.contains_key("tools/security_sim.py"));
+    assert!(security.contains_key("security-state.json"));
+}
+
+#[test]
 fn every_hard_requirement_has_source_markers_and_behavioral_cases() {
     let requirements =
         json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");

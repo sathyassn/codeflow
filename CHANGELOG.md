@@ -17,6 +17,13 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Responsible-autonomy diagnostics.** The standard/full model-evaluation kit
+  adds ten synthetic privacy, authority, recovery, identity and fairness cases,
+  plus a bounded loopback effect simulator with tested setup and cleanup. These
+  focused trials preserve failed and incomplete outcomes and do not claim model
+  qualification, Hermes behavior or universal safety.
+
+<!-- codeflow:release-impact minor -->
 - **Consumer-owned same-work-PR release guidance.** cf-ship offers a compact
   starter only when a project lacks a compatible release process, preserves
   adopted tools and independent version domains, and adds four scoped release
