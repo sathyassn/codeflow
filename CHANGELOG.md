@@ -32,6 +32,11 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Documentation portal dependency security.** The bundled portal pins
+  devalue 5.9.4, removing GHSA-9rgm-9g3h-6x36 while preserving the existing
+  starter identity, managed ownership contract and static-site behavior.
+
+<!-- codeflow:release-impact patch -->
 - **Responsible autonomy contract.** Managed instructions now bind
   consequential effects to explicit authority, minimize private data, preserve
   ordinary authorized work, and stop only the affected risky lane when

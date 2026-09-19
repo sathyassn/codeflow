@@ -22,11 +22,11 @@
     },
     "package-lock.json": {
       "ownership": "managed",
-      "pristine_sha256": "d51e60df092d1da2bbd6b84c25827e9cea20a636a4d064b6e56be7d05020f339"
+      "pristine_sha256": "ceaea3cf3a4b973559038ef140c819f5b813e2431bd873df761f5a060e47d7b2"
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "49b97a1e4582dea7005391132ac3c2bbe7385095e780fc3a0c28c4c092678c6b"
+      "pristine_sha256": "17c63419fab9f177f49cc2ee6d3a60f33fa245dbef443bb4e19543abc7ed0b90"
     },
     "portal.config.json": {
       "ownership": "user-owned",
