@@ -72,8 +72,11 @@ Top 10:2025, OWASP LLM Top 10:2025, CWE Top 25 (2025)).
    shapes the regexes miss, secrets assembled at runtime, secrets in config /
    IaC / CI YAML / comments, secrets passed as CLI args or into LLM prompts and
    logs. [OWASP A02/A04, LLM02, CWE-200/798]
-2. **Confidential data / PII flow** — PII reaching logs, telemetry, error
-   messages, transcripts, or model prompts. [A09, LLM02, CWE-200/532]
+2. **Confidential data / PII flow** — verify each data class is necessary and
+   authorized before it reaches a provider/tool, prompt, URL, log, screenshot,
+   trace, feedback, Git record, or peer; prefer synthetic/redacted fixtures and
+   test for unrelated private search or disclosure. Route qualification is not
+   data authority. [A09, LLM02, CWE-200/532]
 3. **Injection (command / SQL / path / template / prompt)** — taint from an
    untrusted source to a sink; for agent code specifically, agent or tool output
    interpolated into a shell or a subprocess-exec string. [A05, LLM01/LLM05,
@@ -87,10 +90,13 @@ Top 10:2025, OWASP LLM Top 10:2025, CWE Top 25 (2025)).
 6. **General vuln classes** — deserialization (CWE-502), SSRF (CWE-918, now under
    A01), crypto misuse (A04), security misconfiguration (A02), unbounded resource
    consumption (CWE-770 / LLM10), fail-open / mishandled exceptions (A10 NEW).
-7. **Prompt-injection surface of the agent code itself** — skills, workflows,
-   tool definitions, and AGENTS.md as an attack surface (LLM01/LLM07); improper
-   handling of model output (LLM05); excessive agency / unguarded workspace-write
-   (LLM06).
+7. **Prompt-injection / excessive-agency surface of the agent code itself** —
+   skills, workflows, tool definitions, and AGENTS.md as an attack surface
+   (LLM01/LLM07); model/tool output handling (LLM05); and whether actual effects
+   stay inside the authorized purpose, action, resource, data,
+   destination/recipient, and side effects. Reading or drafting is not sending;
+   GET/read may disclose or mutate. Inspect uncertain non-idempotent outcomes
+   before retry and preserve bounded incident evidence. [LLM06]
 
 ## Severity — CVSS 4.0 aligned
 
