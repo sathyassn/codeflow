@@ -125,6 +125,38 @@ preview-captured architecture panel in light and dark and the narrow dark home
 matches the earlier judgment: display-role claim, crate figure, full-width
 labeled stage with named edges and caption, one visible panel, no overflow.
 
+## Architecture visual correction
+
+Independent review of the `746f55fcd` screenshots judged the clipped ASCII
+Concept figure a material defect, since the utility stage grammar can carry
+the relationship. Commit `c8b967c2154f10b665ff69b00c7e22a8641cd9dd` replaces
+both ASCII primaries in `docs/architecture.md` with `cf-stage` figures: the
+Concept flow SCAFFOLD, ENFORCE, VERIFY, REMEMBER with the harness caption, and
+the crate assembly (core, present, and `assets/` in parallel, then the CLI,
+then one binary). The count is corrected to the verified 22 clap subcommands
+from `crates/codeflow-cli/src/main.rs`, with `estimate` added to the prose
+list. The existing policy-flow stage, the prose, and the Technical layer are
+unchanged; no runtime, theme, schema, or dependency changed.
+
+Checks on `c8b967c21` with Node 24.18.0 and the candidate binary: `npm run
+check` 95 / 95 and Astro 0 errors; `npm run build` 141 pages, 463 artifacts;
+candidate `validate --portal docs-portal` 135 pages clean. The rendered
+architecture page now carries three stage figures and no `<pre>` block.
+`npm run preview` on loopback 4321 answered 200 for home (commit line
+`c8b967c21…`) and the architecture route; twelve task-owned headless Chromium
+captures at 1280 and 390 widths in light and dark all reported one visible
+panel, the hash-selected tab, no horizontal overflow, and no console errors;
+after SIGTERM there were zero listeners, zero preview processes, and no lease
+files. Durable evidence:
+`research-evidence/release-readiness-2026-09-19/native/fable-tsk035-author/preview-evidence-c8b967c21/`.
+Visual judgment: the Concept panel shows four labeled nodes with named arrows
+and the caption fully visible at desktop and stacked at narrow width; the
+Architecture panel shows the three parallel inputs flowing to the CLI and the
+binary above the unchanged policy stage, with no clipping. The earlier
+three-engine browser matrix remains valid for behavior the source change does
+not touch; the changed figures were exercised by these captures and by the
+locked check and validator, not by a rerun of the full suite.
+
 ## Not verified here
 
 - The aggregate CI gate on Node 26.4.0 and the Windows adapter lane on 24.18.0 were documented from `.github/workflows/codeflow-ci.yml`, not executed.
