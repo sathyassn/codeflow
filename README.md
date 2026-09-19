@@ -157,6 +157,27 @@ never honors and blocks agents from setting in-session.
 - [docs/release-checklist.md](docs/release-checklist.md) — evidence required for every release
 - [docs/decisions/](docs/decisions/) — ADRs (the record of why)
 
+### Repository guide
+
+The same documents can be read as a layered, searchable guide with source
+links, altitude tabs, and Markdown twins. It is generated locally from
+`docs-portal/` and is not a hosted website: GitHub renders the Markdown above,
+and nothing publishes the generated HTML. From a clean committed checkout, with
+the Node version pinned in `docs-portal/.node-version` (24.18.0):
+
+```sh
+cd docs-portal
+npm run deps:install   # locked install; dependency lifecycle scripts stay disabled
+npm run build          # derive pages and evidence, then build the site
+npm run preview        # serve the built site on a loopback port
+```
+
+The guide names the exact commit it was built from and carries no release
+version, because the source is the pending 3.0.0 while v2.1.0 remains the
+latest verified public release. See
+[reading the CodeFlow guide locally](docs/adoption.md#reading-the-codeflow-guide-locally)
+for the check, validate, preview, and cleanup details.
+
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). In short:

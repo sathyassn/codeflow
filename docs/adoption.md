@@ -283,6 +283,51 @@ design-exploration board that settled the craft is a reference, not a page to
 clone. Read `cf-docs-portal` for content, dependency, browser, accessibility,
 evidence, and cleanup obligations.
 
+### Reading the CodeFlow guide locally
+
+This repository dogfoods the starter at `docs-portal/`: a managed runtime, a
+project-owned `portal.config.json`, and the `signal` theme. The guide is a
+derived view of the Markdown under `docs/` and `project-management/`. Those
+files remain the only authority; every generated page, Markdown twin, search
+index, and `llms.txt` is disposable output that Git ignores. Nothing publishes
+it: there is no hosted site, and GitHub shows the Markdown sources, not the
+generated HTML.
+
+Build it from a clean committed checkout, using the Node version pinned in
+`docs-portal/.node-version` (24.18.0). The adapter reads only committed bytes
+and refuses a snapshot whose portal runtime, configuration, or configured
+source roots differ from `HEAD`, including untracked files under those roots,
+so commit source edits before building:
+
+```sh
+cd docs-portal
+npm run deps:install        # locked install; dependency lifecycle scripts stay disabled
+npm run check               # adapter tests, page derivation, Astro check
+npm run build               # derive pages and evidence, then the production build
+npm run preview             # serve dist/ on a loopback port until interrupted
+cd ..
+codeflow validate --portal docs-portal
+```
+
+`check`, `build`, `dev`, and `preview` share one workflow lease: run one at a
+time and stop the preview before the next build. `npm run dev` derives the
+pages once and serves them through Astro's dev server for authoring; it reads
+the same committed snapshot. `npm run browser:verify` runs the isolated
+headless journey matrix when Playwright browsers are installed.
+
+The home page names the exact repository commit the guide was built from and
+no release version. That is deliberate: the workspace source identifies as
+3.0.0, which is pending and unpublished, while `v2.1.0` remains the latest
+verified public release (see the
+[historical bridge into v3](releasing.md#historical-bridge-into-v3)). A
+`release_version` value renders as a release label, so it stays `null` until a
+verified public release exists for the built commit.
+
+Node roles differ by lane, and neither pin changes here: the aggregate CI gate
+runs on Node 26.4.0, and its full strict target installs, checks, builds, and
+validates this portal; the portal-local `.node-version` and the Windows
+adapter-test lane use 24.18.0; the starter itself accepts 22.19.0 or newer.
+
 ## Optional interactive review documents
 
 Standard and full tiers also include `cf-present`. It is a bounded review

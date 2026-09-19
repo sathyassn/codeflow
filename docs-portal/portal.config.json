@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "title": "CodeFlow guide",
-  "description": "Layered project documentation generated from repository-owned sources.",
+  "description": "What CodeFlow does, how it is built, and what is in flight: a searchable, source-linked view of this repository's committed Markdown.",
   "theme": "signal",
   "repository_url": "https://github.com/sathyassn/codeflow",
-  "release_version": "3.0.0",
+  "release_version": null,
   "primitive_tokens": null,
   "repository_root": "..",
   "source_roots": ["docs", "project-management"],
