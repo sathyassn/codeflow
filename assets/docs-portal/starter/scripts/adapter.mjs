@@ -3,7 +3,7 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships,
+  amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships,
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown,
   pinnedSourceUrl as providerSourceUrl, referencedIds, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
@@ -36,6 +36,7 @@ const repositoryRoot = await realpath(discoveredRepositoryRoot);
 const git = new GitSnapshot(repositoryRoot);
 const commit = git.resolveHead();
 const repositoryFiles = git.loadInventory(commit);
+const repositoryDirectories = committedDirectoryPaths(repositoryFiles);
 
 const portalConfigRelative = safeRelative(path.relative(repositoryRoot, path.join(portalRoot, "portal.config.json")).split(path.sep).join("/"), "portal configuration path");
 const configRecord = git.requireRegular(portalConfigRelative, ["100644"], "portal configuration");
@@ -240,8 +241,8 @@ function sourceLink(sourcePath) {
   return `<a href="${escapeHtml(href)}">${label}</a>`;
 }
 
-function pinnedSourceUrl(sourcePath) {
-  return providerSourceUrl(config.repository_url, commit, sourcePath);
+function pinnedSourceUrl(sourcePath, target = "file") {
+  return providerSourceUrl(config.repository_url, commit, sourcePath, target);
 }
 
 function renderPage(page, routesById, previews, referencedMedia, anchorsBySource) {
@@ -258,6 +259,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
     sourcePath: page.source_path,
     sourceRoutes,
     repositoryFiles,
+    repositoryDirectories,
     pinnedSourceUrl,
     commit,
     base,

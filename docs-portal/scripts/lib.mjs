@@ -101,7 +101,7 @@ export function validatePageMetadata(frontmatter, sourcePath) {
 }
 
 export function rewriteRepositoryMarkdown(body, {
-  sourcePath, sourceRoutes, repositoryFiles = new Map(), pinnedSourceUrl = () => null,
+  sourcePath, sourceRoutes, repositoryFiles = new Map(), repositoryDirectories = new Set(), pinnedSourceUrl = () => null,
   commit = "", base, strictTargets, mediaReferences, sourceAnchors = new Map(),
 }) {
   const tree = markdownTree(body);
@@ -117,7 +117,7 @@ export function rewriteRepositoryMarkdown(body, {
   visitMarkdown(tree, (node) => {
     if (node.type !== "definition") return;
     const kind = referenceKinds.get(node.identifier);
-    if (kind) definitionResolutions.set(node.identifier, resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors }));
+    if (kind) definitionResolutions.set(node.identifier, resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, repositoryDirectories, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors }));
   });
   let previewSequence = 0;
   visitMarkdown(tree, (node, parent, index, ancestors) => {
@@ -139,7 +139,7 @@ export function rewriteRepositoryMarkdown(body, {
       }
       const resolved = node.type === "definition"
         ? definitionResolutions.get(node.identifier)
-        : resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors });
+        : resolveRepositoryUrl(node.url, { sourcePath, sourceRoutes, repositoryFiles, repositoryDirectories, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors });
       if (resolved.sourceReference) {
         if (node.type === "definition") parent.children.splice(index, 1);
         else parent.children[index] = sourceReferenceNode(node, resolved.sourceReference, commit);
@@ -349,7 +349,7 @@ function unsafeUrl(value) {
   return /^(?:javascript|data|file|vbscript):/.test(normalized);
 }
 
-function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors }) {
+function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles, repositoryDirectories, pinnedSourceUrl, base, mediaReferences, kind, sourceAnchors }) {
   if (unsafeUrl(value)) throw new Error(`${sourcePath}: unsafe Markdown URL scheme`);
   if (/^(?:https?:|mailto:)/i.test(value)) {
     if (kind === "image") throw new Error(`${sourcePath}: remote images are not imported: ${value}`);
@@ -373,8 +373,13 @@ function resolveRepositoryUrl(value, { sourcePath, sourceRoutes, repositoryFiles
     return { url: `${withBase(base, sourceRoutes.get(safe))}${suffix}` };
   }
   if (kind === "link" && repositoryFiles.has(safe)) {
-    const href = pinnedSourceUrl(safe);
+    const href = pinnedSourceUrl(safe, "file");
     return href === null ? { sourceReference: safe } : { url: `${href}${suffix}` };
+  }
+  const directory = safe.endsWith("/") ? safe.slice(0, -1) : safe;
+  if (kind === "link" && repositoryDirectories.has(directory)) {
+    const href = pinnedSourceUrl(directory, "directory");
+    return href === null ? { sourceReference: directory } : { url: `${href}${suffix}` };
   }
   if (/\.(?:md|mdx)$/i.test(safe) || kind === "link" && !path.posix.extname(safe)) throw new Error(`${sourcePath}: repository document target does not exist: ${safe}`);
   const extension = path.posix.extname(safe).toLowerCase();
@@ -655,15 +660,29 @@ export function strictUrlSegment(value) {
   return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-export function pinnedSourceUrl(repositoryUrl, commit, sourcePath) {
+export function committedDirectoryPaths(repositoryFiles) {
+  if (!(repositoryFiles instanceof Map)) throw new Error("repository inventory must be a Map");
+  const directories = new Set();
+  for (const sourcePath of repositoryFiles.keys()) {
+    let directory = path.posix.dirname(safeRelative(sourcePath, "committed repository path"));
+    while (directory !== ".") {
+      directories.add(directory);
+      directory = path.posix.dirname(directory);
+    }
+  }
+  return directories;
+}
+
+export function pinnedSourceUrl(repositoryUrl, commit, sourcePath, target = "file") {
   if (typeof repositoryUrl !== "string") return null;
+  if (!["file", "directory"].includes(target)) throw new Error(`unsupported repository source target: ${target}`);
   const repository = new URL(repositoryUrl);
   const root = repositoryUrl.replace(/\/$/, "").replace(/\.git$/, "");
   const encodedPath = sourcePath.split("/").map(strictUrlSegment).join("/");
   const host = repository.hostname.toLowerCase();
-  if (host === "github.com") return `${root}/blob/${commit}/${encodedPath}`;
-  if (host === "gitlab.com") return `${root}/-/blob/${commit}/${encodedPath}`;
-  if (host === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}`;
+  if (host === "github.com") return `${root}/${target === "directory" ? "tree" : "blob"}/${commit}/${encodedPath}`;
+  if (host === "gitlab.com") return `${root}/-/${target === "directory" ? "tree" : "blob"}/${commit}/${encodedPath}`;
+  if (host === "bitbucket.org") return `${root}/src/${commit}/${encodedPath}${target === "directory" ? "/" : ""}`;
   return null;
 }
 

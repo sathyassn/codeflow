@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "3f5b3b539ca545c3a842d0620b7ebe71db47286030fe66f77b5f807783f4dd95"
+      "pristine_sha256": "1b7083719947bf0fcb39dc4c99b6073620e2fed02ff55f1f656aa1af8ebe562e"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
@@ -78,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "32d5ca46e3a3fdd5bae355d09fd21838034562d5d42148b5204cdcd883bb2df7"
+      "pristine_sha256": "923c444e49d1e20d3f08cbc224f57a1d2f08e29b518e4c2a77e239f96da63756"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f5cce507a5f914853f11066438a505e0ba9c092972fdf1039355abd3b31ca16d"
+      "pristine_sha256": "453e2eb6d425f48de40b7434494db99bd9fc61c3e3d9af378e67e1845c38ef21"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
