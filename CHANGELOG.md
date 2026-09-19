@@ -40,7 +40,9 @@ publication date._
   `docs-portal/` guide from a clean checkout on Node 24.18.0, distinguish the
   pending 3.0.0 source from the published v2.1.0 release, and state the actual
   CI Node roles. The dogfood portal configuration replaces the pending release
-  label with the exact built-from commit.
+  label with the exact built-from commit, and the release checklist gates
+  advertising the private vulnerability-reporting channel on a visibly
+  verified route.
 
 <!-- codeflow:release-impact patch -->
 - **Documentation portal dependency security.** The bundled portal pins

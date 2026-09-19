@@ -318,10 +318,10 @@ headless journey matrix when Playwright browsers are installed.
 The home page names the exact repository commit the guide was built from and
 no release version. That is deliberate: the workspace source identifies as
 3.0.0, which is pending and unpublished, while `v2.1.0` remains the latest
-verified public release (see the
+verified published release (see the
 [historical bridge into v3](releasing.md#historical-bridge-into-v3)). A
 `release_version` value renders as a release label, so it stays `null` until a
-verified public release exists for the built commit.
+verified published release exists for the built commit.
 
 Node roles differ by lane, and neither pin changes here: the aggregate CI gate
 runs on Node 26.4.0, and its full strict target installs, checks, builds, and
