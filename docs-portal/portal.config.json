@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "title": "CodeFlow guide",
-  "description": "What CodeFlow does, how it is built, and what is in flight: a searchable, source-linked view of this repository's committed Markdown.",
+  "description": "What CodeFlow does, how it is built, and what is in flight. A searchable, source-linked view of this repository's committed Markdown.",
   "theme": "signal",
   "repository_url": "https://github.com/sathyassn/codeflow",
   "release_version": null,
