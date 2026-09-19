@@ -41,6 +41,11 @@ tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
 install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
 ```
 
+That v2.1.0 binary predates parts of this guide: the commands and workflows
+documented here describe the pending 3.0.0 source, and some of them are not
+available in the published release. To follow the current guide, build the
+pending source checkout above.
+
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
 
