@@ -93,6 +93,38 @@ screenshot server. The browser harness reported its own profile and server
 teardown. `docs-portal/node_modules`, `dist/`, `.portal/generated/`, and the
 browser evidence remain as ignored local output for host review.
 
+## Follow-up after the first review
+
+Commit `6387ccfd6ba8be21a166995e6e1f3fba5cc4573f` renames v2.1.0 the latest
+verified published release in the copy this task introduced (publication is
+verified; anonymous repository visibility is not), adds the pre-public
+private-vulnerability-reporting gate to the release checklist, and extends the
+changelog note by one clause. The GitHub setting was neither changed nor
+checked here. The closing follow-up commit adds this section only.
+
+Authoritative validation used the immutable candidate binary
+`research-evidence/release-readiness-2026-09-19/bin/codeflow-tsk034-2a785423`
+(`codeflow 3.0.0`), with its `codeflow-cli-target/release` directory prepended
+process-locally so the commit hooks resolved the same build. Results on
+`6387ccfd6`: `npm run build` 141 pages, 463 artifacts; candidate
+`validate --portal docs-portal` reported `135 page(s) clean`; the home page
+line read `Repository 6387ccfd6… · portal 2.0.0`. The host reruns both on the
+final head, whose only change is this section.
+
+`npm run preview` was rehearsed on loopback port 4321 (free beforehand) from
+that build: `/` answered 200 with the commit line above, `/system/architecture/`
+answered 200 with one altitude tablist, and the twin
+`/markdown/system/architecture.md` answered 200. Nine screenshots were taken
+against that live preview with a task-owned headless Chromium and no operator
+profile, then the workflow process was sent SIGTERM. Afterwards: zero listeners
+on 4321, zero preview processes, no lease files. Evidence, outside the
+repository:
+`research-evidence/release-readiness-2026-09-19/native/fable-tsk035-author/preview-evidence/`
+(`preview.log`, `screenshots/`, `shots.json`). Visual judgment of the
+preview-captured architecture panel in light and dark and the narrow dark home
+matches the earlier judgment: display-role claim, crate figure, full-width
+labeled stage with named edges and caption, one visible panel, no overflow.
+
 ## Not verified here
 
 - The aggregate CI gate on Node 26.4.0 and the Windows adapter lane on 24.18.0 were documented from `.github/workflows/codeflow-ci.yml`, not executed.
