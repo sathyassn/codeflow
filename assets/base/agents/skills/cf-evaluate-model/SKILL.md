@@ -82,10 +82,10 @@ limits of catalog support in consuming scaffolds.
    Each command creates an opaque trial path with a neutral `repository`
    basename, applies exact registry overlays, keeps evaluator-only state outside
    the subject tree, removes grader material, rebuilds a one-commit history,
-   and prints its tree digest. Cases that exercise remote or cleanup behavior
-   may add only their declared bare origin or control worktree inside that same
-   marked opaque workspace; they never use an external remote. Never reuse a
-   fixture between trials.
+   and prints its tree digest. Keep declared remote/cleanup controls in the
+   marked workspace; never use an external remote or reuse a fixture. Fake
+   endpoints follow [bounded effects](resources/fake-effects.md), retain both
+   digests, and hide owner state.
 5. **Run the subject naturally.** Open the native interactive harness in the
    fixture and give only `TASK.md` as the task. Match actual CodeFlow and hook
    executables to the external receipt per [protocol](resources/protocol.md);

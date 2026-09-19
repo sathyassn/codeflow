@@ -163,6 +163,7 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$archive"
           printf '%s  %s\n' "$GITLEAKS_SHA256" "$archive" | sha256sum -c -
           tar -xzf "$archive" gitleaks
+          sh scripts/check-gitleaks-allowlist.sh ./gitleaks
           ./gitleaks detect --source . --redact --no-banner --exit-code 1
 
   security-review:

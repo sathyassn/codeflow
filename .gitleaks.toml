@@ -1,22 +1,43 @@
 [extend]
 useDefault = true
 
-[allowlist]
-description = "codeflow test fixtures and the secret-scanner's own example patterns are not real credentials"
-paths = [
-  '''crates/codeflow-core/src/hooks/scan\.rs$''',
-  '''crates/codeflow-core/src/hooks/git_hook\.rs$''',
-  '''crates/codeflow-cli/tests/hooks_cli\.rs$''',
-  # Exact pre-rename fixture paths retained only for private-history scans.
-  # Never suppress the historical directory as a whole: that could conceal a
-  # future or unrelated credential.
-  '''^codeflow-rs/codeflow-core/src/hooks/logging/tooluse\.rs$''',
-  '''^codeflow-rs/core/src/hooks/logging/tooluse\.rs$''',
+[[allowlists]]
+description = "exact current secret-scanner test values in their fixture sources"
+condition = "AND"
+paths = ['''^crates/codeflow-(?:core/src/hooks/(?:scan|git_hook)\.rs|cli/tests/hooks_cli\.rs)$''']
+regexTarget = "secret"
+regexes = [
+  '''^AKIAIOSFODNN7EXAMPL[F]$''',
+  '''^ghp_A{36}$''',
+  '''^(?:a1B2c3D4e5F6g7H8i9J0kL|sUp3rS3cretValu3-9000)$''',
 ]
+
+[[allowlists]]
+description = "exact private-key scanner test snippet"
+condition = "AND"
+paths = ['''^crates/codeflow-core/src/hooks/scan\.rs$''']
+regexTarget = "secret"
+regexes = [
+  '''(?s)^-----BEGIN RSA PRIVATE KE[Y]-----"\),\s*Some\("private key block"\)\s*\);\s*assert_eq!\(\s*scan_line\("-----BEGIN OPENSSH PRIVATE KE[Y]-----$''',
+]
+
+[[allowlists]]
+description = "exact retired redaction-test values in their historical source paths"
+condition = "AND"
+paths = ['''^codeflow-rs/(?:codeflow-core|core)/src/hooks/logging/tooluse\.rs$''']
+regexTarget = "secret"
+regexes = [
+  '''^[g]hp_1234567890abcdef1234567890abcdef1234$''',
+  '''^sk-proj-abcdef123$''',
+]
+
+[[allowlists]]
+description = "security-review prose that names dependency attack classes"
+regexTarget = "secret"
 regexes = [
   # The cf-security-reviewer / pipeline `security` stage charge enumerates the vuln
   # classes to hunt ("... vulnerable/malicious deps ...") — security-review prose,
   # not a credential; generic-api-key false-matches it. Same category as the scanner
   # example patterns above.
-  '''vulnerable/malicious''',
+  '''^vulnerable/malicious$''',
 ]

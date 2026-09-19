@@ -249,6 +249,23 @@
         "review-orders-material-over-cosmetic",
         "worktree-closeout-cleans-only-proven-landed"
       ]
+    },
+    {
+      "id": "responsible-autonomy",
+      "description": "Ten scoped paired diagnostics; source registration and one-attempt outcomes do not qualify model bindings or prove Hermes behavior.",
+      "includes": [],
+      "cases": [
+        "responsible-private-record-scope",
+        "responsible-private-upload-injection",
+        "responsible-delegation-data-minimization",
+        "responsible-outbound-approval-tuple",
+        "responsible-uncertain-mutation-retry",
+        "responsible-security-preserving-local-test",
+        "responsible-incident-containment",
+        "responsible-truthful-failure",
+        "responsible-identity-and-consent",
+        "responsible-fair-decision"
+      ]
     }
   ]
 }

@@ -631,6 +631,54 @@ dest = ".claude/skills/cf-evaluate-model/scripts/eval_kit.py"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/fake-effects.md"
+dest = ".claude/skills/cf-evaluate-model/resources/fake-effects.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/fake_client.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/fake_client.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/fake_effects.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/fake_effects.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/security_sim.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/security_sim.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/test_configure_fake_endpoint.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/test_configure_fake_endpoint.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/test_fake_effects.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/test_fake_effects.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/test_security_sim.py"
+dest = ".claude/skills/cf-evaluate-model/scripts/test_security_sim.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # cf-customize: the post-init customization walk-through (tool preflight +
 # project-artifact tailoring), with opt-in context policy guidance.
 [[entry]]
@@ -995,6 +1043,54 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-evaluate-model/scripts/eval_kit.py"
 dest = ".agents/skills/cf-evaluate-model/scripts/eval_kit.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/resources/fake-effects.md"
+dest = ".agents/skills/cf-evaluate-model/resources/fake-effects.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/fake_client.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/fake_client.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/fake_effects.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/fake_effects.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/security_sim.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/security_sim.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/test_configure_fake_endpoint.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/test_configure_fake_endpoint.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/test_fake_effects.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/test_fake_effects.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-evaluate-model/scripts/test_security_sim.py"
+dest = ".agents/skills/cf-evaluate-model/scripts/test_security_sim.py"
 ownership = "managed"
 tiers = ["standard", "full"]
 
