@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -212,7 +212,13 @@ test("browser evidence binds actual dist bytes and known source providers", () =
   assert.equal(pinnedSourceUrl("https://github.com/acme/repo.git", commit, source), `https://github.com/acme/repo/blob/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9.md`);
   assert.equal(pinnedSourceUrl("https://gitlab.com/acme/repo", commit, source), `https://gitlab.com/acme/repo/-/blob/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9.md`);
   assert.equal(pinnedSourceUrl("https://bitbucket.org/acme/repo", commit, source), `https://bitbucket.org/acme/repo/src/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9.md`);
+  const directory = "docs/Mixed Case + café";
+  assert.equal(pinnedSourceUrl("https://github.com/acme/repo.git", commit, directory, "directory"), `https://github.com/acme/repo/tree/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9`);
+  assert.equal(pinnedSourceUrl("https://gitlab.com/acme/repo", commit, directory, "directory"), `https://gitlab.com/acme/repo/-/tree/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9`);
+  assert.equal(pinnedSourceUrl("https://bitbucket.org/acme/repo", commit, directory, "directory"), `https://bitbucket.org/acme/repo/src/${commit}/docs/Mixed%20Case%20%2B%20caf%C3%A9`);
   assert.equal(pinnedSourceUrl("https://git.example.com/acme/repo", commit, source), null);
+  assert.equal(pinnedSourceUrl("https://git.example.com/acme/repo", commit, directory, "directory"), null);
+  assert.throws(() => pinnedSourceUrl("https://github.com/acme/repo", commit, source, "archive"), /unsupported repository source target/);
 });
 
 test("browser surface discovery scans beyond the first 64 pages", async () => {
@@ -552,6 +558,60 @@ test("the AST rewrite permits external links but refuses remote images and ambig
     ...options, base: "/guide/", mediaReferences,
   }), /\/guide\/media\/[a-f0-9]{16}-Mixed%20Case%20%2B%20caf%C3%A9\.png/);
   assert.equal(mediaReferences.get("docs/media/Mixed Case + café.png")?.endsWith("-Mixed Case + café.png"), true);
+});
+
+test("committed directory links use exact inventory ancestors and remain link-only", () => {
+  const repositoryFiles = new Map([
+    ["docs/guide.md", { mode: "100644", type: "blob" }],
+    ["system/skills/Mixed Case + café/SKILL.md", { mode: "100644", type: "blob" }],
+    ["system/linked-skill", { mode: "120000", type: "blob" }],
+    ["vendor/submodule", { mode: "160000", type: "commit" }],
+  ]);
+  const repositoryDirectories = committedDirectoryPaths(repositoryFiles);
+  assert.equal(repositoryDirectories.has("system/skills/Mixed Case + café"), true);
+  assert.equal(repositoryDirectories.has("system/linked-skill"), false);
+  assert.equal(repositoryDirectories.has("vendor/submodule"), false);
+  const calls = [];
+  const options = {
+    sourcePath: "docs/guide.md",
+    sourceRoutes: new Map(),
+    repositoryFiles,
+    repositoryDirectories,
+    pinnedSourceUrl: (sourcePath, target) => {
+      calls.push([sourcePath, target]);
+      return pinnedSourceUrl("https://github.com/example/repository", "a".repeat(40), sourcePath, target);
+    },
+    commit: "a".repeat(40),
+    base: "/",
+    strictTargets: new Map(),
+    mediaReferences: new Map(),
+  };
+  const rendered = rewriteRepositoryMarkdown("[slash](../system/skills/Mixed%20Case%20%2B%20caf%C3%A9/?plain=1#readme) [plain](../system/skills/Mixed%20Case%20%2B%20caf%C3%A9)", options);
+  assert.match(rendered, /\/tree\/a{40}\/system\/skills\/Mixed%20Case%20%2B%20caf%C3%A9\?plain=1#readme/);
+  assert.equal(rendered.match(/\/tree\//g)?.length, 2);
+  assert.deepEqual(calls, [
+    ["system/skills/Mixed Case + café", "directory"],
+    ["system/skills/Mixed Case + café", "directory"],
+  ]);
+  for (const link of ["../system/skills/Mixed", "../system/linked-skill/", "../vendor/submodule/"]) {
+    assert.throws(() => rewriteRepositoryMarkdown(`[broken](${link})`, options), /does not exist/);
+  }
+  assert.throws(() => rewriteRepositoryMarkdown("[file with slash](../system/skills/Mixed%20Case%20%2B%20caf%C3%A9/SKILL.md/)", options));
+  assert.throws(() => rewriteRepositoryMarkdown("![directory](../system/skills/Mixed%20Case%20%2B%20caf%C3%A9/)", options), /unsupported local media type/);
+  for (const link of ["../../../escape/", "../system/%ZZ/"]) {
+    assert.throws(() => rewriteRepositoryMarkdown(`[broken](${link})`, options), /stay beneath|malformed percent-encoding/);
+  }
+});
+
+test("an image-suffixed committed directory is not accepted as media", async () => {
+  const root = await portalFixture();
+  try {
+    await mkdir(path.join(root, "docs/images.png"), { recursive: true });
+    await writeFile(path.join(root, "docs/images.png/member.txt"), "directory member\n");
+    await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\n![Not an image](images.png)\n");
+    commitFixture(root, "add image-suffixed directory");
+    assert.match(runAdapter(root, false).stderr, /referenced media must be one committed regular file/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("portal-owned Markdown fragments must match rendered heading anchors", () => {
@@ -1866,11 +1926,11 @@ test("generated strict-ID previews are source-grounded and keyboard-native", asy
 });
 
 test("pinned source links use known provider routes and fall back visibly", async () => {
-  for (const [repositoryUrl, expected] of [
-    ["https://github.com/example/repository", "/blob/"],
-    ["https://gitlab.com/example/repository", "/-/blob/"],
-    ["https://bitbucket.org/example/repository", "/src/"],
-    ["https://source.example/repository", null],
+  for (const [repositoryUrl, expectedFile, expectedDirectory] of [
+    ["https://github.com/example/repository", "/blob/", "/tree/"],
+    ["https://gitlab.com/example/repository", "/-/blob/", "/-/tree/"],
+    ["https://bitbucket.org/example/repository", "/src/", "/src/"],
+    ["https://source.example/repository", null, null],
   ]) {
     const root = await portalFixture();
     try {
@@ -1880,19 +1940,26 @@ test("pinned source links use known provider routes and fall back visibly", asyn
       config.exclude = ["docs/excluded.md"];
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
       await writeFile(path.join(root, "docs/excluded.md"), "# Excluded but committed\n");
-      await writeFile(path.join(root, "docs/guide (one).md"), "# Guide\n\n[Excluded source](excluded.md)\n\n[Excluded reference][excluded]\n\n[excluded]: excluded.md\n");
+      await mkdir(path.join(root, "docs/Mixed Case + café"), { recursive: true });
+      await writeFile(path.join(root, "docs/Mixed Case + café/fixture.txt"), "committed directory member\n");
+      await writeFile(path.join(root, "docs/guide (one).md"), "# Guide\n\n[Excluded source](excluded.md)\n\n[Excluded reference][excluded]\n\n[Directory](<Mixed Case + café/?plain=1#readme>)\n\n[Directory reference][directory]\n\n[excluded]: excluded.md\n[directory]: <Mixed Case + café>\n");
       commitFixture(root, "configure source provider");
       const commit = git(root, ["rev-parse", "HEAD"]).trim();
       runAdapter(root);
       const output = await readFile(path.join(root, "src/content/docs/reference/guide (one).md"), "utf8");
       assert.match(output, /<code>docs\/guide \(one\)\.md<\/code> at <code>[a-f0-9]{12}<\/code>/);
-      if (expected === null) {
+      if (expectedFile === null) {
         assert.doesNotMatch(output, /<a[^>]+>Excluded source<\/a>/);
         assert.match(output, /Excluded source \(<code>docs\/excluded\.md<\/code> at <code>[a-f0-9]{12}<\/code>\)/);
         assert.match(output, /Excluded reference \(<code>docs\/excluded\.md<\/code> at <code>[a-f0-9]{12}<\/code>\)/);
+        assert.doesNotMatch(output, /<a[^>]+>Directory<\/a>/);
+        assert.match(output, /Directory \(<code>docs\/Mixed Case \+ café<\/code> at <code>[a-f0-9]{12}<\/code>\)/);
+        assert.match(output, /Directory reference \(<code>docs\/Mixed Case \+ café<\/code> at <code>[a-f0-9]{12}<\/code>\)/);
       } else {
-        assert.match(output, new RegExp(`${expected.replaceAll("/", "\\/")}${commit}\\/docs\\/guide%20%28one%29\\.md`));
-        assert.match(output, new RegExp(`${expected.replaceAll("/", "\\/")}${commit}\\/docs\\/excluded\\.md`));
+        assert.match(output, new RegExp(`${expectedFile.replaceAll("/", "\\/")}${commit}\\/docs\\/guide%20%28one%29\\.md`));
+        assert.match(output, new RegExp(`${expectedFile.replaceAll("/", "\\/")}${commit}\\/docs\\/excluded\\.md`));
+        assert.match(output, new RegExp(`${expectedDirectory.replaceAll("/", "\\/")}${commit}\\/docs\\/Mixed%20Case%20%2B%20caf%C3%A9\\?plain=1#readme`));
+        assert.match(output, new RegExp(`${expectedDirectory.replaceAll("/", "\\/")}${commit}\\/docs\\/Mixed%20Case%20%2B%20caf%C3%A9`));
         assert.match(output, /Excluded reference/);
       }
     } finally { await rm(root, { recursive: true, force: true }); }

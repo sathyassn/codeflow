@@ -32,6 +32,11 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Committed portal directory links.** Repository guides preserve relative
+  links to committed directories as exact-source provider tree URLs while
+  retaining visible provenance on unknown providers and fail-closed path rules.
+
+<!-- codeflow:release-impact patch -->
 - **Documentation portal dependency security.** The bundled portal pins
   devalue 5.9.4, removing GHSA-9rgm-9g3h-6x36 while preserving the existing
   starter identity, managed ownership contract and static-site behavior.

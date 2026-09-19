@@ -67,8 +67,15 @@ SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed;
 ordinary HTTPS and mail links remain links and are never fetched.
 Pin source links to the evidenced commit on known GitHub, GitLab, and Bitbucket
 HTTPS repository URLs. A committed document excluded from the portal remains a
-pinned provider link; for another provider, show a visible source path and
-commit without manufacturing a route. A genuinely absent document still fails.
+pinned provider file link. A relative link to a committed directory uses the
+provider's pinned tree route, with or without a trailing slash; directory
+identity comes only from ancestors in the committed inventory, never from the
+working tree. Existing query and fragment suffixes are preserved. For another
+provider, show a visible source path and commit without manufacturing a route.
+Directory resolution is link-only and follows exact-file resolution: images
+targeting directories fail, and symlinks or submodules are never treated as
+ordinary directories. Existing file-link behavior is unchanged. Similarly
+prefixed paths and genuinely absent targets still fail.
 
 ## Failure and staleness
 
