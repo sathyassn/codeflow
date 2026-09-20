@@ -73,7 +73,7 @@
 | · | [ADR-0064](ADR-0064-portal-as-a-guide-to-the-project-as-it-stands.md) | the portal is a guide to the project as it stands | none |
 | Agentic estimation | [ADR-0057](ADR-0057-optional-agentic-estimation.md) | Optional agentic operating and estimation method | none |
 
-63 decisions. Three carry `status: superseded`; the chains below record every
+64 decisions. Three carry `status: superseded`; the chains below record every
 `superseded_by` link declared in frontmatter, including the ones whose source
 still reads `accepted`. A superseded ADR stays in place and is never rewritten;
 the chain names the decision that now binds.

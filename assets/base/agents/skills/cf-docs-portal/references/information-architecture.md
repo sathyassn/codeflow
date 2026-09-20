@@ -6,10 +6,8 @@ Start with the repository's existing Markdown, decisions, work records, and
 technical references as one authoritative graph. Generate one portal over that
 graph. The shipped starter scans `docs/` only. Decisions, epics, tasks and specs
 stay in the repository: the portal points to their folders from one generated
-pointer page and does not list them page by page. A project that needs record
-pages switches its records layer on in the configuration and accepts the
-lookup form for them. A portal is a reading and navigation view, not another
-documentation authority and not a folder browser.
+pointer page and does not list them page by page. A portal is a reading and
+navigation view, not another documentation authority and not a folder browser.
 
 Use progressive depth where the source material supports it:
 

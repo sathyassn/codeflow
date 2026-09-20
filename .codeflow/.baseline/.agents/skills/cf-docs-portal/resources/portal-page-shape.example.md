@@ -1,6 +1,6 @@
 # Portal page shape example (utility presentation system)
 
-Use this as **how to think about a durable architecture page**, not content to
+Use this as **how to think about a durable explanatory page**, not content to
 copy. Source of truth remains repository Markdown/ADRs named in
 `portal.config.json`. Portal is derived.
 
@@ -77,15 +77,15 @@ Code / diff / record tables here, not another wall of cards restating the stage.
 
 ## A second page, same grammar
 
-The trio belongs on **every** architecture-shaped source, never one hero
+The trio belongs on **every** explanatory source, never one hero
 page. A subsystem page repeats the shape at its own altitude:
 
 - **Concept:** one claim plus a `cf-stage` of the subsystem's own flow.
 - **Architecture:** the subsystem's labeled structure.
 - **Technical:** its evidence table.
 
-Verification exercises every tabbed page and fails an architecture-shaped
-layer that has none.
+Verification exercises every tabbed page and fails an explanatory page that
+has none.
 
 ---
 

@@ -9,7 +9,7 @@
 4. [content-contract.md](content-contract.md) before source interpretation changes
 5. [operations.md](operations.md) before install / publish / acceptance evidence
 6. Prefer [resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md)
-   as the shape of architecture pages
+   as the shape of an explanatory page
 
 If a page violates the canonical resource’s anti-patterns or fails the portal
 composition gate, **do not** treat it as craft-complete. Fix sources or refuse
@@ -44,10 +44,10 @@ review. Your job is still structural: what do they **see** in the first
 screen of this layer, and does architecture use **layout** (stage, table,
 full-width figure) or only more prose under a heading?
 
-- **Concept** pages orient: one mental model, not a dump of every capability.
-- **Architecture** pages must work if sentences thin out: nodes and edges, not
-  caption chips restating paragraphs.
-- **Technical** pages are for lookup and evidence, not another essay.
+- The **Concept** panel orients: one mental model, not a dump of every capability.
+- The **Architecture** panel must work if sentences thin out: nodes and edges,
+  not caption chips restating paragraphs.
+- The **Technical** panel is for lookup and evidence, not another essay.
 
 Same utility craft as present; different job (durable source-linked guide). Do
 not copy present Comment chrome. Shape example:
@@ -91,8 +91,8 @@ of folders with purpose, count and repository link and is never expanded into
 per-record pages. Author the trio on **every** explanatory source, never one
 hero page. Browser verification fails
 closed when a trio page shows more than one layer at once, and when an
-architecture-shaped layer contains zero altitude pages; it exercises every
-tabbed route, not the first it finds.
+explanatory page has no trio; it exercises every tabbed route, not the first
+it finds.
 
 A subject-led labeled figure is a `cf-stage` fence: node lines
 (`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger` /

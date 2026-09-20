@@ -128,7 +128,7 @@ and [references/visual-craft.md](references/visual-craft.md). Page shape example
   and an explanatory page with no trio.
 - **Records** (decisions, epics, tasks, specs) are pointed to from one
   generated pointer page: folder, purpose, count, repository link. They are
-  not portal pages unless the project switches its records layer on.
+  not portal pages.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
   scale. Do not ship ad-hoc font stacks in content.
 - **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers

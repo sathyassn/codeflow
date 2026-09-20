@@ -76,10 +76,8 @@ not portal pages: one pointer page names their folders.
 | **Reference** (operations, CLI, checklists, evidence) | The lookup form: table, status, code, diff | The trio where the page explains; tables and evidence blocks where it looks up | Minimal; lookup, not essay |
 | **Record pointer** (decisions, epics, tasks, specs) | One table: folder, purpose, count, repository link | The pointer table, generated from configuration; never per-record pages | One sentence: the records live in the repository |
 
-A project that switches its records layer on renders those sources in the
-lookup form, tables and status, never as essays and never as the front of the
-guide. Accepted decisions stay append-only in the repository and are cited by
-id from the pages that rely on them.
+Accepted decisions stay append-only in the repository and are cited by id
+from the pages that rely on them.
 
 A present document walks the same altitudes as a path: the Concept carrier
 first, an Architecture view only when a second structural view is needed,
