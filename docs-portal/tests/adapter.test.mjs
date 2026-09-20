@@ -2176,6 +2176,8 @@ test("a layer landing lists its pages in configured reading order", async () => 
     assert.match(landing, /Purpose first\./);
     assert.match(landing, /Start with \[Zulu\]\(\/orient\/zulu\/\)/);
     assert.equal(/^- \[/m.test(landing), false);
+    const order = async (file) => Number((await readFile(path.join(root, "src/content/docs", file), "utf8")).match(/^sidebar:\n  order: (\d+)$/m)[1]);
+    assert.deepEqual(await Promise.all(["orient/index.md", "orient/zulu.md", "orient/alpha.md", "orient/notes/swept.md"].map(order)), [0, 1, 2, 3]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -2275,6 +2277,35 @@ test("the records switch drops record sources and points at their folders", asyn
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("the starter default points at decisions instead of publishing them", async () => {
+  // The same shape as assets/docs-portal/starter/portal.config.json, which the
+  // manifest consistency test pins; this proves what that shape publishes.
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/overview.md"] },
+        { id: "system", label: "System", description: "System", paths: ["docs/architecture.md"], prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      records: { enabled: false, layer: "system", pointers: [{ folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted architecture decisions, appended and superseded, never rewritten." }] },
+    });
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nThe shape follows ADR-0001.\n");
+    await writeFile(path.join(root, "docs/architecture.md"), "# Architecture\n\nBody.\n");
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-example.md"), "---\nid: ADR-0001\n---\n\n# Example decision\n");
+    commitFixture(root, "scaffold a project with one decision");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.deepEqual(evidence.pages.map((page) => page.route).sort(), ["orient/product", "system/architecture"]);
+    assert.equal((await readFile(path.join(root, "public/llms.txt"), "utf8")).includes("ADR-0001"), false);
+    const pointer = await readFile(path.join(root, "src/content/docs/system/records.md"), "utf8");
+    assert.match(pointer, /\| `docs\/decisions` \| Accepted architecture decisions, appended and superseded, never rewritten\\\. \| 1 \| `docs\/decisions` \|/);
+    assert.match(pointer, /^sidebar:\n  order: 2$/m);
+    assert.match(await readFile(path.join(root, "src/content/docs/orient/product.md"), "utf8"), /<a class="portal-record-link" href="\/system\/records\/"/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("an id whose record is not a portal source resolves without dangling", async () => {
   for (const repositoryUrl of ["https://github.com/example/repo", null]) {
     const root = await portalFixture();
@@ -2349,6 +2380,19 @@ test("the provenance line stays one row and proves the full commit", async () =>
     const page = await readFile(path.join(unlinked, "src/content/docs/reference/guide.md"), "utf8");
     assert.match(page, new RegExp(`built from <code>${commit}</code>`));
   } finally { await rm(unlinked, { recursive: true, force: true }); }
+
+  const unsupported = await portalFixture();
+  try {
+    await configureFixture(unsupported, { repository_url: "https://code.example.com/team/repo" });
+    await writeFile(path.join(unsupported, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(unsupported, "add a guide on a host without a blob layout");
+    runAdapter(unsupported);
+    const commit = git(unsupported, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(unsupported, "src/content/docs/reference/guide.md"), "utf8");
+    const provenance = page.match(/<div class="portal-provenance">.*<\/div>/)[0];
+    assert.equal(provenance.includes("<a "), false);
+    assert.match(provenance, new RegExp(`built from <code>${commit}</code>`));
+  } finally { await rm(unsupported, { recursive: true, force: true }); }
 });
 
 test("stage nodes hold a minimum width, wrap on words, and stack at phone width", async () => {
