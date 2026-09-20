@@ -28,10 +28,11 @@ walks the altitude trio, Concept, Architecture and Technical, with one figure
 in Concept, the structure in Architecture and the lookups in Technical, each
 framed by prose. Decisions, epics, tasks and specs stay in the repository and
 are pointed to from one generated pointer page that names each folder with
-its purpose, its count and its repository link. Per-record pages and the
-records layer are a configuration switch, off in CodeFlow's own portal and
-docs-only in the starter; a project that switches records on renders them in
-the lookup form. Pages that rely on a decision cite it by id and link to the
+its purpose, its count and its repository link. The guide has no per-record
+pages. The adapter keeps a records switch as a configuration affordance, off
+in CodeFlow's own portal and absent from the starter default; a project that
+turns it on takes the lookup form for those sources and steps outside this
+guide doctrine. Pages that rely on a decision cite it by id and link to the
 repository file. ADR-0048, ADR-0058 and ADR-0063 stand unchanged; SPC-010 is
 withdrawn.
 

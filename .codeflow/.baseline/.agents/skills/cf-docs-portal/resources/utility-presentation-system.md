@@ -74,7 +74,7 @@ not portal pages: one pointer page names their folders.
 | **Orient** (purpose, capabilities, adoption, journeys) | The Concept panel: one governing claim in the display role and one figure | The trio; Concept carries a stage, table or full-width figure, Architecture the structure, Technical the commands, files and tables | One lead above each carrier; the acting sentences below; bullets only where they aid scanning |
 | **Architecture** (system, subsystems, boundaries) | The Concept panel of the trio | The trio plus a subject-led `cf-stage` (or a justified `text` figure) | Frames each panel; never the carrier |
 | **Reference** (operations, CLI, checklists, evidence) | The lookup form: table, status, code, diff | The trio where the page explains; tables and evidence blocks where it looks up | Minimal; lookup, not essay |
-| **Record pointer** (decisions, epics, tasks, specs) | One table: folder, purpose, count, repository link | The pointer table, generated from configuration; never per-record pages | One sentence: the records live in the repository |
+| **Record pointer** (decisions, epics, tasks, specs) | One table: folder, purpose, count, repository link | The pointer table, generated from configuration; no per-record pages in the guide (the adapter's records switch is off by default) | One sentence: the records live in the repository |
 
 Accepted decisions stay append-only in the repository and are cited by id
 from the pages that rely on them.

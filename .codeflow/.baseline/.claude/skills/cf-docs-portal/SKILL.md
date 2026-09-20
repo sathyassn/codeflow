@@ -98,8 +98,8 @@ purpose and mental model                         (concept)
 records: decisions, epics, tasks and specs are pointed to as folders
 ```
 
-Keep navigation predictable and searchable. Prefer plain language, descriptive
-titles, concise prose, and bullets when they improve scanning. Match an
+Keep navigation predictable. Prefer plain language, descriptive titles,
+concise prose, and bullets when they improve scanning. Match an
 established project voice when it exists; otherwise use calm, direct,
 third-person documentation language. Avoid cryptic headings, invented
 personality, gratuitous emoji, and promotional language.
@@ -115,7 +115,8 @@ Page shape example:
   prose in every panel; architecture pages add a subject-led stage, not
   caption micro-boxes; verification fails a trio page showing more than one
   panel or an explanatory page with no trio.
-- **Records** are one generated pointer page of folders, never portal pages.
+- **Records** are one generated pointer page of folders, not portal pages;
+  the adapter's records switch stays off.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
   scale. Do not ship ad-hoc font stacks in content.
 - **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
