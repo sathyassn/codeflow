@@ -183,9 +183,13 @@ Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
 ### What pins this contract
 
 The unattended Claude workflow is explicitly single-vendor and rejects the old
-`duo` preset semantics. Manifest parity tests pin byte mirrors, while
-`orchestration_contract.rs` pins the two-draft anti-anchoring rule, design and
-review roles, hard coverage floor, security lenses, always-loaded reasoning
-duties, host, UI, and reverse-lane contract markers. Runtime adapter behavior
-is exercised by the CAP-009 hook unit and CLI tests. No engine model router is
+`duo` preset semantics. Three deterministic surfaces hold the rest in place:
+
+| Pin | What it holds |
+|---|---|
+| Manifest parity tests | Byte mirrors of the skill across its managed copies |
+| `orchestration_contract.rs` | The two-draft anti-anchoring rule, design and review roles, hard coverage floor, security lenses, always-loaded reasoning duties, host, UI, and reverse-lane contract markers |
+| The CAP-009 hook unit and CLI tests | Runtime adapter behavior |
+
+No engine model router is
 added; deterministic gates and the human-merged PR remain authoritative.
