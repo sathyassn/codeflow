@@ -153,6 +153,7 @@ export class GitSnapshot {
     try {
       return execFileSync("git", [
         "-c", "core.fsmonitor=false",
+        "-c", `core.excludesFile=${NULL_DEVICE}`,
         "-c", "core.pager=cat",
         "-c", "pager.status=false",
         "-C", this.repositoryRoot,
@@ -224,10 +225,12 @@ function statusPath(value) {
   return safeRelative(stripped, "Git status path");
 }
 
+const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+
 export function hardenedGitEnvironment(source = process.env) {
   return {
     ...hardenedChildEnvironment(source),
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_GLOBAL: NULL_DEVICE,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_NO_LAZY_FETCH: "1",
     GIT_NO_REPLACE_OBJECTS: "1",

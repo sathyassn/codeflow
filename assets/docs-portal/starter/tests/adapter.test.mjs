@@ -1756,7 +1756,7 @@ test("HEAD cleanliness exempts ignored untracked litter and nothing else", async
 
   const litter = await portalFixture();
   try {
-    await writeFile(path.join(litter, ".gitignore"), "__pycache__/\n.claude/.cc-writes/\n");
+    await writeFile(path.join(litter, ".gitignore"), "__pycache__/\n**/.claude/.cc-writes/\n");
     await writeFile(path.join(litter, "docs/guide.md"), "# Guide\n");
     commitFixture(litter, "commit a source root beside ignore patterns");
     await mkdir(path.join(litter, "docs/__pycache__"), { recursive: true });
@@ -1776,6 +1776,18 @@ test("HEAD cleanliness exempts ignored untracked litter and nothing else", async
     await writeFile(path.join(untracked, "docs/draft.md"), "# Draft\n");
     assert.match(runAdapter(untracked, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
   } finally { await rm(untracked, { recursive: true, force: true }); }
+
+  const userIgnored = await portalFixture();
+  try {
+    await writeFile(path.join(userIgnored, "docs/guide.md"), "# Guide\n");
+    commitFixture(userIgnored, "commit a source root before a per-user ignore file matches a new source");
+    const excludes = path.join(userIgnored, "user-ignore");
+    await writeFile(excludes, "docs/draft.md\n");
+    git(userIgnored, ["config", "core.excludesFile", excludes]);
+    await writeFile(path.join(userIgnored, "docs/draft.md"), "# Draft\n");
+    assert.match(git(userIgnored, ["status", "--porcelain=v1", "--ignored=matching", "--", "docs"]), /^!! docs\/draft\.md$/m);
+    assert.match(runAdapter(userIgnored, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
+  } finally { await rm(userIgnored, { recursive: true, force: true }); }
 });
 
 test("masked source, token, and media edits block publication", async () => {
