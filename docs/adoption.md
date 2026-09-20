@@ -11,7 +11,7 @@ full | + project-management records · work start gate @positive
 caption: the floor never changes; tiers add method on top
 ```
 
-How a project takes on the discipline layer — greenfield or brownfield — what it
+How a project takes on the discipline layer, greenfield or brownfield, what it
 gets at each tier, what codeflow owns versus what stays yours, and the daily
 loop. Runtime autonomy and harness settings live in
 [harness posture](harness-posture.md); qualifying a new model or harness lives
@@ -101,7 +101,7 @@ still activate durable-work checks in an existing repository.
 
 | Tier | Adds | For |
 |---|---|---|
-| `--minimal` | The complete git-discipline enforcement floor: all five git hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the CI check, the in-session `git-guard`/`exec-guard` + orient/summary hooks (`.claude/settings.json` + the `.codex/` starter), the armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md` | Any repo — doc-sets, config repos, small tools |
+| `--minimal` | The complete git-discipline enforcement floor: all five git hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the CI check, the in-session `git-guard`/`exec-guard` + orient/summary hooks (`.claude/settings.json` + the `.codex/` starter), the armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md` | Any repo: doc-sets, config repos, small tools |
 | `--standard` (default) | + the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine, the full contract, the test gate, recall capture, and harness integration | Code projects |
 | `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Programs whose work outlives sessions |
 
@@ -136,14 +136,14 @@ cache/index records but is not shared team authority. `/cf-customize` records
 this post-init project choice; the agent-facing decision model lives in
 `cf-method/references/project-organization.md`.
 
-## Greenfield — an empty directory
+## Greenfield: an empty directory
 
 ```sh
 mkdir myproject && cd myproject && git init
 codeflow init --standard --yes    # scaffold; offline; sane defaults
 ```
 
-`init` scaffolds every managed file, then — because this is a fresh repo — makes
+`init` scaffolds every managed file, then, because this is a fresh repo, makes
 the initial `chore: scaffold codeflow standard tier` commit for you, wires git
 hooks via `core.hooksPath`, and arms branch policy. The printed report lists
 every file written and closes with the next step. From there:
@@ -155,7 +155,7 @@ every file written and closes with the next step. From there:
    and commit those project facts; CodeFlow never invents them or silently
    changes global harness settings.
 2. Start your first feature on a `feat/*` branch, in a worktree.
-3. Build with tests; commit small (`type(scope): description` — description ≤ 50
+3. Build with tests; commit small (`type(scope): description`, with description ≤ 50
    chars, subject line ≤ 72, a body of only `-` bullets when one is needed).
 4. Land via a PR (or `codeflow integrate` with no remote).
 
@@ -181,13 +181,13 @@ separate: `codeflow test setup --template <name> --replace`. Run `codeflow test`
 and `codeflow doctor --check test-config` after setup.
 
 **Bootstrap grace.** codeflow needs exactly one commit before its gates guard
-the repo — its own scaffold commit — and that is a sanctioned path (it arms
+the repo, its own scaffold commit, and that is a sanctioned path (it arms
 `policy_armed` and passes the hooks via the gate-context token), so you never
 hit a policy wall on the way to your first PR (the v2 charter,
 `docs/plan/v2/00-charter.md`, §16 AC #1). The secret scan is the one rule that
 is never graced (charter §6.3).
 
-## Brownfield — an existing repo
+## Brownfield: an existing repo
 
 `init` on a repo with history is deliberately gentler:
 
@@ -204,11 +204,11 @@ is never graced (charter §6.3).
   existing steps). `codeflow doctor` surfaces the unwired state so it stays
   visible.
 
-Adopt gradually: start `--minimal` (the full enforcement floor — all the git
-hooks, CI, the in-session guards, and the armed policy — with none of the method
+Adopt gradually: start `--minimal` (the full enforcement floor of all the git
+hooks, CI, the in-session guards, and the armed policy, with none of the method
 machinery), run for a while, then re-init `--standard` and later `--full` as the
-work earns the weight. Each step is additive and idempotent, and — because the
-floor is the same at every tier — the upgrade adds the method on top; existing
+work earns the weight. Each step is additive and idempotent, and because the
+floor is the same at every tier, the upgrade adds the method on top; existing
 recognizable historical CodeFlow tasks may already keep durable tracking
 active below full. Inspect installed state and the gate result rather than
 assuming the tier name switches it off. A `--minimal` repo initialized before
@@ -218,26 +218,26 @@ When you add the standard/full method, run `/cf-customize` before treating the
 generated product, architecture, commands, or tool posture as project truth;
 `codeflow doctor` keeps a reminder visible while scaffold sentinels remain.
 
-## Ownership model — who owns what on update
+## Ownership model: who owns what on update
 
 | Class | Examples | What `update` does |
 |---|---|---|
-| Fully-managed | `.claude/` agents, skills; git-hook shims; CI template | Replaced if you never touched them; 3-way merged from `.codeflow/.baseline/` if you did — conflicts land as `.new` + a report |
+| Fully-managed | `.claude/` agents, skills; git-hook shims; CI template | Replaced if you never touched them; 3-way merged from `.codeflow/.baseline/` if you did, and conflicts land as `.new` plus a report |
 | Managed-region | `AGENTS.md` / `CLAUDE.md` markers; `.gitignore` markers; `.claude/settings.json` codeflow keys | Only the marked region or codeflow-owned keys are rewritten; everything else is yours |
 | User-owned, schema-versioned | `.codeflow/policy.json`, `.codeflow/project.toml` | Only *new* keys are added with their defaults and reported; values you set are never mutated |
-| User-owned docs (write-once seeds) | all of `docs/` — product, architecture, capabilities, ADRs | Seeded once at init; `update` never mutates them — they are yours to edit and own |
+| User-owned docs (write-once seeds) | all of `docs/`: product, architecture, capabilities, ADRs | Seeded once at init; `update` never mutates them, so they are yours to edit and own |
 | Engine-generated | `.codeflow/manifest.json`, `.codeflow/.baseline/`, `status` / `orient` views | Rewritten by the binary; never hand-edit |
 
 `docs/product.md` always describes the consuming project's purpose, users,
-scope, and non-goals — not the CodeFlow CLI. `docs/architecture.md` describes how
+scope, and non-goals, not the CodeFlow CLI. `docs/architecture.md` describes how
 that project is built. Common project facts, commands, and constraints belong in
 `AGENTS.md`; `CLAUDE.md` carries only Claude-specific differences. CodeFlow does
 not introduce a competing `project.md` or `projects.md`.
 
 ## The update story
 
-Two motions (charter §10): upgrade the binary — which improves every repo at
-once, because hooks call `codeflow` from `PATH` — then run `codeflow update` per
+Two motions (charter §10): upgrade the binary, which improves every repo at
+once because hooks call `codeflow` from `PATH`, then run `codeflow update` per
 repo to refresh scaffold files. Until you do, every command prints a
 version-skew warning.
 
@@ -249,23 +249,23 @@ via `gh release download` (see Install).
 `codeflow update` refreshes managed files by the classes above: unmodified
 managed files are replaced, files you changed get a 3-way merge from the
 baseline, and anything that cannot merge cleanly is written beside your file as
-`<name>.new` with a report entry — never clobbered, never silently skipped.
+`<name>.new` with a report entry, never clobbered and never silently skipped.
 `--diff <FILE>` writes the report plus unified diffs; `--force` replaces
 user-modified managed files instead of merging.
 
 `update` also **reconciles orphans**: when an artifact is renamed or dropped
 upstream (as the `.claude/commands/*` slash commands became `.claude/skills/*`),
-an unmodified managed file the new version no longer ships is removed — with its
-baseline and manifest record — so it cannot linger and collide with its
-replacement. Anything that could hold your content — a managed file you modified,
-a managed-region file, or a user-owned file — is kept and simply unmanaged, never
+an unmodified managed file the new version no longer ships is removed, with its
+baseline and manifest record, so it cannot linger and collide with its
+replacement. Anything that could hold your content, whether a managed file you modified,
+a managed-region file, or a user-owned file, is kept and simply unmanaged, never
 deleted (ADR-0011).
 
 New policy keys arrive this way too. When a codeflow upgrade adds a
 `.codeflow/policy.json` key (for example the `merge_to_protected`,
 `pr_merge_to_protected`, and `local_ref_protection` keys added in ADR-0007),
 `update` inserts it with its shipped default and reports it, and never touches
-the values you already set — so tightening ships without a manual migration.
+the values you already set, so tightening ships without a manual migration.
 
 ## The daily flow
 
@@ -283,8 +283,8 @@ caption: every step has a plane that catches the mistake it can make
 ```
 
 1. **Orient and route.** The SessionStart digest (or `codeflow orient`) gives branch and
-   worktree state, work counts, recent ADR titles, gate status, and pointers —
-   read the pointed docs, not the digest, for depth. Begin every non-trivial
+   worktree state, work counts, recent ADR titles, gate status, and pointers.
+   Read the pointed docs, not the digest, for depth. Begin every non-trivial
    repository task with `/cf-model-orchestrator`; it uses only the research,
    planning, implementation, or review stages the requested outcome needs and
    degrades visibly if a native peer seat is unavailable.
@@ -292,9 +292,9 @@ caption: every step has a plane that catches the mistake it can make
    worktree; never develop on the root protected-branch checkout.
 3. **Gates as you go.** pre-commit (secret scan), commit-msg (conventional
    format with the restored 50-char description / 72-char subject budget and the
-   bullet-only body shape — ADR-0020 — plus no AI attribution and no emoji),
+   bullet-only body shape of ADR-0020, plus no AI attribution and no emoji),
    pre-merge-commit and reference-transaction
-   (protected-branch merge/ref rules — the latter also catches fast-forward
+   (protected-branch merge/ref rules; the latter also catches fast-forward
    merges, `reset --hard`, and `branch -D`), pre-push (branch naming,
    protected-branch rules, test gate). Keep `codeflow test` and `codeflow
    validate --docs` green before push.
@@ -302,21 +302,21 @@ caption: every step has a plane that catches the mistake it can make
    template (summary, changes, testing, linked epic/capability IDs); a
    human merges it when required checks are evidenced green (an infra-killed
    duplicate CI job is not a failed check; an agent-performed `gh pr merge`
-   into a protected base is blocked — that is the boundary). With no remote, `codeflow
+   into a protected base is blocked, and that is the boundary). With no remote, `codeflow
    integrate <branch> --into <target>` is the sanctioned local path, and a human
    can override the git layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
-### A body of work — the integration branch
+### A body of work: the integration branch
 
 The loop above lands one standalone task per PR onto `main`. When the work is a
-multi-task epic — several tasks, some serial, some parallel — its default
+multi-task epic with several tasks, some serial and some parallel, its default
 landing shape is one shared **integration branch**. Do not casually turn the
 epic into a series of task-to-`main` PRs: a different shape needs a recorded
 Plan vN rationale and approval from both primary model seats before allocation.
 The normal path is:
 
 - `integration/<epic>` is branched off `main` and is **non-protected**, so
-  agents merge tasks into it — by `codeflow integrate <task> --into
+  agents merge tasks into it, by `codeflow integrate <task> --into
   integration/<…>` or a PR based on the integration branch. Every other gate
   (commits, secrets, tests, protected-branch rules) still applies.
 - Only the finished body reaches `main`, as **one** human-reviewed
@@ -331,7 +331,7 @@ contexts, and browser/tool capacity. Land tasks serially through
 aggregate suite and both-model review on the combined integration diff. Never
 run concurrent writers in one worktree or rebase the shared integration branch.
 
-`main` stays human-merge-only throughout — the integration branch is never a
+`main` stays human-merge-only throughout, and the integration branch is never a
 backdoor to it. See cf-method's "Managing a body of work" for the full procedure.
 
 ## Task graphs and verification strength
@@ -382,11 +382,11 @@ fits:
 reviewed commands only when earned. They do not install every technique, create
 whole-repository score targets, or turn architectural taste into a gate.
 
-## Enforcement planes — who catches what
+## Enforcement planes: who catches what
 
 One policy (`.codeflow/policy.json`), four complementary planes. Minimal installs
 the local floor and CI scaffold, not remote branch protection (ADR-0019).
-Git hooks are harness-agnostic (any agent or human — including Codex); the
+Git hooks are harness-agnostic (any agent or human, including Codex); the
 in-session PreToolUse guards (`git-guard` + `exec-guard`) are a fast bonus for
 Claude and, through a byte-compatible payload, an **interactive** Codex session
 (ADR-0008). Other harnesses need their qualified event contract. CI re-runs the
@@ -398,19 +398,19 @@ permissions. Local checks are required feedback, but remain editable.
 | Protection | git hooks | in-session guard | CI | remote |
 |---|---|---|---|---|
 | Commit / non-ff merge commit on protected | pre-commit / pre-merge-commit | git-guard | yes | yes |
-| FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | git-guard | — | yes (result unpushable) |
-| Push / force-push / delete to protected | pre-push | git-guard | — | yes |
-| `gh pr merge` into a protected base | — (hooks can't see a PR) | git-guard | — | yes |
-| Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
-| Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
-| Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
-| Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
+| FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | git-guard | none | yes (result unpushable) |
+| Push / force-push / delete to protected | pre-push | git-guard | none | yes |
+| `gh pr merge` into a protected base | none (hooks can't see a PR) | git-guard | none | yes |
+| Destructive command (`rm -rf /`, `mkfs`, fork bomb) | none | exec-guard (block) | none | none |
+| Privilege escalation (`sudo`, `LD_PRELOAD`) | none | exec-guard (warn) | none | none |
+| Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | none |
+| Override-token laundering, `--no-verify` bypass | none | git-guard (structural) | none | none |
 
-Two facts the matrix encodes. **PR-content checks are git-guard/CI by design** —
-a git hook never sees `gh pr create`/`gh pr merge`, so attribution/emoji scans
+Two facts the matrix encodes. **PR-content checks are git-guard/CI by design.**
+A git hook never sees `gh pr create`/`gh pr merge`, so attribution/emoji scans
 and the protected-base check live in the Claude layer and CI, not the hooks.
 **The human override (`CODEFLOW_HUMAN_OVERRIDE=1`) and the integrate token apply
-to the git-hook plane only** — the git-guard never trusts them, because an agent
+to the git-hook plane only.** The git-guard never trusts them, because an agent
 in a session cannot prove it is a human. `reference-transaction` needs git ≥
 2.28; on older git it is absent and protection falls back to the other planes.
 With active protection, an unreadable or unevaluable prepared transaction
@@ -448,22 +448,22 @@ Standard/full projects use the duo for non-trivial work; standalone consults
 are available when an outside opinion is useful. Minimal does not install the
 method. Transport remains interactive-only, with preferred lanes and qualified
 native fallback (ADR-0059). One-time setup: authenticate Codex manually, enable
-`codex@openai-codex` in Claude Code, and install the Claude CLI with Herdr —
-the named-tab terminal host that runs an interactive peer CLI in its own tab,
-with tmux as the documented degraded host — for the reverse lane. Codeflow
+`codex@openai-codex` in Claude Code, and install the Claude CLI with Herdr for the reverse lane.
+Herdr is the named-tab terminal host that runs an interactive peer CLI in its
+own tab, with tmux as the documented degraded host. Codeflow
 never automates auth. `codeflow doctor` reports inspectable prerequisites;
 retain a scoped interactive canary in each direction.
 
 - `/cf-consult` gets an independent, read-only second opinion from the vendor
-  the session is *not* — from Claude Code through the official
+  the session is *not*: from Claude Code through the official
   `codex-plugin-cc` plugin (`/codex:review`); from Codex by driving the
   interactive `claude` CLI via Herdr (tmux degraded) with Stop/StopFailure
-  hook completion—and makes you synthesize it against your
+  hook completion. It makes you synthesize the reply against your
   own analysis (never paste its reply as fact). Headless `codex exec` /
   `claude -p` are not sanctioned delegation transports (ADR-0023).
 - A full edit handoff (`cf-delegate`; from Claude Code, `/codex:rescue`) runs
   only inside a worktree on a feature branch, where the delegate's commits pass
-  the same gates and independent review as yours — enforcement is
+  the same gates and independent review as yours, because enforcement is
   author-agnostic.
 - An incompatible plugin permits the qualified official native client fallback
   in `cf-delegate`; verify its tools, boundaries and recheckable native result.
@@ -555,7 +555,7 @@ verified published release (see the
 verified published release exists for the built commit.
 
 Node roles differ by lane, and neither pin changes here: the aggregate CI gate
-runs on Node 26.4.0 — the presentation renderer's pin — and its full strict
+runs on Node 26.4.0, the presentation renderer's pin, and its full strict
 target installs, checks, builds, and validates this portal; the portal-local
 `.node-version` and the Windows adapter-test lane use 24.18.0; the starter
 itself accepts 22.19.0 or newer.
@@ -563,7 +563,7 @@ itself accepts 22.19.0 or newer.
 ## Optional interactive review documents
 
 Standard and full tiers also include `cf-present`. It is a bounded review
-utility for complex explanations, alternatives, plans, diffs, and evidence—not
+utility for complex explanations, alternatives, plans, diffs, and evidence, not
 a product UI or durable documentation store. Author **this session's** subject
 into a schema-valid temporary JSON document from the skill's block catalog.
 The runtime owns chrome, themes, and Comment. Do not clone the
