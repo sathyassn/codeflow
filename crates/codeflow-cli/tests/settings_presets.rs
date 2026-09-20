@@ -619,7 +619,7 @@ fn authenticated_tool_configuration_remains_available() {
 /// Privilege-escalation command patterns (TSK-041 defect 2). Claude exposes
 /// two shell tools — `Bash` and `PowerShell` — and a permission rule is keyed
 /// by the tool that carries the command, so `Bash(...)` alone leaves the
-/// Windows/graphical launchers ungated on the PowerShell tool. The shell guard
+/// Windows/graphical launchers ungated on the `PowerShell` tool. The shell guard
 /// matcher (`^(Bash|PowerShell)$`) already covers both; the permission layer
 /// now does too.
 const PRIVILEGE_ESCALATION_PATTERNS: [&str; 8] = [
@@ -646,7 +646,7 @@ fn privilege_escalation_is_asked_for_both_shell_tools() {
             for pattern in PRIVILEGE_ESCALATION_PATTERNS {
                 let rule = format!("{tool}({pattern})");
                 assert!(
-                    ask.iter().any(|entry| *entry == rule),
+                    ask.contains(&rule),
                     "{name}: ask missing {rule:?} — a rule keyed to the other \
                      shell tool does not gate this one"
                 );

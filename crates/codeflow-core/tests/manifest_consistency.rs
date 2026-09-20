@@ -546,8 +546,8 @@ fn ci_downloads_verify_pinned_checksums() {
 
 /// The ADR-0018 instruction-only clause (TSK-041 defect 8). ADR-0018 is an
 /// accepted, append-only record ("never edited afterwards except to set
-/// superseded_by"), so the clarifying clause cannot land there — its one home
-/// is the AGENTS contract, which `codeflow update` regenerates.
+/// `superseded_by`"), so the clarifying clause cannot land there — its one
+/// home is the AGENTS contract, which `codeflow update` regenerates.
 const INSTRUCTION_ONLY_CLAUSE: &str = "instruction-only: CodeFlow does not \
      technically prevent a harness from launching headless task execution";
 
