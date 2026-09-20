@@ -90,8 +90,8 @@ The test gate evaluates file and aggregate coverage rules through one verdict.
 Delegation has two engine surfaces. The legacy `delegate-turn --result`
 adapter writes immutable `0600` terminal evidence and signals its scoped tmux
 waiter, byte-compatible with the ADR-0023 lanes. The schema-v2 lifecycle
-(`delegate.rs`, surfaced as `codeflow delegate` with `init`, `arm` and `wait`,
-and `hook delegate-turn --state-dir`) is a transport-neutral state machine over
+(`delegate.rs`, surfaced as `codeflow delegate init|arm|wait` and
+`hook delegate-turn --state-dir`) is a transport-neutral state machine over
 write-once JSON records in an owner-only state directory outside any Git
 worktree.
 

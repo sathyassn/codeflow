@@ -9,9 +9,10 @@
 ## Concept
 
 **One policy file arms four planes, so no single harness is a required trust
-anchor.** `.codeflow/policy.json` is the only place a rule is written; each
-plane reads that one source and acts where it can see the work, with no inline
-drift and thin per-platform CI wrappers for portability (ADR-0017).
+anchor.** `.codeflow/policy.json` is the only place a rule is written; each of
+the four complementary planes reads that one source and acts where it can see
+the work, with no inline drift and thin per-platform CI wrappers for
+portability (ADR-0017).
 
 ```cf-stage
 .codeflow/policy.json | one source of truth @accent
@@ -130,7 +131,7 @@ per-platform wrappers (ADR-0017).
 | CI check | What it enforces |
 |---|---|
 | commit format | the conventional-commit shape |
-| subject length | the 50/72 budget |
+| subject length | the 50/72 subject-length budget |
 | body shape | bullet-only, with opt-in footer trailers and ticket references |
 | contract-surface tripwire | warn only (ADR-0020) |
 | attribution, emoji | no AI attribution and no emoji in commit content |
@@ -154,8 +155,9 @@ The advisory blocks when either `security_review` or `dep_audit` is `block`.
 ### remote protection
 
 The GitHub remote-protect adapter (`remote.rs`, surfaced as `codeflow remote`)
-arms the host's own branch rules where the host offers them. CI becomes a merge
-gate when the remote requires its result, and the end state the planes exist
+arms the host's own branch rules where the host offers them. CI re-runs the
+checks and configured remote rules can require their results, so CI becomes a
+merge gate when the remote requires its result. The end state the planes exist
 for is a protected branch whose PRs are merged by a human on evidenced-green
 checks.
 

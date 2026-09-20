@@ -87,7 +87,7 @@ own tokens.
 | egress | broad public egress, exact loopback for local UI tests, live search | private destinations and arbitrary Unix sockets stay closed when a session is launched without `--sandbox danger-full-access` |
 | `approval_policy` | `never`, with production `--sandbox danger-full-access` (ADR-0055) | that OS sandbox is off for the process; git-guard, exec-guard, git hooks, and CI remain the floor |
 | environment | Codex's default `KEY`/`SECRET`/`TOKEN` scrub is kept (ADR-0025, ADR-0026) | the shell does not inherit provider secrets |
-| `approvals_reviewer` | `auto_review` | vestigial under `never`: it is not a human gate and does not fire on-request prompts |
+| `approvals_reviewer` | `approvals_reviewer = "auto_review"` | vestigial under `never`: it is not a human gate and does not fire on-request prompts |
 
 `.codex/hooks.json` wires `codeflow hook git-guard` and
 `codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event, and
