@@ -20,12 +20,15 @@ board or copy present Comment chrome.
 **Before theming, layering, or authoring portal pages, load in order:**
 
 1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
-   — **canonical** utility presentation system (shared with `cf-present`)
-2. [references/visual-craft.md](references/visual-craft.md) — portal checklist
+   — shared doctrine, byte-identical with `cf-present` (ADR-0063)
+2. [references/visual-craft.md](references/visual-craft.md) — portal profile
+   and page composition gate
 3. Other references below as the task requires
 
-Pass the portal composition gate in the canonical resource. A prose-card wall
-or a marketing layout fails this skill.
+Pass the page composition gate in `references/visual-craft.md`. A prose-card
+wall, a marketing layout, or a page that is the source Markdown re-rendered
+fails this skill: the portal composes the sources visually with supporting
+text.
 
 Apply `cf-design` only when the **consuming product** needs experience
 direction, never to utility portal themes. Portal themes, Starlight

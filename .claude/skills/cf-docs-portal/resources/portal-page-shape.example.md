@@ -92,6 +92,8 @@ layer that has none.
 ## Fail closed
 
 - Do not publish a concept layer that is only a teaser for architecture.
-- Do not invent portal-only prose that is not in the repository sources.
+- Do not assert portal-only facts or decisions absent from the repository
+  sources. Supporting text that frames a stage, table, or evidence block is
+  required, not invented authority.
 - Do not drop product brand packs into Starlight “to make it pretty.”
 - Do not add present Comment chrome to the portal.
