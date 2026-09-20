@@ -3,13 +3,13 @@
 **Required load order (do not skip):**
 
 1. [resources/how-presentation-works.md](../resources/how-presentation-works.md)
-   — **how to think**: what the human sees, why structure is the presentation,
+   is **how to think**: what the human sees, why structure is the presentation,
    how to choose instruments before JSON
 2. [resources/utility-presentation-system.md](../resources/utility-presentation-system.md)
-   — shared craft: composition rule, page classes, carriers, tokens
-3. This file — the present profile: composition gate, Comment surface,
+   is the shared craft: composition rule, page classes, carriers, tokens
+3. This file is the present profile: composition gate, Comment surface,
    feedback pipeline, runtime mapping, checklist
-4. [document-authoring.md](document-authoring.md) — envelope and block fields
+4. [document-authoring.md](document-authoring.md) covers envelope and block fields
    only after the thinking is settled
 5. Prefer [resources/present-document.example.json](../resources/present-document.example.json)
    as a **shape** (figure → frame → evidence → ask), not a template to pad
@@ -20,9 +20,10 @@ the session.
 `cf-design` stays product-generic. This skill is **utility present** only.
 Author **this session's** subject. Do not clone the design-exploration board.
 
-Display chrome (runtime-owned, same as the settled design reference): Font
-(Archivo / Inter / Plex Sans), Size (Compact / Default / Large), Palette
-(Neutral / Cool / Warm), Appearance (Light / Dark / System). Comment is one
+Display chrome (runtime-owned, as the shared doctrine states): Font (Archivo
+for instrument, Inter for editorial, IBM Plex Sans for ink), Size (Compact /
+Default / Large), Palette (Neutral / Cool / Warm), Appearance (Light / Dark /
+System). Comment is one
 mode: gesture → float → composer; rail only while armed; Esc backs out.
 
 ---
@@ -104,10 +105,10 @@ Delivery is at-least-once by `event_id`. No harness-specific transport.
 
 ## Altitude as a path
 
-1. **Concept** — the carrier that creates the 5‑second picture  
-2. **Architecture** — only if another structural view is required  
-3. **Technical** — verifiable panes (status, diff, code, table)  
-4. **Ask** — one clear feedback prompt  
+1. **Concept**: the carrier that creates the 5 second picture  
+2. **Architecture**: only if another structural view is required  
+3. **Technical**: verifiable panes (status, diff, code, table)  
+4. **Ask**: one clear feedback prompt  
 
 Short narrative **frames**; it does not replace the carrier.
 

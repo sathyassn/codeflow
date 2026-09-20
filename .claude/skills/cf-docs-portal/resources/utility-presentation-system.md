@@ -60,12 +60,24 @@ supporting text. It is never the subject's prose re-rendered.**
 
 ### Page classes (portal) and document shapes (present)
 
+The portal is a guide to the project as it stands: what it is, what it does,
+how to adopt it, how it is built and how it is operated. Every explanatory
+page walks the altitude trio, `## Concept` / `## Architecture` /
+`## Technical`, and each panel pairs one carrier with the prose that frames it:
+a lead sentence above the figure saying what the reader is looking at, labels
+inside it, and the acting sentences or table below. Figures without framing
+text and text without a figure both fail. Decisions, epics, tasks and specs are
+not portal pages: one pointer page names their folders.
+
 | Class | First screen must show | Required carrier | Prose role |
 |-------|------------------------|------------------|------------|
-| **Orient** (purpose, capabilities, adoption, journeys) | One governing claim in the display role | One primary carrier: stage, table, or full-width figure | One short lead; bullets only where they aid scanning |
-| **Architecture** (system, subsystems, boundaries) | The Concept panel of the altitude trio | `## Concept` / `## Architecture` / `## Technical` trio plus a subject-led `cf-stage` (or a justified `text` figure) | Frames each panel; never the carrier |
-| **Technical and records** (references, specs, epics, tasks, evidence) | The lookup form: table, status, code, diff | Tables and evidence blocks | Minimal; lookup, not essay |
-| **Historical decisions** (accepted ADRs) | Their own append-only text | Exempt from the trio; rendered as records | Unchanged |
+| **Orient** (purpose, capabilities, adoption, journeys) | The Concept panel: one governing claim in the display role and one figure | The trio; Concept carries a stage, table or full-width figure, Architecture the structure, Technical the commands, files and tables | One lead above each carrier; the acting sentences below; bullets only where they aid scanning |
+| **Architecture** (system, subsystems, boundaries) | The Concept panel of the trio | The trio plus a subject-led `cf-stage` (or a justified `text` figure) | Frames each panel; never the carrier |
+| **Reference** (operations, CLI, checklists, evidence) | The lookup form: table, status, code, diff | The trio where the page explains; tables and evidence blocks where it looks up | Minimal; lookup, not essay |
+| **Record pointer** (decisions, epics, tasks, specs) | One table: folder, purpose, count, repository link | The pointer table, generated from configuration; no per-record pages in the guide (the adapter's records switch is off by default) | One sentence: the records live in the repository |
+
+Accepted decisions stay append-only in the repository and are cited by id
+from the pages that rely on them.
 
 A present document walks the same altitudes as a path: the Concept carrier
 first, an Architecture view only when a second structural view is needed,
@@ -128,7 +140,7 @@ at build time: `signal` → instrument, `folio` → ink.
 
 | Display control | Values | Token effect |
 |-----------------|--------|--------------|
-| Font | Archivo (instrument), Inter (editorial), IBM Plex Sans (plex) | `--cf-font-sans`; bundled Latin variable faces, system fallbacks, no remote fonts |
+| Font | Archivo (instrument), Inter (editorial), IBM Plex Sans (ink) | `--cf-font-sans`; bundled Latin variable faces, system fallbacks, no remote fonts |
 | Size | Compact 0.94 · Default 1.00 · Large 1.12 | `--cf-ui-scale`; floors below are never crossed |
 | Palette | Neutral = instrument · Cool = editorial · Warm = ink | full semantic role set per skin |
 | Appearance | Light · Dark · System | `data-theme`; no wrong-mode flash before first paint |
@@ -187,7 +199,7 @@ own skill and is loaded after this file:
   gate, Comment surface, feedback pipeline, runtime mapping) and
   `resources/how-presentation-works.md`.
 - **Portal:** `cf-docs-portal/references/visual-craft.md` (page composition
-  gate, layers over sources, verification matrix) with
+  gate, layers over sources, record pointer, verification matrix) with
   `information-architecture.md`, `content-contract.md`, `operations.md`.
 
 ---

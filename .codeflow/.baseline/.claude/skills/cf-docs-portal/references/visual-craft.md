@@ -3,13 +3,13 @@
 **Required load order (do not skip):**
 
 1. [resources/utility-presentation-system.md](../resources/utility-presentation-system.md)
-   — shared doctrine: composition rule, page classes, supported carriers, tokens
-2. This file — the portal profile: page composition gate, layers, verification
+   is the shared doctrine: composition rule, page classes, supported carriers, tokens
+2. This file is the portal profile: page composition gate, layers, verification
 3. [information-architecture.md](information-architecture.md) before source roots / layers
 4. [content-contract.md](content-contract.md) before source interpretation changes
 5. [operations.md](operations.md) before install / publish / acceptance evidence
 6. Prefer [resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md)
-   as the shape of architecture pages
+   as the shape of an explanatory page
 
 If a page violates the canonical resource’s anti-patterns or fails the portal
 composition gate, **do not** treat it as craft-complete. Fix sources or refuse
@@ -24,8 +24,8 @@ clone the design-exploration board or copy present Comment chrome.
 ## 0. Page composition gate (before publish / browser verify)
 
 1. What **question** does this page answer better than the raw Markdown?
-2. Which page class is it (orient, architecture, technical/records, historical
-   decision), and does it carry that class's required carrier?
+2. Which page class is it (orient, architecture, reference, record pointer),
+   and does it carry that class's required carrier?
 3. Are concept → architecture → technical each complete for their audience?
 4. Does the architecture view survive sentence removal?
 5. Is every **claim** traceable to a repository source, while the page itself
@@ -39,15 +39,15 @@ or refuse decorative chrome.
 
 ## 1. How to think about a portal page
 
-The reader lands in a **docs shell** (nav, crumbs, search)—not a session
+The reader lands in a **docs shell** (nav, crumbs, search), not a session
 review. Your job is still structural: what do they **see** in the first
 screen of this layer, and does architecture use **layout** (stage, table,
 full-width figure) or only more prose under a heading?
 
-- **Concept** pages orient: one mental model, not a dump of every capability.
-- **Architecture** pages must work if sentences thin out—nodes and edges, not
-  caption chips restating paragraphs.
-- **Technical** pages are for lookup and evidence, not another essay.
+- The **Concept** panel orients: one mental model, not a dump of every capability.
+- The **Architecture** panel must work if sentences thin out: nodes and edges,
+  not caption chips restating paragraphs.
+- The **Technical** panel is for lookup and evidence, not another essay.
 
 Same utility craft as present; different job (durable source-linked guide). Do
 not copy present Comment chrome. Shape example:
@@ -65,30 +65,34 @@ not copy present Comment chrome. Shape example:
 ## 3. Layers composed from sources in place
 
 ```text
-purpose and mental model          (concept)
-  → capabilities and journeys
-    → architecture, decisions, work   (architecture)
-      → technical references, evidence  (technical)
+purpose and mental model              (concept)
+  -> capabilities and journeys
+    -> architecture and boundaries in effect   (architecture)
+      -> reference, operations and evidence    (technical)
+records: decisions, epics, tasks and specs are pointed to as folders
 ```
 
 Each layer complete for its audience. Architecture: full-width stages with
-margins and engineer-legible structure—not caption micro-boxes.
+margins and engineer-legible structure, not caption micro-boxes.
 
-Author the trio as depth-2 sections — `## Concept`, `## Architecture`,
-`## Technical` — in the repository source. The adapter renders them as a
+Author the trio as depth-2 sections, `## Concept`, `## Architecture` and
+`## Technical`, in the repository source. The adapter renders them as a
 **real altitude tablist**: exactly one layer visible at a time, arrow-key
 navigable, the selected layer recorded in the URL hash (`#architecture` loads
 that panel only). Fenced `text` stages render full-width. Raw source HTML
 stays escaped, so the grammar lives in Markdown, never hand-authored chrome.
 
-Composition gate by layer kind: an architecture-layer source needs the trio
-plus a subject-led stage (`cf-stage` or a justified figure); an orient or
-concept page leads with one governing claim, not a bullet wall; technical and
-record pages prefer tables, code, and evidence. Author the trio on **every**
-architecture-shaped source, never one hero page. Browser verification fails
+Composition gate by page class: every explanatory source (orient, architecture,
+reference that explains) carries the trio with one figure in Concept; an
+architecture page adds a subject-led stage (`cf-stage` or a justified figure);
+an orient page leads with one governing claim, not a bullet wall; reference
+lookups prefer tables, code, and evidence; the record pointer page is one table
+of folders with purpose, count and repository link and is never expanded into
+per-record pages. Author the trio on **every** explanatory source, never one
+hero page. Browser verification fails
 closed when a trio page shows more than one layer at once, and when an
-architecture-shaped layer contains zero altitude pages; it exercises every
-tabbed route, not the first it finds.
+explanatory page has no trio; it exercises every tabbed route, not the first
+it finds.
 
 A subject-led labeled figure is a `cf-stage` fence: node lines
 (`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger` /
@@ -102,7 +106,7 @@ fences as the fallback for shapes the flow grammar cannot express.
 
 - Bundled themes via `portal.config.json` map to the utility skins: **signal**
   → instrument (Archivo), **folio** → ink (IBM Plex Sans); light/dark from the
-  shell toggle. System-fallback faces only — no remote fonts.
+  shell toggle. System-fallback faces only, no remote fonts.
 - Author for type roles; themes own faces and scale.
 - Project may adapt utility once from brand; never feed portal palette/type/
   components back into the product design system.

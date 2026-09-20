@@ -4,9 +4,10 @@
 
 Start with the repository's existing Markdown, decisions, work records, and
 technical references as one authoritative graph. Generate one portal over that
-graph. The shipped starter scans `docs/` only; add a `project-management`
-source root and Records layer when those files exist. A portal is a reading and navigation view, not another documentation
-authority and not a folder browser.
+graph. The shipped starter scans `docs/` only. Decisions, epics, tasks and specs
+stay in the repository: the portal points to their folders from one generated
+pointer page and does not list them page by page. A portal is a reading and
+navigation view, not another documentation authority and not a folder browser.
 
 Use progressive depth where the source material supports it:
 
@@ -14,7 +15,7 @@ Use progressive depth where the source material supports it:
 concept and purpose
   -> capability or user journey
     -> system, surface, or owned area
-      -> technical reference, record, code, and evidence
+      -> technical reference, code, and evidence; records pointed to
 ```
 
 Collapse a layer when it adds no useful distinction. A tiny repository with a
@@ -23,8 +24,9 @@ README and a few short notes usually needs better Markdown, not a portal.
 ## Single-project repository
 
 Orient a reader around the product intent and its main journeys first. Connect
-those concepts to capabilities, architecture, decisions, delivery records, and
-implementation references through declared IDs and source links. Do not copy a
+those concepts to capabilities, architecture in effect and implementation
+references through source links; cite decisions by id, linking to the
+repository file. Do not copy a
 concept into every technical page. Prefer a stable route based on meaning over
 navigation based only on the current folder tree.
 
@@ -32,8 +34,8 @@ navigation based only on the current folder tree.
 
 Keep repository-wide purpose, shared journeys, platform boundaries, common
 architecture, vocabulary, and governance at the global level. Then provide
-drill-down by meaningful surface or owned area—for example web, iOS, Android,
-backend, data, or infrastructure—before module and file references.
+drill-down by meaningful surface or owned area, for example web, iOS, Android,
+backend, data, or infrastructure, before module and file references.
 
 Configure multiple `source_roots` and explicit layer paths/prefixes to assemble
 that view. Reader-facing routes use the semantic layer plus the path relative

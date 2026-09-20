@@ -24,8 +24,9 @@ one token contract | three skins × light/dark · type floors · Display panel @
 caption: authors compose the subject; the runtimes render it under one craft
 ```
 
-The portal is a composed visual presentation of the sources with supporting
-text, never the Markdown re-rendered; present is a composed review document,
+The portal is a guide to the project as it stands, a composed visual
+presentation of the sources with supporting text, never the Markdown
+re-rendered, and it points to decisions and work records as folders; present is a composed review document,
 never a chat answer restyled.
 
 ## Architecture
@@ -70,7 +71,7 @@ to the instrument skin and produce the same artifact.
 | Present blocks | `crates/codeflow-present` document schema under `.codeflow/schemas/present/` | present contract tests |
 | Type floors | micro 12.5 · caption 13 · ui 13.5 · body 15 px; measure 68ch; scales 0.94 / 1.00 / 1.12 | `utility-tokens.css` and `styles.css` values; token contract test |
 | Token equality | 16 semantic roles × instrument/editorial/ink × light/dark, plus three typeface stacks and the mono stack | `portal_utility_tokens_match_present_skins` in `crates/codeflow-core/tests/manifest_consistency.rs` |
-| Page classes | orient: claim + carrier; architecture: trio + stage; technical/records: tables and evidence; accepted ADRs exempt | rendered review per class; portal composition gate |
+| Page classes | orient, architecture and reference: the altitude trio with a figure in Concept, a stage on architecture pages; record pointer: one table of folders; records are not portal pages (ADR-0064) | rendered review per class; portal composition gate |
 | Precedence | shared resource is normative; ADR-0053's design-intent note is historical evidence | ADR-0063 |
 
 Unsupported carriers (tree and arbitrary diagram syntaxes on both surfaces;
