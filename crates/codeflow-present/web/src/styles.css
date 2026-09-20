@@ -162,22 +162,22 @@
 }
 
 :root[data-cf-theme="ink"][data-cf-mode-resolved="light"] {
-  --cf-canvas: #f6efe3;
-  --cf-surface: #fbf6ec;
-  --cf-surface-raised: #f3eadc;
-  --cf-surface-subtle: #e8dccb;
+  --cf-canvas: #f6f3ee;
+  --cf-surface: #fcfaf6;
+  --cf-surface-raised: #f4f0e9;
+  --cf-surface-subtle: #eae4da;
   --cf-text: #2a2116;
-  --cf-text-muted: #5c5144;
-  --cf-border: #d9cbb8;
-  --cf-border-strong: #8a7a66;
-  --cf-accent: #8a4b24;
-  --cf-accent-strong: #6e3b1b;
-  --cf-accent-soft: #f3e6d6;
-  --cf-focus: #8a4b24;
+  --cf-text-muted: #5b5348;
+  --cf-border: #dcd4c8;
+  --cf-border-strong: #857a6c;
+  --cf-accent: #8a5636;
+  --cf-accent-strong: #6d4128;
+  --cf-accent-soft: #f3ece3;
+  --cf-focus: #8a5636;
   --cf-positive: #3d6b3a;
   --cf-warning: #a46a16;
   --cf-danger: #9b1c1c;
-  --cf-diagram-line: #5c5144;
+  --cf-diagram-line: #5b5348;
 }
 
 :root[data-cf-theme="ink"][data-cf-mode-resolved="dark"] {
