@@ -12,8 +12,19 @@ const KIB: usize = 1024;
 // limit with headroom. Detailed workflow rationale moved behind a mandatory
 // stage route; the semantic tests below pin both the entry kernel and owner.
 const ROOT_AGENTS_MAX_BYTES: usize = 31 * KIB;
-const STANDARD_AGENTS_MAX_BYTES: usize = 28 * KIB;
-const MINIMAL_AGENTS_MAX_BYTES: usize = 16 * KIB;
+// Raised from 28 KiB by TSK-041, which repairs three contract facts that are
+// the contract text itself and cannot be factored into an on-demand resource:
+// three registered subcommands missing from the mechanics row, `.grok/hooks/`
+// named inside the in-session guard plane, and the one statement that the
+// ADR-0018 headless prohibition is instruction-only (ADR-0018 is append-only,
+// so AGENTS is its only home). The Git-rules intro was compressed by 102 bytes
+// in the same change to absorb what it could without deleting a duty.
+const STANDARD_AGENTS_MAX_BYTES: usize = 28 * KIB + 256;
+// Raised from 16 KiB by TSK-041 for the same reason as the standard budget:
+// the minimal-tier inventory must name `.grok/hooks/` inside the in-session
+// guard plane, and the inventory is the contract text. The sentence was
+// compressed by 63 bytes in the same change.
+const MINIMAL_AGENTS_MAX_BYTES: usize = 16 * KIB + 256;
 const STANDARD_CLAUDE_MAX_BYTES: usize = 6 * KIB;
 const MINIMAL_CLAUDE_MAX_BYTES: usize = 3 * KIB;
 const ROUTING_SKILL_MAX_BYTES: usize = 29 * KIB;
