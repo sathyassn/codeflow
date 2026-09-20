@@ -42,8 +42,9 @@ cargo install --path crates/codeflow-cli
 
 On native Windows, build with Cargo: the PowerShell installer is a pending
 3.0.0 release target, not a published asset. Git for Windows is required.
-WSL2 uses the Linux installer and is the
-preferred Windows route for Linux-native tooling or Claude sandboxing. See the
+WSL2 builds with Cargo like any other Unix host and is the preferred Windows
+route for Linux-native tooling or Claude sandboxing; once releases are public
+it uses the shell installer with the Linux archive. See the
 platform-assurance section in the adoption guide before high-blast-radius work.
 
 ### Once codeflow's releases are public
@@ -119,7 +120,9 @@ hooks, in-session PreToolUse guards (`git-guard`, `exec-guard`), CI, and remote
 branch protection. Installed files are not coverage — verify hook execution,
 harness trust, required CI results, and actual remote rules before claiming a
 plane effective. Protected-branch merges land via a PR **merged by a human**,
-or `codeflow integrate`; an agent never merges into protected. Plane-by-plane
+or `codeflow integrate`; an agent never merges into protected. A human can
+override the git-hook plane locally with `CODEFLOW_HUMAN_OVERRIDE=1`; git-guard
+never honors that env and blocks agents from setting it. Plane-by-plane
 detail: [the enforcement matrix](docs/adoption.md#enforcement-planes--who-catches-what).
 
 ## Docs

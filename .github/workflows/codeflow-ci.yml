@@ -138,7 +138,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # 24.18.0 is the documentation portal's pin, owned by
-      # docs-portal/.node-version; this job runs only the portal suite.
+      # docs-portal/.node-version; the following Node steps run only the
+      # portal adapter-test suite.
       - uses: actions/setup-node@v4
         with:
           node-version: 24.18.0
