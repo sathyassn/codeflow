@@ -1358,6 +1358,83 @@ fn portal_utility_tokens_match_present_skins() {
         }
     }
 
+    // The settled TSK-045 token table. Equality between the sheets is not
+    // enough on its own: a coordinated retune of all three would still pass it,
+    // so every role of every skin and mode pair is pinned to its settled value
+    // in each of the three sheets.
+    const SETTLED_ROLES: [&str; 14] = [
+        "canvas",
+        "surface",
+        "surface-raised",
+        "surface-subtle",
+        "text",
+        "text-muted",
+        "border",
+        "border-strong",
+        "accent",
+        "accent-strong",
+        "accent-soft",
+        "positive",
+        "warning",
+        "danger",
+    ];
+    const SETTLED: [[&str; 14]; 6] = [
+        [
+            "#f2f3f4", "#ffffff", "#f7f8f9", "#e8eaec", "#15181b", "#4d555d", "#d5d9dd",
+            "#6d767f", "#1f6fb2", "#185c95", "#e8f1f9", "#2e7d57", "#9a5f0f", "#9b1c1c",
+        ],
+        [
+            "#0f1113", "#161a1e", "#1d2227", "#252b31", "#e8ebee", "#a8b0b8", "#2e353c",
+            "#7a838c", "#6aaee8", "#8fc2f0", "#15283a", "#4fb183", "#d99a45", "#ff7b6e",
+        ],
+        [
+            "#eef2f6", "#fafcfe", "#f2f5f9", "#e2e8ef", "#171c22", "#4a5563", "#cfd8e2",
+            "#6b7a8c", "#2f5f8a", "#244a6d", "#e3edf6", "#246b4a", "#9a6b1a", "#a33a32",
+        ],
+        [
+            "#0f141a", "#161c24", "#1d252f", "#26303b", "#e6ecf2", "#a4b0bd", "#2d3846",
+            "#78889a", "#86b4d6", "#a5c8e4", "#182a3b", "#4fb183", "#d9a85a", "#ff8a80",
+        ],
+        [
+            "#f6f3ee", "#fcfaf6", "#f4f0e9", "#eae4da", "#2a2116", "#5b5348", "#dcd4c8",
+            "#857a6c", "#8a5636", "#6d4128", "#f3ece3", "#3d6b3a", "#8f5a12", "#9b1c1c",
+        ],
+        [
+            "#1c1510", "#261d16", "#30261e", "#3b2f25", "#f3eadc", "#c6b6a3", "#45372b",
+            "#927e69", "#dba672", "#e6bd8c", "#3e2c1c", "#7cbc74", "#d9a85a", "#ff8a80",
+        ],
+    ];
+    for index in 0..pairs.len() {
+        let (label, portal_marker, present_marker) = pairs[index];
+        for (sheet, css, marker) in [
+            ("starter portal", &portal, portal_marker),
+            ("live portal", &live_portal, portal_marker),
+            ("present", &present, present_marker),
+        ] {
+            let block = block_after(css, marker);
+            for (role, settled) in SETTLED_ROLES.iter().zip(SETTLED[index].iter()) {
+                match block.get(*role) {
+                    Some(actual) if actual == settled => {}
+                    actual => drift.push(format!(
+                        "{label}: {sheet} --cf-{role}: {actual:?} != settled {settled:?}"
+                    )),
+                }
+            }
+        }
+    }
+    // Present's bare :root default carries the instrument light skin, so a
+    // present document that has not yet had its theme attribute written paints
+    // the settled instrument values rather than a stale earlier palette.
+    let present_default = block_after(&present, ":root {");
+    for (role, settled) in SETTLED_ROLES.iter().zip(SETTLED[0].iter()) {
+        match present_default.get(*role) {
+            Some(actual) if actual == settled => {}
+            actual => drift.push(format!(
+                "present :root default: --cf-{role}: {actual:?} != settled {settled:?}"
+            )),
+        }
+    }
+
     let typefaces = [
         (
             "portal instrument sans vs present instrument typeface",
