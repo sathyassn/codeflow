@@ -3,22 +3,22 @@ id: ADR-NNNN
 title: <short decision title>
 date: YYYY-MM-DD
 status: accepted          # proposed | accepted | superseded
-superseded_by: null       # ADR id — set on supersession; a dated Note may also be appended
+superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
 architecture_impact: none # none | one line naming what in architecture.md changes
 ---
 
 <!-- ADRs are append-only: written at the moment of decision. Never rewrite
-     existing content — you may set superseded_by, or append a clearly-dated
+     existing content; you may set superseded_by, or append a clearly-dated
      Note. Warranted at Tier-3 decision
-     points only — new dependency, schema change, boundary change — not one
+     points only (new dependency, schema change, boundary change), not one
      per task. If architecture_impact is not none, update docs/architecture.md
      in the same PR. -->
 
-# ADR-NNNN — <short decision title>
+# ADR-NNNN: <short decision title>
 
 ## Context
 
-<!-- What forced a decision: the constraint, not the history. 2–5 sentences. -->
+<!-- What forced a decision: the constraint, not the history. 2 to 5 sentences. -->
 
 ## Decision
 

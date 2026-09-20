@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: none — confirms ADR-0048/0049 runtimes; adds shared utility presentation design-system boundary
 ---
 
-# ADR-0053 — utility presentation design system with Preact present chrome and Starlight portal
+# ADR-0053: utility presentation design system with Preact present chrome and Starlight portal
 
 ## Context
 

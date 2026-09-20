@@ -10,7 +10,7 @@ architecture_impact: none
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0009 — human authorization out-of-band; local guards are the honest-agent floor
+# ADR-0009: human authorization out-of-band; local guards are the honest-agent floor
 
 ## Context
 

@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — plans record accountable primaries separately from evidenced execution routes
 ---
 
-# ADR-0060 — separate primary accountability from worker execution
+# ADR-0060: separate primary accountability from worker execution
 
 ## Context
 

@@ -10,7 +10,7 @@ architecture_impact: docs/architecture.md — the Codex parity note records that
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0014 — Codex credential read-guard via a named permission profile (cf-guard)
+# ADR-0014: Codex credential read-guard via a named permission profile (cf-guard)
 
 ## Context
 

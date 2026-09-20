@@ -1,13 +1,13 @@
 ---
 id: ADR-0002
-title: sync push policy — push_to_protected warn on this repo
+title: "sync push policy: push_to_protected warns on this repo"
 date: 2026-06-12
 status: superseded
 superseded_by: ADR-0006
 architecture_impact: none
 ---
 
-# ADR-0002 — sync push policy: push_to_protected warn on this repo
+# ADR-0002: sync push policy: push_to_protected warn on this repo
 
 ## Context
 

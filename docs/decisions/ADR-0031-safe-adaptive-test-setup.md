@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: The existing test setup adapter now consumes release-embedded templates, limits automatic detection to root markers, preserves populated or malformed project configs, and treats configured-gate parse failures as violations; legacy structural blocks remain loadable but explicitly unenforced.
 ---
 
-# ADR-0031 — safe adaptive test setup
+# ADR-0031: safe adaptive test setup
 
 ## Context
 

@@ -7,7 +7,7 @@ superseded_by: ADR-0062
 architecture_impact: docs/releasing.md — one maintained candidate PR and exact-source publication guards replace the manual release branch and tag push
 ---
 
-# ADR-0061 — automate candidates; authorize exact-source publication
+# ADR-0061: automate candidates; authorize exact-source publication
 
 ## Context
 

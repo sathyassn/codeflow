@@ -1,6 +1,6 @@
 ---
 id: ADR-0017
-title: codeflow ci — CI-portable, binary-sourced verification
+title: "codeflow ci: CI portable, binary sourced verification"
 date: 2026-07-11
 status: accepted
 superseded_by: null
@@ -10,7 +10,7 @@ architecture_impact: docs/architecture.md — the CI enforcement plane stops re-
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0017 — codeflow ci: CI-portable, binary-sourced verification
+# ADR-0017: codeflow ci: CI-portable, binary-sourced verification
 
 ## Context
 

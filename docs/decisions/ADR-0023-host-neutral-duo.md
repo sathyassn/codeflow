@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: scaffold orchestration is host-neutral; doctor now verifies both interactive lane prerequisites; batch workflow naming no longer implies cross-vendor assurance
 ---
 
-# ADR-0023 — host-neutral Claude+Codex duo
+# ADR-0023: host-neutral Claude+Codex duo
 
 ## Context
 

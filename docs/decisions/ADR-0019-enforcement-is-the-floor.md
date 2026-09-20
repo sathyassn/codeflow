@@ -1,6 +1,6 @@
 ---
 id: ADR-0019
-title: enforcement is the floor — tiers scale project-management, not discipline
+title: "enforcement is the floor: tiers scale project management, not discipline"
 date: 2026-07-11
 status: accepted
 superseded_by: null
@@ -10,7 +10,7 @@ architecture_impact: tier-boundary only — the four enforcement planes now inst
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0019 — enforcement is the floor
+# ADR-0019: enforcement is the floor
 
 ## Context
 

@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: workflow, duo quality, reviewer, develop-loop, and model-evaluation artifacts share one execution-focus, deferral, and blocker-navigation rule
 ---
 
-# ADR-0038 — critical-path focus and deferral stewardship
+# ADR-0038: critical-path focus and deferral stewardship
 
 ## Context
 

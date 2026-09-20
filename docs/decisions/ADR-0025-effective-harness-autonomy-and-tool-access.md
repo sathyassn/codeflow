@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: scaffolded Claude and Codex settings now enable real public-network and tool autonomy while keeping secret, destructive, privileged, private-network, and unsandboxed boundaries explicit
 ---
 
-# ADR-0025 — effective harness autonomy and tool access
+# ADR-0025: effective harness autonomy and tool access
 
 ## Context
 

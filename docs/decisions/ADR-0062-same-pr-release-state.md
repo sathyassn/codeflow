@@ -7,7 +7,7 @@ supersedes: ADR-0061
 architecture_impact: docs/releasing.md — cumulative pending state replaces candidate branches and release-only PRs while cargo-dist remains the sole publisher
 ---
 
-# ADR-0062 — keep release state in the normal work PR
+# ADR-0062: keep release state in the normal work PR
 
 ## Context
 

@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: delegate arm validates non-empty canonical UTF-8 prompt text with internal LF, no terminal line break, and no editor control characters before creating turn state; the host still owns transport and exact delivery
 ---
 
-# ADR-0037 — canonical delegate prompt boundary
+# ADR-0037: canonical delegate prompt boundary
 
 ## Context
 

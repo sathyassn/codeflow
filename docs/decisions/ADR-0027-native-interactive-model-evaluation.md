@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — the scaffold gains a model-qualification skill with requirement traceability, exact disposable fixtures, deterministic scoring, comparison, and fail-closed cleanup
 ---
 
-# ADR-0027 — native-interactive model evaluation
+# ADR-0027: native-interactive model evaluation
 
 ## Context
 

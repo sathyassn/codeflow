@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: the scaffold contract routes every non-trivial repository task through one stage-aware Claude+Codex entry point and adds an explicit bounded-parallel integration contract
 ---
 
-# ADR-0024 — stage-aware duo and bounded parallelism
+# ADR-0024: stage-aware duo and bounded parallelism
 
 ## Context
 
