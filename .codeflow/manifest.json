@@ -473,7 +473,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "4e8a94874fd63877ea61898327ef03bba246f86b778591761cbc545a9139358d",
+      "sha256": "329a6bf8745dfcfd456f2aee4dbad761562d1854e0a2c3bdf32f3ffc5d4c3027",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1019,7 +1019,7 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "90ed9fb4b87bc313ce7cf3ce9f45058a988a6c6cf349a6b7507de0f7beb67e5e",
+      "sha256": "63b5e306781e774ab0a445b39f6f8f144852f0da26ffbed65e8c2d2225879278",
       "exec": false
     },
     ".gitignore": {
@@ -1037,7 +1037,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "f714f747afe2db73adf9fb4e5a10afa197bb4e47c9977cdb46c668a435df5ca7",
+      "sha256": "4cea2d8ed87f0770c21a7ef55dcb9d0dae7321a564ed0d05b8aa32209c320031",
       "exec": false
     },
     "CLAUDE.md": {
