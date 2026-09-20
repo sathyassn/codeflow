@@ -1362,7 +1362,7 @@ fn portal_utility_tokens_match_present_skins() {
     // enough on its own: a coordinated retune of all three would still pass it,
     // so every role of every skin and mode pair is pinned to its settled value
     // in each of the three sheets.
-    const SETTLED_ROLES: [&str; 14] = [
+    let settled_roles: [&str; 14] = [
         "canvas",
         "surface",
         "surface-raised",
@@ -1378,7 +1378,7 @@ fn portal_utility_tokens_match_present_skins() {
         "warning",
         "danger",
     ];
-    const SETTLED: [[&str; 14]; 6] = [
+    let settled_table: [[&str; 14]; 6] = [
         [
             "#f2f3f4", "#ffffff", "#f7f8f9", "#e8eaec", "#15181b", "#4d555d", "#d5d9dd",
             "#6d767f", "#1f6fb2", "#185c95", "#e8f1f9", "#2e7d57", "#9a5f0f", "#9b1c1c",
@@ -1412,7 +1412,7 @@ fn portal_utility_tokens_match_present_skins() {
             ("present", &present, present_marker),
         ] {
             let block = block_after(css, marker);
-            for (role, settled) in SETTLED_ROLES.iter().zip(SETTLED[index].iter()) {
+            for (role, settled) in settled_roles.iter().zip(settled_table[index].iter()) {
                 match block.get(*role) {
                     Some(actual) if actual == settled => {}
                     actual => drift.push(format!(
@@ -1426,7 +1426,7 @@ fn portal_utility_tokens_match_present_skins() {
     // present document that has not yet had its theme attribute written paints
     // the settled instrument values rather than a stale earlier palette.
     let present_default = block_after(&present, ":root {");
-    for (role, settled) in SETTLED_ROLES.iter().zip(SETTLED[0].iter()) {
+    for (role, settled) in settled_roles.iter().zip(settled_table[0].iter()) {
         match present_default.get(*role) {
             Some(actual) if actual == settled => {}
             actual => drift.push(format!(
