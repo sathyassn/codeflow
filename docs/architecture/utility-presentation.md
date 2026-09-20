@@ -53,6 +53,13 @@ the portal's bundled theme names map `signal` → instrument and `folio` → ink
 at build time. The Display panel on both surfaces sets Font, Size (Compact
 0.94 / Default / Large 1.12), Palette (Neutral / Cool / Warm) and Appearance
 (Light / Dark / System) through root data attributes read before first paint.
+Each Palette pill carries a canvas swatch and an accent swatch read from the
+live custom properties of the skin it selects, so the control shows the three
+families rather than naming them.
+
+`codeflow present export --theme` accepts `editorial`, `instrument` and
+`technical`. `technical` is the documented alias of `instrument`: both resolve
+to the instrument skin and produce the same artifact.
 
 ## Technical
 

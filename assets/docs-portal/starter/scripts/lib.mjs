@@ -615,9 +615,9 @@ function validPortSuffix(value) {
 // Reader-selectable skins, not only the initial config theme. Browser tests
 // bind these validation backgrounds to the actual utility CSS.
 export const PORTAL_ACCENT_BACKGROUNDS = Object.freeze({
-  instrument: { light: ["#ffffff", "#f5f8f5", "#e8eee9", "#eaf2f9"], dark: ["#121c18", "#182420", "#1e2c26", "#153040"] },
-  editorial: { light: ["#fafaf8", "#f1f1ee", "#e4e4df", "#e8eef1"], dark: ["#1f1c1a", "#282422", "#322e2b", "#1e2a30"] },
-  ink: { light: ["#fcfaf6", "#f4f0e9", "#eae4da", "#f3ece3"], dark: ["#241e17", "#2e261e", "#3a3127", "#3a2a1c"] },
+  instrument: { light: ["#ffffff", "#f7f8f9", "#e8eaec", "#e8f1f9"], dark: ["#161a1e", "#1d2227", "#252b31", "#15283a"] },
+  editorial: { light: ["#fafcfe", "#f2f5f9", "#e2e8ef", "#e3edf6"], dark: ["#161c24", "#1d252f", "#26303b", "#182a3b"] },
+  ink: { light: ["#fcfaf6", "#f4f0e9", "#eae4da", "#f3ece3"], dark: ["#261d16", "#30261e", "#3b2f25", "#3e2c1c"] },
 });
 
 export function validatePrimitiveTokens(value, theme) {

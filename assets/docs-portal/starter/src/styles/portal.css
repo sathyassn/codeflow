@@ -142,6 +142,22 @@ nav.sidebar .sidebar-pane { border-inline-end: 1px solid var(--cf-border); }
   color: var(--cf-text);
   cursor: pointer;
 }
+.portal-display-panel .pills button .sw {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1875rem;
+  margin-inline-end: 0.375rem;
+  vertical-align: -0.0625rem;
+}
+.portal-display-panel .pills button .sw i {
+  display: block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--cf-border-strong);
+}
+.portal-display-panel .pills button .sw-canvas { background: var(--pill-canvas, var(--cf-canvas)); }
+.portal-display-panel .pills button .sw-accent { background: var(--pill-accent, var(--cf-accent)); }
 .portal-display-panel .pills button[aria-pressed="true"] {
   background: var(--cf-text);
   color: var(--cf-surface);
