@@ -1707,3 +1707,104 @@ fn task_home_inventory_limit_blocks_both_hook_and_ci() {
     assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
     assert!(ci_error.contains("inventory exceeds 16384"), "{ci_error}");
 }
+
+// --- TSK-041 CLI help-string regressions --------------------------------------
+
+/// Run `codeflow <args>` purely for its help output, with no repo context.
+fn help_text(args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("run codeflow {args:?}: {e}"));
+    assert!(
+        output.status.success(),
+        "codeflow {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("utf-8 help output")
+}
+
+/// The four hook events `delegate-turn` actually dispatches on
+/// (`codeflow_core::delegate::handle_hook`).
+const DELEGATE_TURN_EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"];
+
+/// DEFECT 4: `codeflow hook --help` names every delegate event. The help used
+/// to advertise only `Stop`/`StopFailure`, hiding the schema-v2 lifecycle
+/// events a caller must wire.
+#[test]
+fn hook_help_names_every_delegate_turn_event() {
+    let help = help_text(&["hook", "--help"]);
+    let line = help
+        .lines()
+        .find(|line| line.trim_start().starts_with("- delegate-turn:"))
+        .unwrap_or_else(|| panic!("hook --help has no delegate-turn entry:\n{help}"));
+    for event in DELEGATE_TURN_EVENTS {
+        assert!(
+            line.contains(event),
+            "hook --help delegate-turn entry omits {event}: {line}"
+        );
+    }
+    // NEGATIVE: the assertion is not satisfied by a line that drops one event.
+    let degraded = line.replace("UserPromptSubmit", "");
+    assert!(
+        !DELEGATE_TURN_EVENTS.iter().all(|e| degraded.contains(e)),
+        "the check would pass with an event removed"
+    );
+}
+
+/// DEFECT 5: `doctor --help` is generated from the check registry. Every
+/// registered check name appears; nothing is hand-listed beside it.
+#[test]
+fn doctor_help_equals_the_check_registry() {
+    let help = help_text(&["doctor", "--help"]);
+    let registered = codeflow_core::doctor::check_names();
+    assert!(!registered.is_empty(), "check registry is empty");
+
+    let about = help
+        .lines()
+        .find(|line| line.starts_with("Health checks:"))
+        .unwrap_or_else(|| panic!("doctor --help has no derived about line:\n{help}"));
+    let listed: Vec<&str> = about
+        .trim_start_matches("Health checks:")
+        .split(". See")
+        .next()
+        .expect("about line has a check list")
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    assert_eq!(
+        listed, registered,
+        "doctor --help must list exactly the registry's check names, in order"
+    );
+
+    // `doctor --list` is the registry's own rendering; help and list agree.
+    let listing = help_text(&["doctor", "--list"]);
+    for name in &registered {
+        assert!(
+            listing.contains(name),
+            "doctor --list omits registered check {name}"
+        );
+    }
+}
+
+/// DEFECT 9: the `git-hook` help names the path the install code writes the
+/// shims to — compared against the constant that code uses, not a literal.
+#[test]
+fn git_hook_help_matches_the_install_path_constant() {
+    let installed = codeflow_core::scaffold::detect::CODEFLOW_HOOKS_PATH;
+    let help = help_text(&["--help"]);
+    let line = help
+        .lines()
+        .find(|line| line.trim_start().starts_with("git-hook"))
+        .unwrap_or_else(|| panic!("codeflow --help has no git-hook row:\n{help}"));
+    assert!(
+        line.contains(installed),
+        "git-hook help must name {installed}, got: {line}"
+    );
+    // NEGATIVE: the old, wrong path must not reappear.
+    assert!(
+        !line.contains(".git/hooks"),
+        "git-hook help names .git/hooks, which the install code does not use"
+    );
+}

@@ -37,7 +37,8 @@ pub enum HookName {
     SessionOrient,
     /// `SessionEnd`: append the session record to the ledger.
     SessionSummary,
-    /// `Stop` / `StopFailure`: persist and signal one interactive delegate turn.
+    /// `SessionStart` / `UserPromptSubmit` / `Stop` / `StopFailure`: track an
+    /// interactive delegate lifecycle (--state-dir); legacy --result signals termination.
     DelegateTurn,
 }
 

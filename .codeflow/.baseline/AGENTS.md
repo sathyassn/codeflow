@@ -55,7 +55,7 @@ it as non-trivial.
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |
 | Get an outside opinion | `/cf-consult` (read-only) or `/cf-delegate` (edit). Host the TTY with `/cf-herdr` when `HERDR_ENV=1` |
-| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs|--portal <dir>]`, `portal setup --path <dir>`, `portal transfer --confirm`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>`, `present open|list|show|update|feedback|resolve|history|export|close|clear` |
+| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs|--portal <dir>]`, `portal setup --path <dir>`, `portal transfer --confirm`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `estimate`, `policy`, `ci`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>`, `present open|list|show|update|feedback|resolve|history|export|close|clear` |
 
 ## Planning and tracking
 
@@ -91,19 +91,20 @@ it as non-trivial.
 
 ## Git rules
 
-Four planes provide defense in depth: git hooks, in-session `git-guard`,
-scaffolded CI, and configured remote branch protection. Hooks and CI share
-`.codeflow/policy.json` and the `codeflow ci` checks; remote setup derives its
-supported rules from that policy (CodeFlow ADR-0017). Installed files alone do
-not prove active enforcement: verify hook execution, harness trust and event
-support, CI results, and actual remote rules. Interactive Codex needs the
-one-time `/hooks` trust; other harnesses need their qualified hook contract.
-Local checks provide required fast feedback but are editable, not an
-unbypassable security boundary. CI becomes a merge gate only where the remote
-requires its result; remote authority also depends on permissions and bypass
-settings. Report missing planes without relaxing task safety or review.
-Headless task execution remains prohibited (CodeFlow ADR-0018), independently
-of whether a particular harness can run hooks in that mode. See cf-method,
+Four planes provide defense in depth: git hooks; in-session guards
+(`.claude/settings.json`, `.codex/`, `.grok/hooks/`); scaffolded CI; and
+configured remote branch protection. Hooks and CI share `.codeflow/policy.json`
+and the `codeflow ci` checks; remote setup derives its supported rules from that
+policy (CodeFlow ADR-0017). Installed files do not prove active enforcement:
+verify hook execution, harness trust and event support, CI results, and actual
+remote rules. Interactive Codex needs the one-time `/hooks` trust; other
+harnesses need their qualified hook contract. Local checks give required fast
+feedback but are editable, not an unbypassable security boundary. CI gates
+merges only where the remote requires its result; remote authority also depends
+on permissions and bypass settings. Report missing planes without relaxing task
+safety or review. Headless task execution stays prohibited (CodeFlow ADR-0018)
+whether or not a harness runs hooks in that mode; that prohibition is
+instruction-only — CodeFlow cannot technically prevent it. See cf-method,
 "Why the git boundary is remote." The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/

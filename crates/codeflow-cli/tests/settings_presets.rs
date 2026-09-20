@@ -616,6 +616,112 @@ fn authenticated_tool_configuration_remains_available() {
     }
 }
 
+/// Privilege-escalation command patterns (TSK-041 defect 2). Claude exposes
+/// two shell tools — `Bash` and `PowerShell` — and a permission rule is keyed
+/// by the tool that carries the command, so `Bash(...)` alone leaves the
+/// Windows/graphical launchers ungated on the `PowerShell` tool. The shell guard
+/// matcher (`^(Bash|PowerShell)$`) already covers both; the permission layer
+/// now does too.
+const PRIVILEGE_ESCALATION_PATTERNS: [&str; 8] = [
+    "sudo *",
+    "su *",
+    "doas *",
+    "pkexec *",
+    "gsudo *",
+    "runas *",
+    "Start-Process -Verb RunAs*",
+    "Start-Process * -Verb RunAs*",
+];
+
+/// The shell tools Claude exposes; every escalation pattern is gated for both.
+const SHELL_TOOLS: [&str; 2] = ["Bash", "PowerShell"];
+
+/// DEFECT 2 (positive): every privilege-escalation pattern is at the ask tier
+/// for both shell tools, in every preset.
+#[test]
+fn privilege_escalation_is_asked_for_both_shell_tools() {
+    for name in preset_files() {
+        let ask = perm_array(&load(&name), "ask");
+        for tool in SHELL_TOOLS {
+            for pattern in PRIVILEGE_ESCALATION_PATTERNS {
+                let rule = format!("{tool}({pattern})");
+                assert!(
+                    ask.contains(&rule),
+                    "{name}: ask missing {rule:?} — a rule keyed to the other \
+                     shell tool does not gate this one"
+                );
+            }
+        }
+    }
+}
+
+/// DEFECT 2 (negative): ask-tier only, never allow. This is the assertion that
+/// fails if any escalation pattern is promoted into `allow`, under any tool
+/// prefix and in any preset — including `bypass-sandboxed`, where an `ask` rule
+/// is the only thing that still prompts.
+#[test]
+fn privilege_escalation_is_never_promoted_to_allow() {
+    for name in preset_files() {
+        let value = load(&name);
+        let allow = perm_array(&value, "allow");
+        for pattern in PRIVILEGE_ESCALATION_PATTERNS {
+            for entry in &allow {
+                let inner = entry
+                    .split_once('(')
+                    .and_then(|(_, rest)| rest.strip_suffix(')'))
+                    .unwrap_or(entry.as_str());
+                assert_ne!(
+                    inner, pattern,
+                    "{name}: privilege escalation {pattern:?} was promoted to \
+                     allow — this family is ask-tier only, never allow"
+                );
+            }
+        }
+    }
+}
+
+/// DEFECT 2 companion: adding the ask entries must not have relaxed anything
+/// else. The non-relaxable secret-read prohibitions and the fail-closed
+/// sandbox defaults are re-asserted here, in the same run that proves the new
+/// ask entries, so a widening edit cannot land alongside them unnoticed.
+#[test]
+fn escalation_additions_leave_prohibitions_and_sandbox_unchanged() {
+    for name in preset_files() {
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        let allow = perm_array(&value, "allow");
+
+        // The secret-file read denies survive, and nothing re-grants them.
+        for rule in CLAUDE_SENSITIVE_READ_DENIES {
+            assert!(
+                deny.iter().any(|entry| entry == rule),
+                "{name}: non-relaxable read deny {rule:?} disappeared"
+            );
+        }
+        for rule in &deny {
+            assert!(
+                !allow.iter().any(|entry| entry == rule),
+                "{name}: {rule:?} is both denied and allowed"
+            );
+        }
+
+        // The sandbox stays enabled and fail-closed, with no broad static
+        // exclusion smuggled in beside the new ask entries.
+        let sandbox = &value["sandbox"];
+        assert_eq!(sandbox["enabled"], true, "{name}: sandbox disabled");
+        assert_eq!(
+            sandbox["failIfUnavailable"], true,
+            "{name}: sandbox must stay fail-closed"
+        );
+        assert!(
+            sandbox["excludedCommands"]
+                .as_array()
+                .is_none_or(std::vec::Vec::is_empty),
+            "{name}: a broad static sandbox exclusion appeared"
+        );
+    }
+}
+
 #[test]
 fn every_preset_has_a_fail_closed_autonomous_sandbox() {
     // Broad public access is available to both native web tools and sandboxed
