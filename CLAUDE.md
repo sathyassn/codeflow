@@ -25,6 +25,10 @@ or one obvious local check.
   in the active host (or user settings) and supply
   `autoMode.classifyAllShell` at user/CLI scope. `/cf-customize` canaries the
   effective mode; never claim the repo file enabled it.
+- `.claude/settings.json` also sets `includeCoAuthoredBy` to false and an
+  empty `attribution` for commit and PR with the session link off, so the
+  host never injects the AI attribution that project policy forbids; the commit-msg hook and
+  git-guard remain the floor if a host ignores the setting.
 - The AGENTS.md git rules are **hook-enforced** here — the commit-msg hook and
   `git-guard` (wired in `.claude/settings.json`) block violations before they land, so
   fix the cause, never route around them. Full rules: AGENTS.md, "Git rules."

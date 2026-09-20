@@ -303,5 +303,11 @@
       ]
     }
   },
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  }
 }
