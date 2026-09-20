@@ -120,9 +120,14 @@ monorepos see
 
 One policy (`.codeflow/policy.json`), four complementary planes: git client
 hooks, in-session PreToolUse guards (`git-guard`, `exec-guard`), CI, and remote
-branch protection. Installed files are not coverage. Verify hook execution,
-harness trust, required CI results, and actual remote rules before claiming a
-plane effective. Protected-branch merges land via a PR **merged by a human**,
+branch protection. Minimal init scaffolds local hooks, in-session settings, and
+CI while preserving an existing hook manager; it does not configure remote
+branch protection. Installed files alone do not make those planes effective.
+Verify hook execution, harness trust and event support, required CI results,
+and actual remote rules, permissions, and bypasses before claiming a plane
+effective. Codex-driven work receives the git-hook plane where those hooks are
+installed and executed. CI becomes a merge gate when the remote requires its
+result. Protected-branch merges land via a PR **merged by a human**,
 or `codeflow integrate`; an agent never merges into protected. A human can
 override the git-hook plane locally with `CODEFLOW_HUMAN_OVERRIDE=1`; git-guard
 never honors that env and blocks agents from setting it. Plane-by-plane
