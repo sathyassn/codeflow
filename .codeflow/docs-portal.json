@@ -138,7 +138,7 @@
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
-      "pristine_sha256": "acc48812c9a9355202f044185cf0aec6624181eae33503ca3750773c5ff8cde1"
+      "pristine_sha256": "8e6b5216ed0b5f42cb562d1def69e0ce8cd7b8e5c481888378e025365513b0d9"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
