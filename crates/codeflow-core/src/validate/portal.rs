@@ -22,6 +22,8 @@ use crate::scaffold::sha256_hex;
 use crate::strict_json::parse_strict_json;
 
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+const PAGEFIND_ENTRY_PATH: &str = "dist/pagefind/pagefind-entry.json";
+const MAX_PAGEFIND_ENTRY_BYTES: u64 = 1024 * 1024;
 const MAX_PAGES: usize = 10_000;
 const MAX_REPOSITORY_FILES: usize = 100_000;
 const MAX_GIT_TREE_BYTES: u64 = 64 * 1024 * 1024;
@@ -899,6 +901,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
     }
     let actual_artifacts = collect_dist_artifacts(&portal, &mut report);
+    verify_pagefind_entry(&portal, &actual_artifacts.paths, &mut report);
     for actual in actual_artifacts.paths.difference(&artifact_paths) {
         report
             .issues
@@ -2346,6 +2349,78 @@ fn collect_dist_artifacts_with_entry_limit(
         report,
     );
     DistArtifactInventory { paths, total_bytes }
+}
+
+/// Refuse a built Pagefind entry file that carries no usable search index.
+///
+/// Pagefind writes this file last, so a truncated, empty or hand-edited entry
+/// is the shape a broken search build takes while every page artifact still
+/// looks complete. Every refusal names the file so the operator can delete the
+/// build and run it again.
+fn verify_pagefind_entry(
+    portal: &Path,
+    artifacts: &BTreeSet<String>,
+    report: &mut PortalValidationReport,
+) {
+    if !artifacts.contains(PAGEFIND_ENTRY_PATH) {
+        return;
+    }
+    let Some(path) = safe_join(
+        portal,
+        Path::new(PAGEFIND_ENTRY_PATH),
+        "Pagefind search index entry",
+        report,
+    ) else {
+        return;
+    };
+    let bytes = match read_bounded_regular(&path, MAX_PAGEFIND_ENTRY_BYTES) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            report.issues.push(format!(
+                "Pagefind search index entry is unreadable {PAGEFIND_ENTRY_PATH}: {error}"
+            ));
+            return;
+        }
+    };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        report.issues.push(format!(
+            "Pagefind search index entry is empty: {PAGEFIND_ENTRY_PATH}"
+        ));
+        return;
+    }
+    let entry: serde_json::Value = match parse_strict_json(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            report.issues.push(format!(
+                "Pagefind search index entry is not valid JSON {PAGEFIND_ENTRY_PATH}: {error}"
+            ));
+            return;
+        }
+    };
+    let Some(fields) = entry.as_object() else {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a JSON object"
+        ));
+        return;
+    };
+    if fields
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|version| version.trim().is_empty())
+    {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty version string"
+        ));
+    }
+    if fields
+        .get("languages")
+        .and_then(serde_json::Value::as_object)
+        .is_none_or(serde_json::Map::is_empty)
+    {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty languages object"
+        ));
+    }
 }
 
 fn verify_snippets(
@@ -4927,6 +5002,61 @@ mod tests {
                 .issues
                 .iter()
                 .any(|issue| issue.contains("symlink is refused")));
+        }
+    }
+
+    fn pagefind_entry_report(contents: &str) -> PortalValidationReport {
+        let portal = tempfile::tempdir().unwrap();
+        let entry = portal.path().join(PAGEFIND_ENTRY_PATH);
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, contents).unwrap();
+        let mut report = PortalValidationReport::default();
+        let artifacts = BTreeSet::from([PAGEFIND_ENTRY_PATH.to_string()]);
+        verify_pagefind_entry(portal.path(), &artifacts, &mut report);
+        report
+    }
+
+    #[test]
+    fn a_populated_pagefind_entry_passes_validation() {
+        let report = pagefind_entry_report(
+            r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7","wasm":"en","page_count":165}}}"#,
+        );
+        assert!(report.is_clean(), "{:?}", report.issues);
+    }
+
+    #[test]
+    fn an_empty_pagefind_entry_is_refused_by_name() {
+        for contents in ["", "   \n\t  "] {
+            let report = pagefind_entry_report(contents);
+            assert!(
+                report.issues.iter().any(|issue| issue
+                    .contains("Pagefind search index entry is empty")
+                    && issue.contains(PAGEFIND_ENTRY_PATH)),
+                "{:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_pagefind_entry_is_refused_by_name() {
+        for contents in [
+            r#"{"version":"1.5.2","languages":"#,
+            "[]",
+            r#"{"languages":{"en":{"hash":"en_71666de4f7"}}}"#,
+            r#"{"version":"1.5.2","languages":{}}"#,
+            r#"{"version":"","languages":{"en":{"hash":"en_71666de4f7"}}}"#,
+        ] {
+            let report = pagefind_entry_report(contents);
+            assert!(
+                report.issues.iter().any(|issue| {
+                    (issue.contains("Pagefind search index entry is malformed")
+                        || issue.contains("Pagefind search index entry is not valid JSON"))
+                        && issue.contains(PAGEFIND_ENTRY_PATH)
+                }),
+                "{contents}: {:?}",
+                report.issues
+            );
         }
     }
 
