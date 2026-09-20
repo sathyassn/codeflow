@@ -3,8 +3,8 @@
 **Required load order (do not skip):**
 
 1. [resources/utility-presentation-system.md](../resources/utility-presentation-system.md)
-   — canonical utility presentation system (altitude, anti-patterns, planes)
-2. This file — portal-only operational checklist
+   — shared doctrine: composition rule, page classes, supported carriers, tokens
+2. This file — the portal profile: page composition gate, layers, verification
 3. [information-architecture.md](information-architecture.md) before source roots / layers
 4. [content-contract.md](content-contract.md) before source interpretation changes
 5. [operations.md](operations.md) before install / publish / acceptance evidence
@@ -21,12 +21,28 @@ clone the design-exploration board or copy present Comment chrome.
 
 ---
 
+## 0. Page composition gate (before publish / browser verify)
+
+1. What **question** does this page answer better than the raw Markdown?
+2. Which page class is it (orient, architecture, technical/records, historical
+   decision), and does it carry that class's required carrier?
+3. Are concept → architecture → technical each complete for their audience?
+4. Does the architecture view survive sentence removal?
+5. Is every **claim** traceable to a repository source, while the page itself
+   is a composed visual of those sources with supporting text, not the
+   Markdown re-printed?
+6. Themes × light/dark readable; no product brand pack forced into Starlight?
+7. Evidence manifest still authenticates claims after the change?
+
+A page that fails this gate is not craft-complete: fix the source composition
+or refuse decorative chrome.
+
 ## 1. How to think about a portal page
 
 The reader lands in a **docs shell** (nav, crumbs, search)—not a session
 review. Your job is still structural: what do they **see** in the first
 screen of this layer, and does architecture use **layout** (stage, table,
-tree) or only more prose under a heading?
+full-width figure) or only more prose under a heading?
 
 - **Concept** pages orient: one mental model, not a dump of every capability.
 - **Architecture** pages must work if sentences thin out—nodes and edges, not
@@ -46,7 +62,7 @@ not copy present Comment chrome. Shape example:
 | Anti-patterns (prose-in-boxes, walls of cards) | No session Comment / verdicts |
 | Subject-led stages with margins | Evidence manifest, Markdown twins, `llms.txt` |
 
-## 3. Altitude on durable pages
+## 3. Layers composed from sources in place
 
 ```text
 purpose and mental model          (concept)
@@ -75,7 +91,8 @@ architecture-shaped layer contains zero altitude pages; it exercises every
 tabbed route, not the first it finds.
 
 A subject-led labeled figure is a `cf-stage` fence: node lines
-(`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger`),
+(`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger` /
+`neutral`),
 a `->` line between stages (nodes inside one stage are parallel), and one
 `caption:` line. The adapter renders it into generated HTML styled by the
 `--cf-*` tokens; invalid grammar fails the page loudly. Keep ASCII `text`
@@ -114,5 +131,5 @@ on architecture pages.
 
 - [ ] Can name what the first screen teaches without a bullet recap
 - [ ] Architecture claims use structure, not only headings in prose
-- [ ] Source-in-place only; no portal-only second authority
+- [ ] Every claim traces to a source; supporting framing text is expected, not a second authority
 - [ ] Evidence manifest still authenticates claims
