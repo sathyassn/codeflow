@@ -81,7 +81,7 @@ left `.new` sidecars behind.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. `--run-id` and `--result` drive the legacy `delegate-turn` mode, `--state-dir` the schema-v2 mode |
+| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. The other four names take no flags. `delegate-turn` requires `--run-id` and exactly one of `--result`, which selects the legacy mode, or `--state-dir`, which selects the schema-v2 mode |
 | `codeflow git-hook <STAGE> [ARGS]...` | `<STAGE>` is one of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push` | `[ARGS]` are the arguments git passes through, for example the commit-msg file path or the pre-push remote name and URL |
 | `codeflow ci` | `--base <REF>`, `--head <REF>`, `--branch <NAME>`, `--pr-body <TEXT>`, `--pr-body-file <FILE>` | Base and head are auto-detected from the CI environment when omitted; branch defaults to the CI-provided or current HEAD branch. `--pr-body` and `--pr-body-file` scan for AI attribution, emoji, and the required section structure |
 | `codeflow policy explain` | no flags | Prints every key's type, default, valid values, and purpose from the schema registry |
@@ -131,9 +131,9 @@ stderr, not the exit code, to tell an advisory failure from a clean pass.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow delegate init` | `--run-id <ID>`, `--state-dir <DIR>` | Creates the owner-only run directory and the task hook settings. `--state-dir` must be an absolute path |
-| `codeflow delegate arm` | `--run-id <ID>`, `--state-dir <DIR>`, `--turn-id <ID>`, `--prompt-file <FILE>` | `--prompt-file` holds the exact prompt bytes the host will deliver |
-| `codeflow delegate wait` | `--run-id <ID>`, `--state-dir <DIR>`, `--until <ready\|accepted\|terminal>`, `--turn-id <ID>`, `--timeout-seconds <N>` | `--turn-id` is required for `accepted` and `terminal` waits |
+| `codeflow delegate init` | `--run-id <ID>` (required), `--state-dir <DIR>` (required) | Creates the owner-only run directory and the task hook settings. `--state-dir` must be an absolute path |
+| `codeflow delegate arm` | `--run-id <ID>` (required), `--state-dir <DIR>` (required), `--turn-id <ID>` (required), `--prompt-file <FILE>` (required) | `--prompt-file` holds the exact prompt bytes the host will deliver |
+| `codeflow delegate wait` | `--run-id <ID>` (required), `--state-dir <DIR>` (required), `--until <ready\|accepted\|terminal>` (required), `--timeout-seconds <N>` (required), `--turn-id <ID>` | There is no default timeout, so `--timeout-seconds` is always passed. `--turn-id` is required for `accepted` and `terminal` waits and ignored for `ready` |
 | `codeflow portal setup` | `--path <DIR>` (required) | The repository-relative portal workspace directory |
 | `codeflow portal transfer` | `--confirm` (required) | Confirms responsibility for future runtime reconciliation |
 | `codeflow present open <DOCUMENT>` | `--no-launch` | `--no-launch` starts the service but does not launch a browser window |
