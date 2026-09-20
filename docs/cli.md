@@ -149,8 +149,8 @@ run, 124 on timeout, and 130 when interrupted. `delegate init` and
 | `codeflow present show <SESSION_ID>` | `--no-launch` | `--no-launch` prints the session endpoint and profile without launching |
 | `codeflow present update <SESSION_ID> <DOCUMENT>` | no flags | Appends a validated immutable revision to an active session |
 | `codeflow present history <SESSION_ID>` | no flags | Prints the append-only feedback history as JSON |
-| `codeflow present feedback <SESSION_ID>` | `--follow` | `--follow` continues until the session closes |
-| `codeflow present resolve <SESSION_ID> <EVENT_ID>` | `--event-version <N>` (required), `--status <addressed\|dismissed>` (required) | `--event-version` is the current event version printed by the review surface or by `history` |
+| `codeflow present feedback <SESSION_ID>` | `--follow` | Delivers pending review envelopes as JSON lines. `--follow` continues until the session closes |
+| `codeflow present resolve <SESSION_ID> <EVENT_ID>` | `--event-version <EVENT_VERSION>` (required), `--status <addressed\|dismissed>` (required) | Marks one delivered feedback event addressed or dismissed. `--event-version` is the current event version printed by the review surface or by `history` |
 | `codeflow present close <SESSION_ID>` | no flags | Repeating close is safe |
 | `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <editorial\|instrument\|technical>` (default `editorial`), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact |
 | `codeflow present clear [SESSION_ID]` | `--older-than <OLDER_THAN>` (default `30d`), `--dry-run` | With no session id it removes every eligible closed session older than the window |

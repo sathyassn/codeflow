@@ -39,7 +39,7 @@ reinterpret an upstream decision.
 
 | Stage | Who acts | Gate it must satisfy |
 |---|---|---|
-| Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact patch\|minor\|major` HTML marker directly before each new pending entry |
+| Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry |
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, actual proposed merge tree, pending annotations, coupled stamps, and conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility |
 | Merge | A human | PR CI checks the actual proposed merge tree, not conflict absence; main-push CI repeats the state check without writing. Without strict branch protection a stale clean merge remains possible, so the human merger must require the fresh check |
 | Dispatch | A human with current write, maintain, or admin permission | `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
