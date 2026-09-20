@@ -371,8 +371,8 @@ fn ask_arrays_gate_escalation_and_publish() {
         "Bash(sudo *)",
         "Bash(su *)",
         "Bash(doas *)",
-        "Bash(rm -rf *)",
-        "Bash(rm -fr *)",
+        "Bash(rm -rf /)",
+        "Bash(rm -fr /)",
         "Bash(git reset --hard)",
         "Bash(git reset --hard *)",
         "Bash(git clean *)",
@@ -416,9 +416,7 @@ fn ask_arrays_gate_escalation_and_publish() {
         "Bash(git push * --mirror *)",
         "Bash(git push --prune *)",
         "Bash(git push * --prune *)",
-        "Bash(git branch -d *)",
         "Bash(git branch -D *)",
-        "Bash(git branch --delete *)",
         "Bash(git branch --delete --force *)",
         "Bash(git branch --force --delete *)",
         "Bash(git branch -d -f *)",
@@ -720,4 +718,56 @@ fn minimal_claude_guidance_matches_the_classified_retry_setting() {
     assert!(guidance.contains("trusted installed tool"));
     assert!(guidance.contains("This is not a general bypass"));
     assert!(!guidance.contains("unsandboxed retry is disabled"));
+}
+
+/// Since Claude Code 2.1.257 `auto` and `bypassPermissions` are honored only
+/// from user settings or the launch flag, and a project value outranks the
+/// user file. A `defaultMode` in the default preset would therefore only ever
+/// pull an operator's chosen mode back to manual prompting, so the default
+/// preset leaves the mode to the operator; the opt-in presets still name
+/// their mode because those values remain valid from project scope.
+#[test]
+fn default_preset_leaves_the_permission_mode_to_the_operator() {
+    let value = load("default.json");
+    assert!(
+        value["permissions"].get("defaultMode").is_none(),
+        "default.json must not set permissions.defaultMode"
+    );
+    assert_eq!(
+        load("acceptEdits.json")["permissions"]["defaultMode"],
+        "acceptEdits"
+    );
+}
+
+/// Recursive deletes inside the working tree are ordinary, sandbox-confined
+/// work; only the rooted and home-anchored forms stay behind a prompt, and a
+/// safe branch delete (`-d`) needs none because git refuses an unmerged one.
+#[test]
+fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
+    for name in preset_files() {
+        let ask = perm_array(&load(&name), "ask");
+        for absent in [
+            "Bash(rm -rf *)",
+            "Bash(rm -fr *)",
+            "Bash(git branch -d *)",
+            "Bash(git branch --delete *)",
+        ] {
+            assert!(
+                !ask.iter().any(|a| a == absent),
+                "{name}: {absent} prompts on ordinary work"
+            );
+        }
+        for present in [
+            "Bash(rm -rf /)",
+            "Bash(rm -rf /*)",
+            "Bash(rm -rf ~*)",
+            "Bash(git branch -D *)",
+            "Bash(git branch --delete --force *)",
+        ] {
+            assert!(
+                ask.iter().any(|a| a == present),
+                "{name}: {present} must stay behind a prompt"
+            );
+        }
+    }
 }
