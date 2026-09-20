@@ -70,6 +70,7 @@
 | · | [ADR-0053](ADR-0053-utility-presentation-stack-and-design-system.md) | utility presentation design system with Preact present chrome and Starlight portal | none |
 | · | [ADR-0058](ADR-0058-explicit-portal-runtime-ownership.md) | replace portal source merging with explicit runtime ownership | none |
 | · | [ADR-0063](ADR-0063-utility-presentation-doctrine-home.md) | one shared utility presentation doctrine with a durable architecture home | none |
+| · | [ADR-0064](ADR-0064-portal-as-a-guide-to-the-project-as-it-stands.md) | the portal is a guide to the project as it stands | none |
 | Agentic estimation | [ADR-0057](ADR-0057-optional-agentic-estimation.md) | Optional agentic operating and estimation method | none |
 
 63 decisions. Three carry `status: superseded`; the chains below record every

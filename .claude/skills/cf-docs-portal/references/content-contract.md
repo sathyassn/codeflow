@@ -9,20 +9,22 @@
 - Build only from one clean, full Git commit. Read configuration, source
   Markdown, optional primitive tokens, and referenced local media from bounded
   Git blobs at that commit. Compare the adopted runtime and every configured
-  worktree input—configuration, source Markdown, optional primitive tokens,
-  and referenced media—byte-for-byte with those blobs; dirty, staged, deleted,
+  worktree input (configuration, source Markdown, optional primitive tokens,
+  and referenced media) byte-for-byte with those blobs; dirty, staged, deleted,
   untracked, ignored, inaccessible, masked (`assume-unchanged` or
   `skip-worktree`), or changing inputs block publication. Read worktree files
   through bounded, no-follow handles and order evidence with the starter's
   locale-independent comparator. Never label worktree bytes with `HEAD`.
 - Resolve relationships from declared frontmatter and strict stable IDs. Inline
-  ID mentions may become links, but never invent a declared dependency.
+  ID mentions may become links, but never invent a declared dependency. An ID
+  whose record is not a portal source links to the repository file, or to the
+  pointer page for its folder; it is never a dangling link and never a page.
 - Depth-2 `Concept` / `Architecture` / `Technical` sections are the altitude
   grammar: the adapter renders the trio as a tablist with one visible panel in
   the derived page only. Sources stay plain Markdown; raw source HTML stays
   escaped.
-- A leading depth-1 heading that repeats the page title — exactly, or with
-  only a record-ID prefix such as `ADR-0001 —` — renders once (the shell
+- A leading depth-1 heading that repeats the page title, exactly or with
+  only a record-ID prefix such as `ADR-0001:`, renders once (the shell
   already shows the title); any other heading is author content.
 - A `cf-stage` fence is generated-figure input: bounded node/stage/caption
   grammar, every text field escaped, roles whitelisted. An invalid figure

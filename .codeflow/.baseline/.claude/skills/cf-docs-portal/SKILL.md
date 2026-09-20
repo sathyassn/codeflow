@@ -3,12 +3,14 @@ name: cf-docs-portal
 description: Adopt, configure, build, update, transfer, or verify the optional CodeFlow documentation portal for a consuming repository. Use when a project asks for a layered repository guide, browsable technical documentation, source-linked views, Markdown twins or llms.txt, or maintenance and ownership of an adopted portal. Do not use for product UI design, a transient response surface, or ordinary Markdown-only documentation.
 ---
 
-# cf-docs-portal — repository guide utility
+# cf-docs-portal: repository guide utility
 
-Create and maintain a navigable view over repository-owned documentation. The
-portal is a derived utility, never a second source of truth. Product behavior,
-architecture, capabilities, decisions, specs, epics, tasks, and code remain in
-their established files.
+Create and maintain a guide to the project as it stands over repository-owned
+documentation: what it is, what it does, how to adopt it, how it is built and
+how it is operated. The portal is a derived utility, never a second source of
+truth. Product behavior, architecture, capabilities, decisions, specs, epics,
+tasks, and code remain in their established files; decisions and work records
+are pointed to as folders, not listed page by page.
 
 This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
 
@@ -20,9 +22,9 @@ board or copy present Comment chrome.
 **Before theming, layering, or authoring portal pages, load in order:**
 
 1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
-   — shared doctrine, byte-identical with `cf-present` (ADR-0063)
-2. [references/visual-craft.md](references/visual-craft.md) — portal profile
-   and page composition gate
+   is the shared doctrine, byte-identical with `cf-present` (ADR-0063)
+2. [references/visual-craft.md](references/visual-craft.md) is the portal
+   profile and page composition gate
 3. Other references below as the task requires
 
 Pass the page composition gate in `references/visual-craft.md`. A prose-card
@@ -95,9 +97,15 @@ Expose progressive depth where sources support it (altitude grammar):
 ```text
 purpose and mental model                         (concept)
   -> capabilities and journeys
-    -> architecture, decisions, and work         (architecture)
-      -> technical source references and evidence (technical)
+    -> architecture and boundaries in effect     (architecture)
+      -> reference, operations and evidence      (technical)
+records: decisions, epics, tasks and specs are pointed to as folders
 ```
+
+Every explanatory page carries the `## Concept` / `## Architecture` /
+`## Technical` trio with one figure in Concept, the structure in Architecture
+and the lookups in Technical, each framed by prose. Order the layers so a
+reader moves from what the project is to how it is operated.
 
 Keep navigation predictable and searchable. Prefer plain language, descriptive
 titles, concise prose, and bullets when they improve scanning. Match an
@@ -105,7 +113,7 @@ established project voice when it exists; otherwise use calm, direct,
 third-person documentation language. Avoid cryptic headings, invented
 personality, gratuitous emoji, and promotional language.
 
-### Visual craft (utility presentation system—mandatory)
+### Visual craft (utility presentation system, mandatory)
 
 Normative detail:
 [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
@@ -114,9 +122,13 @@ and [references/visual-craft.md](references/visual-craft.md). Page shape example
 
 - **Visuals** only when they clarify relationship, hierarchy, state, or flow.
   Text inside decorated boxes is not a visual explanation.
-- **Architecture-layer sources** each author the altitude trio plus a stage —
-  full-width labeled structure, not caption micro-boxes; verification fails a
-  trio page that shows more than one panel.
+- **Explanatory sources** each author the altitude trio; architecture pages
+  add a subject-led stage, full-width labeled structure, not caption
+  micro-boxes; verification fails a trio page that shows more than one panel
+  and an explanatory page with no trio.
+- **Records** (decisions, epics, tasks, specs) are pointed to from one
+  generated pointer page: folder, purpose, count, repository link. They are
+  not portal pages unless the project switches its records layer on.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
   scale. Do not ship ad-hoc font stacks in content.
 - **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
