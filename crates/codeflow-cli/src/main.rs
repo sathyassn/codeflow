@@ -69,9 +69,7 @@ enum Command {
     Status(cmd::status::StatusArgs),
     /// Land a branch into a target: flock(rebase -> test -> ff-merge).
     Integrate(cmd::integrate::IntegrateArgs),
-    /// Health checks: hooks, Claude, Codex, config, permissions, network,
-    /// delegates, repo integrity, CI perimeter, managed drift, customization,
-    /// and test config — `doctor --list` names them all.
+    #[command(about = doctor_help())]
     Doctor(cmd::doctor::DoctorArgs),
     /// Inspect .codeflow/policy.json: `explain` the full key schema from the
     /// binary; `show` the effective values, their source, and invalid keys.
@@ -92,6 +90,19 @@ enum Command {
     Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),
+}
+
+/// Render the `doctor` about-line from a list of check names. Split out from
+/// [`doctor_help`] so the derivation itself is testable against a fixture
+/// list: a hand-maintained help string drifts from the registry, this cannot.
+fn doctor_help_for(names: &[&str]) -> String {
+    format!("Health checks: {}. See `doctor --list`", names.join(", "))
+}
+
+/// `doctor`'s about-line, derived from the check registry — never hand-listed.
+fn doctor_help() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| doctor_help_for(&codeflow_core::doctor::check_names()))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -183,4 +194,32 @@ fn main() -> anyhow::Result<()> {
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DEFECT 5: the `doctor` about-line is derived, not hand-maintained —
+    /// a different registry produces different help, with every name present.
+    #[test]
+    fn doctor_help_is_derived_from_the_check_names_it_is_given() {
+        let fixture = doctor_help_for(&["alpha", "beta"]);
+        assert_eq!(fixture, "Health checks: alpha, beta. See `doctor --list`");
+
+        // Adding a fixture check changes the help.
+        let extended = doctor_help_for(&["alpha", "beta", "gamma"]);
+        assert_ne!(fixture, extended);
+        assert!(extended.contains("gamma"));
+
+        // The shipped help names exactly the registry's checks.
+        let registered = codeflow_core::doctor::check_names();
+        assert_eq!(doctor_help(), doctor_help_for(&registered));
+        for name in registered {
+            assert!(
+                doctor_help().contains(name),
+                "doctor help omits registered check {name}"
+            );
+        }
+    }
 }

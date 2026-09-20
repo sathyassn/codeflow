@@ -1753,3 +1753,39 @@ fn hook_help_names_every_delegate_turn_event() {
     );
 }
 
+/// DEFECT 5: `doctor --help` is generated from the check registry. Every
+/// registered check name appears; nothing is hand-listed beside it.
+#[test]
+fn doctor_help_equals_the_check_registry() {
+    let help = help_text(&["doctor", "--help"]);
+    let registered = codeflow_core::doctor::check_names();
+    assert!(!registered.is_empty(), "check registry is empty");
+
+    let about = help
+        .lines()
+        .find(|line| line.starts_with("Health checks:"))
+        .unwrap_or_else(|| panic!("doctor --help has no derived about line:\n{help}"));
+    let listed: Vec<&str> = about
+        .trim_start_matches("Health checks:")
+        .split(". See")
+        .next()
+        .expect("about line has a check list")
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    assert_eq!(
+        listed, registered,
+        "doctor --help must list exactly the registry's check names, in order"
+    );
+
+    // `doctor --list` is the registry's own rendering; help and list agree.
+    let listing = help_text(&["doctor", "--list"]);
+    for name in &registered {
+        assert!(
+            listing.contains(name),
+            "doctor --list omits registered check {name}"
+        );
+    }
+}
+
