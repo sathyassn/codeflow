@@ -8,7 +8,7 @@
   "primitive_tokens": null,
   "repository_root": "..",
   "source_roots": ["docs"],
-  "exclude": ["docs/verification"],
+  "exclude": ["docs/verification", "docs/plan"],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "What CodeFlow is, what it does, and how a repository adopts it.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md"], "prefixes": ["docs/capabilities"] },
     { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, and the boundaries each harness and surface runs under.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md", "docs/harness-posture.md"], "prefixes": ["docs/architecture"] },
