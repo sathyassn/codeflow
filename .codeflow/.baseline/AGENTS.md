@@ -55,7 +55,7 @@ it as non-trivial.
 | Tailor a scaffolded project | `/cf-customize` — verify the tools its flows need and fill the project-owned specifics, after `codeflow init` or when an update brings new defaults |
 | Qualify a model or harness change | `/cf-evaluate-model` — deliberate native-interactive regression/capability evaluation over disposable fixtures; use inside the orchestrated maintenance flow, never for ordinary work |
 | Get an outside opinion | `/cf-consult` (read-only) or `/cf-delegate` (edit). Host the TTY with `/cf-herdr` when `HERDR_ENV=1` |
-| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs|--portal <dir>]`, `portal setup --path <dir>`, `portal transfer --confirm`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>`, `present open|list|show|update|feedback|resolve|history|export|close|clear` |
+| Mechanics | `codeflow` CLI: `test [setup]`, `validate [--docs|--portal <dir>]`, `portal setup --path <dir>`, `portal transfer --confirm`, `status [--delivery]`, `recall "<query>"`, `orient`, `doctor`, `estimate`, `policy`, `ci`, `integrate <branch>`, `remote`, `epic new`, `spec new --for <id>`, `task new`, `work start <task-id>`, `present open|list|show|update|feedback|resolve|history|export|close|clear` |
 
 ## Planning and tracking
 

@@ -1120,3 +1120,92 @@ fn pipeline_example_names_the_current_model_id() {
     }
 }
 
+/// Subcommands the mechanics row deliberately omits: scaffold entry points a
+/// reader reaches from the tier section, and harness-invoked hook targets no
+/// human types. A new subcommand must be added to the row or listed here.
+const MECHANICS_ROW_EXCLUSIONS: [&str; 6] =
+    ["init", "update", "hook", "delegate", "git-hook", "help"];
+
+/// Every backticked `codeflow`-subcommand token in the mechanics row, reduced
+/// to its leading subcommand word.
+fn mechanics_row_subcommands(agents: &str) -> BTreeSet<String> {
+    let row = agents
+        .lines()
+        .find(|line| line.trim_start().starts_with("| Mechanics |"))
+        .expect("AGENTS template has a Mechanics row");
+    let mut found = BTreeSet::new();
+    let mut rest = row;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else { break };
+        let token = &after[..close];
+        if let Some(word) = token.split_whitespace().next() {
+            if word != "codeflow" {
+                found.insert(word.to_string());
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    found
+}
+
+/// DEFECT 7: the mechanics row is checked against the binary's registered
+/// subcommands — `estimate`, `policy` and `ci` were missing from it. Positive:
+/// every registered subcommand is either in the row or deliberately excluded.
+/// Negative: nothing in the row is unregistered or excluded.
+#[test]
+fn mechanics_row_matches_the_registered_subcommands() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .arg("--help")
+        .output()
+        .expect("codeflow --help runs");
+    assert!(help.status.success(), "codeflow --help failed");
+    let help = String::from_utf8(help.stdout).expect("utf-8 help");
+    let commands = help
+        .split("Commands:")
+        .nth(1)
+        .expect("help lists commands")
+        .split("Options:")
+        .next()
+        .expect("commands section ends");
+    let registered: BTreeSet<String> = commands
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            (line.starts_with("  ") && !trimmed.is_empty())
+                .then(|| trimmed.split_whitespace().next())
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        registered.contains("estimate") && registered.contains("policy"),
+        "help parse produced no subcommands: {registered:?}"
+    );
+
+    let excluded: BTreeSet<String> = MECHANICS_ROW_EXCLUSIONS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let expected: BTreeSet<String> = registered.difference(&excluded).cloned().collect();
+
+    for template in ["assets/base/AGENTS.md.tmpl", "AGENTS.md"] {
+        let row = mechanics_row_subcommands(&read(template));
+        assert_eq!(
+            row, expected,
+            "{template}: mechanics row disagrees with the registered \
+             subcommands (row-only: {:?}, missing: {:?})",
+            row.difference(&expected).collect::<Vec<_>>(),
+            expected.difference(&row).collect::<Vec<_>>(),
+        );
+    }
+
+    // Keep the exclusion list honest: an entry that is no longer a subcommand
+    // must be removed from it.
+    for name in MECHANICS_ROW_EXCLUSIONS {
+        assert!(
+            registered.contains(name),
+            "MECHANICS_ROW_EXCLUSIONS entry {name} is not a registered subcommand"
+        );
+    }
+}
