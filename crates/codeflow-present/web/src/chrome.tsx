@@ -232,6 +232,26 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return watchSystemMode(() => applyAppearance(appearance));
   }, [appearance]);
 
+  // Each palette pill shows the canvas and accent of the skin it selects,
+  // read from the live custom properties rather than from a second hard coded
+  // copy of the token table: the root attribute is moved, the computed value
+  // is read, and the attribute is put back within the same task, so no
+  // intermediate state is ever painted.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const element = document.documentElement;
+    const computed = getComputedStyle(element);
+    const current = element.dataset.cfTheme;
+    for (const pill of document.querySelectorAll<HTMLButtonElement>("[data-testid=\"skin-pills\"] button[data-skin]")) {
+      element.dataset.cfTheme = pill.dataset.skin!;
+      pill.style.setProperty("--pill-canvas", computed.getPropertyValue("--cf-canvas").trim());
+      pill.style.setProperty("--pill-accent", computed.getPropertyValue("--cf-accent").trim());
+    }
+    if (current === undefined) delete element.dataset.cfTheme;
+    else element.dataset.cfTheme = current;
+    return undefined;
+  }, [appearance, settingsOpen]);
+
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
   useEffect(
     () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
@@ -999,6 +1019,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       aria-pressed={appearance.theme === t}
                       onClick={() => setAppearance((c) => ({ ...c, theme: t }))}
                     >
+                      <span class="sw" aria-hidden="true">
+                        <i class="sw-canvas" />
+                        <i class="sw-accent" />
+                      </span>
                       {themeLabels[t]}
                     </button>
                   ))}
