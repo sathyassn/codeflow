@@ -14,8 +14,8 @@ caption: the floor never changes; tiers add method on top
 How a project takes on the discipline layer — greenfield or brownfield — what it
 gets at each tier, what codeflow owns versus what stays yours, and the daily
 loop. Runtime autonomy and harness settings live in
-[harness-posture.md](harness-posture.md); qualifying a new model or harness
-lives in [model-upgrades.md](model-upgrades.md). Every claim here reflects
+[harness posture](harness-posture.md); qualifying a new model or harness lives
+in [model and harness upgrades](model-upgrades.md). Every claim here reflects
 current behavior; nothing aspirational.
 
 ## Install the binary
@@ -422,7 +422,7 @@ repository storage to evade it.
 
 How far each plane reaches on a harness CodeFlow does not integrate, and the
 runtime posture each harness receives, are in
-[harness-posture.md](harness-posture.md).
+[harness posture](harness-posture.md).
 
 ## Selecting deterministic code analysis
 
