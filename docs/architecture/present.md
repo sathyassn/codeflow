@@ -1,4 +1,4 @@
-# present: bounded review sessions
+# Present review sessions
 
 <!-- HOW layer. Graduated from docs/architecture.md per its own rule: the
      area outgrew the single file; a one-line pointer remains behind.
@@ -6,8 +6,8 @@
 
 ## Concept
 
-A present session is one bounded, owner-private review: an agent authors the
-catalog document, Rust owns every durable byte, and the browser is a
+**A present session is one bounded, owner-private review:** an agent authors
+the catalog document, Rust owns every durable byte, and the browser is a
 disposable isolated viewer, never an authority.
 
 ```cf-stage
@@ -21,15 +21,18 @@ feedback envelope | append-only, consumed by any harness @positive
 caption: the browser is a viewer, durable authority never leaves rust
 ```
 
-The runtime owns chrome and Comment; agents author only this session's
-subject. Present is not a resident service, a product UI framework, or a
-documentation portal.
+Read the figure as the direction of trust: authority flows left to right and
+never back. The runtime owns chrome and Comment; agents author only this
+session's subject. Present is not a resident service, a product UI framework,
+or a documentation portal.
 
 ## Architecture
 
-Each active review has one project-keyed owner-private durable authority and a
-separate derived owner-private runtime root, under one canonical lock order:
-project mutation → session → runtime control (ADR-0052).
+Each active review splits its state in two, so growth is governed where it
+happens. One project-keyed owner-private durable authority holds the record; a
+separate derived owner-private runtime root holds what the browser needs. One
+canonical lock order covers both: project mutation → session → runtime control
+(ADR-0052).
 
 ```cf-stage
 durable authority | versioned document · immutable revisions · feedback @accent
@@ -41,7 +44,7 @@ caption: revisions and feedback are the only quota-governed history
 ```
 
 Immutable revisions and feedback are the only quota-governed history.
-Browser-owned profile/cache data never becomes durable authority, and the
+Browser-owned profile and cache data never becomes durable authority, and the
 CodeFlow-owned bootstrap, ready, and launch-recovery controls have a separate
 exact budget. Conservative cache flags, bounded idle lifetime, and
 identity-scoped cleanup mitigate browser growth without misrepresenting it as a
@@ -49,95 +52,89 @@ hard CodeFlow quota.
 
 ## Technical
 
+The contracts, the bounds, and the platform evidence that keep the split above
+true.
+
 ### Engine surface and contracts
 
-Interactive presentation is a separate bounded engine surface
-(`codeflow-present`, ADR-0049, ADR-0050, and ADR-0052). Its closed versioned document,
-primitive-token, and public-history contracts are represented by matching Rust
-types and managed JSON Schemas installed under `.codeflow/schemas/present/`.
-Rust owns validation, immutable revisions, append-only feedback, retention,
-export, and the per-session loopback service. The service embeds one
-content-addressed Preact/Shiki/Mermaid distribution built reproducibly from its
-exact lockfile, SBOM, license inventory, integrity manifest, audit, and size
-budgets; consumer builds and runtime use require no Node toolchain.
+| Contract | Detail |
+|---|---|
+| Engine surface | interactive presentation is a separate bounded engine surface, `codeflow-present` (ADR-0049, ADR-0050, ADR-0052) |
+| Schemas | the closed versioned document, primitive-token, and public-history contracts are represented by matching Rust types and managed JSON Schemas installed under `.codeflow/schemas/present/` |
+| Rust ownership | validation, immutable revisions, append-only feedback, retention, export, and the per-session loopback service |
+| Embedded distribution | one content-addressed Preact/Shiki/Mermaid bundle built reproducibly from its exact lockfile, SBOM, license inventory, integrity manifest, audit, and size budgets; consumer builds and runtime use require no Node toolchain |
 
 ### State, quotas, and bounded growth
 
-Repository state keys hash the canonical path's native OS representation, not
-a lossy display string. One project mutation lease serializes every durable
-growth path before the per-session lock. Creation, immutable revisions,
-feedback transitions, and runtime identity publication reserve exact bounded
-disk headroom before publication; they never commit over quota and then invoke
-retention. A control reserve and separate non-growth path keep close, runtime
-identity release, and clear available for recovery even when legacy active
-state is already over its configured bound. Block, diagram, per-collection,
-and whole-document collection cardinalities bound renderer amplification in
-addition to encoded byte limits.
+| Rule | Behaviour |
+|---|---|
+| State keys | repository state keys hash the canonical path's native OS representation, not a lossy display string |
+| Serialization | one project mutation lease serializes every durable growth path before the per-session lock |
+| Headroom | creation, immutable revisions, feedback transitions, and runtime identity publication reserve exact bounded disk headroom before publication; they never commit over quota and then invoke retention |
+| Recovery reserve | a control reserve and a separate non-growth path keep close, runtime identity release, and clear available for recovery even when legacy active state is already over its configured bound |
+| Cardinalities | block, diagram, per-collection, and whole-document collection cardinalities bound renderer amplification in addition to encoded byte limits |
 
 ### Session surface and export
 
-Each session has one loopback
-service, one single-use file bootstrap, and one isolated browser profile.
-Host/Origin/cookie/CSP checks protect the review chrome;
-untrusted static HTML is served from a revision-qualified sandbox without
-scripts, same-origin, forms, navigation, or network. Full-fidelity export is a
-self-contained read-only HTML artifact with no credentials, review controls,
-profile paths, feedback history, or service state. Platform adapters fail
-closed rather than falling back to the operator's browser. The `present` CLI
-adapter exposes open/update/list/show/history/feedback/resolve/export/close/
-clear but
-does not become a resident service, product UI framework, or documentation
-portal.
+| Surface | Contract |
+|---|---|
+| Per session | one loopback service, one single-use file bootstrap, and one isolated browser profile |
+| Review chrome | Host, Origin, cookie and CSP checks protect it |
+| Untrusted static HTML | served from a revision-qualified sandbox without scripts, same-origin, forms, navigation, or network |
+| Export | a self-contained read-only HTML artifact at full fidelity, with no credentials, review controls, profile paths, feedback history, or service state |
+| Platform adapters | fail closed rather than falling back to the operator's browser |
+| CLI adapter | `present` exposes open, update, list, show, history, feedback, resolve, export, close and clear, and does not become a resident service, product UI framework, or documentation portal |
 
 ### Feedback ledger and renderer bounds
 
-Every state read and recovery path is self-bounded. A single feedback ledger
-replay rejects duplicate receipts/deliveries, delivery before receipt,
-resolution before delivery, and every post-terminal transition; exact receipt,
-delivery, and identical terminal retries append nothing, while conflicts remain
-loud. Event tails are read from the same opened
-handle used for size and repair decisions; aggregate history,
-records, revisions, media, and state entries have explicit limits. A document
-may contain at most 24 Mermaid diagrams of at most 64 KiB each. The browser pins
-Mermaid's text and edge limits, enhances diagrams serially, yields between
-items, and gives the eager fallback a cumulative time budget. One accepted
-residual remains explicit: Mermaid rendering is synchronous within one bounded
-diagram, so TSK-007 must qualify a dense adversarial corpus in real browsers.
+Every state read and recovery path is self-bounded.
+
+| Bound | Behaviour |
+|---|---|
+| Ledger replay | a single replay rejects duplicate receipts and deliveries, delivery before receipt, resolution before delivery, and every post-terminal transition |
+| Idempotence | exact receipt, delivery, and identical terminal retries append nothing, while conflicts remain loud |
+| Event tails | read from the same opened handle used for size and repair decisions |
+| Explicit limits | aggregate history, records, revisions, media, and state entries each have one |
+| Mermaid corpus | at most 24 diagrams per document, at most 64 KiB each |
+| Mermaid rendering | the browser pins Mermaid's text and edge limits, enhances diagrams serially, yields between items, and gives the eager fallback a cumulative time budget |
+
+One accepted residual remains explicit: Mermaid rendering is synchronous within
+one bounded diagram, so TSK-007 must qualify a dense adversarial corpus in real
+browsers.
 
 ### Platform boundaries
 
-Platform boundaries are native and fail closed: Windows discovers trusted
-system and known-folder paths without `PATH` lookup, rejects reparse traversal,
-parses process identity with Windows command-line rules, emits UTF-8 from
-Windows PowerShell, passes a protected owner-only descriptor at creation for
-every private file including append/lease files, and verifies owner, protected
-DACL, trustees, and inheritance whenever existing state is opened. Every browser or auxiliary system-tool child starts from one
-allowlist-only environment, so provider-secret environment variables are not
-inherited.
-Linux/WSL2 reads bounded, no-follow `/proc` identity and terminates only the
-proven process group; macOS uses delimiter-aware identity and the same ownership
-rule, and Unix state-root inputs must be absolute. A session lease serializes
-each browser launch from exact per-attempt recovery publication through durable
-registration; close, show, and later launch consume interrupted evidence. If a
-recorded PID disappears or is reused, the native adapter searches for the exact
-instance/profile marker. Windows corroborates absence with bounded exclusive
-handle checks over the real profile tree rather than a POSIX-style lock-file
-assumption; Unix rechecks exact candidates and the process group. Failed enumeration, unreadable identity, a remaining
-candidate, or an inconclusive resource probe retains recovery evidence rather
-than signalling or deleting. Durable clear/retention reaps derived runtime only
-after the same absence boundary; independently corrupt bulk items are retained
-and reported without blocking an explicitly selected safe item. A selected
-session that is active or still owns a proven runtime is reported as retained,
-never represented by an empty successful clear.
+Platform boundaries are native and fail closed.
+
+| Platform | Boundary |
+|---|---|
+| Windows | discovers trusted system and known-folder paths without `PATH` lookup, rejects reparse traversal, parses process identity with Windows command-line rules, emits UTF-8 from Windows PowerShell, passes a protected owner-only descriptor at creation for every private file including append and lease files, and verifies owner, protected DACL, trustees, and inheritance whenever existing state is opened |
+| Linux and WSL2 | reads bounded, no-follow `/proc` identity and terminates only the proven process group |
+| macOS | uses delimiter-aware identity and the same ownership rule |
+| Unix generally | state-root inputs must be absolute |
+
+Every browser or auxiliary system-tool child starts from one allowlist-only
+environment, so provider-secret environment variables are not inherited.
+
+| Lifecycle rule | Behaviour |
+|---|---|
+| Launch lease | a session lease serializes each browser launch from exact per-attempt recovery publication through durable registration; close, show, and later launch consume interrupted evidence |
+| Lost PID | if a recorded PID disappears or is reused, the native adapter searches for the exact instance and profile marker |
+| Absence proof | Windows corroborates absence with bounded exclusive handle checks over the real profile tree rather than a POSIX-style lock-file assumption; Unix rechecks exact candidates and the process group |
+| Inconclusive result | failed enumeration, unreadable identity, a remaining candidate, or an inconclusive resource probe retains recovery evidence rather than signalling or deleting |
+| Clear and retention | durable clear and retention reap derived runtime only after the same absence boundary; independently corrupt bulk items are retained and reported without blocking an explicitly selected safe item |
+| Retained session | a selected session that is active or still owns a proven runtime is reported as retained, never represented by an empty successful clear |
+
 Cross-target compilation checks adapter shape only. Native runtime, Unicode
 path, ACL, process-tree, browser, and cleanup evidence remains a release gate.
 
 ### Review-surface anchoring and resolve
 
-The current review surface loads a bounded recent feedback snapshot. Same-
-revision selectors retain their exact offsets; older selectors re-anchor only
-when exact quote plus prefix/suffix context has one match. Missing or ambiguous
-matches remain visibly orphaned. Agent-side `resolve` transitions require the
-event's current delivered version and append addressed/dismissed state; stale
-or cross-session updates fail closed. Full append-only history remains available
-explicitly without being injected into unrelated work.
+| Rule | Behaviour |
+|---|---|
+| Snapshot | the current review surface loads a bounded recent feedback snapshot |
+| Same-revision selectors | retain their exact offsets |
+| Older selectors | re-anchor only when the exact quote plus prefix and suffix context has one match |
+| Missing or ambiguous match | remains visibly orphaned |
+| Agent-side `resolve` | requires the event's current delivered version and appends addressed or dismissed state; stale or cross-session updates fail closed |
+| Full history | remains available explicitly, without being injected into unrelated work |
