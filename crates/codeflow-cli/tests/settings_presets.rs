@@ -786,6 +786,9 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
             "git branch --delete -f topic",
             "git branch -d -f topic",
             "git branch -f -d topic",
+            "git branch -d topic -qf",
+            "git branch --delete topic -qf",
+            "git branch -d -fq topic",
         ] {
             assert!(
                 ask_covers(&ask, forced),
@@ -793,11 +796,15 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
             );
         }
         // Ordinary work stays unprompted, and a branch name that merely looks
-        // like an option must not be read as one.
+        // like an option must not be read as one. `-vqf` records the stated
+        // boundary rather than a claim of coverage: prefix globs cannot
+        // enumerate every aggregated cluster that hides `f`, and git-guard,
+        // not this rule, is what still blocks a protected branch.
         for ordinary in [
             "git branch -d topic",
             "git branch --delete topic",
             "git branch -d topic-force",
+            "git branch -d topic -vqf",
             "rm -rf target",
             "rm -rf ./build",
         ] {
@@ -811,13 +818,28 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
 
 /// Model how Claude Code matches a Bash permission rule against a command: a
 /// rule `Bash(p)` matches when `p`, with `*` standing for any run of
-/// characters, matches the whole command, and a `p` without `*` is exact.
+/// characters, matches the whole command; a `p` without `*` is exact; and a
+/// trailing ` *` that is the only wildcard also matches the bare command, so
+/// `Bash(ls *)` covers `ls`.
+///
+/// This models a single normalized command only. It is not the Bash
+/// permission evaluator: it does not split compound commands, and it knows
+/// nothing of deny precedence or of allow rules overriding ask rules.
 fn ask_covers(ask: &[String], command: &str) -> bool {
     ask.iter().any(|rule| {
         rule.strip_prefix("Bash(")
             .and_then(|rest| rest.strip_suffix(')'))
-            .is_some_and(|pattern| glob_matches(pattern, command))
+            .is_some_and(|pattern| rule_matches(pattern, command))
     })
+}
+
+fn rule_matches(pattern: &str, command: &str) -> bool {
+    if let Some(head) = pattern.strip_suffix(" *") {
+        if !head.contains('*') && head == command {
+            return true;
+        }
+    }
+    glob_matches(pattern, command)
 }
 
 /// Whole-string glob match where `*` spans any run of characters, including
@@ -838,4 +860,25 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
         };
         tail = &tail[next.len_utf8()..];
     }
+}
+
+/// Conformance fixtures for the rule matcher itself, so the delete fixtures
+/// above rest on a model that matches the documented rule syntax.
+#[test]
+fn rule_matcher_follows_the_documented_bash_rule_syntax() {
+    assert!(
+        rule_matches("ls *", "ls"),
+        "a lone trailing wildcard is optional"
+    );
+    assert!(rule_matches("ls *", "ls -la"));
+    assert!(!rule_matches(
+        "git branch -d * --force",
+        "git branch -d topic"
+    ));
+    assert!(!rule_matches(
+        "git branch -d * --force",
+        "git branch -d topic-force"
+    ));
+    assert!(rule_matches("git branch -D *", "git branch -D topic"));
+    assert!(!rule_matches("rm -rf /*", "rm -rf ./build"));
 }
