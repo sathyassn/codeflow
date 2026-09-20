@@ -118,10 +118,11 @@ try {
 
 async function checkStaticExportModes(browser, origin) {
   for (const { mode, preference, expected } of [
-    { mode: "system", preference: "dark", expected: "rgb(23, 21, 19)" },
-    { mode: "system", preference: "light", expected: "rgb(246, 243, 238)" },
-    { mode: "dark", preference: "light", expected: "rgb(23, 21, 19)" },
-    { mode: "light", preference: "dark", expected: "rgb(246, 243, 238)" },
+    // The export page defaults to the editorial skin: cool slate, #eef2f6 light and #0f141a dark.
+    { mode: "system", preference: "dark", expected: "rgb(15, 20, 26)" },
+    { mode: "system", preference: "light", expected: "rgb(238, 242, 246)" },
+    { mode: "dark", preference: "light", expected: "rgb(15, 20, 26)" },
+    { mode: "light", preference: "dark", expected: "rgb(238, 242, 246)" },
   ]) {
     const context = await browser.newContext({ colorScheme: preference, javaScriptEnabled: false });
     const page = await context.newPage();
